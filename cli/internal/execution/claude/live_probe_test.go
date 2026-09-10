@@ -3,9 +3,19 @@
 package claude
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +23,220 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
+
+// TestLiveClaudeNativeSessionProvider exercises the production SessionProvider
+// boundary used by View: native ID creation, a real filesystem write, release,
+// resume and a second turn with different model/effort and native memory.
+func TestLiveClaudeNativeSessionProvider(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude SessionProvider probe")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	root := t.TempDir()
+	token := "NATIVE_ADAPTER_" + liveRandomHex(t, 4)
+	config := map[string]any{"command": "claude", "model": "sonnet", "effort": "low", "permission_mode": "acceptEdits"}
+	provider := New(Options{})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "live-native-claude", Environment: execution.SessionEnvironment{WorkingDir: root, ProviderConfig: config, Location: "local"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: created.Session, TurnID: "turn-live-1", SubmissionID: "submission-live-1", Message: "Ricorda esattamente il token " + token + ". Scrivi esattamente OK seguito da newline nel file native-adapter-marker.txt usando i tool reali, poi conferma brevemente.", Model: "sonnet", Options: map[string]string{"effort": "low"}})
+	if err != nil || first.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("first turn: %#v, %v", first, err)
+	}
+	waitForLiveNativeIdle(t, ctx, provider, created.Session)
+	marker, err := os.ReadFile(filepath.Join(root, "native-adapter-marker.txt"))
+	if err != nil || string(marker) != "OK\n" {
+		t.Fatalf("real tool write = %q, %v", marker, err)
+	}
+	if err := provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := New(Options{})
+	resumed, err := restarted.ResumeSession(ctx, execution.ResumeSessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := restarted.StartTurn(ctx, execution.StartTurnRequest{Session: resumed.Session, TurnID: "turn-live-2", SubmissionID: "submission-live-2", Message: "Quale token ti avevo chiesto di ricordare? Rispondi con il solo token.", Model: "opus", Options: map[string]string{"effort": "high"}})
+	if err != nil || second.Turn.Applied.Model == "" || second.Turn.Applied.Options["effort"] != "high" {
+		t.Fatalf("resumed turn: %#v, %v", second, err)
+	}
+	waitForLiveNativeIdle(t, ctx, restarted, resumed.Session)
+	native := restarted.nativeSession(resumed.Session.Native.ID)
+	native.mu.Lock()
+	events := append([]execution.RunEvent(nil), native.events...)
+	native.mu.Unlock()
+	for _, event := range events {
+		if event.Kind == localrun.KindText && strings.Contains(event.Text, token) {
+			return
+		}
+	}
+	t.Fatalf("resumed session did not recall %q; events: %#v", token, events)
+}
+
+func waitForLiveNativeIdle(t *testing.T, ctx context.Context, provider *Provider, metadata execution.SessionMetadata) {
+	t.Helper()
+	for {
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: metadata})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Work == execution.SessionIdle {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// TestLiveClaudeResumeWithModelAndSkill proves the native persistence contract
+// without going through ARchetipo's long-lived stream adapter. The first
+// process creates a real persisted Claude session; a second process resumes the
+// same ID, changes model and effort, and has to recall data that is absent from
+// its new prompt. It also proves that the effective skill catalog in the init
+// frame contains a project fixture and that invoking it performs a real write.
+//
+// LIVE_CLAUDE=1 go test -tags liveprobe -run TestLiveClaudeResumeWithModelAndSkill -timeout 10m ./internal/execution/claude/
+func TestLiveClaudeResumeWithModelAndSkill(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude resume probe")
+	}
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".claude", "skills", "native-protocol-probe")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skill := "---\nname: native-protocol-probe\ndescription: Fixture for the native session protocol probe.\n---\nWrite exactly SKILL_FIXTURE_OK followed by a newline to native-skill-marker.txt. Write exactly ${CLAUDE_EFFORT} followed by a newline to native-skill-effort.txt. Then answer only SKILL_FIXTURE_OK.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionID := liveUUID(t)
+	randomWord := "ZAFFIRO-" + liveRandomHex(t, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+
+	first := runLiveClaudeProcess(t, ctx, root, []string{"--session-id", sessionID, "--model", "sonnet", "--effort", "low"},
+		"/native-protocol-probe\n\nMemorizza anche la parola "+randomWord+" senza scriverla in file.")
+	if first.SessionID != sessionID || !strings.Contains(first.Model, "sonnet") {
+		t.Fatalf("first runtime reported session=%q model=%q", first.SessionID, first.Model)
+	}
+	if !containsLiveString(first.Skills, "native-protocol-probe") {
+		t.Fatalf("the effective catalog omitted the fixture skill: %v", first.Skills)
+	}
+	marker, err := os.ReadFile(filepath.Join(root, "native-skill-marker.txt"))
+	if err != nil || string(marker) != "SKILL_FIXTURE_OK\n" {
+		t.Fatalf("the fixture skill did not perform its write: %q, %v", marker, err)
+	}
+	assertLiveClaudeFile(t, filepath.Join(root, "native-skill-effort.txt"), "low\n")
+
+	second := runLiveClaudeProcess(t, ctx, root, []string{"--resume", sessionID, "--model", "opus", "--effort", "high"},
+		"Qual era la parola casuale? Rispondi soltanto con quella.")
+	if second.SessionID != sessionID || !strings.Contains(second.Model, "opus") {
+		t.Fatalf("resumed runtime reported session=%q model=%q", second.SessionID, second.Model)
+	}
+	if strings.TrimSpace(second.Result) != randomWord {
+		t.Fatalf("resume lost native context: got %q, want %q", second.Result, randomWord)
+	}
+	third := runLiveClaudeProcess(t, ctx, root, []string{"--resume", sessionID, "--model", "opus", "--effort", "high"}, "/native-protocol-probe")
+	if strings.TrimSpace(third.Result) != "SKILL_FIXTURE_OK" {
+		t.Fatalf("the resumed skill invocation returned %q", third.Result)
+	}
+	assertLiveClaudeFile(t, filepath.Join(root, "native-skill-effort.txt"), "high\n")
+	t.Logf("resumed %s across three processes; models %s -> %s; effort low -> high observed through the documented skill substitution", sessionID, first.Model, second.Model)
+}
+
+type liveClaudeResult struct {
+	SessionID string
+	Model     string
+	Skills    []string
+	Result    string
+}
+
+func runLiveClaudeProcess(t *testing.T, ctx context.Context, root string, extraArgs []string, prompt string) liveClaudeResult {
+	t.Helper()
+	args := []string{"-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--replay-user-messages", "--permission-mode", "auto"}
+	args = append(args, extraArgs...)
+	command := exec.CommandContext(ctx, defaultCommand, args...)
+	command.Dir = root
+	input, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": prompt}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stdin = bytes.NewReader(append(input, '\n'))
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("claude process failed: %v", err)
+	}
+
+	var observed liveClaudeResult
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		var frame struct {
+			Type      string   `json:"type"`
+			Subtype   string   `json:"subtype"`
+			SessionID string   `json:"session_id"`
+			Model     string   `json:"model"`
+			Skills    []string `json:"skills"`
+			Result    string   `json:"result"`
+		}
+		if json.Unmarshal(line, &frame) != nil {
+			continue
+		}
+		if frame.Type == "system" && frame.Subtype == "init" {
+			observed.SessionID, observed.Model, observed.Skills = frame.SessionID, frame.Model, frame.Skills
+		}
+		if frame.Type == "result" {
+			observed.Result = frame.Result
+		}
+	}
+	if observed.SessionID == "" || observed.Result == "" {
+		t.Fatalf("claude stream omitted init or result: %s", output)
+	}
+	return observed
+}
+
+func liveUUID(t *testing.T) string {
+	t.Helper()
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	encoded := hex.EncodeToString(raw)
+	return fmt.Sprintf("%s-%s-%s-%s-%s", encoded[:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:])
+}
+
+func liveRandomHex(t *testing.T, size int) string {
+	t.Helper()
+	raw := make([]byte, size)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	return strings.ToUpper(hex.EncodeToString(raw))
+}
+
+func containsLiveString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func assertLiveClaudeFile(t *testing.T, name, wanted string) {
+	t.Helper()
+	content, err := os.ReadFile(name)
+	if err != nil || string(content) != wanted {
+		t.Fatalf("%s contains %q, want %q: %v", name, content, wanted, err)
+	}
+}
 
 // TestLiveClaudePlansASpec dispatches one real spec.plan action to the real
 // Claude Code binary in a real workspace. It is the only check that exercises
@@ -185,6 +409,95 @@ func TestLiveClaudeMultiTurn(t *testing.T) {
 	}
 }
 
+// TestLiveClaudeInterruptThenResume removes the timing race from the older
+// dialogue probe. A fixture command announces that it is really running and
+// then blocks indefinitely; only then does the probe interrupt the turn. It
+// tries a new turn on the same stream and always releases/reopens the runtime
+// with the same persisted session ID, which is Claude's supported fallback.
+//
+// LIVE_CLAUDE=1 go test -tags liveprobe -run TestLiveClaudeInterruptThenResume -timeout 10m ./internal/execution/claude/
+func TestLiveClaudeInterruptThenResume(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude interrupt probe")
+	}
+	root := t.TempDir()
+	sessionID := liveUUID(t)
+	randomWord := "GIADA-" + liveRandomHex(t, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+
+	cfg := settings{Command: defaultCommand, PermissionMode: defaultPermissionMode, Timeout: 8 * time.Minute}
+	args := make([]string, 0, len(buildArgs(cfg))+2)
+	for _, arg := range buildArgs(cfg) {
+		if arg != "--no-session-persistence" {
+			args = append(args, arg)
+		}
+	}
+	args = append(args, "--session-id", sessionID)
+	process, err := localrun.ExecStarter{}.Start(ctx, root, cfg.Command, args)
+	if err != nil {
+		t.Fatalf("starting the persistent claude session: %v", err)
+	}
+	session := localrun.NewSession("live-interrupt", nil)
+	client := newStreamSession(process, session, true)
+	go client.consume()
+	if err := client.start(ctx, "Memorizza "+randomWord+". Poi esegui con Bash `sh -c 'printf READY > interrupt-ready; tail -f /dev/null'` e attendi."); err != nil {
+		t.Fatalf("starting the blocking turn: %v", err)
+	}
+	waitForLiveFile(t, ctx, filepath.Join(root, "interrupt-ready"), "the blocking tool readiness marker")
+	if err := client.Interrupt(ctx); err != nil {
+		t.Fatalf("the real runtime refused the interrupt while its tool was active: %v", err)
+	}
+	select {
+	case outcome := <-client.Turns():
+		t.Logf("interrupted turn: completed=%v final=%q", outcome.Completed, outcome.Final)
+	case <-client.Gone():
+		t.Log("the stream process ended as a result of interrupt")
+	case <-ctx.Done():
+		t.Fatal("the interrupted turn did not settle")
+	}
+
+	sameStream := false
+	if err := client.Send(ctx, "Rispondi soltanto SAME_STREAM."); err == nil {
+		outcome := waitForLiveTurn(t, ctx, client, "the turn after interrupt on the same stream")
+		if !outcome.Completed || strings.TrimSpace(outcome.Final) != "SAME_STREAM" {
+			t.Fatalf("same-stream turn after interrupt failed: %#v", outcome)
+		}
+		sameStream = true
+	} else {
+		t.Logf("same-stream turn unavailable after interrupt; using native resume: %v", err)
+	}
+	_ = process.Close()
+	select {
+	case <-client.Gone():
+	case <-ctx.Done():
+		t.Fatal("the interrupted runtime did not release")
+	}
+
+	resumed := runLiveClaudeProcess(t, ctx, root, []string{"--resume", sessionID, "--model", "sonnet", "--effort", "low"},
+		"Qual era la parola casuale prima dell'interrupt? Rispondi soltanto con quella.")
+	if resumed.SessionID != sessionID || strings.TrimSpace(resumed.Result) != randomWord {
+		t.Fatalf("resume after interrupt lost context: session=%q result=%q, want %q", resumed.SessionID, resumed.Result, randomWord)
+	}
+	t.Logf("interrupt delivered while tool active; same-stream next turn=%v; resume kept session %s", sameStream, sessionID)
+}
+
+func waitForLiveFile(t *testing.T, ctx context.Context, name, what string) {
+	t.Helper()
+	for {
+		if _, err := os.Stat(name); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("checking %s: %v", what, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s did not appear", what)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 // waitForLiveTurn blocks until the process itself declares a turn finished.
 func waitForLiveTurn(t *testing.T, ctx context.Context, client *streamSession, what string) TurnOutcome {
 	t.Helper()
@@ -338,5 +651,245 @@ func waitForLivePermission(t *testing.T, ctx context.Context, client *streamSess
 			t.Fatalf("%s never arrived", what)
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+}
+
+// TestLiveClaudeHTTPServerLifecycle starts a real development server through
+// the real harness and then observes it at the three boundaries View has to
+// keep apart: the end of the turn that started it, the interrupt of a turn, and
+// the release of the runtime that owns the session.
+//
+// It is the probe behind the one promise this feature must not overstate. A
+// server started by the harness is a child of the harness process, and the
+// harness process is a child of View: nothing here claims it survives a
+// restart. What is demonstrated instead is the thing a person actually needs —
+// the session comes back, and from inside it the service can be checked and
+// stopped, or started again.
+//
+// Whatever is still listening when the test ends is stopped by pid, so a probe
+// that fails halfway leaves no process behind.
+//
+//	LIVE_CLAUDE=1 go test -tags liveprobe -run TestLiveClaudeHTTPServerLifecycle -timeout 15m ./internal/execution/claude/
+func TestLiveClaudeHTTPServerLifecycle(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude HTTP lifecycle probe")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "http-probe.txt"), []byte("HTTP_CLAUDE_OK\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	detachedPort := reserveLivePort(t)
+	foregroundPort := reserveLivePort(t)
+	detachedURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", detachedPort)
+	foregroundURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", foregroundPort)
+	detachedPID := filepath.Join(root, "detached.pid")
+	foregroundPID := filepath.Join(root, "foreground.pid")
+	t.Cleanup(func() { stopLivePID(detachedPID); stopLivePID(foregroundPID) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	config := map[string]any{"command": "claude", "model": "sonnet", "effort": "low", "permission_mode": "bypassPermissions"}
+	provider := New(Options{})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{
+		ConversationID: "live-http-claude",
+		Environment:    execution.SessionEnvironment{WorkingDir: root, ProviderConfig: config, Location: "local"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One: a development server started in the background, and a turn that ends
+	// while it keeps serving. This is the ordinary shape — somebody asks for the
+	// server, gets an answer, and goes on talking.
+	detachedPrompt := fmt.Sprintf(
+		"Sei dentro una sandbox usa e getta di un test automatico: la directory di lavoro contiene solo il file di fixture http-probe.txt. "+
+			"Il test verifica che un server di sviluppo avviato da te sopravviva alla fine del turno. "+
+			"Avvia quindi con il tool Bash un server statico sulla porta %d di 127.0.0.1 in background, scrivendone il PID nel file detached.pid della directory di lavoro, "+
+			"per esempio con `nohup python3 -m http.server %d --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > detached.pid`. "+
+			"Il test lo fermerà da sé alla fine. Quando il PID è scritto rispondi soltanto DETACHED_STARTED.",
+		detachedPort, detachedPort)
+	if started, err := provider.StartTurn(ctx, execution.StartTurnRequest{
+		Session: created.Session, TurnID: "turn-http-1", SubmissionID: "submission-http-1", Message: detachedPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("starting the background server: %#v, %v", started, err)
+	}
+	waitForLiveNativeIdle(t, ctx, provider, created.Session)
+	defer dumpLiveSession(t, provider, created.Session)
+	detachedCtx, cancelDetached := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelDetached()
+	waitForLiveFileIn(t, detachedCtx, detachedPID, "the background server PID")
+	httpCtx, cancelHTTP := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelHTTP()
+	waitForLiveHTTP(t, httpCtx, detachedURL, "HTTP_CLAUDE_OK\n")
+	afterTurn := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+
+	// Two: a server held in the foreground of a turn, and that turn interrupted.
+	foregroundPrompt := fmt.Sprintf(
+		"Sempre nella stessa sandbox del test: adesso serve un secondo server statico, questa volta tenuto in primo piano dal tuo comando, "+
+			"così il test può interrompere il turno mentre gira e misurare che ne è del processo. "+
+			"Esegui con il tool Bash `sh -c 'echo $$ > foreground.pid; exec python3 -m http.server %d --bind 127.0.0.1'` e resta in attesa mentre il comando è attivo.",
+		foregroundPort)
+	if started, err := provider.StartTurn(ctx, execution.StartTurnRequest{
+		Session: created.Session, TurnID: "turn-http-2", SubmissionID: "submission-http-2", Message: foregroundPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("starting the foreground server: %#v, %v", started, err)
+	}
+	foregroundFileCtx, cancelForegroundFile := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelForegroundFile()
+	waitForLiveFileIn(t, foregroundFileCtx, foregroundPID, "the foreground server PID")
+	foregroundCtx, cancelForeground := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelForeground()
+	waitForLiveHTTP(t, foregroundCtx, foregroundURL, "HTTP_CLAUDE_OK\n")
+	if _, err := provider.InterruptTurn(ctx, execution.SessionCommandRequest{
+		Session: created.Session, TurnID: "turn-http-2", SubmissionID: "submission-http-2-interrupt",
+	}); err != nil {
+		t.Fatalf("interrupting the foreground turn: %v", err)
+	}
+	waitForLiveNativeIdle(t, ctx, provider, created.Session)
+	foregroundAfterInterrupt := liveHTTPAvailable(foregroundURL, "HTTP_CLAUDE_OK\n")
+	detachedAfterInterrupt := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+
+	// Three: the runtime released, which is what View does when it leaves a
+	// workspace or is shut down. Both servers are measured, not assumed.
+	if err := provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+	detachedAfterRelease := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+	foregroundAfterRelease := liveHTTPAvailable(foregroundURL, "HTTP_CLAUDE_OK\n")
+
+	// Four: the session is resumed by a new provider — a new View process — and
+	// from inside it the service is checked and stopped. Whatever the three
+	// measurements above turned out to be, this is what a person can always do.
+	restarted := New(Options{})
+	resumed, err := restarted.ResumeSession(ctx, execution.ResumeSessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatalf("resuming the session that owns the servers: %v", err)
+	}
+	checkPrompt := fmt.Sprintf(
+		"Siamo sempre nella sandbox del test, ed è la stessa conversazione in cui hai avviato i due server: la sessione è stata ripresa dopo che il runtime era stato rilasciato. "+
+			"Con il tool Bash verifica se qualcosa è ancora in ascolto sulle porte %d e %d di 127.0.0.1 e ferma i server che trovi, "+
+			"usando i PID nei file detached.pid e foreground.pid della directory di lavoro quando esistono. Poi rispondi soltanto SERVERS_STOPPED.",
+		detachedPort, foregroundPort)
+	if started, err := restarted.StartTurn(ctx, execution.StartTurnRequest{
+		Session: resumed.Session, TurnID: "turn-http-3", SubmissionID: "submission-http-3", Message: checkPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("asking the resumed session about the servers: %#v, %v", started, err)
+	}
+	waitForLiveNativeIdle(t, ctx, restarted, resumed.Session)
+	dumpLiveSession(t, restarted, resumed.Session)
+	// Measured before anything else touches the machine: this is whether the
+	// resumed session really did the work, and not whether the cleanup below
+	// can kill a pid.
+	detachedAfterResumedTurn := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+	// Belt and braces, and the guarantee this test owes the machine it runs on:
+	// nothing is left listening whatever the agent decided to do.
+	stopLivePID(detachedPID)
+	stopLivePID(foregroundPID)
+	waitForLiveHTTPDown(t, ctx, detachedURL, "HTTP_CLAUDE_OK\n")
+	waitForLiveHTTPDown(t, ctx, foregroundURL, "HTTP_CLAUDE_OK\n")
+	if err := restarted.ReleaseSession(ctx, execution.SessionRequest{Session: resumed.Session}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("background server reachable: after its turn=%v, after an interrupt of another turn=%v, after the runtime was released=%v", afterTurn, detachedAfterInterrupt, detachedAfterRelease)
+	t.Logf("foreground server reachable: after the interrupt of its own turn=%v, after the runtime was released=%v", foregroundAfterInterrupt, foregroundAfterRelease)
+	t.Logf("the session was resumed by a second provider and asked to check and stop the services: background server still reachable afterwards=%v", detachedAfterResumedTurn)
+	t.Log("nothing was left listening when the probe returned")
+}
+
+// dumpLiveSession writes what the harness actually said into the test log. A
+// live probe that fails on a missing file is otherwise a failure with no
+// evidence: the interesting part is the transcript, and it lives in the
+// provider's own session.
+func dumpLiveSession(t *testing.T, provider *Provider, metadata execution.SessionMetadata) {
+	t.Helper()
+	session := provider.nativeSession(metadata.Native.ID)
+	if session == nil {
+		t.Log("the session is no longer held by this provider")
+		return
+	}
+	session.mu.Lock()
+	events := append([]execution.RunEvent(nil), session.events...)
+	session.mu.Unlock()
+	for _, event := range events {
+		t.Logf("[%d] %s %s", event.ID, event.Kind, strings.TrimSpace(event.Text))
+	}
+}
+
+func reserveLivePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func waitForLiveFileIn(t *testing.T, ctx context.Context, name, what string) {
+	t.Helper()
+	for {
+		if info, err := os.Stat(name); err == nil && info.Size() > 0 {
+			return
+		} else if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("checking %s: %v", what, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s did not appear", what)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func liveHTTPAvailable(url, wanted string) bool {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	response, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	return err == nil && response.StatusCode == http.StatusOK && string(body) == wanted
+}
+
+func waitForLiveHTTP(t *testing.T, ctx context.Context, url, wanted string) {
+	t.Helper()
+	for {
+		if liveHTTPAvailable(url, wanted) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the HTTP fixture at %s never served %q", url, wanted)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func waitForLiveHTTPDown(t *testing.T, ctx context.Context, url, wanted string) {
+	t.Helper()
+	for liveHTTPAvailable(url, wanted) {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the HTTP fixture at %s stayed reachable after its PID was stopped", url)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func stopLivePID(name string) {
+	body, err := os.ReadFile(name)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil || pid <= 0 {
+		return
+	}
+	if process, err := os.FindProcess(pid); err == nil {
+		_ = process.Kill()
 	}
 }

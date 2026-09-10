@@ -275,6 +275,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/model-choice", s.handleGetNativeConversationModelChoice)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/messages", s.handleSendWorkspaceConversationMessage)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/proposal", s.handleDecideWorkspaceConversationProposal)
 	// A conversation whose agent stops to ask permission is a conversation
@@ -282,6 +283,11 @@ func (s *Server) registerRoutes() {
 	// conversation's own id, because a conversation has no execution record to
 	// be named by.
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/approvals/{approvalId}", s.handleRespondWorkspaceConversationApproval)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/inputs/{inputId}", s.handleRespondWorkspaceConversationInput)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/interrupt", s.handleInterruptNativeConversation)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/archive", s.handleArchiveNativeConversation)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/reopen", s.handleReopenNativeConversation)
+	s.handleWorkspace("PUT /api/workspace/conversations/{id}/next-turn", s.handleUpdateNativeConversationNextTurn)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}", s.handleCloseWorkspaceConversation)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/record", s.handleDeleteWorkspaceConversation)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/record", s.handleRestoreWorkspaceConversation)

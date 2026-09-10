@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -87,13 +88,18 @@ type conversationView struct {
 	// Both are omitted when the provider declares no catalog, when its catalog
 	// cannot be obtained, or when nothing is configured: a viewer that has only
 	// the provider id draws exactly what it drew before these fields existed.
-	Model        string                    `json:"model,omitempty"`
-	ModelOptions map[string]string         `json:"model_options,omitempty"`
-	Conversation *conversationSnapshotView `json:"conversation"`
-	Events       []execution.RunEvent      `json:"events"`
-	LastID       int64                     `json:"last_id"`
-	Truncated    bool                      `json:"truncated"`
-	Notice       string                    `json:"notice,omitempty"`
+	Model        string                      `json:"model,omitempty"`
+	ModelOptions map[string]string           `json:"model_options,omitempty"`
+	Conversation *conversationSnapshotView   `json:"conversation"`
+	Events       []execution.RunEvent        `json:"events"`
+	LastID       int64                       `json:"last_id"`
+	Truncated    bool                        `json:"truncated"`
+	HasMore      bool                        `json:"has_more"`
+	Session      *execution.SessionSnapshot  `json:"session,omitempty"`
+	NextTurn     execution.TurnConfiguration `json:"next_turn,omitempty"`
+	Deliveries   []execution.SessionDelivery `json:"deliveries,omitempty"`
+	LegacyLimit  string                      `json:"legacy_limit,omitempty"`
+	Notice       string                      `json:"notice,omitempty"`
 	// Approvals are the decisions the agent of this conversation is waiting on.
 	// They exist because a local agent asks before it uses a tool it may not use
 	// on its own, and a question nobody can see is a conversation stopped
@@ -168,6 +174,12 @@ type conversationRunView struct {
 	// approvals exist only while a follower is attached, and attaching it is
 	// this side's job.
 	AwaitingResponse bool `json:"awaiting_response"`
+	// InThisThread says the action is being carried out in the very
+	// conversation this view describes. The block then carries no log and
+	// offers no way to reach a thread: the thread is the one being read, and
+	// drawing the same turns twice on one page is exactly what the unification
+	// of runs and conversations exists to stop.
+	InThisThread bool `json:"in_this_thread"`
 	// ThreadID names the conversation this run is read in, empty for a run that
 	// is read nowhere else.
 	//
@@ -189,6 +201,7 @@ type conversationTarget struct {
 	runtime      execution.Provider
 	provider     execution.Conversationalist
 	collaborator execution.RunCollaborator
+	sessions     execution.SessionProvider
 	// reason is empty exactly when a conversation can be opened. It is the very
 	// sentence providerAvailability.reasonFor produces, never a second wording
 	// for the same fact.
@@ -235,8 +248,9 @@ func (s *Server) conversationAvailabilityFor(ctx context.Context, ws *workspaceS
 		target.reason = denied.reasonFor(execution.CapabilityWorkspaceConverse)
 		return target
 	}
-	conversationalist, converses := execution.ConversationalistFor(provider)
-	if !converses {
+	conversationalist, legacyConversations := execution.ConversationalistFor(provider)
+	sessions, nativeConversations := execution.SessionProviderFor(provider)
+	if !legacyConversations && !nativeConversations {
 		// Unreachable while the capability stays derived from the interface, and
 		// answered with the same sentence anyway: a capability list emptied of the
 		// one the provider cannot honour is exactly the state reasonFor already
@@ -249,6 +263,7 @@ func (s *Server) conversationAvailabilityFor(ctx context.Context, ws *workspaceS
 	target.runtime = provider
 	target.provider = conversationalist
 	target.collaborator, _ = execution.RunCollaboratorFor(provider)
+	target.sessions = sessions
 	return target
 }
 
@@ -271,6 +286,7 @@ func heldConversationTarget(snapshot conversationSnapshot) conversationTarget {
 		},
 		provider:     snapshot.provider,
 		collaborator: snapshot.collaborator,
+		sessions:     snapshot.sessionProvider,
 	}
 }
 
@@ -411,6 +427,7 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	if !open {
 		return view
 	}
+	view.LegacyLimit = "no native session reference; this transcript can only seed a new conversation explicitly"
 	rendered := &conversationSnapshotView{
 		ID:          snapshot.id,
 		WorkingDir:  snapshot.workingDir,
@@ -486,7 +503,7 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	// this route is polled every couple of seconds for as long as the
 	// conversation lives. A poll with nothing to decide must cost exactly what
 	// it cost before this existed.
-	if proposal, proposalID, pending := pendingProposal(session, snapshot.decidedProposalID); pending {
+	if proposal, proposalID, pending := pendingProposal(session.Events(0), snapshot.decidedProposalID); pending {
 		view.Proposal = s.resolveProposal(ctx, ws, proposal, proposalID)
 	}
 	events := session.Events(afterID)
@@ -674,7 +691,8 @@ func pastConversationViewOf(record conversationlog.Record, openability conversat
 		// A conversation that has ended waits on nothing: there is no process
 		// left to answer, and offering a live button on one would be an offer
 		// nothing can honour.
-		Approvals: []execution.PendingApproval{},
+		Approvals:   []execution.PendingApproval{},
+		LegacyLimit: "no native session reference; this transcript can only seed a new conversation explicitly",
 	}
 	if len(events) > 0 {
 		view.LastID = events[len(events)-1].ID
@@ -704,6 +722,10 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	id := strings.TrimSpace(r.PathValue("id"))
 	if snapshot, live := ws.conversation.get(id); live {
+		if snapshot.sessionProvider != nil {
+			writeJSON(w, http.StatusOK, s.nativeConversationView(ctx, ws, snapshot, afterID))
+			return
+		}
 		// The verdict costs no probe for a conversation that is being held. See
 		// heldConversationTarget.
 		writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
@@ -712,6 +734,10 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 	record, err := s.readPastConversation(ctx, ws, id)
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if record.Native() {
+		writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, afterID))
 		return
 	}
 	view := pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID)
@@ -808,6 +834,9 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	view := s.conversationViewOf(ctx, ws, opened.target, opened.snapshot, opened.held, 0)
+	if opened.snapshot.sessionProvider != nil {
+		view = s.nativeConversationView(ctx, ws, opened.snapshot, 0)
+	}
 	if opened.notice != "" && view.Notice == "" {
 		view.Notice = opened.notice
 	}
@@ -889,11 +918,12 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		return openedConversation{}, wrapRunModelChoiceError(err)
 	}
 	target.availability.providerConfig = effectiveConfig
-	// The process vocabulary is resolved here and travels on the request,
-	// because the provider does not know the process and must not learn it: the
-	// agent may propose an action, and it can only name one that exists if the
-	// list reaches it. An unresolvable template is already an error of every
-	// other route that needs one, and it is answered the same way here.
+	// The process template is resolved here because an unresolvable one is an
+	// error of every other route that needs one, and it is answered the same way
+	// here. Its action vocabulary travels on the request only for a provider
+	// without native sessions: a native session receives no ARchetipo opening
+	// prompt at all — the harness reads the workspace instructions itself, and a
+	// conversation is not required to pass through propose/confirm.
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		return openedConversation{}, err
@@ -908,6 +938,67 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 	if modelChoice != nil {
 		model = modelChoice.Model
 		modelOptions = cloneModelOptions(modelChoice.Options)
+	}
+	if target.sessions != nil {
+		discovery, discoverErr := target.sessions.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
+			ProviderConfig: providerConfig,
+			WorkingDir:     ws.cfg.ProjectRoot,
+		})
+		if discoverErr != nil {
+			return openedConversation{}, iox.NewInternal("discovering native session support: "+discoverErr.Error(), discoverErr)
+		}
+		environment := discovery.Environment
+		if strings.TrimSpace(environment.WorkingDir) == "" {
+			environment.WorkingDir = ws.cfg.ProjectRoot
+		}
+		if environment.ProviderConfig == nil {
+			environment.ProviderConfig = providerConfig
+		}
+		created, createErr := target.sessions.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: id, Environment: environment})
+		if createErr != nil {
+			return openedConversation{}, iox.NewInternal("creating a native conversation: "+createErr.Error(), createErr)
+		}
+		created.Session.ConversationID = id
+		created.Session.ProviderID = target.availability.providerID
+		created.Session.Environment = environment
+		if created.Archive == "" {
+			created.Archive = execution.ArchiveOpen
+		}
+		openedAt := time.Now().UTC()
+		record := conversationlog.Record{
+			Version: conversationlog.CurrentVersion, ID: id, SpecCode: spec.specCode,
+			Title: conversationTitleOf(nil, openedAt), WorkingDir: environment.WorkingDir,
+			ProviderID: created.Session.ProviderID, OpenedAt: openedAt, LastMessageAt: openedAt,
+			Session: &created.Session, Archive: created.Archive, Connection: created.Connection,
+			Recovery: created.Recovery, Work: created.Work, CurrentTurn: created.CurrentTurn,
+			NextTurn: execution.TurnConfiguration{Model: model, Options: modelOptions},
+		}
+		if title := strings.TrimSpace(spec.title); title != "" {
+			record.Title = truncateRunes(title, conversationTitleLimit)
+		}
+		if err := ws.conversationStore().Save(ctx, record); err != nil {
+			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
+			return openedConversation{}, iox.NewInternal("persisting the native conversation: "+err.Error(), err)
+		}
+		// A conversation nobody has seen before cannot be owned by anybody else,
+		// so this claim always succeeds; it is taken all the same, because what
+		// releases it is the very code that releases every other one.
+		if err := ws.takeNativeRuntime(ctx, id); err != nil {
+			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
+			return openedConversation{}, err
+		}
+		if err := ws.conversation.open(conversationHold{
+			id: id, providerID: created.Session.ProviderID, sessionProvider: target.sessions, session: created.Session,
+			providerConfig: providerConfig, model: model, modelOptions: modelOptions,
+			workingDir: environment.WorkingDir, openedAt: openedAt, specCode: spec.specCode,
+		}); err != nil {
+			ws.nativeRuntime.drop(id)
+			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
+			return openedConversation{}, conversationOpenRefusal(ctx, ws, err)
+		}
+		snapshot, held := ws.conversation.get(id)
+		ws.startNativeFollower(snapshot)
+		return openedConversation{target: target, snapshot: snapshot, held: held}, nil
 	}
 	openErr := target.provider.OpenConversation(ctx, execution.ConversationRequest{
 		ConversationID: id,
@@ -1017,6 +1108,14 @@ type openConversationReq struct {
 
 type sendConversationMessageReq struct {
 	Message string `json:"message"`
+	Skill   string `json:"skill,omitempty"`
+	// executionID names the ARchetipo action this turn carries out, and is
+	// deliberately not a JSON field: a browser cannot claim that the message it
+	// is typing belongs to an action. It is filled in by the two callers that
+	// know — the start of an action, and an ordinary message sent while one is
+	// still in flight — so the turn the provider opens can be told apart later
+	// from every turn that belongs to no action at all.
+	executionID string
 }
 
 // handleSendWorkspaceConversationMessage delivers a message to the open
@@ -1040,7 +1139,10 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		writeError(w, err)
 		return
 	}
-	if strings.TrimSpace(body.Message) == "" {
+	// Una skill invocata da sola è un turn intero: `/review` non ha bisogno di
+	// parole in più, e il provider la scrive comunque davanti al messaggio. Solo
+	// un turn senza né skill né testo non dice niente.
+	if strings.TrimSpace(body.Message) == "" && strings.TrimSpace(body.Skill) == "" {
 		writeError(w, iox.NewInvalidInput("message is required", "send a non-empty message", nil))
 		return
 	}
@@ -1053,6 +1155,15 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		// conversation of no workspace. The refusal says which of the two it is,
 		// with the sentence every other route uses for the second.
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "send a message"))
+		return
+	}
+	if snapshot.sessionProvider != nil {
+		ctx := r.Context()
+		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, body); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, s.nativeConversationView(ctx, ws, snapshot, afterID))
 		return
 	}
 	if snapshot.collaborator == nil {
@@ -1116,6 +1227,14 @@ func (s *Server) handleRespondWorkspaceConversationApproval(w http.ResponseWrite
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "answer a decision"))
 		return
 	}
+	if snapshot.sessionProvider != nil {
+		if err := s.respondNativeConversationApproval(r.Context(), ws, snapshot, approvalID, body.OptionID); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, afterID))
+		return
+	}
 	if snapshot.collaborator == nil {
 		writeError(w, iox.NewConflict(
 			"the conversation "+snapshot.id+" cannot be commanded from this viewer",
@@ -1131,6 +1250,44 @@ func (s *Server) handleRespondWorkspaceConversationApproval(w http.ResponseWrite
 		return
 	}
 	writeJSON(w, http.StatusAccepted, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
+}
+
+type respondConversationInputRequest struct {
+	Payload json.RawMessage `json:"payload"`
+}
+
+func (s *Server) handleRespondWorkspaceConversationInput(w http.ResponseWriter, r *http.Request) {
+	afterID, err := parseAfterID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	inputID := strings.TrimSpace(r.PathValue("inputId"))
+	if inputID == "" {
+		writeError(w, iox.NewInvalidInput("missing input id", "use /api/workspace/conversations/<id>/inputs/<inputId>", nil))
+		return
+	}
+	var body respondConversationInputRequest
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(body.Payload) == 0 || string(body.Payload) == "null" {
+		writeError(w, iox.NewInvalidInput("payload is required", "answer the structured input requested by the provider", nil))
+		return
+	}
+	ws := s.session()
+	id := strings.TrimSpace(r.PathValue("id"))
+	snapshot, live := ws.conversation.get(id)
+	if !live || snapshot.sessionProvider == nil {
+		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "answer a structured input request"))
+		return
+	}
+	if err := s.respondNativeConversationInput(r.Context(), ws, snapshot, inputID, body.Payload); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, afterID))
 }
 
 // handleCloseWorkspaceConversation closes the conversation and releases the
@@ -1153,6 +1310,28 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 	snapshot, live := ws.conversation.get(id)
 	if !live {
 		writeError(w, s.conversationGoneRefusal(ctx, ws, id, "close it"))
+		return
+	}
+	if snapshot.sessionProvider != nil {
+		view := s.nativeConversationView(ctx, ws, snapshot, afterID)
+		if err := ws.releaseNativeConversation(ctx, snapshot); err != nil {
+			writeError(w, iox.NewInternal("releasing the native conversation "+id, err))
+			return
+		}
+		if view.Conversation != nil {
+			view.Conversation.State = execution.RunClosed
+		}
+		// The projection was rendered *before* the release, because rendering it
+		// after would mean rendering a conversation this viewer no longer holds.
+		// What the release changed therefore has to be written into it by hand,
+		// and the connection is part of that: answering CONNECTED to the very
+		// request that released the runtime told the browser the opposite of
+		// what had just happened, and only the next GET corrected it.
+		if view.Session != nil {
+			view.Session.Connection = execution.ConnectionReleased
+			view.Session.ConnectionID = ""
+		}
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
 	// Sealed while the holder still holds it: the final state is read from the
@@ -1183,6 +1362,17 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 func (s *Server) conversationGoneRefusal(ctx context.Context, ws *workspaceSession, id, intent string) error {
 	if _, err := s.readPastConversation(ctx, ws, id); err != nil {
 		return err
+	}
+	// A thread this viewer is not holding is not necessarily a thread that has
+	// ended: another View process opened on the same workspace may be running
+	// it right now, and telling this person to resume it would ask them to start
+	// a second harness runtime on a session that already has one.
+	if ws.heldByAnotherViewer(ctx, id) {
+		return iox.NewConflict(
+			"the conversation "+id+" is held by another View process on this workspace",
+			"continue it there, or stop that viewer: two runtimes on one native session would write the same transcript",
+			nil,
+		)
 	}
 	return iox.NewConflict(
 		"the conversation "+id+" is no longer live on this workspace",

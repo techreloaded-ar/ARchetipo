@@ -32,6 +32,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { buildCLI as buildCLIShared, createRunDir as createRunDirShared, escapeHTML, makeRunCommand, parseCommonArgs, readBody, stopProcess as stopProcessShared } from "./support/view-smoke-harness.mjs";
 import { startViewServer as startViewServerShared } from "./support/view-smoke-harness.mjs";
+import { findChrome, launchChrome } from "./viewer-page-load-smoke.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,7 +102,7 @@ async function main() {
     const dirB = await createWorkspace(runDir, targetsDir, "beta", "claude", CODE_B, env);
     const dirC = await createWorkspace(runDir, targetsDir, "gamma", "codex", CODE_C, env);
 
-    await scenarioCodexConversationWorks(dirC, env);
+    await scenarioNativeCodexConversation(dirC, env);
     await scenarioConversationOfTheOpenWorkspace(dirA, dirB, env);
     await assertNoSessionMaterialLeaked([dirA, dirB, dirC]);
   } catch (error) {
@@ -127,23 +128,18 @@ async function main() {
 
 // --- AC-4 -------------------------------------------------------------------
 //
-// codex-workspace-converse: the codex provider now holds a free conversation
-// too, over its own app-server JSON-RPC protocol rather than claude's
-// stream-json. The two protocols differ enough that the guarantee is worth
-// proving on codex directly rather than assumed from the claude scenario
-// below: a thread opens with no turn, the first message is what opens the
-// first turn — carrying the held instruction ahead of it, in the same
-// turn — and the end of that turn is not the end of the conversation: the
-// next message opens a second turn on the same thread instead of being
-// refused, which is the one fact a single-turn dispatched action never
-// exercises.
-async function scenarioCodexConversationWorks(dirC, env) {
-  const realC = await fs.realpath(dirC);
+// The Codex workspace exercises the same native conversation contract as
+// Claude through the real View routes and a controlled app-server fake.
+async function scenarioNativeCodexConversation(dirC, env) {
   let view;
   let control;
+  let browser;
   try {
     control = await startControlServer();
-    view = await startViewServer(dirC, { ...env, FAKE_CODEX_CONTROL: control.url });
+    view = await startViewServer(dirC, {
+      ...env,
+      FAKE_CODEX_CONTROL: control.url,
+    });
     console.log(`-> view ready on the codex workspace: ${view.url}`);
 
     await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
@@ -162,92 +158,130 @@ async function scenarioCodexConversationWorks(dirC, env) {
     if (!(codex.capabilities || []).includes("workspace.converse")) {
       throw new Error(`AC-4: codex must declare workspace.converse; got ${JSON.stringify(codex.capabilities)}`);
     }
+    const offered = await apiJSON(`${view.url}/api/workspace/conversations`, {}, 200);
+    if (offered.available !== true) {
+      throw new Error(`AC-4: the Codex conversation must be offered; got ${JSON.stringify(offered)}`);
+    }
 
     const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
-    if (opened.available !== true || !opened.conversation?.id) {
-      throw new Error(`AC-4: unexpected payload on open: ${JSON.stringify(opened)}`);
-    }
-    const conversationC = opened.conversation.id;
-    await assertSamePath(opened.conversation.working_dir, dirC, "AC-4: the directory the conversation reports");
-
-    const invocation = await control.waitFor("argv", 1);
-    const startedIn = await fs.realpath(invocation.cwd);
-    if (startedIn !== realC) {
-      throw new Error(`AC-4: the codex process was started in ${invocation.cwd}, want the project root of the open workspace ${dirC}`);
+    const conversationID = opened.conversation?.id;
+    const nativeID = opened.session?.session?.native?.id;
+    if (!conversationID || nativeID !== "thread-1") {
+      throw new Error(`AC-4: Codex did not expose its persistent native thread: ${JSON.stringify(opened)}`);
     }
     const threadStart = await control.waitFor("thread/start", 1);
-    if (threadStart.params?.cwd !== dirC && (await fs.realpath(threadStart.params?.cwd || "/")) !== realC) {
-      throw new Error(`AC-4: thread/start named ${JSON.stringify(threadStart.params?.cwd)}, want ${dirC}`);
-    }
-    if (control.reports().some((entry) => entry.kind === "turn/start")) {
-      throw new Error("AC-4: opening the conversation must open no turn before anybody has said anything");
+    if (threadStart.params?.ephemeral !== false || threadStart.params?.approvalPolicy !== "untrusted") {
+      throw new Error(`AC-4: thread/start was not persistent and interactive: ${JSON.stringify(threadStart.params)}`);
     }
 
-    const accepted = await apiJSON(`${view.url}/api/workspace/conversations/${conversationC}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
-    if (JSON.stringify(accepted).includes(MESSAGE_SENTINEL)) {
-      throw new Error("AC-4: the accepted message must not be echoed into the history before the process re-emits it");
+    const chromePath = await findChrome(process.env.ARCHETIPO_CHROME || process.env.CHROME_PATH);
+    if (!chromePath) throw new Error("task 06 richiede Chrome; imposta ARCHETIPO_CHROME se non è nel percorso standard");
+    browser = await launchChrome(chromePath, path.join(path.dirname(dirC), "chrome-profile"));
+    const page = await browser.newPage();
+    const exceptions = [];
+    page.on("Runtime.exceptionThrown", (params) => exceptions.push(params.exceptionDetails));
+    await page.send("Runtime.enable");
+    await page.send("Page.enable");
+    await page.send("Page.navigate", { url: view.url });
+    await page.once("Page.loadEventFired", 30000, "il caricamento della View");
+    await page.waitFor(`!!document.querySelector('[data-conversation-id="${conversationID}"]')`, 20000, "la rail entry della sessione Codex");
+    await page.evaluate(`document.querySelector('[data-conversation-id="${conversationID}"]').click()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-pill="model"]')`, 20000, "il selettore modello della sessione");
+    await page.evaluate(`document.querySelector('[data-conversation-pill="model"]').click()`);
+    await page.evaluate(`document.querySelector('[data-conversation-model-choice="gpt-fake"]').click()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-pill="option:effort"]')`, 20000, "il selettore effort");
+    await page.evaluate(`document.querySelector('[data-conversation-pill="option:effort"]').click()`);
+    await page.evaluate(`document.querySelector('[data-conversation-option-choice="high"]').click()`);
+    await waitForConversation(view.url, conversationID, 0, (data) => data.next_turn?.model === "gpt-fake" && data.next_turn?.options?.effort === "high", "la scelta model/effort fatta con click");
+    // Il menu delle skill non è più una combobox: si apre scrivendo «/» nel
+    // campo, come in ogni harness, e mostra i nomi che il catalogo dichiara.
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = '/'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-skill-option="plugin:fixture"]')`, 20000, "il menu delle skill native");
+    const skillOptions = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-skill-option]')).map((option) => option.getAttribute('data-conversation-skill-option'))`);
+    if (!skillOptions.includes("codex-only") || !skillOptions.includes("shared") || skillOptions.includes("claude-only") || skillOptions.includes("disabled")) {
+      throw new Error(`AC-4: il catalogo Codex non rispetta runtime e disabilitazioni: ${JSON.stringify(skillOptions)}`);
     }
+    await page.evaluate(`document.querySelector('[data-conversation-skill-option="plugin:fixture"]').click()`);
+    await page.waitFor(`document.querySelector('.conv-composer-input').value === '/plugin:fixture '`, 20000, "la skill scelta scritta nel campo");
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = '/plugin:fixture turno codex uno'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+    await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     const firstTurn = await control.waitFor("turn/start", 1);
-    const firstInput = firstTurn.params?.input || [];
-    const lastBlock = firstInput[firstInput.length - 1];
-    if (firstInput.length < 2 || lastBlock?.text !== MESSAGE_SENTINEL) {
-      throw new Error(`AC-4: the first turn's input was ${JSON.stringify(firstInput)}, want the opening instruction followed by the sentinel`);
+    if (firstTurn.params?.model !== "gpt-fake" || firstTurn.params?.effort !== "high") {
+      throw new Error(`AC-4: turn/start lost model/effort: ${JSON.stringify(firstTurn.params)}`);
     }
-    const openingBlocks = firstInput.slice(0, -1).map((block) => ({ type: "text", text: block.text }));
-
-    // The process re-emits the whole turn's input as one userMessage item,
-    // exactly as codex-cli joins several content blocks of one message, and
-    // the opening instruction must be stripped back out of the history.
-    control.push(emitCodex("item/started", {
-      item: { type: "userMessage", content: [...openingBlocks, { type: "text", text: MESSAGE_SENTINEL }] },
-    }));
-    const first = await waitForConversation(
-      view.url,
-      conversationC,
-      0,
-      (data) => (data.events || []).some((event) => event.kind === "user_message"),
-      "the re-emitted message to enter the history",
-    );
-    const echoed = first.events.filter((event) => event.kind === "user_message");
-    if (echoed.length !== 1 || echoed[0].text !== MESSAGE_SENTINEL) {
-      throw new Error(`AC-4: the history must open on the person's own message, with the instruction stripped; got ${JSON.stringify(echoed)}`);
+    const skillInput = (firstTurn.params?.input || []).find((entry) => entry?.type === "skill");
+    if (skillInput?.name !== "plugin:fixture" || !(firstTurn.params?.input || []).some((entry) => entry?.type === "text" && entry.text.includes("$plugin:fixture"))) {
+      throw new Error(`AC-4: la skill non è stata invocata come input nativo nello stesso turn: ${JSON.stringify(firstTurn.params)}`);
     }
+    await page.waitFor(`!!document.querySelector('[data-conversation-interrupt]') && !document.querySelector('.conv-composer-input').disabled`, 20000, "il compositore aperto durante il turn attivo");
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = 'correzione nel turn'; input.dispatchEvent(new Event('input', {bubbles:true})); input.form.requestSubmit(); })()`);
+    await control.waitFor("turn/steer", 1);
+    if (exceptions.length) throw new Error(`la View ha emesso eccezioni JS: ${JSON.stringify(exceptions)}`);
+    control.push({ kind: "emit", method: "item/started", params: { item: { type: "userMessage", content: [{ type: "text", text: "turno codex uno" }] } } });
+    control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+    await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "IDLE", "the first Codex turn to complete");
 
-    // The end of this turn is the agent finishing an answer, not the end of
-    // the conversation: a second message must open a second turn on the same
-    // thread instead of being refused.
-    control.push(emitCodex("turn/completed", { turn: { id: "turn-1" } }));
-    await waitForConversation(
-      view.url,
-      conversationC,
-      0,
-      (data) => (data.events || []).some((event) => event.kind === "turn_end"),
-      "the first turn to close",
-    );
-    const survives = await readConversation(view.url, conversationC, 0);
-    if (!survives.conversation?.id || survives.conversation.state !== "ACTIVE") {
-      throw new Error(`AC-4: the conversation must survive the end of its first turn; got ${JSON.stringify(survives.conversation)}`);
-    }
-
-    const SECOND_SENTINEL = `${MESSAGE_SENTINEL}-2`;
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationC}/messages`, postJSON({ message: SECOND_SENTINEL }), 202);
+    const secondAccepted = apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: "turno codex due", skill: "shared" }), 202);
     const secondTurn = await control.waitFor("turn/start", 2);
-    const secondInput = secondTurn.params?.input || [];
-    if (secondInput.length !== 1 || secondInput[0]?.text !== SECOND_SENTINEL) {
-      throw new Error(`AC-4: the second turn's input was ${JSON.stringify(secondInput)}, want exactly the second message with no instruction repeated`);
+    if (!(secondTurn.params?.input || []).some((entry) => entry?.type === "skill" && entry.name === "shared")) {
+      throw new Error(`AC-4: la skill condivisa non è stata invocata nello stesso thread: ${JSON.stringify(secondTurn.params)}`);
+    }
+    await secondAccepted;
+    await page.send("Page.setWebLifecycleState", { state: "frozen" });
+    for (let index = 0; index < 505; index += 1) {
+      control.push({ kind: "emit", method: "item/agentMessage/delta", params: { delta: `history-${index}\n` } });
+    }
+    await waitForConversation(view.url, conversationID, 0, (data) => data.has_more === true, "la history Codex paginata");
+    await page.send("Page.setWebLifecycleState", { state: "active" });
+    await page.waitFor(`!!document.querySelector('[data-conversation-history-more]')`, 30000, "il comando di paginazione della history");
+    await page.evaluate(`document.querySelector('[data-conversation-history-more]').click()`);
+    await page.waitFor(`!document.querySelector('[data-conversation-history-more]')`, 30000, "la pagina successiva della history");
+    control.push({ kind: "request", id: 71, method: "item/commandExecution/requestApproval", params: { threadId: "thread-1", turnId: "turn-2", itemId: "item-1", reason: "write smoke file" } });
+    const waitingApproval = await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "WAITING_APPROVAL", "the Codex approval to reach View");
+    if (waitingApproval.session?.pending_approvals?.[0]?.id !== "71") {
+      throw new Error(`AC-4: pending approval is missing: ${JSON.stringify(waitingApproval.session)}`);
+    }
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/approvals/71`, postJSON({ option_id: "allow" }), 202);
+    const approvalResponse = await control.waitFor((entry) => entry.kind === "response" && entry.id === 71);
+    if (approvalResponse.result?.decision !== "accept") {
+      throw new Error(`AC-4: approval response = ${JSON.stringify(approvalResponse)}`);
     }
 
-    const closed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationC}?after_id=0`, { method: "DELETE" }, 200);
-    if (closed.conversation?.state !== "CLOSED") {
-      throw new Error(`AC-4: the close must report the conversation CLOSED; got ${JSON.stringify(closed.conversation)}`);
+    control.push({ kind: "request", id: 72, method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-2", questions: [{ id: "choice", question: "A o B?" }] } });
+    await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "WAITING_INPUT", "the Codex input request to reach View");
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/inputs/72`, postJSON({ payload: { answers: { choice: { answers: ["B"] } } } }), 202);
+    const inputResponse = await control.waitFor((entry) => entry.kind === "response" && entry.id === 72);
+    if (inputResponse.result?.answers?.choice?.answers?.[0] !== "B") {
+      throw new Error(`AC-4: input response = ${JSON.stringify(inputResponse)}`);
     }
-    await waitForProcessGone(invocation.pid, `the codex conversation process (pid ${invocation.pid}) to be released by the close`);
 
+    await page.waitFor(`!!document.querySelector('[data-conversation-interrupt]')`, 20000, "il comando interrupt");
+    await page.evaluate(`document.querySelector('[data-conversation-interrupt]').click()`);
+    await control.waitFor("turn/interrupt", 1);
+    control.push({ kind: "emit", method: "turn/completed", params: { turn: { id: "turn-2", status: "interrupted" } } });
+    await waitForConversation(view.url, conversationID, 0, (data) => data.session?.current_turn?.state === "INTERRUPTED", "the interrupted Codex turn");
+    await page.waitFor(`!!document.querySelector('[data-conversation-close-open]')`, 20000, "il comando archive");
+    await page.evaluate(`document.querySelector('[data-conversation-close-open]').click()`);
+    await page.evaluate(`document.querySelector('[data-conversation-close-confirm]').click()`);
+    await waitForConversation(view.url, conversationID, 0, (data) => data.conversation?.state === "CLOSED", "l'archiviazione della sessione");
+    await page.waitFor(`!!document.querySelector('[data-conversation-reopen]')`, 20000, "il comando reopen");
+    await page.evaluate(`document.querySelector('[data-conversation-reopen]').click()`);
+    const resumeCall = await control.waitFor("thread/resume", 1);
+    const resumed = await waitForConversation(view.url, conversationID, 0, (data) => data.session?.connection === "CONNECTED", "il resume della stessa sessione");
+    if (resumed.conversation?.id !== conversationID || resumed.session?.session?.native?.id !== nativeID || resumeCall.params?.threadId !== nativeID) {
+      throw new Error(`AC-4: resume changed identity: ${JSON.stringify({ resumed, resumeCall })}`);
+    }
+    const listing = await apiJSON(`${view.url}/api/workspace/conversations`);
+    if ((listing.conversations || []).filter((entry) => entry.id === conversationID).length !== 1) {
+      throw new Error(`AC-4: resume created another rail entry: ${JSON.stringify(listing.conversations)}`);
+    }
     ok(
       "AC-4",
-      `codex declares workspace.converse, starts its process in ${dirC}, opens its thread with no turn, opens a turn only once the first message arrives — the opening instruction ahead of it in the same turn, stripped from the history — survives the end of that turn by opening a second turn carrying only the second message, and closing releases the process`,
+      "Codex exposes workspace.converse and keeps one persistent native thread across two turn/start calls, per-turn model/effort, approval, structured input, interrupt, release and thread/resume without adding a rail entry",
     );
   } finally {
+    if (browser) await browser.close();
     if (view) await stopProcess(view.child);
     if (control) await control.close();
   }
@@ -294,9 +328,6 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
 
     // --- AC-1 ---------------------------------------------------------------
-    // The process announces itself before the open call can return, so the
-    // frame is queued before the request that starts the process.
-    control.push(emit({ type: "system", subtype: "init", session_id: "conversation-a" }));
     const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     if (opened.available !== true || !opened.conversation?.id) {
       throw new Error(`AC-1: unexpected payload on open: ${JSON.stringify(opened)}`);
@@ -316,6 +347,8 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error("AC-1: the agent process was started in the workspace that is not open");
     }
     assertStreamingInvocation(invocation.argv || []);
+    const nativeSessionID = invocation.argv?.[invocation.argv.indexOf("--session-id") + 1];
+    control.push(emit({ type: "system", subtype: "init", session_id: nativeSessionID }));
 
     control.push(emit(assistantText("Ciao: leggo il workspace e rispondo.")));
     const first = await waitForConversation(
@@ -329,18 +362,22 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-1: the frame was not translated into a text event; got ${JSON.stringify(first.events[0])}`);
     }
 
-    const accepted = await apiJSON(`${view.url}/api/workspace/conversations/${conversationA}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    const acceptedRequest = apiJSON(`${view.url}/api/workspace/conversations/${conversationA}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    const turnInvocation = await control.waitFor("argv", 2);
+    const resumedSessionID = turnInvocation.argv?.[turnInvocation.argv.indexOf("--session-id") + 1]
+      || turnInvocation.argv?.[turnInvocation.argv.indexOf("--resume") + 1];
+    control.push(emit({ type: "system", subtype: "init", session_id: resumedSessionID, model: "sonnet" }));
+    const accepted = await acceptedRequest;
     if (JSON.stringify(accepted).includes(MESSAGE_SENTINEL)) {
       throw new Error("AC-1: the accepted message must not be echoed into the history before the process re-emits it");
     }
-    // The opening instruction was held rather than written at the open, so the
-    // operator's message is what delivers it: both travel in the one frame the
-    // process is given, the instruction as the block before the sentinel.
+    // A native session receives the person's message directly. ARchetipo does
+    // not inject a proposal-only turn ahead of it.
     const steered = await control.waitFor(userFrame, 1);
     const steeredBlocks = steered.frame?.message?.content || [];
     const lastBlock = steeredBlocks[steeredBlocks.length - 1];
-    if (steeredBlocks.length < 2 || lastBlock?.text !== MESSAGE_SENTINEL) {
-      throw new Error(`AC-1: the process received ${JSON.stringify(steeredBlocks)} instead of the opening instruction followed by the sentinel`);
+    if (steeredBlocks.length !== 1 || lastBlock?.text !== MESSAGE_SENTINEL) {
+      throw new Error(`AC-1: the process received ${JSON.stringify(steeredBlocks)} instead of exactly the sentinel`);
     }
     const stillOne = await readConversation(view.url, conversationA, 0);
     if ((stillOne.events || []).length !== 1) {
@@ -407,17 +444,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     // of the two takes a given frame, the new one gets the next. An extra
     // `system`/`init` frame produces no event in any conversation, and the
     // leftovers are drained rather than left for whoever polls next.
-    const announcing = setInterval(
-      () => control.push(emit({ type: "system", subtype: "init", session_id: "conversation-a-second" })),
-      25,
-    );
-    let secondOpen;
-    try {
-      secondOpen = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
-    } finally {
-      clearInterval(announcing);
-      control.drain();
-    }
+    const secondOpen = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationA2 = secondOpen.conversation?.id;
     if (!conversationA2 || conversationA2 === conversationA) {
       throw new Error(`AC-3: a second open must answer with a conversation of its own; got ${JSON.stringify(secondOpen.conversation)}`);
@@ -425,7 +452,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     // It is closed again straight away, so the rest of the scenario keeps
     // talking to a single agent process: the control server is shared by every
     // fake, and two live ones would race for the frames pushed to it.
-    const secondInvocation = await control.waitFor("argv", 2);
+    const secondInvocation = await control.waitFor("argv", 3);
     const secondClosed = await apiJSON(
       `${view.url}/api/workspace/conversations/${conversationA2}?after_id=0`,
       { method: "DELETE" },
@@ -451,41 +478,9 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-3: a second conversation and a refused command changed the projection of the first\n  before: ${truncate(beforeRefusals, 400)}\n  after:  ${truncate(afterRefusals, 400)}`);
     }
 
-    // --- AC-3, the partial history ------------------------------------------
-    // More frames than the window retains, in one command: the fake still
-    // progresses only when it is told to, and the burst is one telling.
-    const flood = [];
-    for (let i = 1; i <= FLOOD_FRAMES; i += 1) flood.push(assistantText(`riga ${i}`));
-    control.push({ kind: "emit", frames: flood });
-    const total = 2 + FLOOD_FRAMES;
-    await waitForConversation(
-      view.url,
-      conversationA,
-      total - 1,
-      (data) => (data.events || []).length === 1 && data.events[0].id === total,
-      `the last of ${FLOOD_FRAMES} flooded frames (event ${total})`,
-    );
-    const partial = await readConversation(view.url, conversationA, 0);
-    if (partial.truncated !== true) {
-      throw new Error(`AC-3: a cursor now outside the window must be answered truncated; got ${JSON.stringify({ truncated: partial.truncated, first: partial.events?.[0]?.id, count: partial.events?.length })}`);
-    }
-    if (!String(partial.notice || "").trim()) {
-      throw new Error("AC-3: a partial history must carry a non-empty notice");
-    }
-    if (partial.events.length !== RETAINED_EVENTS) {
-      throw new Error(`AC-3: the window must keep exactly ${RETAINED_EVENTS} events; got ${partial.events.length}`);
-    }
-    const dropped = total - RETAINED_EVENTS;
-    if (partial.events[0].id !== dropped + 1) {
-      throw new Error(`AC-3: the surviving history must begin at event ${dropped + 1}; got ${partial.events[0].id}`);
-    }
-    assertStrictlyIncreasing(partial.events, "AC-3 the partial history");
-    if (partial.events[partial.events.length - 1].id !== total || partial.last_id !== total) {
-      throw new Error(`AC-3: the newest event must be ${total}; got ${JSON.stringify({ last: partial.events[partial.events.length - 1].id, last_id: partial.last_id })}`);
-    }
     ok(
       "AC-3",
-      `the same viewer process (pid ${pid}) re-read the whole history with truncated:false, a second conversation ${conversationA2} opened beside it with 201 and was closed again while a refused command answered 404, all three leaving the projection of ${conversationA} byte-identical, and once ${total} events had been produced the read from a cursor now outside the ${RETAINED_EVENTS}-event window answered truncated:true beginning at event ${partial.events[0].id} with the notice ${JSON.stringify(truncate(partial.notice, 120))}`,
+      `the same viewer process (pid ${pid}) re-read the durable history with truncated:false, a second conversation ${conversationA2} opened beside it with 201 and was closed again while a refused command answered 404, all three leaving the projection of ${conversationA} byte-identical`,
     );
 
     // --- AC-5 ---------------------------------------------------------------
@@ -508,7 +503,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     // The switch is also what released the process of A: the oracle is the
     // operating system, asked whether that process is still there.
-    await waitForProcessGone(invocation.pid, `the agent process of A (pid ${invocation.pid}) to be released by the workspace switch`);
+    await waitForProcessGone(turnInvocation.pid, `the agent process of A (pid ${turnInvocation.pid}) to be released by the workspace switch`);
 
     await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
       id: "claude",
@@ -521,7 +516,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       throw new Error(`AC-5: B must open a conversation of its own; got ${JSON.stringify(openedInB.conversation)}`);
     }
     await assertSamePath(openedInB.conversation.working_dir, dirB, "AC-5: the directory the conversation of B reports");
-    const invocationB = await control.waitFor("argv", 3);
+    const invocationB = await control.waitFor("argv", 4);
     const startedInB = await fs.realpath(invocationB.cwd);
     if (startedInB !== realB) {
       throw new Error(`AC-5: the second agent process was started in ${invocationB.cwd}, want ${dirB}`);
@@ -606,10 +601,13 @@ async function assertNoSessionMaterialLeaked(dirs) {
 // stream-json there is no `initialize` call: the streaming flags are what make a
 // live dialogue possible at all.
 function assertStreamingInvocation(argv) {
-  for (const flag of ["--print", "--verbose", "--replay-user-messages", "--no-session-persistence"]) {
+  for (const flag of ["--print", "--verbose", "--replay-user-messages", "--session-id"]) {
     if (!argv.includes(flag)) {
       throw new Error(`AC-1: the session was not opened as configured, ${flag} is missing: ${JSON.stringify(argv)}`);
     }
+  }
+  if (argv.includes("--no-session-persistence") || argv.includes("--continue")) {
+    throw new Error(`AC-1: the native session uses a non-persistent or generic resume flag: ${JSON.stringify(argv)}`);
   }
   for (const [flag, value] of [["--input-format", "stream-json"], ["--output-format", "stream-json"]]) {
     if (argv[argv.indexOf(flag) + 1] !== value) {
@@ -721,12 +719,6 @@ async function listExecutionRecords(root) {
 
 function emit(frame) {
   return { kind: "emit", frame };
-}
-
-// emitCodex is emit's counterpart for the codex fake, which speaks JSON-RPC
-// notifications (method + params) rather than stream-json frames.
-function emitCodex(method, params) {
-  return { kind: "emit", method, params };
 }
 
 function assistantText(text) {
@@ -1050,10 +1042,10 @@ function renderReport(summary) {
     </header>
 
     <h2>Scenario</h2>
-    <p>Three real workspaces. One is initialized with <code>archetipo init --tool codex</code> and holds the
-    available-but-not-conversational provider; the other two, <code>A</code> and <code>B</code>, are initialized
+    <p>Three real workspaces. One is initialized with <code>archetipo init --tool codex</code> and exercises a
+    persistent app-server thread; the other two, <code>A</code> and <code>B</code>, are initialized
     with <code>--tool claude</code> and are served by a single <code>archetipo view</code> process. Only the agent
-    binary is fake: <code>test/e2e/support/fake-claude.mjs</code>, driven frame by frame through a local control
+    binaries are fake: <code>test/e2e/support/fake-codex.mjs</code> and <code>test/e2e/support/fake-claude.mjs</code>, driven frame by frame through a local control
     server. The oracles are the working directory the agent process reports at startup, the frames it was really
     given, the execution records that never appear on the filesystem, and the end of the process, asked of the
     operating system by pid.</p>

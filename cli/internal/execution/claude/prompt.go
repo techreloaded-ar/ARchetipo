@@ -1,8 +1,6 @@
 package claude
 
 import (
-	"strings"
-
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 )
 
@@ -126,6 +124,30 @@ func buildArgs(cfg settings) []string {
 	return args
 }
 
+func buildNativeSessionArgs(cfg settings, sessionID string, resume bool) []string {
+	args := []string{
+		"--print",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--replay-user-messages",
+		"--permission-mode", cfg.PermissionMode,
+		"--permission-prompt-tool", permissionPromptHost,
+	}
+	if resume {
+		args = append(args, "--resume", sessionID)
+	} else {
+		args = append(args, "--session-id", sessionID)
+	}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	if cfg.Effort != "" {
+		args = append(args, "--effort", cfg.Effort)
+	}
+	return args
+}
+
 // buildInceptionPrompt renders the single instruction that opens an inception
 // conversation.
 //
@@ -141,21 +163,8 @@ func buildArgs(cfg settings) []string {
 // workspace configuration, which this package deliberately cannot read. The
 // value is informative anyway — the confirmation of the effect happens one
 // layer up, against the connector.
-func buildInceptionPrompt(_ execution.Request) string {
-	return strings.Join([]string{
-		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
-		"Run the product inception for this workspace by invoking the ARchetipo inception skill:",
-		"",
-		"/archetipo-inception",
-		"",
-		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message.",
-		"Persist the PRD with `archetipo prd write`, exactly as the skill prescribes. Do not paste the PRD into your final message.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"artifact":"prd","status":"` + execution.WrittenStatus + `","path":"<path>"}`,
-		"",
-		"<path> is the configured PRD path you actually wrote, as reported by `archetipo config show`. Emit the receipt only after the PRD is persisted, and never before: it is what ends the conversation.",
-	}, "\n")
+func buildInceptionPrompt(req execution.Request) string {
+	return execution.InceptionPrompt(localOpening, req)
 }
 
 // buildBacklogPrompt renders the single instruction that opens a backlog
@@ -175,21 +184,8 @@ func buildInceptionPrompt(_ execution.Request) string {
 // skill already knows to go through `archetipo spec add`. The counts asked for
 // in the receipt are informative — confirming that the epics and the specs
 // really exist happens one layer up, against the connector.
-func buildBacklogPrompt(_ execution.Request) string {
-	return strings.Join([]string{
-		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
-		"Generate the initial product backlog for this workspace from its PRD by invoking the ARchetipo spec skill:",
-		"",
-		"/archetipo-spec",
-		"",
-		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message, and ask only when the answer is really necessary to write the backlog.",
-		"Persist every epic and every spec with `archetipo spec add`, exactly as the skill prescribes. Do not paste the backlog into your final message.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"artifact":"backlog","status":"` + execution.WrittenStatus + `","epics":<N>,"specs":<M>}`,
-		"",
-		"<N> and <M> are the number of epics and of specs you actually persisted. Emit the receipt only after the backlog is persisted, and never before: it is what ends the conversation.",
-	}, "\n")
+func buildBacklogPrompt(req execution.Request) string {
+	return execution.BacklogPrompt(localOpening, req)
 }
 
 // buildSpecDraftPrompt renders the single instruction that opens an assisted
@@ -213,22 +209,8 @@ func buildBacklogPrompt(_ execution.Request) string {
 // Nothing here dictates which epics exist: that is a fact of the workspace the
 // agent reads for itself, and a value invented at this layer would be a value
 // the backlog does not know.
-func buildSpecDraftPrompt(_ execution.Request) string {
-	return strings.Join([]string{
-		"Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed.",
-		"Propose ONE new spec for the backlog of this workspace by invoking the ARchetipo spec skill:",
-		"",
-		"/archetipo-spec",
-		"",
-		"Do NOT persist anything. You must not run `archetipo spec add`, must not write into the backlog and must not create any spec file: the spec will be reviewed, edited and created by a person, and writing it yourself would both take that decision for them and consume a spec code.",
-		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message, and ask only what you really need to write acceptance criteria a reviewer can verify.",
-		"File the spec under one of the epics the backlog already declares: read them yourself and never invent one.",
-		"Close your run with a single JSON receipt line and nothing after it:",
-		"",
-		`{"artifact":"spec_draft","status":"` + execution.ProposedStatus + `","title":"<title>","epic_code":"<EP-XXX>","priority":"HIGH|MEDIUM|LOW","points":<N>,"scope":"<scope>","blocked_by":[],"body":"<markdown>"}`,
-		"",
-		"<markdown> is the complete markdown body of the spec on a single line, with every line break written as \\n. Emit the receipt only when the proposal is complete, and never before: it is what ends the conversation.",
-	}, "\n")
+func buildSpecDraftPrompt(req execution.Request) string {
+	return execution.SpecDraftPrompt(localOpening, req)
 }
 
 // buildConversationPrompt renders the single instruction that opens a free

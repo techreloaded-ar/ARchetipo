@@ -140,7 +140,7 @@ async function scenarioInceptionProducesThePRD(runDir) {
     ok("AC-1", `a workspace without a PRD offers ${JSON.stringify(inception.label)} as runnable, with no execution behind it`);
 
     // The run starts from the state the UI produces: a press on that action.
-    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "inception" }), 201);
+    const started = await pressAction(w, { action: "inception" });
     if (started.status !== "RUNNING" || !started.id) {
       throw new Error(`AC-1: unexpected execution record on start: ${JSON.stringify(started)}`);
     }
@@ -151,7 +151,6 @@ async function scenarioInceptionProducesThePRD(runDir) {
 
     // The instruction travels inside the protocol, as the first user frame, and
     // it is the skill the process is asked to invoke.
-    await w.control.waitFor("argv");
     const prompt = userFrameText(await w.control.waitFor(userFrame, 1));
     if (!prompt.includes("/archetipo-inception")) {
       throw new Error(`AC-1: the prompt does not invoke the inception skill: ${JSON.stringify(prompt)}`);
@@ -160,7 +159,6 @@ async function scenarioInceptionProducesThePRD(runDir) {
 
     // AC-2, first half — the agent asks, and the question is in the UI while the
     // record is still running.
-    w.control.push(emit({ type: "system", subtype: "init", session_id: "session-1" }));
     w.control.push(emit({ type: "assistant", message: { model: "claude-fake", content: [{ type: "text", text: QUESTION }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "In attesa della risposta." }));
 
@@ -176,6 +174,7 @@ async function scenarioInceptionProducesThePRD(runDir) {
     ok("AC-2", "the agent's question is exposed as a text event while the record is still RUNNING");
 
     // AC-2, second half — the answer continues the same conversation.
+    announceSession(w);
     const accepted = await apiJSON(`${w.view.url}/api/execution/${executionID}/run/messages`, postJSON({ message: ANSWER }), 202);
     if (JSON.stringify(accepted).includes(ANSWER)) {
       throw new Error("AC-2: the accepted answer must not be echoed into the timeline before the process re-emits it");
@@ -197,7 +196,7 @@ async function scenarioInceptionProducesThePRD(runDir) {
     // is written by a command of this smoke, never by the fake, because what is
     // being proved is what the viewer does with a PRD that exists.
     await writePRD(w.sandboxDir, PRD_BODY);
-    w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: "Ho scritto il PRD." }] } }));
+    w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: RECEIPT }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: RECEIPT }));
 
     const succeeded = await waitForWorkspaceExecution(w.view.url, (record) => record && record.status !== "RUNNING");
@@ -228,10 +227,9 @@ async function scenarioCancelledRunLeavesNoPRD(runDir) {
   console.log("\n=== AC-4: a cancelled run leaves no PRD ===");
   const w = await openWorkspace(runDir, "sandbox-cancelled");
   try {
-    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "inception" }), 201);
+    const started = await pressAction(w, { action: "inception" });
     const executionID = started.id;
     await w.control.waitFor(userFrame, 1);
-    w.control.push(emit({ type: "system", subtype: "init", session_id: "session-1" }));
     w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: QUESTION }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "In attesa della risposta." }));
     await waitForRun(w.view.url, executionID, (data) =>
@@ -389,6 +387,31 @@ function userFrame(entry) {
 
 function userFrameText(entry) {
   return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
+}
+
+// pressAction is a press on an action of the workspace, in the shape the press
+// now really has: the action opens the native session it will work in, so the
+// agent process starts *inside* the request and announces its session while the
+// response is still in flight. Pushing the announcement before the press would
+// name a session the viewer has not assigned yet; pushing it after would be a
+// test waiting for the answer to a frame it is holding.
+async function pressAction(w, payload) {
+  const pressed = apiJSON(`${w.view.url}/api/workspace/execution`, postJSON(payload), 201);
+  const invocation = await w.control.waitFor("argv");
+  const argv = invocation.argv || [];
+  w.sessionID = argv[argv.indexOf("--session-id") + 1];
+  w.control.push(emit({ type: "system", subtype: "init", session_id: w.sessionID }));
+  return pressed;
+}
+
+// announceSession queues the frame that opens the next turn's process.
+//
+// A streaming Claude exits when a turn ends, so every turn after the first is a
+// new process resumed on the same session id, and every one of them announces
+// itself with its own init. Queuing it before the command that starts the turn
+// is what lets the fake answer a process that does not exist yet.
+function announceSession(w) {
+  w.control.push(emit({ type: "system", subtype: "init", session_id: w.sessionID }));
 }
 
 function postJSON(payload) {

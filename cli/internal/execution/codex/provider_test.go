@@ -189,9 +189,9 @@ func TestProviderDeclaresIdentityAndItsCapabilities(t *testing.T) {
 // DeclaredCapabilities exists to make impossible.
 func TestProviderDeclaresTheConversationThroughTheInterface(t *testing.T) {
 	provider := New(Options{})
-	conversationalist, ok := execution.ConversationalistFor(provider)
-	if !ok || conversationalist == nil {
-		t.Fatal("the provider does not expose a free conversation")
+	sessions, ok := execution.SessionProviderFor(provider)
+	if !ok || sessions == nil {
+		t.Fatal("the provider does not expose a native session")
 	}
 	declared, err := provider.Capabilities(context.Background())
 	if err != nil {

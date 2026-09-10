@@ -398,7 +398,7 @@ function chromeCandidates(explicit) {
   return candidates;
 }
 
-async function findChrome(explicit) {
+export async function findChrome(explicit) {
   for (const candidate of chromeCandidates(explicit)) {
     try {
       await fs.access(candidate, fs.constants.X_OK);
@@ -410,7 +410,7 @@ async function findChrome(explicit) {
   return null;
 }
 
-async function launchChrome(chromePath, userDataDir) {
+export async function launchChrome(chromePath, userDataDir) {
   await fs.mkdir(userDataDir, { recursive: true });
   const child = spawn(
     chromePath,
@@ -719,7 +719,9 @@ async function stopProcess(child) {
   }
 }
 
-main().catch((error) => {
-  console.error(`\nFAIL: ${error.message}`);
-  process.exit(1);
-});
+if (path.resolve(process.argv[1] || "") === __filename) {
+  main().catch((error) => {
+    console.error(`\nFAIL: ${error.message}`);
+    process.exit(1);
+  });
+}

@@ -131,6 +131,14 @@ describe("renderConversation", () => {
 		);
 	});
 
+	it("mostra il menu delle skill nel composer senza interpretarne il catalogo", () => {
+		const html = renderConversation(LIVE, "", {
+			skillChoiceHtml: '<ul class="conv-skill-menu"><li><button data-conversation-skill-option="plugin:fixture">/plugin:fixture</button></li></ul>',
+		});
+		assert.ok(html.includes("data-conversation-skill-option"));
+		assert.ok(html.indexOf("data-conversation-skill-option") < html.indexOf('type="submit"'));
+	});
+
 	// A conversazione conclusa riprenderla apre una sessione nuova, e la riga
 	// agente è dove si sceglie con che modello parte: sta nel compositore,
 	// all'altezza del pulsante che manda.
@@ -151,30 +159,38 @@ describe("renderConversation", () => {
 		);
 	});
 
-	// Prima il blocco spariva e con lui l'informazione: ora la riga resta,
-	// inerte e con un lucchetto.
-	it("una conversazione attiva dice il modello fissato e non lo offre", () => {
+	// Le pastiglie dicono già da sole che cosa vale per il turn in corso e che
+	// cosa per il prossimo: le due etichette accanto lo ripetevano a parole, e
+	// la riga del compositore le pagava in larghezza.
+	it("la riga agente porta le pastiglie e nessuna etichetta di turn", () => {
 		const html = renderConversation(
 			withConversation({
 				model: "MODELLO-FISSATO",
 				model_options: { sforzo: "LIVELLO-X" },
+				session: {
+					archive: "OPEN",
+					recovery: "RESUMABLE",
+					current_turn: { applied: { model: "MODELLO-FISSATO", options: { sforzo: "LIVELLO-X" } } },
+				},
 			}),
 			"",
-			{ modelChoiceHtml: "MODELLO-DA-NON-MOSTRARE" },
+			{ modelChoiceHtml: "MODELLO-PROSSIMO" },
 		);
 		const text = visibleText(html);
 
-		assert.ok(!html.includes("MODELLO-DA-NON-MOSTRARE"));
-		assert.ok(!html.includes("data-conversation-pill"), "la scelta è ancora premibile");
-		assert.ok(html.includes("conv-agent-lock"), "la riga fissata non porta il lucchetto");
-		assert.ok(
-			html.includes('title="Modello e ragionamento sono stati fissati all&#39;apertura"'),
-			"la ragione per cui non si sceglie più non è nel title",
-		);
-		assert.ok(
-			text.includes("MODELLO-FISSATO · LIVELLO-X"),
-			"il modello fissato e il suo sforzo non si leggono sulla riga",
-		);
+		assert.ok(text.includes("MODELLO-PROSSIMO"));
+		assert.ok(!text.includes("Turn attivo"));
+		assert.ok(!text.includes("Prossimo turn"));
+	});
+
+	it("senza steering non promette un invio durante il turn attivo", () => {
+		const html = renderConversation(withConversation(), "bozza intatta", {
+			writable: false,
+			sendBehavior: "wait",
+		});
+		assert.match(html, /conv-composer-input[^>]* disabled/);
+		assert.match(visibleText(html), /non supporta steering/);
+		assert.match(html, /bozza intatta/);
 	});
 
 	it("senza disponibilità mostra la ragione e non offre il compositore", () => {
@@ -356,7 +372,7 @@ describe("renderConversation", () => {
 		assert.ok(button, "il comando di chiusura non è un bottone");
 		assert.match(
 			button[0],
-			/aria-label="Chiudi la conversazione"/,
+			/aria-label="Archivia la conversazione"/,
 			"il comando di chiusura non dichiara il proprio nome accessibile",
 		);
 	});
@@ -1678,13 +1694,14 @@ describe("la ripresa di una conversazione finita", () => {
 			working_dir: "/tmp/DIRECTORY-X",
 			opened_at: "2026-08-21T10:00:00.000Z",
 		},
+		session: { archive: "OPEN", recovery: "RESUMABLE", work: "IDLE" },
 	});
 
-	it("dice che la risposta arriverà in una conversazione nuova", () => {
+	it("dice che il messaggio riprende la stessa sessione", () => {
 		const text = visibleText(renderConversation(CHIUSA, "", {}));
 		assert.match(
 			text,
-			/conversazione nuova/,
+			/stessa sessione e la stessa conversation/,
 			"non dice dove andrà a finire ciò che si sta per scrivere",
 		);
 	});
@@ -1703,7 +1720,7 @@ describe("la ripresa di una conversazione finita", () => {
 		// che non si scrive — e non una seconda copia della nota qui sopra.
 		const riga = html.slice(idxRiga);
 		assert.ok(
-			!/conv-composer-hint[^]*conversazione nuova/.test(riga),
+			!/conv-composer-hint[^]*stessa sessione/.test(riga),
 			"la nota di ripresa è ripetuta anche nella riga del campo",
 		);
 	});
@@ -1741,6 +1758,16 @@ describe("la ripresa di una conversazione finita", () => {
 		const text = visibleText(renderConversation(LIVE, "", {}));
 		assert.match(text, /invio: invia/);
 		assert.match(text, /maiusc\+invio: a capo/);
+	});
+
+	it("un campo che accetta il messaggio non porta nessun suggerimento", () => {
+		// «Il messaggio avvia il prossimo turn» e «il messaggio entra nel turn
+		// attivo» erano il campo che descriveva se stesso: la riga resta muta,
+		// e torna a parlare solo quando ha da dire qualcosa che non si vede.
+		for (const sendBehavior of ["turn", "steer"]) {
+			const html = renderConversation(LIVE, "", { sendBehavior });
+			assert.ok(!html.includes("conv-composer-hint"), sendBehavior);
+		}
 	});
 
 	it("il suggerimento del campo c'è anche a conversazione finita", () => {

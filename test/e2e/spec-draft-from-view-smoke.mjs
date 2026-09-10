@@ -203,7 +203,7 @@ async function scenarioProposalIsReviewedAndConfirmed(runDir) {
     }
     ok("AC-1", `a workspace with a backlog offers ${JSON.stringify(draft.label)} as offered and runnable beside the manual creation, with no execution behind it`);
 
-    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
+    const started = await pressAction(w, { action: "spec-draft" });
     if (started.status !== "RUNNING" || !started.id) {
       throw new Error(`AC-1: unexpected execution record on start: ${JSON.stringify(started)}`);
     }
@@ -212,7 +212,6 @@ async function scenarioProposalIsReviewedAndConfirmed(runDir) {
     }
     const executionID = started.id;
 
-    await w.control.waitFor("argv");
     const prompt = userFrameText(await w.control.waitFor(userFrame, 1));
     if (!prompt.includes("/archetipo-spec")) {
       throw new Error(`AC-1: the prompt does not invoke the spec skill: ${JSON.stringify(prompt)}`);
@@ -224,7 +223,6 @@ async function scenarioProposalIsReviewedAndConfirmed(runDir) {
 
     // AC-2, first half — the agent asks, and the question is in the UI while the
     // record is still running.
-    w.control.push(emit({ type: "system", subtype: "init", session_id: "session-1" }));
     w.control.push(emit({ type: "assistant", message: { model: "claude-fake", content: [{ type: "text", text: QUESTION }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "In attesa della risposta." }));
 
@@ -240,6 +238,7 @@ async function scenarioProposalIsReviewedAndConfirmed(runDir) {
     ok("AC-2", "the agent's question is exposed as a text event while the record is still RUNNING");
 
     // AC-2, second half — the answer continues the same conversation.
+    announceSession(w);
     const accepted = await apiJSON(`${w.view.url}/api/execution/${executionID}/run/messages`, postJSON({ message: ANSWER }), 202);
     if (JSON.stringify(accepted).includes(ANSWER)) {
       throw new Error("AC-2: the accepted answer must not be echoed into the timeline before the process re-emits it");
@@ -263,7 +262,7 @@ async function scenarioProposalIsReviewedAndConfirmed(runDir) {
 
     // AC-3 — the agent closes on its proposal, and the proposal is readable in
     // full. Nothing is persisted by the fake, because nothing is supposed to be.
-    w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: "Ecco la spec che propongo." }] } }));
+    w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: RECEIPT }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: RECEIPT }));
 
     const succeeded = await waitForWorkspaceExecution(w.view.url, (record) => record && record.status !== "RUNNING");
@@ -271,7 +270,10 @@ async function scenarioProposalIsReviewedAndConfirmed(runDir) {
       throw new Error(`AC-3: the proposal must succeed; got ${JSON.stringify(succeeded)}`);
     }
     const record = await apiJSON(`${w.view.url}/api/execution/${executionID}`);
-    const proposal = record?.result?.payload?.spec_draft;
+    // An action carried out in a session closes on one uniform payload — the
+    // conversation, the turn and the receipt the agent emitted — whichever
+    // action it was and whichever provider ran it.
+    const proposal = record?.result?.payload?.receipt;
     if (!proposal) {
       throw new Error(`AC-3: the record must carry the proposal; got ${JSON.stringify(record?.result?.payload)}`);
     }
@@ -337,10 +339,9 @@ async function scenarioCancelledRunLeavesNoSpecAndNoConsumedCode(runDir) {
   try {
     const before = await readBacklogFiles(w.sandboxDir);
 
-    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
+    const started = await pressAction(w, { action: "spec-draft" });
     const executionID = started.id;
     await w.control.waitFor(userFrame, 1);
-    w.control.push(emit({ type: "system", subtype: "init", session_id: "session-1" }));
     w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: QUESTION }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "In attesa della risposta." }));
     await waitForRun(w.view.url, executionID, (data) =>
@@ -585,6 +586,27 @@ function userFrame(entry) {
 
 function userFrameText(entry) {
   return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
+}
+
+// pressAction is a press on an action of the workspace, in the shape the press
+// now really has: the action opens the native session it will work in, so the
+// agent process starts *inside* the request and announces its session while the
+// response is still in flight.
+async function pressAction(w, payload) {
+  const pressed = apiJSON(`${w.view.url}/api/workspace/execution`, postJSON(payload), 201);
+  const invocation = await w.control.waitFor("argv");
+  const argv = invocation.argv || [];
+  w.sessionID = argv[argv.indexOf("--session-id") + 1];
+  announceSession(w);
+  return pressed;
+}
+
+// announceSession queues the frame that opens the next turn's process: a
+// streaming Claude exits when a turn ends, so every turn after the first is a
+// new process resumed on the same session id, announcing itself with its own
+// init.
+function announceSession(w) {
+  w.control.push(emit({ type: "system", subtype: "init", session_id: w.sessionID }));
 }
 
 function postJSON(payload) {

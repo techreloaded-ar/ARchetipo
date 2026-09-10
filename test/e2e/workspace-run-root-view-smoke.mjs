@@ -141,13 +141,19 @@ async function scenarioRunFollowsTheOpenWorkspace(runDir) {
     const treeABefore = await snapshotTree(dirA);
 
     // --- AC-1 and AC-2 ------------------------------------------------------
-    const started = await apiJSON(`${view.url}/api/spec/${CODE_B}/execution`, postJSON({ action: "plan" }), 201);
+    // The press opens the native session the action works in, so the process
+    // starts *inside* the request: its invocation is read, and the frame that
+    // announces its session pushed, while the response is still in flight.
+    const start = apiJSON(`${view.url}/api/spec/${CODE_B}/execution`, postJSON({ action: "plan" }), 201);
+    const invocation = await control.waitFor("argv", 1);
+    const argv = invocation.argv || [];
+    control.push({ kind: "emit", frame: { type: "system", subtype: "init", session_id: argv[argv.indexOf("--session-id") + 1] } });
+    const started = await start;
     if (started.status !== "RUNNING" || !started.id) {
       throw new Error(`AC-1: unexpected execution record on start: ${JSON.stringify(started)}`);
     }
     const runID = started.id;
 
-    const invocation = await control.waitFor("argv", 1);
     const startedIn = await fs.realpath(invocation.cwd);
     if (startedIn !== realB) {
       throw new Error(`AC-1: the agent process was started in ${invocation.cwd}, want the project root of the open workspace ${dirB}`);

@@ -98,8 +98,12 @@ export async function startViewServer(cliPath, cwd, env, readyPath) {
       reject(error);
     });
   });
+  // The rest of the run keeps collecting stderr: a handler that panics closes
+  // the connection and the client only learns "fetch failed", so the reason has
+  // to be readable from the process that wrote it.
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
   await waitForHTTP(`${url}${readyPath}`);
-  return { child, url };
+  return { child, url, log: () => stderr };
 }
 
 export async function stopProcess(child, runCommand) {
@@ -110,7 +114,13 @@ export async function stopProcess(child, runCommand) {
   }
   child.kill("SIGTERM");
   await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(3000)]);
-  if (!child.killed) child.kill("SIGKILL");
+  // Whether it is still there is asked of the child, never of `killed`: that
+  // flag says a signal was *sent*, so it is already true here and a process
+  // that did not act on SIGTERM would keep the whole smoke waiting for ever.
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
 }
 
 export async function waitForHTTP(url) {
@@ -128,10 +138,17 @@ export async function waitForHTTP(url) {
 }
 
 export async function apiJSON(url, init = {}) {
-  const response = await fetch(url, {
-    ...init,
-    headers: { Accept: "application/json", ...(init.headers || {}) },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { Accept: "application/json", ...(init.headers || {}) },
+    });
+  } catch (error) {
+    // A request that never gets an answer says only "fetch failed"; which
+    // request it was is the one thing the reader needs.
+    throw new Error(`${init.method || "GET"} ${url} did not answer: ${error.message}`, { cause: error });
+  }
   const text = await response.text();
   let data = null;
   try {

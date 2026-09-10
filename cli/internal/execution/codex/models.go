@@ -75,15 +75,25 @@ func (p *Provider) Models(ctx context.Context, raw map[string]any) ([]execution.
 	}
 	defer func() { _, _, _ = p.shutdown(process) }()
 
-	// Not conversational, and the argument is not a detail: this probe opens no
-	// turn at all — it initializes, pages through model/list and leaves — so
-	// nothing here ever has a turn to steer or to reopen.
-	client := newAppServer(process, localrun.NewSession("codex-model-catalog", nil), false)
+	// This probe opens no turn at all — it initializes, pages through
+	// model/list and leaves — so it never binds the client to a session.
+	client := newAppServer(process, localrun.NewSession("codex-model-catalog", nil))
 	go client.consume()
 	if err := client.initialize(listCtx); err != nil {
 		return nil, fmt.Errorf("listing models from the codex command %q: %w", cfg.Command, err)
 	}
 
+	return listModels(listCtx, client)
+}
+
+// listModels pages through model/list on an already-initialized client and
+// returns the catalog the app server declares.
+//
+// It is shared with the native session, which asks the very same question of
+// the very same protocol: a second decoder would be a second answer, free to
+// drift from this one — and it would be the poorer answer, because the paging,
+// the hidden filter and the single-default check all live here.
+func listModels(ctx context.Context, client *appServer) ([]execution.ModelOption, error) {
 	models := make([]execution.ModelOption, 0)
 	seenModels := map[string]struct{}{}
 	seenCursors := map[string]struct{}{}
@@ -96,7 +106,7 @@ func (p *Provider) Models(ctx context.Context, raw map[string]any) ([]execution.
 		if cursor != "" {
 			params["cursor"] = cursor
 		}
-		result, err := client.call(listCtx, methodModelList, params)
+		result, err := client.call(ctx, methodModelList, params)
 		if err != nil {
 			return nil, fmt.Errorf("the codex app server could not list models: %w", err)
 		}

@@ -31,28 +31,26 @@ type fakeCodex struct {
 	waitErr      error
 	waitForClose bool
 
-	threadErr    *rpcError
+	threadErr *rpcError
+	modelErr  *rpcError
+	// modelPages, when set, makes model/list answer page by page keyed by the
+	// cursor asked for. Left nil, the fake serves the single fixed catalog the
+	// native-session tests read.
+	modelPages   map[string]string
 	turnErr      *rpcError
 	steerErr     *rpcError
 	interruptErr *rpcError
 	reemitSteer  bool
-	modelErr     *rpcError
-	modelPages   map[string]string
+	turnCount    int
+	skillPath    string
 
-	turnStarted     chan struct{}
-	turnStartedOnce sync.Once
-	done            chan struct{}
+	turnStarted chan struct{}
+	done        chan struct{}
 
 	// startDir is the directory the process was really started in — the
 	// cmd.Dir the Starter receives — so a test can assert where the run
 	// executes instead of asserting a configuration value that stands for it.
 	startDir string
-	// starts, startName and startArgs record every call to Start, so a
-	// conversation test can assert it spawned exactly one process, and what it
-	// spawned.
-	starts    int
-	startName string
-	startArgs []string
 }
 
 var _ localrun.Process = (*fakeCodex)(nil)
@@ -60,17 +58,14 @@ var _ localrun.Process = (*fakeCodex)(nil)
 func newFakeCodex() *fakeCodex {
 	return &fakeCodex{
 		lines:       make(chan []byte, 512),
-		turnStarted: make(chan struct{}),
+		turnStarted: make(chan struct{}, 16),
 		done:        make(chan struct{}),
 	}
 }
 
-func (f *fakeCodex) Start(_ context.Context, dir, name string, args []string) (localrun.Process, error) {
+func (f *fakeCodex) Start(_ context.Context, dir, _ string, _ []string) (localrun.Process, error) {
 	f.mu.Lock()
 	f.startDir = dir
-	f.starts++
-	f.startName = name
-	f.startArgs = args
 	f.mu.Unlock()
 	return f, nil
 }
@@ -79,19 +74,6 @@ func (f *fakeCodex) startedIn() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.startDir
-}
-
-func (f *fakeCodex) spawned() (starts int, name string, args []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.starts, f.startName, f.startArgs
-}
-
-// alive reports whether the process's output has not been ended yet.
-func (f *fakeCodex) alive() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return !f.ended
 }
 
 func (f *fakeCodex) Send(line []byte) error {
@@ -107,23 +89,35 @@ func (f *fakeCodex) Send(line []byte) error {
 	case methodInitialize:
 		f.reply(message.ID, `{"userAgent":"fake"}`, nil)
 	case methodInitialized:
+	case methodThreadStart:
+		f.reply(message.ID, `{"thread":{"id":"thread-1"}}`, f.threadErr)
+	case methodThreadResume:
+		f.reply(message.ID, `{"thread":{"id":"thread-1"},"model":"gpt-native","reasoningEffort":"high"}`, f.threadErr)
 	case methodModelList:
 		var params struct {
 			Cursor string `json:"cursor"`
 		}
 		_ = json.Unmarshal(message.Params, &params)
-		result := `{"data":[],"nextCursor":null}`
-		if page, ok := f.modelPages[params.Cursor]; ok {
-			result = page
+		result := `{"data":[{"id":"gpt-native","model":"gpt-native","displayName":"GPT Native","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}]}`
+		if f.modelPages != nil {
+			result = `{"data":[],"nextCursor":null}`
+			if page, ok := f.modelPages[params.Cursor]; ok {
+				result = page
+			}
 		}
 		f.reply(message.ID, result, f.modelErr)
-	case methodThreadStart:
-		f.reply(message.ID, `{"thread":{"id":"thread-1"}}`, f.threadErr)
+	case "skills/list":
+		f.mu.Lock()
+		skillPath := f.skillPath
+		f.mu.Unlock()
+		f.reply(message.ID, fmt.Sprintf(`{"data":[{"cwd":"/workspace","skills":[{"name":"plugin:fixture","description":"Fixture","path":%q,"enabled":true,"scope":"repo"},{"name":"disabled","description":"Disabled","path":"/disabled/SKILL.md","enabled":false,"scope":"user"}]}]}`, skillPath), nil)
 	case methodTurnStart:
-		f.reply(message.ID, `{"turn":{"id":"turn-1"}}`, f.turnErr)
-		// A conversation can open more than one turn; turnStarted signals only
-		// the first, which is all every existing single-turn test waits for.
-		f.turnStartedOnce.Do(func() { close(f.turnStarted) })
+		f.mu.Lock()
+		f.turnCount++
+		turnID := fmt.Sprintf("turn-%d", f.turnCount)
+		f.mu.Unlock()
+		f.reply(message.ID, fmt.Sprintf(`{"turn":{"id":%q}}`, turnID), f.turnErr)
+		f.turnStarted <- struct{}{}
 	case methodTurnSteer:
 		text := textOfInput(message.Params)
 		f.mu.Lock()
@@ -176,7 +170,22 @@ func (f *fakeCodex) push(payload []byte) {
 }
 
 func (f *fakeCodex) completeTurn() {
-	f.emit("turn/completed", `{"turn":{"id":"turn-1"}}`)
+	f.mu.Lock()
+	turnID := fmt.Sprintf("turn-%d", f.turnCount)
+	f.mu.Unlock()
+	f.emit("turn/completed", fmt.Sprintf(`{"turn":{"id":%q,"status":"completed"}}`, turnID))
+}
+
+func (f *fakeCodex) interruptTurn() {
+	f.mu.Lock()
+	turnID := fmt.Sprintf("turn-%d", f.turnCount)
+	f.mu.Unlock()
+	f.emit("turn/completed", fmt.Sprintf(`{"turn":{"id":%q,"status":"interrupted"}}`, turnID))
+}
+
+func (f *fakeCodex) request(id int, method, params string) {
+	payload, _ := json.Marshal(map[string]any{"id": id, "method": method, "params": json.RawMessage(params)})
+	f.push(payload)
 }
 
 // end closes the process's output, which is how a real process disappears.
@@ -220,25 +229,6 @@ func (f *fakeCodex) methodsCalled() []string {
 		out = append(out, request.Method)
 	}
 	return out
-}
-
-// lastParamsOf reads the params of the *last* request of a method, which is
-// what a conversation needs: it opens several turns, and paramsOf answers
-// about the first one.
-func (f *fakeCodex) lastParamsOf(method string) map[string]any {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i := len(f.requests) - 1; i >= 0; i-- {
-		if f.requests[i].Method != method {
-			continue
-		}
-		var params map[string]any
-		if json.Unmarshal(f.requests[i].Params, &params) != nil {
-			return nil
-		}
-		return params
-	}
-	return nil
 }
 
 func (f *fakeCodex) paramsOf(method string) map[string]any {
@@ -295,7 +285,7 @@ func textOfInput(params json.RawMessage) string {
 func openSession(t *testing.T, fake *fakeCodex, cfg settings) (*appServer, *localrun.Session) {
 	t.Helper()
 	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(fake, session, false)
+	client := newAppServer(fake, session)
 	go client.consume()
 	if err := client.start(context.Background(), cfg, "/workspace", "PROMPT"); err != nil {
 		t.Fatalf("handshake failed: %v", err)
@@ -441,7 +431,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 		{
 			name:     "an error the server reported",
 			method:   "error",
-			params:   `{"message":"model unavailable"}`,
+			params:   `{"error":{"message":"model unavailable"}}`,
 			wantKind: localrun.KindError,
 			wantText: "model unavailable",
 		},
@@ -467,7 +457,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			session := localrun.NewSession("run-1", nil)
-			client := newAppServer(newFakeCodex(), session, false)
+			client := newAppServer(newFakeCodex(), session)
 			client.project(tc.method, json.RawMessage(tc.params))
 
 			events := session.Events(0)
@@ -495,7 +485,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 // translation that dropped it would lose history the day Codex adds a type.
 func TestAppServerNeverDropsAnUnknownNotification(t *testing.T) {
 	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(newFakeCodex(), session, false)
+	client := newAppServer(newFakeCodex(), session)
 	const params = `{"something":"entirely new"}`
 	client.project("thread/somethingNobodyHasSeen", json.RawMessage(params))
 
@@ -581,234 +571,6 @@ func TestAppServerInterruptsWithoutClosingTheSession(t *testing.T) {
 	}
 }
 
-// --- conversational multi-turn -----------------------------------------------
-
-// openConversationalSession starts a conversational client against the fake,
-// past the handshake but before any turn: exactly the state a codex
-// conversation is in right after OpenConversation returns. opening, when not
-// empty, is held exactly as OpenConversation holds the instruction it opens
-// on.
-func openConversationalSession(t *testing.T, fake *fakeCodex, cfg settings, opening string) (*appServer, *localrun.Session) {
-	t.Helper()
-	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(fake, session, true)
-	go client.consume()
-	if _, err := client.handshake(context.Background(), cfg, "/workspace"); err != nil {
-		t.Fatalf("handshake failed: %v", err)
-	}
-	if opening != "" {
-		client.hold(opening)
-	}
-	session.AttachDialogue(client)
-	t.Cleanup(fake.end)
-	return client, session
-}
-
-func turnDoneNow(client *appServer) bool {
-	select {
-	case <-client.TurnDone():
-		return true
-	default:
-		return false
-	}
-}
-
-// A conversation opens no turn until the first message, and that message
-// opens one via turn/start rather than steering a turn that does not exist.
-func TestAppServerConversationalFirstMessageOpensATurn(t *testing.T) {
-	fake := newFakeCodex()
-	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
-
-	if turnDoneNow(client) {
-		t.Fatal("TurnDone must not report a turn over before any turn has opened")
-	}
-	if err := client.Send(context.Background(), "prima domanda"); err != nil {
-		t.Fatalf("the first message of the conversation was refused: %v", err)
-	}
-	got := fake.methodsCalled()
-	if len(got) == 0 || got[len(got)-1] != methodTurnStart {
-		t.Fatalf("methods = %v; the first message must open a turn via turn/start", got)
-	}
-	if turn := fake.paramsOf(methodTurnStart); textOfInputMap(turn) != "prima domanda" {
-		t.Fatalf("turn/start input = %v", turn["input"])
-	}
-}
-
-// Once the turn the first message opened completes, a conversation is not
-// over: the next message opens a second turn on the same thread instead of
-// being refused, and TurnDone re-arms for it.
-func TestAppServerConversationalSendOpensANewTurnOnceThePreviousOneCompleted(t *testing.T) {
-	fake := newFakeCodex()
-	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
-
-	if err := client.Send(context.Background(), "prima domanda"); err != nil {
-		t.Fatalf("Send failed: %v", err)
-	}
-	fake.completeTurn()
-	waitFor(t, func() bool { return turnDoneNow(client) })
-
-	if err := client.Send(context.Background(), "seconda domanda"); err != nil {
-		t.Fatalf("the conversation refused a message after its turn completed: %v", err)
-	}
-	starts := 0
-	for _, method := range fake.methodsCalled() {
-		if method == methodTurnStart {
-			starts++
-		}
-	}
-	if starts != 2 {
-		t.Fatalf("turn/start was called %d time(s); want exactly two, one per turn", starts)
-	}
-	if turnDoneNow(client) {
-		t.Fatal("TurnDone must re-arm for the new turn instead of staying closed")
-	}
-}
-
-// The end of a turn is a fact that arrives, not one that is known: the
-// notification is read on another goroutine, so a message written in the
-// instant between the agent finishing and this side learning it still steers a
-// turn that no longer exists. That is the moment people write — while the
-// answer they are reading is being finished — and in a conversation the
-// refusal it earns must not be the answer: the message opens the next turn
-// instead of being lost.
-func TestAppServerConversationalSendOpensANewTurnWhenTheSteerFindsNoneLeft(t *testing.T) {
-	fake := newFakeCodex()
-	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
-
-	if err := client.Send(context.Background(), "prima domanda"); err != nil {
-		t.Fatalf("Send failed: %v", err)
-	}
-	// The turn is over for the process and not yet for this side: no
-	// turn/completed has been read, so turnOpen is still true and the steer is
-	// the first thing that learns the truth.
-	fake.steerErr = &rpcError{Code: -32600, Message: "no active turn to steer"}
-
-	const second = "seconda domanda"
-	if err := client.Send(context.Background(), second); err != nil {
-		t.Fatalf("the message was lost to a turn that had just ended: %v", err)
-	}
-	if got := fake.messagesSteered(); len(got) != 1 || got[0] != second {
-		t.Fatalf("the steer was not even attempted: %v", got)
-	}
-	starts := 0
-	for _, method := range fake.methodsCalled() {
-		if method == methodTurnStart {
-			starts++
-		}
-	}
-	if starts != 2 {
-		t.Fatalf("turn/start was called %d time(s); want the refused steer to have opened the next turn", starts)
-	}
-	if got := textOfInputMap(fake.lastParamsOf(methodTurnStart)); got != second {
-		t.Fatalf("the new turn carried %q; want the message the steer could not deliver", got)
-	}
-}
-
-// Only that one refusal falls back. A protocol failure decided nothing — a
-// retry can still change its outcome — so it stays an error and never opens a
-// turn behind the caller's back.
-func TestAppServerConversationalSendDoesNotOpenATurnOnAProtocolFailure(t *testing.T) {
-	fake := newFakeCodex()
-	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
-
-	if err := client.Send(context.Background(), "prima domanda"); err != nil {
-		t.Fatalf("Send failed: %v", err)
-	}
-	fake.steerErr = &rpcError{Code: -32000, Message: "the model provider is unreachable"}
-
-	err := client.Send(context.Background(), "seconda domanda")
-	if err == nil {
-		t.Fatal("a protocol failure was reported as a delivered message")
-	}
-	if _, refused := execution.RefusalOf(err); refused {
-		t.Fatalf("a protocol failure must not become a refusal: %v", err)
-	}
-	if !strings.Contains(err.Error(), "unreachable") {
-		t.Fatalf("the diagnostic lost the cause: %v", err)
-	}
-	starts := 0
-	for _, method := range fake.methodsCalled() {
-		if method == methodTurnStart {
-			starts++
-		}
-	}
-	if starts != 1 {
-		t.Fatalf("turn/start was called %d time(s); a protocol failure must open no turn", starts)
-	}
-}
-
-// The instruction a conversation opens on travels ahead of the first message,
-// in the same turn, and is stripped back out of the history once the process
-// re-emits the two joined: the conversation's history must open on what the
-// person actually said.
-func TestAppServerConversationalOpeningTravelsWithTheFirstMessageAndIsStrippedFromHistory(t *testing.T) {
-	fake := newFakeCodex()
-	const opening = "ISTRUZIONI DI APERTURA"
-	const first = "Di cosa parla questo workspace?"
-	client, session := openConversationalSession(t, fake, defaultSettings(), opening)
-
-	if err := client.Send(context.Background(), first); err != nil {
-		t.Fatalf("Send failed: %v", err)
-	}
-	turnStart := fake.paramsOf(methodTurnStart)
-	input, _ := turnStart["input"].([]any)
-	if len(input) != 2 {
-		t.Fatalf("turn/start input = %#v, want two blocks: the opening and the first message", input)
-	}
-
-	// The process re-emits the whole turn's input as one userMessage item,
-	// exactly as the real binary joins several content blocks of one message.
-	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"ISTRUZIONI DI APERTURA"},{"type":"text","text":"Di cosa parla questo workspace?"}]}}`)
-	waitFor(t, func() bool { return len(session.Events(0)) == 1 })
-	events := session.Events(0)
-	if events[0].Kind != localrun.KindUserMessage || events[0].Text != first {
-		t.Fatalf("history = %#v; want the opening instruction stripped, leaving only %q", events[0], first)
-	}
-}
-
-// Between two turns of a conversation there is no turn to interrupt: what is
-// cancelled is the conversation itself, by closing the process's input.
-func TestAppServerConversationalInterruptBetweenTurnsClosesTheProcess(t *testing.T) {
-	fake := newFakeCodex()
-	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
-
-	if err := client.Interrupt(context.Background()); err != nil {
-		t.Fatalf("interrupting a conversation that has not opened a turn yet failed: %v", err)
-	}
-	waitFor(t, func() bool {
-		select {
-		case <-client.Gone():
-			return true
-		default:
-			return false
-		}
-	})
-}
-
-// The same is true once a turn has completed, and not only before the first
-// one ever opened.
-func TestAppServerConversationalInterruptAfterATurnCompletesClosesTheProcess(t *testing.T) {
-	fake := newFakeCodex()
-	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
-	if err := client.Send(context.Background(), "domanda"); err != nil {
-		t.Fatalf("Send failed: %v", err)
-	}
-	fake.completeTurn()
-	waitFor(t, func() bool { return turnDoneNow(client) })
-
-	if err := client.Interrupt(context.Background()); err != nil {
-		t.Fatalf("Interrupt between turns failed: %v", err)
-	}
-	waitFor(t, func() bool {
-		select {
-		case <-client.Gone():
-			return true
-		default:
-			return false
-		}
-	})
-}
-
 // AC-5 — the refusal the process expressed becomes the typed one, and a
 // protocol error that decided nothing does not.
 func TestAppServerClassifiesTheProcessRefusal(t *testing.T) {
@@ -846,7 +608,7 @@ func TestAppServerReportsARefusedHandshake(t *testing.T) {
 	fake := newFakeCodex()
 	fake.threadErr = &rpcError{Code: -32602, Message: "invalid sandbox"}
 	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(fake, session, false)
+	client := newAppServer(fake, session)
 	go client.consume()
 	t.Cleanup(fake.end)
 

@@ -78,8 +78,6 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 		return err
 	}
 	skillsDir := filepath.Join(dataDir, "skills")
-	runtimeDir := filepath.Join(dataDir, "runtime")
-
 	if _, statErr := os.Stat(skillsDir); statErr != nil {
 		return iox.NewPrecondition(
 			"skills directory not found",
@@ -138,7 +136,7 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 		fmt.Fprintf(s.out, "  ✓ %s → %s\n", t.Name, target)
 	}
 
-	if err := installRuntimeAssets(s, runtimeDir, conn, tpl, assumeYes, withWiki); err != nil {
+	if err := installRuntimeAssets(s, dataDir, conn, tpl, assumeYes, withWiki); err != nil {
 		return err
 	}
 
@@ -239,16 +237,19 @@ func pickConnectorInteractive(s streams) (string, error) {
 	return "", iox.NewInvalidInput("invalid connector choice: "+line, "enter 1, 2 or 3", nil)
 }
 
-func installRuntimeAssets(s streams, runtimeDir, connector string, tpl template.Template, assumeYes, withWiki bool) error {
-	root := runtimeDir
-	if _, err := os.Stat(filepath.Join(root, "config.yaml")); err != nil {
-		// dataDir/runtime missing -> try repo .archetipo/
-		alt := filepath.Join(filepath.Dir(runtimeDir), ".archetipo")
-		if _, err := os.Stat(filepath.Join(alt, "config.yaml")); err == nil {
-			root = alt
-		} else {
-			return iox.NewPrecondition("runtime assets not found", "package may be incomplete; reinstall the CLI", err)
-		}
+func installRuntimeAssets(s streams, dataDir, connector string, tpl template.Template, assumeYes, withWiki bool) error {
+	// Resolved by the shared resolver and no longer by a copy of it here. The
+	// two had already drifted: this one still knew only config.yaml, so `init`
+	// run from the source repository installed the *live* configuration of this
+	// very workspace — provider and all — while workspace.Initialize, which the
+	// viewer uses, read the template.
+	root, err := workspace.RuntimeAssetsDir(dataDir)
+	if err != nil {
+		return err
+	}
+	configTemplate, err := workspace.ConfigTemplate(root)
+	if err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(".archetipo", 0o755); err != nil {
@@ -278,14 +279,14 @@ func installRuntimeAssets(s streams, runtimeDir, connector string, tpl template.
 			if err != nil {
 				return err
 			}
-			if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, tpl, withWiki); err != nil {
+			if err := writeConfig(configTemplate, configPath, connector, tpl, withWiki); err != nil {
 				return err
 			}
 			fmt.Fprintf(s.out, "  ✓ backup of the previous config: %s\n", backupPath)
 			printConfigWritten(s, connector, tpl)
 		}
 	} else {
-		if err := writeConfig(filepath.Join(root, "config.yaml"), configPath, connector, tpl, withWiki); err != nil {
+		if err := writeConfig(configTemplate, configPath, connector, tpl, withWiki); err != nil {
 			return err
 		}
 		printConfigWritten(s, connector, tpl)

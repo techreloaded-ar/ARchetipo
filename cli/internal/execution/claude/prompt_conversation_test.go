@@ -28,48 +28,37 @@ func conversationActions() []execution.ConversationAction {
 // The process is knowledge of the caller, never of this package: the prompt has
 // to name the ids and the labels it was handed, because an agent that cannot
 // read the list is an agent that invents one.
-func TestConversationPromptNamesTheDeclaredActions(t *testing.T) {
+func TestConversationPromptDoesNotImposeProcessActions(t *testing.T) {
 	got := buildConversationPrompt(conversationActions(), "")
-
 	for _, action := range conversationActions() {
-		assertContains(t, got, action.ID, "conversation prompt")
-		assertContains(t, got, action.Label, "conversation prompt")
-		assertContains(t, got, action.Scope, "conversation prompt")
+		if strings.Contains(got, action.ID) {
+			t.Fatalf("conversation prompt still imposes action %q:\n%s", action.ID, got)
+		}
 	}
 }
 
 // The proposal line the prompt asks for must be the line ParseActionProposal
 // recognizes: the two are one contract, and a prompt asking for another shape
 // would produce proposals the viewer silently drops.
-func TestConversationPromptAsksForOneProposalLine(t *testing.T) {
+func TestConversationPromptDoesNotAskForAProposalLine(t *testing.T) {
 	got := buildConversationPrompt(conversationActions(), "")
-
-	assertContains(t, got, `"artifact"`, "conversation prompt")
-	assertContains(t, got, execution.ActionProposalArtifact, "conversation prompt")
-	assertContains(t, got, `"action"`, "conversation prompt")
-
-	// The oracle is the parser itself: a concrete line of the asked-for shape
-	// has to be recognized as a proposal of a declared action.
-	line := `{"artifact":"` + execution.ActionProposalArtifact + `","action":"plan-spec","spec":"US-054"}`
-	proposal, ok := execution.ParseActionProposal("Avvierei la pianificazione.\n" + line)
-	if !ok {
-		t.Fatalf("the line the prompt asks for is not recognized as a proposal:\n%s", got)
-	}
-	if proposal.Action != "plan-spec" {
-		t.Fatalf("parsed action = %q, want %q", proposal.Action, "plan-spec")
+	if strings.Contains(got, execution.ActionProposalArtifact) {
+		t.Fatalf("conversation prompt still asks for a proposal:\n%s", got)
 	}
 }
 
 // Proposing is not acting. Authorizing the proposal must not have loosened the
 // prohibition, which is the courtesy layer above the structural guarantee that
 // a conversation writes no execution record.
-func TestConversationPromptStillForbidsActing(t *testing.T) {
+func TestConversationPromptAllowsNativeWork(t *testing.T) {
 	got := buildConversationPrompt(conversationActions(), "")
-
-	assertContains(t, got, "Do NOT act on the workspace", "conversation prompt")
-	assertContains(t, got, "must not start any action of the process", "conversation prompt")
-	assertContains(t, got, "must not invoke any `archetipo-*` skill", "conversation prompt")
-	assertContains(t, got, "must not change the status of any spec", "conversation prompt")
+	assertContains(t, got, "inspect and modify it", "conversation prompt")
+	assertContains(t, got, "invoke the skills", "conversation prompt")
+	for _, forbidden := range []string{"Do NOT act", "must not invoke", "PROPOSE it"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("conversation prompt still contains %q:\n%s", forbidden, got)
+		}
+	}
 }
 
 // With no vocabulary there is nothing to propose, and a proposal block naming
@@ -81,8 +70,7 @@ func TestConversationPromptWithoutActionsProposesNothing(t *testing.T) {
 		if strings.Contains(got, execution.ActionProposalArtifact) {
 			t.Fatalf("a prompt with no declared action still asks for a proposal:\n%s", got)
 		}
-		// The prohibition does not depend on the vocabulary.
-		assertContains(t, got, "Do NOT act on the workspace", "conversation prompt")
+		assertContains(t, got, "inspect and modify it", "conversation prompt")
 	}
 }
 
@@ -96,10 +84,6 @@ func TestConversationPromptIsDeterministic(t *testing.T) {
 		t.Fatalf("the conversation prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 
-	// The declared order is the process's own and is never re-sorted here.
-	if strings.Index(first, actions[0].ID) > strings.Index(first, actions[1].ID) {
-		t.Fatalf("the prompt re-sorted the declared actions:\n%s", first)
-	}
 }
 
 // --- the resumed transcript -------------------------------------------------
@@ -161,10 +145,7 @@ func TestConversationPromptCarriesTheResumedTranscript(t *testing.T) {
 	if at := strings.Index(got, sentinel); at < opening || at > closing {
 		t.Fatalf("the resumed transcript is not between the two fences:\n%s", got)
 	}
-	// The prohibition and the vocabulary survive the resume: a resumed
-	// conversation is a conversation.
-	assertContains(t, got, "Do NOT act on the workspace", "resumed conversation prompt")
-	assertContains(t, got, "plan-spec", "resumed conversation prompt")
+	assertContains(t, got, "inspect and modify it", "resumed conversation prompt")
 	if last := strings.Split(got, "\n"); !strings.Contains(last[len(last)-1], "Emit no closing receipt line") {
 		t.Fatalf("the resumed prompt does not end on the receipt line:\n%s", got)
 	}

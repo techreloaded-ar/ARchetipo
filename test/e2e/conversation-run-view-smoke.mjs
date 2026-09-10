@@ -1,53 +1,43 @@
 #!/usr/bin/env node
 
-// End-to-end smoke for "follow a run and answer its requests inside the
+// End-to-end smoke for "follow an action and go on talking inside the
 // conversation that asked for it" (US-060).
 //
 // Everything on the ARchetipo side is real: the CLI built from source,
 // `archetipo view`, the filefs connector on disk, the `claude` provider with
-// its stream-json client and its local session, the `arcipelago` provider with
-// its SSE consumer and the server-side run follower, the conversation routes
+// its stream-json client and its native session, the conversation routes
 // (`POST` on `/api/workspace/conversations` and `GET`, `POST .../messages`,
 // `POST .../proposal`, `DELETE` on `/api/workspace/conversations/{id}`), the
-// rail route `GET /api/workspace/runs`, the
-// approval route `POST /api/execution/{id}/run/approvals/{id}` and the document
-// the browser is really served on `GET /index.html`. Two things are replaced,
-// and only two: the ARcipelago hub, by a local Node server bound to 127.0.0.1,
-// and the agent binary, by `support/fake-claude.mjs`, which speaks the same
-// protocol on stdio. Nothing here needs a credential or leaves the loopback
-// interface.
+// rail route `GET /api/workspace/runs` and the document the browser is really
+// served on `GET /index.html`. One thing is replaced, and only one: the agent
+// binary, by `support/fake-claude.mjs`, which speaks the same protocol on
+// stdio. Nothing here needs a credential or leaves the loopback interface.
 //
-// **Why two providers.** The story needs a run that stops and asks, and a
-// conversation that keeps answering while it is stopped. Neither provider can
-// do both: a local session runs with approvals disabled — `localrun.Collaborator`
-// answers an empty list and refuses every response — so it never asks anything,
-// and only `claude` can hold a conversation at all. A workspace has a single
-// default, so the default is moved from one provider to the other through the
-// very route the Execution panel uses, exactly as a person would.
+// **What changed, and why one provider is now enough.** An ARchetipo action is
+// carried out in the conversation's own native session and never by a second
+// agent started beside it. There is therefore no run process to drive apart
+// from the conversation, no second control server, and no run block with a
+// timeline of its own: the work of the action *is* the thread, and what used to
+// be "the events of the run" is what the conversation says while its turn
+// works.
 //
-// **Why two control servers.** Every frame the fake emits is commanded through
-// a control server, and a command is taken by whichever process asks for it
-// first. Two fake processes are alive at once here — the one holding the
-// conversation and the one running the confirmed action — so a single server
-// would hand a frame meant for the run to the conversation half the time. Each
-// process is therefore started through its own one-line wrapper, written into
-// the run directory, which exports its own `FAKE_CLAUDE_CONTROL` before exec'ing
-// the very same fake: the wrapper is what the Execution panel is pointed at when
-// each process is about to be started, so which process receives a frame is a
-// fact of the fixture and never a race.
+// **What is not asserted here.** The consents of a run served by a remote
+// ARcipelago hub, and the answers given to them, belonged to the model where
+// the run was a separate agent reached through a provider of its own. On a
+// native session an approval is asked by the session and answered in it; the
+// remote half of that story is the business of tasks 10 and 11 of the native
+// sessions plan, which are not delivered, so this smoke no longer claims it.
 //
 // **What proves what.** AC-2 is proved by absence and it is counted, not
 // claimed: every viewer request this file makes goes through one recorder, and
-// the assertion is that the growth of the run was observed with **zero** calls
-// to `GET /api/execution/{id}/run`. AC-4 is proved on the hub — which option it
-// was really told, and that the run then closed — and never on the HTTP status
-// of the answer. AC-5 is proved by the agent process itself reporting the frame
-// it was given, never by the 202 of the route.
+// the assertion is that what the action was doing was learnt with **zero** calls
+// to `GET /api/execution/{id}/run`. AC-5 is proved by the agent process itself
+// reporting the frame it was given, never by the 202 of the route.
 //
 // Nothing progresses on its own and nothing sleeps for an outcome: every agent
-// frame is emitted by this test, the hub opens and closes each approval by hand,
-// and each wait polls a route or the control server with an explicit timeout
-// that names what it expected and what arrived instead.
+// frame is emitted by this test, and each wait polls a route or the control
+// server with an explicit timeout that names what it expected and what arrived
+// instead.
 
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -73,26 +63,11 @@ const defaultWorkspaceRoot = path.join(repoRoot, "test", "workspaces", "conversa
 const SPEC = "US-A01";
 const PROPOSED_ACTION = "implement";
 
-// The remote side of the story.
-const WORKSPACE_ID = "ws-conversation-run";
-const TOKEN_ENV = "ARCIPELAGO_CONVERSATION_RUN_TOKEN";
-const TOKEN_SENTINEL = "conversation-run-smoke-secret-token";
-const RUN_ID = "run-1";
-
-// The two decisions the run asks for. The command is asserted verbatim: a
-// consent card that paraphrases what is about to be executed is not a consent
-// card.
-const APPROVAL_ALLOWED = "appr-1";
-const APPROVAL_DENIED = "appr-2";
-const APPROVAL_COMMAND = "git worktree prune --verbose";
-const OPTION_ALLOW = "allow";
-const OPTION_DENY = "deny";
-
-// The message sent while the run is stopped, and the answer to it. Both are
-// sentinels: the first has to reach the agent process, the second has to come
-// back into the timeline of the same conversation.
-const MESSAGE_SENTINEL = "smoke-message-while-the-run-waits";
-const REPLY_SENTINEL = "smoke-reply-while-the-run-waits";
+// The message sent while the action is being carried out, and the answer to it.
+// Both are sentinels: the first has to reach the agent process, the second has
+// to come back into the timeline of the same conversation.
+const MESSAGE_SENTINEL = "smoke-message-while-the-action-runs";
+const REPLY_SENTINEL = "smoke-reply-while-the-action-runs";
 
 // Every viewer request this file makes, in order. It is what turns "the panel
 // of that run was never opened" from a comment into an assertion.
@@ -142,16 +117,14 @@ async function main() {
   console.log(`Run directory: ${runDir}`);
 }
 
-// One workspace, one conversation, one run — because that is the story: the run
-// is born in the conversation, grows in it, stops in it, is answered in it and
-// ends in it, and the person never opens a separate list to learn any of that.
+// One workspace, one conversation, one action — because that is the story: the
+// action is born in the conversation, carried out *in* it, answered in it and
+// ended in it, and the person never opens a separate list to learn any of that.
 async function scenario(runDir) {
   const sandboxDir = path.join(runDir, "sandbox");
   await fs.mkdir(sandboxDir, { recursive: true });
 
-  let conversationControl;
-  let runControl;
-  let hub;
+  let control;
   let view;
   try {
     // Every process started from here writes the registry of known workspaces
@@ -160,22 +133,14 @@ async function scenario(runDir) {
       ...process.env,
       ARCHETIPO_DATA_DIR: repoRoot,
       ARCHETIPO_STATE_DIR: path.join(runDir, "state"),
-      [TOKEN_ENV]: TOKEN_SENTINEL,
     };
 
     await createWorkspace(runDir, sandboxDir, env);
 
-    conversationControl = await startControlServer();
-    runControl = await startControlServer();
-    console.log(`-> control server of the conversation process: ${conversationControl.url}`);
-    console.log(`-> control server of the run process: ${runControl.url}`);
-    hub = await startFakeHub();
-    console.log(`-> fake ARcipelago hub: ${hub.url}`);
+    control = await startControlServer();
+    console.log(`-> control server for the fake claude: ${control.url}`);
 
-    const conversationCommand = await writeFakeWrapper(runDir, "conversation", conversationControl.url);
-    const runCommandPath = await writeFakeWrapper(runDir, "run", runControl.url);
-
-    view = await startViewServer(sandboxDir, env);
+    view = await startViewServer(sandboxDir, { ...env, FAKE_CLAUDE_CONTROL: control.url });
     console.log(`-> view ready: ${view.url} (launched in ${sandboxDir})`);
 
     // --- the conversation --------------------------------------------------
@@ -183,10 +148,9 @@ async function scenario(runDir) {
     // the conversation starts from the state the UI produces.
     await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
       id: "claude",
-      config: { command: conversationCommand, timeout_seconds: 600 },
+      config: { command: fakeClaudePath, timeout_seconds: 600 },
     }));
 
-    conversationControl.push(emit({ type: "system", subtype: "init", session_id: "conversation-1" }));
     const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationID = opened.conversation?.id;
     if (opened.available !== true || !conversationID) {
@@ -195,13 +159,14 @@ async function scenario(runDir) {
     if (!Array.isArray(opened.runs) || opened.runs.length !== 0) {
       throw new Error(`a freshly opened conversation has started nothing; got ${JSON.stringify(opened.runs)}`);
     }
-    await conversationControl.waitFor("argv", 1);
+    const agent = await control.waitFor("argv", 1);
+    control.push(emit(initFrame(nativeSessionIDOf(agent))), agent.pid);
 
-    conversationControl.push(emit(assistantProposal(
+    control.push(emit(assistantProposal(
       `Posso implementare ${SPEC}, che è pianificata.`,
       PROPOSED_ACTION,
       SPEC,
-    )));
+    )), agent.pid);
     const pending = await waitForConversation(
       view.url,
       conversationID,
@@ -213,20 +178,15 @@ async function scenario(runDir) {
       throw new Error(`the proposal must be anchored to an event of the history; got ${JSON.stringify(pending.proposal)}`);
     }
 
-    // The next agent process to be started is the run's, so the default is
-    // pointed at its wrapper before the confirmation and not after: what the
-    // conversation process is talking to was decided when it was spawned.
-    await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
-      id: "claude",
-      config: { command: runCommandPath, timeout_seconds: 600 },
-    }));
-
     // --- AC-1 ---------------------------------------------------------------
-    const confirmed = await apiJSON(
+    // The confirmation starts the action in this very conversation: the turn
+    // that carries it out is run by a process of its own, on the session that
+    // is already open, and it has to be served while the route is answering.
+    const confirmed = await serveStartingProcesses(control, apiJSON(
       `${view.url}/api/workspace/conversations/${conversationID}/proposal`,
       postJSON({ proposal_id: proposalEventID, decision: "accept" }),
       201,
-    );
+    ));
     const executionID = confirmed.outcome?.execution_id;
     if (!executionID) {
       throw new Error(`the confirmation must name the execution it started; got ${JSON.stringify(confirmed.outcome)}`);
@@ -242,112 +202,56 @@ async function scenario(runDir) {
     assertEqual(block.action, PROPOSED_ACTION, "AC-1: the action the run block names");
     assertEqual(block.spec_code, SPEC, "AC-1: the spec the run block names");
     assertEqual(block.decision, "confirmed", "AC-1: the decision that started the run");
+    // The action runs in this thread and not beside it. It is the difference
+    // the whole story now rests on: no second agent was started, so the block
+    // says the work is happening here.
+    assertEqual(block.in_this_thread, true, "AC-1: whether the action is carried out in this conversation");
     const records = await listExecutionRecords(sandboxDir);
     if (records.length !== 1 || records[0] !== `${executionID}.json`) {
       throw new Error(`AC-1: the block names ${executionID} but the filesystem holds ${JSON.stringify(records)}`);
     }
     ok(
       "AC-1",
-      `confirming the proposal carried at event ${proposalEventID} answered 201 with execution ${executionID}, the conversation then carries exactly one run block for that id — action ${block.action} on ${block.spec_code}, decision ${block.decision} — anchored to event ${block.anchor_event_id}, and that id is the single record under .archetipo/executions/`,
+      `confirming the proposal carried at event ${proposalEventID} answered 201 with execution ${executionID}, the conversation then carries exactly one run block for that id — action ${block.action} on ${block.spec_code}, decision ${block.decision}, carried out in this thread — anchored to event ${block.anchor_event_id}, and that id is the single record under .archetipo/executions/`,
     );
 
     // --- AC-2 ---------------------------------------------------------------
-    // The run's own process is driven frame by frame, and the growth is read
-    // from the conversation alone: the count below is what says the run panel
-    // was never opened to learn any of it.
-    await runControl.waitFor("argv", 1);
-    runControl.push(emit({ type: "system", subtype: "init", session_id: "run-1" }));
-    runControl.push(emit(assistantText("Leggo il piano di " + SPEC)));
-    runControl.push(emit(assistantText(" e apro i file")));
+    // What the action does is read from the conversation alone. In a native
+    // session the work of an action *is* the thread: its turn speaks into the
+    // same timeline the person is reading, so what used to be the events of a
+    // separate run is now what the conversation says. The count below is what
+    // says the run panel was never opened to learn any of it.
+    const turn = await control.waitFor("argv", 2);
+    control.push(emit(assistantText("Leggo il piano di " + SPEC)), turn.pid);
+    control.push(emit(assistantText(" e apro i file")), turn.pid);
     const growing = await waitForConversation(
       view.url,
       conversationID,
-      (data) => (data.runs?.[0]?.events || []).filter((event) => event.kind === "text").length >= 2,
-      `the two frames of the run process to appear inside the run block of ${executionID}`,
+      (data) => (data.events || []).filter((event) => (event.text || "").includes("Leggo il piano di ") || (event.text || "").includes(" e apro i file")).length >= 2,
+      `the two frames of the turn carrying ${executionID} to appear in the timeline of the conversation`,
     );
-    const growingBlock = growing.runs[0];
-    assertEqual(growingBlock.run?.state, "ACTIVE", "AC-2: the state of the run while the agent works");
-    assertEqual(growingBlock.status, "RUNNING", "AC-2: the status of the execution record while the agent works");
-    const texts = growingBlock.events.map((event) => event.text || "").join("");
-    if (!texts.includes("Leggo il piano di " + SPEC) || !texts.includes(" e apro i file")) {
-      throw new Error(`AC-2: the frames the run emitted are not the ones the block shows; got ${JSON.stringify(growingBlock.events)}`);
-    }
-    assertNoRunPanelCalls(executionID, "AC-2: while the growth of the run was being observed");
+    assertEqual(growing.runs?.[0]?.status, "RUNNING", "AC-2: the status of the execution record while the agent works");
+    assertEqual(growing.runs?.[0]?.execution_id, executionID, "AC-2: the execution the block is still about");
+    assertNoRunPanelCalls(executionID, "AC-2: while the work of the action was being observed");
     const conversationReads = viewerRequests.filter((entry) => entry.path.startsWith("/api/workspace/conversations/")).length;
     ok(
       "AC-2",
-      `the two frames the run process emitted appear inside the run block and its state became ACTIVE, observed through ${conversationReads} read(s) of /api/workspace/conversations/${conversationID} and exactly 0 calls to GET /api/execution/${executionID}/run — counted over the ${viewerRequests.length} requests this smoke had made`,
-    );
-
-    // --- the remote provider ------------------------------------------------
-    // Same panel, same route: the workspace default becomes the arcipelago
-    // provider pointed at the local hub, which is the only provider that can
-    // ask for a consent at all. The hub serves a task whose externalId is the
-    // execution born in the conversation, so the very same run block is now
-    // followed on the hub.
-    await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
-      id: "arcipelago",
-      config: {
-        base_url: hub.url,
-        workspace_id: WORKSPACE_ID,
-        token_env: TOKEN_ENV,
-        poll_interval_seconds: 1,
-        timeout_seconds: 600,
-      },
-    }));
-    const remote = hub.seedTask(executionID, SPEC);
-    hub.assignRun(remote.id);
-    const bound = await waitForConversation(
-      view.url,
-      conversationID,
-      (data) => data.runs?.[0]?.run?.run_id === RUN_ID,
-      `the run block of ${executionID} to be bound to the remote run ${RUN_ID}`,
-    );
-    assertEqual(bound.runs[0].execution_id, executionID, "the execution the bound run block is about");
-    console.log(`-> the run block now follows the remote run ${RUN_ID} of task ${remote.id}`);
-
-    // --- AC-3 ---------------------------------------------------------------
-    hub.setApprovals([approval(APPROVAL_ALLOWED)]);
-    const waiting = await waitForConversation(
-      view.url,
-      conversationID,
-      (data) => (data.runs?.[0]?.approvals || []).length === 1,
-      `the consent ${APPROVAL_ALLOWED} to appear inside the run block of ${executionID}`,
-    );
-    const waitingBlock = waiting.runs[0];
-    const asked = waitingBlock.approvals[0];
-    assertEqual(asked.id, APPROVAL_ALLOWED, "AC-3: the consent the run block names");
-    assertEqual(asked.tool_name, "Bash", "AC-3: the tool the consent is about");
-    const args = JSON.stringify(asked.args);
-    if (!args.includes(APPROVAL_COMMAND)) {
-      throw new Error(`AC-3: the command must reach the flow verbatim; got ${args}`);
-    }
-    const optionIDs = (asked.options || []).map((option) => option.id).sort();
-    if (JSON.stringify(optionIDs) !== JSON.stringify([OPTION_ALLOW, OPTION_DENY].sort())) {
-      throw new Error(`AC-3: the consent must offer both answers; got ${JSON.stringify(asked.options)}`);
-    }
-    assertEqual(waitingBlock.awaiting_response, true, "AC-3: whether the run block reports the wait");
-    assertEqual(waitingBlock.run?.state, "ACTIVE", "AC-3: the state of a run stopped on a consent");
-    ok(
-      "AC-3",
-      `the consent ${APPROVAL_ALLOWED} appears inside the run block carrying the command ${JSON.stringify(APPROVAL_COMMAND)} verbatim and both answers [${optionIDs.join(", ")}], the block reports awaiting_response:true and the run stays ACTIVE while nobody has answered`,
+      `the two frames the turn of ${executionID} emitted appear in the timeline of ${conversationID} itself and its record is RUNNING, observed through ${conversationReads} read(s) of /api/workspace/conversations/${conversationID} and exactly 0 calls to GET /api/execution/${executionID}/run — counted over the ${viewerRequests.length} requests this smoke had made`,
     );
 
     // --- AC-5 ---------------------------------------------------------------
-    // The oracle is the agent process saying it was given the message, never
-    // the 202 of the route.
-    const accepted = await apiJSON(
+    // The conversation is not taken hostage by the action running in it: a
+    // person can speak while the turn works, and what they say is steered into
+    // that turn. The oracle is the agent process saying it was given the
+    // message, never the 202 of the route.
+    const accepted = await serveStartingProcesses(control, apiJSON(
       `${view.url}/api/workspace/conversations/${conversationID}/messages`,
       postJSON({ message: MESSAGE_SENTINEL }),
       202,
-    );
-    assertEqual(accepted.available, true, "AC-5: whether the conversation is still available while a run of its own waits");
-    // The first user frame carried the opening instruction; this is the second.
-    const delivered = await conversationControl.waitFor(userFrame, 2);
-    if (userFrameText(delivered) !== MESSAGE_SENTINEL) {
-      throw new Error(`AC-5: the process received ${JSON.stringify(userFrameText(delivered))} instead of the sentinel`);
-    }
-    conversationControl.push(emit(assistantText(REPLY_SENTINEL)));
+    ));
+    assertEqual(accepted.available, true, "AC-5: whether the conversation is still available while an action of its own runs");
+    const delivered = await control.waitFor(userFrameCarrying(MESSAGE_SENTINEL), 1);
+    control.push(emit(assistantText(REPLY_SENTINEL)), delivered.pid);
     const answered = await waitForConversation(
       view.url,
       conversationID,
@@ -355,20 +259,18 @@ async function scenario(runDir) {
       "the agent's answer to appear in the timeline of the conversation",
     );
     assertEqual(answered.conversation?.id, conversationID, "AC-5: the conversation that answered");
-    assertEqual(answered.runs?.[0]?.awaiting_response, true, "AC-5: whether the run is still waiting after the exchange");
+    assertEqual(answered.runs?.[0]?.status, "RUNNING", "AC-5: whether the action is still running after the exchange");
     ok(
       "AC-5",
-      `while the run was stopped on ${APPROVAL_ALLOWED}, POST /api/workspace/conversations/${conversationID}/messages answered 202 with available:true, the agent process itself reported having been given ${JSON.stringify(MESSAGE_SENTINEL)}, its answer came back into the timeline of ${conversationID}, and the run block was still awaiting its consent`,
+      `while ${executionID} was being carried out, POST /api/workspace/conversations/${conversationID}/messages answered 202 with available:true, the agent process itself reported having been given ${JSON.stringify(MESSAGE_SENTINEL)}, its answer came back into the timeline of ${conversationID}, and the action was still running`,
     );
 
     // --- AC-6 ---------------------------------------------------------------
     const listed = await apiJSON(`${view.url}/api/workspace/runs`);
     const entry = (listed.runs || []).find((row) => row.id === executionID);
     if (!entry) {
-      throw new Error(`AC-6: the waiting run must be listed; got ${JSON.stringify(listed.runs)}`);
+      throw new Error(`AC-6: the running action must be listed; got ${JSON.stringify(listed.runs)}`);
     }
-    assertEqual(entry.awaiting_response, true, "AC-6: whether the listed entry reports the wait");
-    assertEqual(entry.pending?.id, APPROVAL_ALLOWED, "AC-6: the decision the listed entry names");
     assertEqual(entry.conversation_id, conversationID, "AC-6: the conversation the listed entry points back to");
     assertEqual(entry.anchor_event_id, proposalEventID, "AC-6: the point of that conversation the listed entry points back to");
     const html = await rawGet(`${view.url}/index.html`);
@@ -377,80 +279,8 @@ async function scenario(runDir) {
     }
     ok(
       "AC-6",
-      `GET /api/workspace/runs marks ${executionID} awaiting_response:true on ${entry.pending.id} and carries conversation_id ${entry.conversation_id} with anchor_event_id ${entry.anchor_event_id} — the conversation and the exact point the notice leads back to — while the served index.html carries #runs-attention`,
+      `GET /api/workspace/runs lists ${executionID} carrying conversation_id ${entry.conversation_id} with anchor_event_id ${entry.anchor_event_id} — the conversation and the exact point the rail leads back to — while the served index.html carries #runs-attention`,
     );
-
-    // --- AC-4, the consent granted ------------------------------------------
-    // Proved on the hub: what it was really told, and what the run did next.
-    await apiJSON(
-      `${view.url}/api/execution/${executionID}/run/approvals/${APPROVAL_ALLOWED}`,
-      postJSON({ option_id: OPTION_ALLOW }),
-      202,
-    );
-    const allowedResponses = hub.approvalResponses();
-    if (allowedResponses.length !== 1
-      || allowedResponses[0].approvalId !== APPROVAL_ALLOWED
-      || allowedResponses[0].optionId !== OPTION_ALLOW) {
-      throw new Error(`AC-4: the hub must have recorded ("${APPROVAL_ALLOWED}","${OPTION_ALLOW}"); got ${JSON.stringify(allowedResponses)}`);
-    }
-    hub.emitRunEvent("Riprendo: eseguo il comando consentito");
-    hub.emitRunEvent(" e ho finito di ripulire");
-    const resumed = await waitForConversation(
-      view.url,
-      conversationID,
-      (data) => (data.runs?.[0]?.events || []).some((event) => (event.text || "").includes("comando consentito"))
-        && (data.runs?.[0]?.approvals || []).length === 0,
-      `the run of ${executionID} to carry on inside the conversation after the consent was granted`,
-    );
-    assertEqual(resumed.runs[0].awaiting_response, false, "AC-4: whether an answered run still reports a wait");
-    assertEqual(resumed.runs[0].run?.state, "ACTIVE", "AC-4: the state of a run that was allowed to carry on");
-
-    // --- AC-4, the consent denied -------------------------------------------
-    hub.setApprovals([approval(APPROVAL_DENIED)]);
-    await waitForConversation(
-      view.url,
-      conversationID,
-      (data) => (data.runs?.[0]?.approvals || [])[0]?.id === APPROVAL_DENIED,
-      `the second consent ${APPROVAL_DENIED} to appear inside the run block`,
-    );
-    await apiJSON(
-      `${view.url}/api/execution/${executionID}/run/approvals/${APPROVAL_DENIED}`,
-      postJSON({ option_id: OPTION_DENY }),
-      202,
-    );
-    const denialResponses = hub.approvalResponses();
-    const denial = denialResponses[denialResponses.length - 1];
-    if (denialResponses.length !== 2 || denial.approvalId !== APPROVAL_DENIED || denial.optionId !== OPTION_DENY) {
-      throw new Error(`AC-4: the hub must have recorded ("${APPROVAL_DENIED}","${OPTION_DENY}"); got ${JSON.stringify(denialResponses)}`);
-    }
-    // The refusal is the runner's to act on: the hub closes the run, exactly as
-    // an agent that has been told not to would.
-    hub.closeRun();
-    const stopped = await waitForConversation(
-      view.url,
-      conversationID,
-      (data) => data.runs?.[0]?.run?.state === "CLOSED",
-      `the run of ${executionID} to be reported as closed inside the conversation`,
-    );
-    assertEqual(stopped.runs[0].awaiting_response, false, "AC-4: whether a stopped run still reports a wait");
-    // The refusal stays readable where it was taken: the block is still the one
-    // anchored to the proposal, on the execution the conversation decided upon.
-    assertEqual(stopped.runs[0].execution_id, executionID, "AC-4: the execution the stopped block is still about");
-    assertEqual(stopped.runs[0].anchor_event_id, proposalEventID, "AC-4: the point of the conversation the stopped block is still anchored to");
-    ok(
-      "AC-4",
-      `answering ${OPTION_ALLOW} on ${APPROVAL_ALLOWED} was recorded by the hub and the run carried on inside the conversation with the events that followed; answering ${OPTION_DENY} on ${APPROVAL_DENIED} was recorded by the hub too, the run then stopped, and the conversation reports it CLOSED on the block it has kept since event ${proposalEventID}`,
-    );
-
-    // --- the credential -----------------------------------------------------
-    // Not a criterion of the story, but the condition under which everything
-    // above means anything: a hub that had been answering 401 would have made
-    // the whole remote half a sequence of notices.
-    if (!hub.authorizedCalls() || hub.unauthorizedCalls()) {
-      throw new Error(
-        `the remote half was not exercised under a valid credential: ${hub.authorizedCalls()} authorized and ${hub.unauthorizedCalls()} refused hub call(s)`,
-      );
-    }
 
     // --- the closing discipline of the sibling smokes ------------------------
     const closed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}`, { method: "DELETE" }, 200);
@@ -459,11 +289,10 @@ async function scenario(runDir) {
     }
   } finally {
     if (view) await stopProcess(view.child);
-    if (hub) await hub.close();
-    if (runControl) await runControl.close();
-    if (conversationControl) await conversationControl.close();
+    if (control) await control.close();
   }
 }
+
 
 // --- oracles ------------------------------------------------------------------
 
@@ -541,6 +370,63 @@ function assistantProposal(sentence, action, specCode) {
 // userFrame recognizes a frame the process was given on its standard input as
 // an operator message, which is the shape the opening instruction and every
 // later message share.
+// serveStartingProcesses answers, while a request is in flight, every agent
+// process that request starts: each is given the announcement of the very
+// session id ARchetipo assigned to it, which is the only one the provider
+// accepts from it. A route that starts a process answers only once that process
+// has announced itself, so the two have to happen at the same time.
+async function serveStartingProcesses(control, request) {
+  // The request is taken hold of first: anything that threw before this line
+  // would leave it floating, and a rejected promise nobody is waiting on takes
+  // the whole run down with an error that names none of this.
+  let pending = true;
+  const answer = request.finally(() => {
+    pending = false;
+  });
+  answer.catch(() => {});
+  let served = control.reports().filter((entry) => entry.kind === "argv").length;
+  while (pending) {
+    const invocations = control.reports().filter((entry) => entry.kind === "argv");
+    while (served < invocations.length) {
+      control.push(emit(initFrame(nativeSessionIDOf(invocations[served]))), invocations[served].pid);
+      served += 1;
+    }
+    await delay(25);
+  }
+  return answer;
+}
+
+// nativeSessionIDOf reads, from the command line of a process, which native
+// session ARchetipo told it to be — or to take up.
+function nativeSessionIDOf(invocation) {
+  const argv = invocation.argv || [];
+  for (const flag of ["--session-id", "--resume"]) {
+    const at = argv.indexOf(flag);
+    if (at >= 0 && argv[at + 1]) return argv[at + 1];
+  }
+  throw new Error(`the invocation names no native session: ${JSON.stringify(argv)}`);
+}
+
+function initFrame(sessionID) {
+  return { type: "system", subtype: "init", session_id: sessionID };
+}
+
+// userFrameBlocks keeps the blocks of a user frame apart, which is what
+// identifying one message requires: the instruction that opens a conversation
+// is held until the first message and travels in the same frame, as a block of
+// its own.
+function userFrameBlocks(entry) {
+  const content = entry.frame?.message?.content;
+  if (!Array.isArray(content)) return [];
+  return content.filter((block) => block?.type === "text").map((block) => block.text ?? "");
+}
+
+function userFrameCarrying(text) {
+  const matcher = (entry) => userFrame(entry) && userFrameBlocks(entry).includes(text);
+  Object.defineProperty(matcher, "name", { value: `a user frame carrying ${JSON.stringify(text)}` });
+  return matcher;
+}
+
 function userFrame(entry) {
   return entry.kind === "received" && entry.frame?.type === "user";
 }
@@ -553,16 +439,6 @@ function userFrameText(entry) {
 // for one of the two agent processes. It is one line: the same fake, started
 // with its own control server. See the header for why the two processes cannot
 // share one.
-async function writeFakeWrapper(runDir, name, controlURL) {
-  const file = path.join(runDir, `fake-claude-${name}.sh`);
-  await fs.writeFile(
-    file,
-    `#!/bin/sh\nFAKE_CLAUDE_CONTROL='${controlURL}' exec '${process.execPath}' '${fakeClaudePath}' "$@"\n`,
-  );
-  await fs.chmod(file, 0o755);
-  return file;
-}
-
 // --- the control server of a fake agent -------------------------------------------
 //
 // The fake binary emits nothing on its own: it asks this server what to do next
@@ -576,7 +452,14 @@ async function startControlServer() {
 
   const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url.startsWith("/next")) {
-      sendJSON(res, 200, commands.shift() || { kind: "none" });
+      // A command may be addressed to one process. A native session is opened
+      // by one process and every turn in it is run by another, so several of
+      // them poll this server at once, and a frame meant for one — an
+      // announcement above all, valid only for the process ARchetipo told to be
+      // that session — must not be taken by whichever asks first.
+      const pid = Number(new URL(req.url, url).searchParams.get("pid")) || 0;
+      const index = commands.findIndex((entry) => entry.pid === 0 || entry.pid === pid);
+      sendJSON(res, 200, index < 0 ? { kind: "none" } : commands.splice(index, 1)[0].command);
       return;
     }
     if (req.method === "POST" && req.url.startsWith("/received")) {
@@ -595,8 +478,11 @@ async function startControlServer() {
 
   return {
     url,
-    push(command) {
-      commands.push(command);
+    push(command, pid = 0) {
+      commands.push({ command, pid });
+    },
+    reports() {
+      return received;
     },
     // waitFor polls until the fake has reported at least `count` matching
     // requests, and returns the count-th of them. The count is explicit rather
@@ -617,247 +503,6 @@ async function startControlServer() {
       return new Promise((resolve) => server.close(resolve));
     },
   };
-}
-
-// --- the fake ARcipelago hub ------------------------------------------------------
-//
-// It serves the task routes the arcipelago client uses plus the run namespace
-// the follower needs. Nothing progresses on its own: this test seeds the task,
-// assigns the run, opens each approval, publishes each event and closes the run
-// by hand.
-//
-// It is a copy of the hub of workspace-runs-view-smoke.mjs and not an import,
-// by the harness's own contract: every smoke is a standalone script. What it
-// adds is what this story needs and that one did not — a task seeded on an
-// execution id, published run events, and a run that can be closed.
-
-async function startFakeHub() {
-  const tasks = new Map(); // task id -> record
-  let created = 0;
-  let authorized = 0;
-  let unauthorized = 0;
-  let eventID = 0;
-
-  const run = { id: "", taskId: "", state: "active", createdAt: Date.now(), closedAt: 0, error: "" };
-  const history = [];
-  const approvalResponses = [];
-  let approvals = [];
-  let stream = null; // the currently attached SSE response, at most one
-
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, "http://127.0.0.1");
-    if (req.headers.authorization !== `Bearer ${TOKEN_SENTINEL}`) {
-      unauthorized += 1;
-      return sendJSON(res, 401, { error: "unauthorized" });
-    }
-    authorized += 1;
-
-    if (req.method === "GET" && url.pathname === "/api/external/tasks/by-reference") {
-      const externalID = url.searchParams.get("externalId");
-      const match = [...tasks.values()].find((task) => task.request.externalId === externalID);
-      if (!match) return sendJSON(res, 404, { error: "task_not_found" });
-      return sendJSON(res, 200, { task: publicTask(match) });
-    }
-
-    if (req.method === "GET" && url.pathname.startsWith("/api/external/tasks/")) {
-      const id = decodeURIComponent(url.pathname.slice("/api/external/tasks/".length));
-      const record = tasks.get(id);
-      if (!record) return sendJSON(res, 404, { error: "task_not_found" });
-      return sendJSON(res, 200, { task: publicTask(record) });
-    }
-
-    const runRoute = /^\/api\/external\/runs\/([^/]+)(\/.*)?$/.exec(url.pathname);
-    if (runRoute) {
-      const runID = decodeURIComponent(runRoute[1]);
-      const rest = runRoute[2] || "";
-      if (!run.id || runID !== run.id) {
-        return sendJSON(res, 404, { error: "run_not_found" });
-      }
-      if (req.method === "GET" && rest === "") {
-        return sendJSON(res, 200, {
-          run: {
-            id: run.id,
-            runnerId: "runner-1",
-            taskId: run.taskId,
-            state: run.state,
-            createdAt: run.createdAt,
-            closedAt: run.closedAt,
-            error: run.error,
-          },
-        });
-      }
-      if (req.method === "GET" && rest === "/approvals") {
-        return sendJSON(res, 200, { approvals });
-      }
-      if (req.method === "GET" && rest === "/events") {
-        return openStream(req, res, url);
-      }
-      const respondRoute = /^\/approvals\/([^/]+)\/respond$/.exec(rest);
-      if (req.method === "POST" && respondRoute) {
-        const approvalID = decodeURIComponent(respondRoute[1]);
-        return readBody(req).then((raw) => {
-          let body = {};
-          try {
-            body = JSON.parse(raw || "{}");
-          } catch {
-            return sendJSON(res, 400, { error: "invalid_json" });
-          }
-          approvalResponses.push({ runId: runID, approvalId: approvalID, optionId: body.optionId });
-          approvals = approvals.filter((approval) => approval.id !== approvalID);
-          return sendJSON(res, 202, { ok: true });
-        });
-      }
-      return sendJSON(res, 404, { error: "not_found" });
-    }
-
-    return sendJSON(res, 404, { error: "not_found" });
-  });
-
-  // openStream serves the SSE history from the cursor the subscriber asked for,
-  // and holds the socket open while the run is active.
-  function openStream(req, res, url) {
-    const afterParam = url.searchParams.get("afterId");
-    const headerCursor = req.headers["last-event-id"];
-    const afterId = Number.parseInt(afterParam ?? headerCursor ?? "0", 10) || 0;
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    for (const frame of history) {
-      if (frame.id > afterId) res.write(frameText(frame));
-    }
-    if (run.state !== "active") {
-      res.write(endFrameText("closed"));
-      res.end();
-      return undefined;
-    }
-    stream = res;
-    req.on("close", () => {
-      if (stream === res) stream = null;
-    });
-    return undefined;
-  }
-
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const url = `http://127.0.0.1:${server.address().port}`;
-
-  // seedTask is how a run born on another provider becomes followable here: the
-  // hub is told about a task whose externalId is the execution id, which is the
-  // identity the client resolves a still-running record by.
-  function seedTask(externalID, specCode) {
-    created += 1;
-    const id = `task-${created}`;
-    const record = {
-      id,
-      status: "running",
-      resultSummary: "",
-      runId: "",
-      specCode,
-      request: { externalId: externalID, workspaceId: WORKSPACE_ID },
-    };
-    tasks.set(id, record);
-    return record;
-  }
-
-  // assignRun is what turns an observable task into a followable run: until the
-  // task carries a runId, ResolveRun has nothing to resolve.
-  function assignRun(taskID) {
-    const record = tasks.get(taskID);
-    if (!record) throw new Error(`no remote task ${taskID} to bind a run to`);
-    record.runId = RUN_ID;
-    run.id = RUN_ID;
-    run.taskId = taskID;
-    run.state = "active";
-    run.createdAt = Date.now();
-    return run;
-  }
-
-  return {
-    url,
-    seedTask,
-    assignRun,
-    setApprovals: (list) => {
-      approvals = list;
-    },
-    // emitRunEvent publishes one frame of the run's history, to the attached
-    // stream when there is one and to the replayable history either way.
-    emitRunEvent: (text) => {
-      eventID += 1;
-      const frame = {
-        id: eventID,
-        runId: run.id,
-        seq: 1,
-        ts: Date.now(),
-        event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } },
-      };
-      history.push(frame);
-      if (stream) stream.write(frameText(frame));
-      return frame;
-    },
-    // closeRun is the runner acting on a refusal: the run ends, and the stream
-    // says so instead of merely dropping.
-    closeRun: (reason = "closed") => {
-      run.state = "closed";
-      run.closedAt = Date.now();
-      if (stream) {
-        const res = stream;
-        stream = null;
-        res.write(endFrameText(reason));
-        res.end();
-      }
-    },
-    approvalResponses: () => approvalResponses.map((entry) => ({ ...entry })),
-    authorizedCalls: () => authorized,
-    unauthorizedCalls: () => unauthorized,
-    close: () =>
-      new Promise((resolve) => {
-        if (stream) {
-          const res = stream;
-          stream = null;
-          res.destroy();
-        }
-        server.closeAllConnections?.();
-        server.close(() => resolve());
-      }),
-  };
-}
-
-function publicTask(record) {
-  return { id: record.id, status: record.status, resultSummary: record.resultSummary, runId: record.runId };
-}
-
-// approval is the consent the run asks for, in the hub's own vocabulary. The
-// command travels inside args because that is what the person has to read
-// before answering.
-function approval(id) {
-  return {
-    id,
-    runId: RUN_ID,
-    runnerId: "runner-1",
-    createdAt: Date.now(),
-    request: {
-      toolName: "Bash",
-      title: "Ripulire i worktree",
-      args: { command: APPROVAL_COMMAND },
-      options: [
-        { optionId: OPTION_ALLOW, name: "Consenti", kind: "allow" },
-        { optionId: OPTION_DENY, name: "Rifiuta", kind: "reject" },
-      ],
-    },
-  };
-}
-
-function frameText(frame) {
-  return `id: ${frame.id}\nevent: run_event\ndata: ${JSON.stringify(frame)}\n\n`;
-}
-
-function endFrameText(reason) {
-  return `event: end\ndata: ${JSON.stringify({ reason })}\n\n`;
 }
 
 function sendJSON(res, status, payload) {
@@ -1107,13 +752,12 @@ function renderReport(summary) {
 
     <h2>Scenario</h2>
     <p>One real workspace served by the real <code>archetipo view</code>. The agent proposes an action, the
-    proposal is confirmed, and the run it starts is followed from then on through
-    <code>GET /api/workspace/conversations/{id}</code> alone — this smoke records every request it makes and asserts
-    that it never called <code>GET /api/execution/{id}/run</code> to learn that the run was growing. The
-    workspace default is then moved to the <code>arcipelago</code> provider pointed at a fake local hub, which
-    opens two consents on that same run: the first is granted and the run carries on, the second is refused and
-    the run stops. What the hub was really told is the oracle for both. While the run is stopped, a message is
-    sent in the same conversation and the agent process itself reports having been given it.</p>
+    proposal is confirmed, and the action it starts is carried out <em>inside that conversation</em> — no second
+    agent is spawned — and followed from then on through <code>GET /api/workspace/conversations/{id}</code> alone:
+    this smoke records every request it makes and asserts that it never called
+    <code>GET /api/execution/{id}/run</code> to learn what the action was doing. While the action works, a message
+    is sent in the same conversation and the agent process itself reports having been given it, and the rail
+    <code>GET /api/workspace/runs</code> leads back to the exact point of the thread the action was asked at.</p>
 
     <h2>Proved statements</h2>
     <table>

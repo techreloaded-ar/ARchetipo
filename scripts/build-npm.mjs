@@ -94,11 +94,17 @@ async function syncAssets() {
 
   const runtimeDst = path.join(npmDir, "archetipo", "runtime");
   await emptyDir(runtimeDst);
-  for (const name of ["config.yaml", "shared-runtime.md"]) {
-    const src = path.join(runtimeSrc, name);
-    if (await exists(src)) {
-      await fs.copyFile(src, path.join(runtimeDst, name));
-    }
+  // The template is config.template.yaml here and config.yaml there: in the
+  // repository it sits beside the live configuration of this very workspace,
+  // which the CLI rewrites, while the package has no live configuration to
+  // confuse it with. Copying the live one would ship somebody's own provider.
+  await fs.copyFile(
+    path.join(runtimeSrc, "config.template.yaml"),
+    path.join(runtimeDst, "config.yaml"),
+  );
+  const sharedSrc = path.join(runtimeSrc, "shared-runtime.md");
+  if (await exists(sharedSrc)) {
+    await fs.copyFile(sharedSrc, path.join(runtimeDst, "shared-runtime.md"));
   }
   console.log("✓ archetipo/runtime/");
 }

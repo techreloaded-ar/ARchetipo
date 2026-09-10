@@ -92,23 +92,3 @@ func buildArgs() []string {
 func buildReviewPrompt(req execution.Request) string {
 	return execution.ReviewPrompt(localOpening, req)
 }
-
-// conversationOpening says where a conversation held by this provider is
-// standing: the very directory the person has open, because the process runs
-// on their machine — the same fact localOpening states for a dispatched
-// action, worded for a person reading it in a chat rather than for an agent
-// mid-instruction.
-const conversationOpening = "Work in the current working directory: it is the ARchetipo workspace a person has open in front of them, with the archetipo CLI and the ARchetipo skills installed."
-
-// buildConversationPrompt renders the single instruction that opens a free
-// conversation about the workspace.
-//
-// Everything but the opening sentence is the shared declaration in
-// execution.ConversationPrompt: the vocabulary of a conversation has one
-// contract, and a copy of it here would be a second one, free to drift. What
-// stays local is the one sentence only this provider can write — it holds the
-// agent on the person's own working directory, word for word what the claude
-// provider says for the same reason.
-func buildConversationPrompt(actions []execution.ConversationAction, resumed string) string {
-	return execution.ConversationPrompt(conversationOpening, actions, resumed)
-}

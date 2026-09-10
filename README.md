@@ -173,7 +173,7 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 |---|---|
 | `archetipo init [--template <id>]` | Installs the skills of the selected process Template into the current project and creates `.archetipo/config.yaml` — with the Template `id` and `version` — plus `.archetipo/shared-runtime.md`. |
 | `archetipo doctor` | Diagnoses the installation: data directory, packaged and installed skills, project config, git, and gh auth (github connector). |
-| `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. Its Execution panel selects the workspace default provider from the registered ones — non-secret settings only — and each spec shows the actions its process Template admits in the spec's current status. |
+| `archetipo view` | Starts a local Kanban view for `.archetipo/backlog.yaml`, `.archetipo/specs/`, and `.archetipo/plans/`. Its Execution panel selects the workspace default provider from the registered ones — non-secret settings only — each spec shows the actions its process Template admits in the spec's current status, and a conversation with the agent is a durable native session of the harness. See [Conversations are native harness sessions](#conversations-are-native-harness-sessions). |
 | `archetipo config show` | Initializes the connector and prints metadata, including the workspace process Template (`id` and `version`). |
 | `archetipo prd write [--file PRD.md]` | Saves PRD markdown from `--file` or stdin. |
 | `archetipo validate prd [--file PRD.md]` | Validates the PRD against structural PRD rules. |
@@ -203,6 +203,22 @@ ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connecto
 The CLI reads `.archetipo/config.yaml` from the project to choose the active connector and artifact paths. All `archetipo validate ...` commands return `kind: "validation_result"` on stdout with `data.ok` set to `true` or `false`; error envelopes are reserved for process failures.
 
 Execution records are local runtime state under `.archetipo/executions/` and are ignored by Git. The optional `execution.default_provider` section stores a registered provider ID and non-secret configuration; tokens and credentials must remain outside `.archetipo/config.yaml`. `set-default` validates before an atomic update, while a run without `--provider` validates the saved configuration again before dispatch. An explicit `--provider` always wins and receives an empty configuration. Three providers ship registered — `arcipelago`, `codex` and `claude`; `archetipo execution provider list` shows what each accepts. Both successful dispatches and recorded provider failures return a `kind: "execution"` envelope; provider lookup, configuration, and capability failures return an error envelope before any record is created.
+
+### Conversations are native harness sessions
+
+A conversation in `archetipo view` is not a chat wrapped around a one-shot invocation: it is a **durable session of the coding harness itself** — Claude Code or Codex CLI — running on your machine, in your project directory, with your tools and the skills your runtime actually has.
+
+What that means in practice:
+
+- **It does not expire.** No global timeout and no inactivity timeout ever close a conversation. Closing the browser tab does not interrupt the work; interrupting a turn stops that turn and nothing else. A conversation is closed when you close it.
+- **It comes back.** Restart `archetipo view` and the conversation is still there, with the same id and the same native session: the agent remembers what it did, because the context belongs to the harness and is resumed by reference. Nothing is summarized and nothing is replayed back at it.
+- **It can act.** The agent reads and modifies the workspace, runs tools, starts servers and invokes skills, under the permission policy of your harness — whose questions reach you as approvals in the panel. It is not a read-only assistant that can only suggest.
+- **Model and effort are yours to change mid-flight.** Pick them for the *next* turn while the current one is still working. The catalogue offered is the one the session's own runtime declares, and choosing here never rewrites the workspace default in `.archetipo/config.yaml`.
+- **Process steps run in the thread you are reading.** Pressing `plan`, `implement`, `review`, inception, backlog or spec draft starts a turn in the open conversation instead of launching a second agent beside it. Each step still gets its own execution record with its own effect verification, and the conversation stays open and writable during and after it — several steps in a row, with free messages in between.
+- **Several conversations at once.** A workspace can hold as many as you open, each with its own agent process, and they do not interfere with each other. One `archetipo view` process at a time owns a given conversation's runtime; a second viewer on the same workspace can read it and is told so plainly if it tries to write.
+- **Stop, archive and delete are three different things.** Stopping releases the runtime and keeps the context. Archiving puts the thread away without losing its native session — reopening resumes it. Deleting removes *ARchetipo's* record and timeline and says so: the harness's own transcript and your working files are never touched.
+
+Two limits are worth knowing. A development server the agent starts may or may not outlive the turn that started it — that is the harness's behaviour, not ARchetipo's, and the two differ; what is promised is that the conversation comes back and that from inside it you can check, stop or restart the service. And conversations are a local-runtime feature: the `arcipelago` remote provider still runs `spec.plan` and `spec.implement` as batch runs and holds no native session.
 
 ### Remote execution on an ARcipelago fleet
 

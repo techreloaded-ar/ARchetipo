@@ -5158,6 +5158,90 @@ body.no-workspace [data-workspace-scoped] {
 	gap: 2px;
 }
 
+.conv-next-turn {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.conv-skill-menu {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	left: var(--gutter);
+	z-index: 20;
+	margin: 0;
+	padding: 4px;
+	list-style: none;
+	min-width: 260px;
+	max-width: min(420px, calc(100% - var(--gutter) * 2));
+	max-height: 240px;
+	overflow-y: auto;
+	background: var(--surface);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-lg);
+}
+
+/* La riga che sta al posto dell'elenco quando l'elenco non c'è: dice perché,
+   e non si può premere. */
+.conv-skill-note {
+	margin: 0;
+	padding: 8px;
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1.4;
+}
+
+.conv-skill-option {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	width: 100%;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text);
+	font-family: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.conv-skill-option:hover,
+.conv-skill-option.is-current {
+	background: var(--accent-soft);
+}
+
+.conv-skill-name {
+	font-family: var(--font-mono);
+}
+
+.conv-skill-origin {
+	color: var(--text-dim);
+	font-size: 11px;
+}
+
+.conv-input {
+	display: grid;
+	gap: 8px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+}
+
+.conv-input pre,
+.conv-input textarea {
+	margin: 0;
+	max-width: 100%;
+}
+
+.conv-history-more {
+	list-style: none;
+	text-align: center;
+}
+
 .conv-empty-command {
 	gap: var(--space-3);
 }
@@ -6036,6 +6120,9 @@ body.no-workspace [data-workspace-scoped] {
 	flex-direction: column;
 	gap: var(--space-2);
 	box-shadow: 0 -12px 24px -22px rgba(30, 30, 60, 0.5);
+	/* Il menu delle skill sale da qui: si apre sopra al campo e non allarga la
+	   riga, come il popup che si ha nelle dita scrivendo «/» altrove. */
+	position: relative;
 }
 
 .conv-composer-input {

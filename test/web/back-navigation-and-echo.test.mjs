@@ -320,7 +320,7 @@ describe("il messaggio inviato si vede subito", () => {
 
 	it("l'invio svuota il campo e mette il messaggio in coda prima di partire", () => {
 		const body = sectionOf(js, "async function sendConversationMessage(");
-		const pendingAt = body.indexOf("conversationPendingMessage = message");
+		const pendingAt = body.indexOf("conversationPendingMessage = typed");
 		const awaitAt = body.indexOf("await apiPost");
 		assert.notEqual(
 			pendingAt,
@@ -347,7 +347,7 @@ describe("il messaggio inviato si vede subito", () => {
 			"dopo un rifiuto la riga in consegna resta: mostrerebbe come consegnato un messaggio che non è partito",
 		);
 		assert.ok(
-			onFailure.includes("conversationDraft = message"),
+			onFailure.includes("conversationDraft = typed"),
 			"dopo un rifiuto il testo non torna nel campo: chi l'ha scritto dovrebbe riscriverlo per leggere la ragione",
 		);
 	});

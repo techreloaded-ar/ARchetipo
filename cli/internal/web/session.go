@@ -54,7 +54,28 @@ type workspaceSession struct {
 	// It is per session for the same reason the store is: the records live under
 	// this project root, and a journal that survived a workspace switch would
 	// write the threads of one project into the directory of another.
-	journal *conversationJournal
+	journal         *conversationJournal
+	nativeFollowers *nativeSessionFollowers
+
+	// nativeRuntime is which native sessions this View process owns. It is per
+	// session for the same reason the journal is — the locks live under this
+	// project root — and it is what keeps a second viewer opened on the same
+	// workspace from starting a second harness process on the same native
+	// session.
+	nativeRuntime *nativeRuntimeHolds
+
+	// broker is how a change this session makes on its own — an action of the
+	// process closing inside a conversation — reaches the clients that are
+	// looking at the board. It is set when the session starts, and is nil for a
+	// session nobody ever started.
+	broker *Broker
+
+	// actionConfirmations are the verdicts the actions in flight still owe
+	// their records, keyed by execution id. They live in memory because a
+	// workspace action's verdict closes over a snapshot of the workspace taken
+	// before it started, which cannot be read again afterwards without
+	// describing what the action itself did. See registerActionConfirmation.
+	actionConfirmations sync.Map
 
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.
@@ -98,8 +119,10 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		dispatch:   newDispatchGroup(),
 		followers:  newRunFollowers(),
 
-		conversation: newConversationSet(),
-		journal:      journal,
+		conversation:    newConversationSet(),
+		journal:         journal,
+		nativeFollowers: newNativeSessionFollowers(),
+		nativeRuntime:   newNativeRuntimeHolds(),
 	}
 	if providers != nil {
 		service, serviceErr := execution.NewService(providers, store, execution.RandomID, time.Now, cfg.ProjectRoot)
@@ -107,6 +130,9 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 			return nil, fmt.Errorf("creating the execution service: %w", serviceErr)
 		}
 		ws.service = service
+		if err := ws.restoreNativeConversations(providers); err != nil {
+			return nil, fmt.Errorf("restoring native conversations: %w", err)
+		}
 	}
 	return ws, nil
 }
@@ -136,12 +162,15 @@ func (ws *workspaceSession) start(parent context.Context, broker *Broker) {
 		if alreadyStopped {
 			return
 		}
+		ws.broker = broker
 		if parent == nil {
 			parent = context.Background()
 		}
 		ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 		ws.cancel = cancel
 		ws.dispatch.bind(ctx)
+		ws.nativeFollowers.bind(ctx)
+		ws.startNativeFollowers()
 
 		// A watcher failure is non-fatal — the viewer keeps working, just without
 		// live updates (clients fall back to the manual refresh button).
@@ -168,6 +197,7 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		}
 		ws.dispatch.wait(drain)
 		ws.followers.closeAll()
+		ws.nativeFollowers.closeAll()
 		// This is what frees the provider when the viewer changes workspace: the
 		// agent process behind each conversation stays alive until somebody
 		// closes it, and after this stop nobody else could. The context is a fresh,
@@ -194,9 +224,17 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		// because a process left alive because the previous one failed to close
 		// is exactly what leaving a workspace must not leave behind.
 		for _, snapshot := range held {
+			if snapshot.sessionProvider != nil {
+				_ = ws.releaseNativeConversation(closeCtx, snapshot)
+				continue
+			}
 			ws.sealConversation(closeCtx, snapshot)
 		}
 		_ = ws.conversation.shutdown(closeCtx)
+		// Last, and only after every runtime has actually been asked to go: a
+		// hold released while its harness process is still shutting down would
+		// let another viewer start a second one on the same native session.
+		ws.nativeRuntime.dropAll()
 	})
 }
 

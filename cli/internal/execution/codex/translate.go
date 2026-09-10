@@ -56,16 +56,25 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.mu.Lock()
 		a.seq++
 		a.agent.Reset()
-		// completed describes the turn that just started, not the one before
-		// it: a conversation's second turn must not inherit the verdict of its
-		// first.
-		a.completed = false
 		a.mu.Unlock()
 		return
 	case "turn/completed":
+		var completed struct {
+			Turn struct {
+				Status string `json:"status"`
+				Error  *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"turn"`
+		}
 		a.mu.Lock()
-		a.completed = true
-		a.turnOpen = false
+		_ = json.Unmarshal(params, &completed)
+		a.turnStatus = completed.Turn.Status
+		a.turnEnded = true
+		if completed.Turn.Error != nil {
+			a.turnError = completed.Turn.Error.Message
+		}
+		a.completed = completed.Turn.Status == "" || completed.Turn.Status == "completed"
 		a.mu.Unlock()
 		a.append(localrun.KindTurnEnd, "", "", params)
 		a.endTurn()
@@ -81,7 +90,7 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.append(localrun.KindThinking, decodeDelta(params), "", params)
 		return
 	case "item/started":
-		kind, text, tool, carries := startedItem(a, params)
+		kind, text, tool, carries := startedItem(params)
 		if carries {
 			a.append(kind, text, tool, params)
 		}
@@ -103,13 +112,17 @@ func (a *appServer) project(method string, params json.RawMessage) {
 func (a *appServer) append(kind, text, tool string, params json.RawMessage) {
 	a.mu.Lock()
 	seq := a.seq
+	turnID, submissionID := a.turnCoreID, a.submissionID
+	appendEvent := a.appendEvent
 	a.mu.Unlock()
-	a.session.Append(execution.RunEvent{
-		Seq:  seq,
-		Kind: kind,
-		Text: text,
-		Tool: tool,
-		Raw:  localrun.RawOf(params),
+	appendEvent(execution.RunEvent{
+		Seq:          seq,
+		Kind:         kind,
+		Text:         text,
+		Tool:         tool,
+		Raw:          localrun.RawOf(params),
+		TurnID:       turnID,
+		SubmissionID: submissionID,
 	})
 }
 
@@ -126,8 +139,8 @@ func decodeDelta(params json.RawMessage) string {
 
 func decodeErrorText(params json.RawMessage) string {
 	var payload struct {
-		Message string `json:"message"`
-		Error   string `json:"error"`
+		Message string          `json:"message"`
+		Error   json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(params, &payload) != nil {
 		return ""
@@ -135,7 +148,15 @@ func decodeErrorText(params json.RawMessage) string {
 	if strings.TrimSpace(payload.Message) != "" {
 		return payload.Message
 	}
-	return payload.Error
+	var nested struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(payload.Error, &nested) == nil && nested.Message != "" {
+		return nested.Message
+	}
+	var plain string
+	_ = json.Unmarshal(payload.Error, &plain)
+	return plain
 }
 
 // startedItem translates the opening of a thread item.
@@ -144,13 +165,7 @@ func decodeErrorText(params json.RawMessage) string {
 // appears in the history exactly once. An agent message is rendered by its
 // deltas, and reasoning by its own delta notifications, so neither carries
 // history at this point.
-//
-// a is consulted only for a userMessage: a conversation's opening turn can
-// carry the held instruction ahead of the person's own words, in the same
-// item, and openingEchoOf is what strips it back out — see its doc for why.
-// Every other kind of item is translated exactly as before, with no reference
-// to the server's state.
-func startedItem(a *appServer, params json.RawMessage) (kind, text, tool string, carries bool) {
+func startedItem(params json.RawMessage) (kind, text, tool string, carries bool) {
 	var notification itemNotification
 	if json.Unmarshal(params, &notification) != nil {
 		return "", "", "", false
@@ -158,11 +173,7 @@ func startedItem(a *appServer, params json.RawMessage) (kind, text, tool string,
 	item := notification.Item
 	switch item.Type {
 	case "userMessage":
-		text := joinContent(item.Content, item.Text)
-		if rest, echoed := a.openingEchoOf(text); echoed {
-			text = rest
-		}
-		return localrun.KindUserMessage, text, "", true
+		return localrun.KindUserMessage, joinContent(item.Content, item.Text), "", true
 	case "agentMessage", "reasoning", "plan":
 		return "", "", "", false
 	default:

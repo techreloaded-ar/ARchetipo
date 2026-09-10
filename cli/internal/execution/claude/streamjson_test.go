@@ -500,6 +500,37 @@ func TestStreamSessionKeepsAJoinedOpeningEchoOutOfTheHistory(t *testing.T) {
 	}
 }
 
+// Un comando con la barra torna indietro come stringa sola, avvolta nei tag con
+// cui l'harness lo descrive: deve entrare nella storia come il messaggio che
+// una persona ha scritto, non come un evento senza testo.
+func TestStreamSessionReadsASlashCommandAsTheMessageItIs(t *testing.T) {
+	fake := newFakeClaude()
+	session := localrun.NewSession("run-command", nil)
+	client := newStreamSession(fake, session, true)
+	go client.consume()
+	session.AttachDialogue(client)
+	t.Cleanup(fake.end)
+
+	payload, err := json.Marshal(map[string]any{
+		"type": frameUser,
+		"message": map[string]any{
+			"role":    "user",
+			"content": "<command-message>archetipo-design</command-message>\n<command-name>/archetipo-design</command-name>\n<command-args>mi fai il mockup?</command-args>",
+		},
+		"isReplay": true,
+	})
+	if err != nil {
+		t.Fatalf("marshalling the frame failed: %v", err)
+	}
+	fake.emit(string(payload))
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+
+	const want = "/archetipo-design mi fai il mockup?"
+	if got := session.Events(0)[0].Text; got != want {
+		t.Fatalf("the history reads %q; want %q", got, want)
+	}
+}
+
 // AC-2, AC-3 — the message travels to the process and becomes history only when
 // the process re-emits it, once.
 func TestStreamSessionSendsTheMessageAndWaitsForTheReEmission(t *testing.T) {

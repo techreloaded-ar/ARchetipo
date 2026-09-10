@@ -156,7 +156,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		writeError(w, iox.NewInvalidInput("action is required", "supported actions: "+supportedActions(), nil))
 		return
 	}
-	started, err := s.startWorkspaceAction(r.Context(), ws, action, req.Model, req.ModelOptions)
+	started, err := s.startWorkspaceAction(r.Context(), ws, action, req.Model, req.ModelOptions, req.ConversationID)
 	if err != nil {
 		writeStartError(w, err)
 		return
@@ -180,7 +180,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 // produces, which is only guaranteed by there being a single sequence. Every
 // refusal is returned as an error; writeStartError is the single place that
 // turns one into an HTTP response.
-func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession, action execution.ActionID, model string, modelOptions map[string]string) (*execution.Execution, error) {
+func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession, action execution.ActionID, model string, modelOptions map[string]string, conversationID string) (*execution.Execution, error) {
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		return nil, err
@@ -269,6 +269,21 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 	startOpts := []execution.StartOption(nil)
 	if modelChoice != nil {
 		startOpts = append(startOpts, execution.WithModelChoice(*modelChoice))
+	}
+	// Same fork as the spec route, for the same reason: a provider that holds
+	// native sessions works in the conversation the person is reading, and the
+	// session outlives the action instead of ending with it.
+	if _, native := execution.SessionProviderFor(provider); native {
+		return s.startActionInSession(ctx, ws, actionInSession{
+			conversationID: conversationID,
+			action:         action,
+			providerID:     providerID,
+			providerConfig: providerConfig,
+			modelChoice:    modelChoice,
+			model:          model,
+			modelOptions:   modelOptions,
+			confirm:        confirm,
+		})
 	}
 	started, continuation, err := ws.service.StartWorkspace(ctx, action, providerID, providerConfig, confirm, startOpts...)
 	if err != nil {

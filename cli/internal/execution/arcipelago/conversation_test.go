@@ -89,14 +89,11 @@ func TestOpenConversationCreatesTheTaskUnderTheConversationID(t *testing.T) {
 	if body.Metadata["kind"] != "conversation" {
 		t.Fatalf("the task metadata does not say it is a conversation: %#v", body.Metadata)
 	}
-	// The prompt is the shared declaration: what the viewer parses back is the
-	// proposal line, and a conversation whose agent was never told its shape
-	// would answer with prose nobody can confirm.
-	if !strings.Contains(body.Prompt, execution.ActionProposalArtifact) {
-		t.Fatal("the conversation prompt does not carry the proposal contract")
+	if strings.Contains(body.Prompt, execution.ActionProposalArtifact) {
+		t.Fatal("the conversation prompt still imposes the removed proposal contract")
 	}
-	if !strings.Contains(body.Prompt, "- plan (spec): Pianifica la spec") {
-		t.Fatal("the conversation prompt does not carry the process vocabulary it was given")
+	if !strings.Contains(body.Prompt, "inspect and modify it") {
+		t.Fatal("the conversation prompt does not allow native workspace work")
 	}
 	if strings.Contains(body.Prompt, plannedStatus) {
 		t.Fatal("the conversation prompt asks for a receipt; a conversation has none")

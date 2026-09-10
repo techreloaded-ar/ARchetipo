@@ -141,13 +141,16 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     console.log(`-> first view ready: ${viewOne.url} (pid ${pidOne}, launched in ${dirA})`);
     await useFakeProvider(viewOne.url);
 
-    control.push(emit(initFrame("conversation-yesterday")));
     const opened = await apiJSON(`${viewOne.url}/api/workspace/conversations`, postJSON({ spec_code: CODE_A }), 201);
     const yesterdayID = opened.conversation?.id;
     if (!yesterdayID) {
       throw new Error(`AC-1: unexpected payload on open: ${JSON.stringify(opened)}`);
     }
+    // The session id belongs to ARchetipo and the process was told which one to
+    // be: a frame announcing a different one is refused by the provider, so the
+    // announcement is pushed only once the invocation has said which id this is.
     const agentYesterday = await control.waitFor("argv", 1);
+    control.push(emit(initFrame(nativeSessionIDOf(agentYesterday))), agentYesterday.pid);
 
     control.push(emit(assistantText(AGENT_SENTINEL)));
     await waitForConversation(
@@ -157,7 +160,10 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
       (data) => (data.events || []).length === 1,
       "the assistant frame of the conversation of yesterday to become a text event",
     );
-    await apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}/messages`, postJSON({ message: HUMAN_SENTINEL }), 202);
+    await serveStartingProcesses(
+      control,
+      apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}/messages`, postJSON({ message: HUMAN_SENTINEL }), 202),
+    );
     // There is no second frame to wait for. The instruction that opens a
     // conversation is not written at the open: it is held and travels in the
     // *same* frame as the first message of the person, as a block of its own
@@ -191,13 +197,22 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     if (record.spec_code !== CODE_A) {
       throw new Error(`AC-1: the record lost the spec it was opened about; got ${JSON.stringify(record.spec_code)}`);
     }
-    if (record.final_state !== "CLOSED") {
-      throw new Error(`AC-1: a conversation closed by the operator must be recorded closed; got ${JSON.stringify(record.final_state)}`);
+    // A native conversation is not ended by being closed: the runtime is
+    // released and the durable session stays, which is what makes taking it up
+    // again possible at all. `final_state` belongs to the legacy shape, where
+    // the conversation really did end with the process behind it.
+    if (record.connection !== "RELEASED") {
+      throw new Error(`AC-1: a conversation closed by the operator must record the release of its runtime; got ${JSON.stringify(record.connection)}`);
+    }
+    if (record.archive !== "OPEN") {
+      throw new Error(`AC-1: closing releases the runtime and does not archive the thread; got ${JSON.stringify(record.archive)}`);
     }
     if (record.title !== HUMAN_SENTINEL) {
       throw new Error(`AC-1: the record must be named by the first thing the person said; got ${JSON.stringify(record.title)}`);
     }
-    assertSameEvents(eventsBefore, record.events, "AC-1 the events written to the record file");
+    // The timeline of a native conversation lives in the sibling journal, one
+    // JSON object per line, and no longer inside the record.
+    assertSameEvents(eventsBefore, await readJournal(dirA, yesterdayID), "AC-1 the events written to the journal file");
 
     // --- ARchetipo is closed, and started again ------------------------------
     await stopProcess(viewOne.child);
@@ -226,7 +241,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
       throw new Error(`AC-1: the listed entry lost its spec; got ${JSON.stringify(entryYesterday.spec_code)}`);
     }
     if (entryYesterday.live !== false) {
-      throw new Error("AC-1: a conversation whose process is long gone must never be listed as live");
+      throw new Error(`AC-1: a conversation whose runtime was released must never be listed as live; got ${JSON.stringify(entryYesterday)}`);
     }
     if (entryYesterday.message_count !== 2) {
       throw new Error(`AC-1: the listed entry counts ${entryYesterday.message_count} messages, want 2`);
@@ -269,13 +284,18 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     // *beside* whatever is open: the claim is about two processes and not only
     // about a payload.
     await useFakeProvider(viewTwo.url);
-    control.push(emit(initFrame("conversation-live")));
     const live = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, postJSON({}), 201);
     const liveID = live.conversation?.id;
     if (!liveID || liveID === yesterdayID) {
       throw new Error(`AC-4: the live conversation must be one of its own; got ${JSON.stringify(live.conversation)}`);
     }
-    const agentLive = await control.waitFor("argv", 2);
+    // The third invocation, not the second: a native session is opened by one
+    // process and every turn in it is run by another — `--session-id` for the
+    // open, `--resume` for the turn — so the conversation of yesterday alone
+    // accounts for two. This one is the open of the conversation that is live
+    // now, and it is the process that holds its session.
+    const agentLive = await control.waitFor("argv", 3);
+    control.push(emit(initFrame(nativeSessionIDOf(agentLive))), agentLive.pid);
     if (promptsCarryingTheTranscript(control).length !== 0) {
       throw new Error("AC-4: no agent process may have been given the transcript of yesterday before the resume was asked for");
     }
@@ -283,36 +303,33 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     // A resume no longer seals and closes the live conversation: it opens one
     // beside it, so two agent processes are alive across this call and they
     // share this control server. The route answers only once the new process has
-    // announced itself, and a single push could be taken by the process already
-    // live, so the announcement is pushed on a timer until the resume has
-    // answered — whichever of the two takes a given frame, the new one gets the
-    // next. An extra `system`/`init` frame produces no event in any
-    // conversation, and the leftovers are drained rather than left for whoever
-    // polls next.
-    const announcing = setInterval(() => control.push(emit(initFrame("conversation-resumed"))), 25);
-    let resumed;
-    try {
-      resumed = await apiJSON(
+    // announced itself, and the announcement must carry the session id
+    // ARchetipo assigned to *that* process — a frame naming any other one is
+    // refused by the provider. It is therefore served per process, from the
+    // invocation each one reported, while the resume is in flight.
+    const resumed = await serveStartingProcesses(
+      control,
+      apiJSON(
         `${viewTwo.url}/api/workspace/conversations/${encodeURIComponent(yesterdayID)}/resume`,
         postJSON({ message: RESUME_SENTINEL }),
         201,
-      );
-    } finally {
-      clearInterval(announcing);
-      control.drain();
-    }
+      ),
+    );
+    control.drain();
 
+    // A native session is taken up, not copied: the conversation that comes back
+    // is the very one of yesterday, with its id, its spec and its history. The
+    // new conversation with a `resumed_from` belonged to the model where the
+    // context could only be re-seeded as text, and there is nothing left here to
+    // re-seed — the session itself survived.
     const resumedID = resumed.conversation?.id;
-    if (!resumedID || resumedID === yesterdayID || resumedID === liveID) {
-      throw new Error(`AC-4: a resume opens a new conversation; got ${JSON.stringify(resumed.conversation)}`);
-    }
-    if (resumed.conversation.resumed_from !== yesterdayID) {
-      throw new Error(`AC-4: the new conversation must declare what it takes up; got ${JSON.stringify(resumed.conversation.resumed_from)}`);
+    if (resumedID !== yesterdayID) {
+      throw new Error(`AC-4: a native resume takes up the same conversation; got ${JSON.stringify(resumed.conversation)}`);
     }
     if (resumed.conversation.spec_code !== CODE_A) {
       throw new Error(`AC-4: a resumed thread stays about what it was about; got ${JSON.stringify(resumed.conversation.spec_code)}`);
     }
-    const agentResumed = await control.waitFor("argv", 3);
+    const agentResumed = await control.waitFor("argv", 4);
     if (agentResumed.pid === agentLive.pid) {
       throw new Error("AC-4: the resume reused the process of the conversation that was already live");
     }
@@ -321,7 +338,7 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     // live, which is what "beside" means.
     assertProcessAlive(agentLive.pid, `the agent process of the live conversation (pid ${agentLive.pid}) after the resume`);
     const bothLive = await apiJSON(`${viewTwo.url}/api/workspace/conversations`);
-    for (const [label, id] of [["the conversation that was already live", liveID], ["the conversation that resumed the one of yesterday", resumedID]]) {
+    for (const [label, id] of [["the conversation that was already live", liveID], ["the conversation of yesterday, taken up", resumedID]]) {
       const entry = (bothLive.conversations || []).find((row) => row.id === id);
       if (!entry || entry.live !== true) {
         throw new Error(`AC-4: ${label} (${id}) must be listed as live after the resume; got ${JSON.stringify(bothLive.conversations)}`);
@@ -332,31 +349,33 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     // two of them would otherwise be racing for.
     await apiJSON(`${viewTwo.url}/api/workspace/conversations/${encodeURIComponent(liveID)}?after_id=0`, { method: "DELETE" }, 200);
     await waitForProcessGone(agentLive.pid, `the agent process of the live conversation (pid ${agentLive.pid}) to be released by its own close`);
-    const prompt = await control.waitFor(framesOf(agentResumed.pid, userFrame), 1);
-    const promptText = userFrameText(prompt);
-    for (const sentinel of [AGENT_SENTINEL, HUMAN_SENTINEL]) {
-      if (!promptText.includes(sentinel)) {
-        throw new Error(`AC-4: the prompt the new agent process really received does not carry ${JSON.stringify(sentinel)}: ${truncate(promptText, 600)}`);
-      }
-    }
+    // The process that took the session up was given the message and nothing
+    // else: the transcript of yesterday is in the session it resumed, and a
+    // process handed it again as text would be reading the same conversation
+    // twice.
     await control.waitFor(framesOf(agentResumed.pid, userFrameCarrying(RESUME_SENTINEL)), 1);
+    const reseeded = promptsCarryingTheTranscript(control);
+    if (reseeded.length !== 0) {
+      throw new Error(`AC-4: a native resume must hand no transcript to the process it starts; got ${truncate(userFrameText(reseeded[0]), 600)}`);
+    }
     control.push(emit(userReplay(RESUME_SENTINEL)));
     const resumedHistory = await waitForConversation(
       viewTwo.url,
       resumedID,
       0,
       (data) => (data.events || []).some((event) => event.kind === "user_message" && event.text === RESUME_SENTINEL),
-      "the message that asked for the resume to enter the history of the new conversation",
+      "the message that asked for the resume to enter the history of the conversation it took up",
     );
     if (resumedHistory.conversation?.id !== resumedID) {
       throw new Error(`AC-4: the workspace holds ${JSON.stringify(resumedHistory.conversation?.id)} instead of the resumed conversation ${resumedID}`);
     }
-    if ((resumedHistory.events || []).some((event) => event.text === AGENT_SENTINEL)) {
-      throw new Error("AC-4: the past conversation was copied into the new one instead of being handed to it as context");
-    }
+    // The history goes on where it stopped: the two events of yesterday are
+    // still there, with their ids, and the resume is the next one after them.
+    assertSameEvents(eventsBefore, (resumedHistory.events || []).slice(0, eventsBefore.length), "AC-4 the history of the conversation that was taken up");
+    assertStrictlyIncreasing(resumedHistory.events, "AC-4 the history of the conversation that was taken up");
     ok(
       "AC-4",
-      `POST /api/workspace/conversations/${yesterdayID}/resume answered 201 with the new conversation ${resumedID} declaring resumed_from ${resumed.conversation.resumed_from}, the conversation ${liveID} that was already live stayed live — its process (pid ${agentLive.pid}) still there and both threads listed live:true — the new agent process (pid ${agentResumed.pid}) was really given both sentences of yesterday in its prompt, and the message that asked for the resume entered the history of the new conversation`,
+      `POST /api/workspace/conversations/${yesterdayID}/resume answered 201 taking up that very conversation — same id, spec ${resumed.conversation.spec_code} — on a new agent process (pid ${agentResumed.pid}) that was given the message and no transcript, while the conversation ${liveID} that was already live stayed live with its own process (pid ${agentLive.pid}) still there and both threads listed live:true; the message that asked for the resume entered the history after the ${eventsBefore.length} events of yesterday`,
     );
 
     // --- AC-6 ---------------------------------------------------------------
@@ -371,18 +390,18 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     await waitForProcessGone(agentResumed.pid, `the agent process of A (pid ${agentResumed.pid}) to be released by the workspace switch`);
 
     await useFakeProvider(viewTwo.url);
-    control.push(emit(initFrame("conversation-beta")));
     const openedInB = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationB = openedInB.conversation?.id;
     if (!conversationB) {
       throw new Error(`AC-6: B must open a conversation of its own; got ${JSON.stringify(openedInB.conversation)}`);
     }
-    const agentB = await control.waitFor("argv", 4);
+    const agentB = await control.waitFor("argv", 5);
+    control.push(emit(initFrame(nativeSessionIDOf(agentB))), agentB.pid);
     control.push(emit(assistantText(BETA_SENTINEL)));
     await waitForConversation(viewTwo.url, conversationB, 0, (data) => (data.events || []).length === 1, "the history of the conversation of B");
 
     const rawIndexB = await rawGet(`${viewTwo.url}/api/workspace/conversations`);
-    for (const [label, id] of [["of yesterday", yesterdayID], ["that was live", liveID], ["that resumed it", resumedID]]) {
+    for (const [label, id] of [["of yesterday, taken up again", yesterdayID], ["that was live", liveID]]) {
       if (rawIndexB.includes(id)) {
         throw new Error(`AC-6: the conversation ${label} (${id}) of A appears in the index served for B: ${truncate(rawIndexB, 600)}`);
       }
@@ -527,6 +546,54 @@ function emit(frame) {
   return { kind: "emit", frame };
 }
 
+// readJournal reads the durable timeline of a native conversation: the sibling
+// `<id>.events.jsonl`, one event per line, which is where the events of a
+// native session are appended as they arrive.
+async function readJournal(root, conversationID) {
+  const file = path.join(root, ".archetipo", "conversations", `${conversationID}.events.jsonl`);
+  const body = await fs.readFile(file, "utf8");
+  return body
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
+// nativeSessionIDOf reads out of a real invocation the session the process was
+// told to be: `--session-id <uuid>` the first time, `--resume <uuid>` afterwards.
+function nativeSessionIDOf(invocation) {
+  const argv = invocation.argv || [];
+  for (const flag of ["--session-id", "--resume"]) {
+    const at = argv.indexOf(flag);
+    if (at >= 0 && argv[at + 1]) return argv[at + 1];
+  }
+  throw new Error(`the invocation names no native session: ${JSON.stringify(argv)}`);
+}
+
+// serveStartingProcesses answers, while a request is in flight, every harness
+// process that request starts. A turn of a native session runs in a process of
+// its own and the route does not answer until that process has announced
+// itself, so the request is sent and not awaited.
+async function serveStartingProcesses(control, request) {
+  // The request is taken hold of first: anything that threw before this line
+  // would leave it floating, and a rejected promise nobody is waiting on takes
+  // the whole run down with an error that names none of this.
+  let pending = true;
+  const answer = request.finally(() => {
+    pending = false;
+  });
+  answer.catch(() => {});
+  let served = control.reports().filter((entry) => entry.kind === "argv").length;
+  while (pending) {
+    const invocations = control.reports().filter((entry) => entry.kind === "argv");
+    while (served < invocations.length) {
+      control.push(emit(initFrame(nativeSessionIDOf(invocations[served]))), invocations[served].pid);
+      served += 1;
+    }
+    await delay(25);
+  }
+  return answer;
+}
+
 function initFrame(sessionID) {
   return { type: "system", subtype: "init", session_id: sessionID };
 }
@@ -606,7 +673,13 @@ async function startControlServer() {
 
   const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url.startsWith("/next")) {
-      sendJSON(res, 200, commands.shift() || { kind: "none" });
+      // A command may be addressed to one process. Two agent processes are
+      // alive across a resume and they poll the same server, so an
+      // announcement — which is valid only for the process ARchetipo told to be
+      // that session — must not be taken by whichever of the two asks first.
+      const pid = Number(new URL(req.url, url).searchParams.get("pid")) || 0;
+      const index = commands.findIndex((entry) => entry.pid === 0 || entry.pid === pid);
+      sendJSON(res, 200, index < 0 ? { kind: "none" } : commands.splice(index, 1)[0].command);
       return;
     }
     if (req.method === "POST" && req.url.startsWith("/received")) {
@@ -625,8 +698,8 @@ async function startControlServer() {
 
   return {
     url,
-    push(command) {
-      commands.push(command);
+    push(command, pid = 0) {
+      commands.push({ command, pid });
     },
     reports() {
       return received;

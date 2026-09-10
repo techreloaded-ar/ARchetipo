@@ -109,7 +109,11 @@ func stage(ctx context.Context, dir, skillsDir, runtimeDir string, resolved Reso
 		return iox.NewInternal("cannot stage .archetipo/", err)
 	}
 
-	body, err := os.ReadFile(filepath.Join(runtimeDir, "config.yaml"))
+	template, err := ConfigTemplate(runtimeDir)
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(template)
 	if err != nil {
 		return iox.NewInternal("read config template", err)
 	}

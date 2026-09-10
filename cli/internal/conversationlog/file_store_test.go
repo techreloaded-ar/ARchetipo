@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -261,5 +262,224 @@ func TestFileStoreDeleteRemovesOnlyTheNamedRecord(t *testing.T) {
 	err = store.Delete(context.Background(), "../escape")
 	if !errors.As(err, &storeErr) || storeErr.Kind != StoreInvalidID {
 		t.Fatalf("Delete accepted an invalid id: %v", err)
+	}
+}
+
+func TestNativeRecordKeepsMetadataAtomicAndPaginatesMoreThanTwoThousandEvents(t *testing.T) {
+	root := t.TempDir()
+	store := newStore(t, root)
+	record := Record{
+		Version: CurrentVersion,
+		ID:      "conv-native",
+		Session: &execution.SessionMetadata{
+			ConversationID: "conv-native",
+			ProviderID:     "fake",
+			Environment:    execution.SessionEnvironment{WorkingDir: root, Location: "local"},
+			Native:         execution.NativeSessionReference{Kind: "fake.thread", ID: "native-1"},
+		},
+		Archive: execution.ArchiveOpen,
+	}
+	saveRecord(t, store, record)
+	events := make([]execution.RunEvent, 2105)
+	for i := range events {
+		events[i] = execution.RunEvent{ID: int64(i + 1), Kind: "text", Text: strconv.Itoa(i + 1)}
+	}
+	if err := store.AppendEvents(context.Background(), record.ID, events); err != nil {
+		t.Fatal(err)
+	}
+
+	firstPage, err := store.ReadEvents(context.Background(), record.ID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPage, err := store.ReadEvents(context.Background(), record.ID, firstPage.LastID, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdPage, err := store.ReadEvents(context.Background(), record.ID, secondPage.LastID, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Events) != 1000 || !firstPage.HasMore || firstPage.LastID != 1000 {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+	if len(secondPage.Events) != 1000 || !secondPage.HasMore || secondPage.Events[0].ID != 1001 {
+		t.Fatalf("second page has %d events, first=%d, more=%v", len(secondPage.Events), secondPage.Events[0].ID, secondPage.HasMore)
+	}
+	if len(thirdPage.Events) != 105 || thirdPage.HasMore || thirdPage.Events[0].ID != 2001 || thirdPage.LastID != 2105 {
+		t.Fatalf("third page = %#v", thirdPage)
+	}
+	metadataBody, err := os.ReadFile(filepath.Join(conversationsDir(root), record.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(metadataBody), "\"events\"") {
+		t.Fatalf("native metadata embeds its timeline: %s", metadataBody)
+	}
+	got, err := newStore(t, root).Get(context.Background(), record.ID)
+	if err != nil || len(got.Events) != len(events) || got.Session.Native.ID != "native-1" {
+		t.Fatalf("Get after restart = events %d, record %#v, err %v", len(got.Events), got, err)
+	}
+}
+
+func TestAppendEventsIsIdempotentAndRejectsGaps(t *testing.T) {
+	store := newStore(t, t.TempDir())
+	saveRecord(t, store, Record{Version: CurrentVersion, ID: "conv-native", Session: &execution.SessionMetadata{
+		ConversationID: "conv-native", Native: execution.NativeSessionReference{ID: "native-1"},
+	}})
+	events := []execution.RunEvent{{ID: 1, Text: "one"}, {ID: 2, Text: "two"}}
+	if err := store.AppendEvents(context.Background(), "conv-native", events); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendEvents(context.Background(), "conv-native", events); err != nil {
+		t.Fatalf("replay failed: %v", err)
+	}
+	if err := store.AppendEvents(context.Background(), "conv-native", []execution.RunEvent{{ID: 4}}); err == nil {
+		t.Fatal("event gap accepted")
+	}
+	page, err := store.ReadEvents(context.Background(), "conv-native", 0, 10)
+	if err != nil || len(page.Events) != 2 {
+		t.Fatalf("events after replay = %#v, %v", page, err)
+	}
+}
+
+func TestAppendEventsRecoversAnIncompleteCrashTail(t *testing.T) {
+	root := t.TempDir()
+	store := newStore(t, root)
+	saveRecord(t, store, Record{Version: CurrentVersion, ID: "conv-native", Session: &execution.SessionMetadata{
+		ConversationID: "conv-native", Native: execution.NativeSessionReference{ID: "native-1"},
+	}})
+	if err := store.AppendEvents(context.Background(), "conv-native", []execution.RunEvent{{ID: 1, Text: "complete"}}); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath, err := store.eventsPath("conv-native")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`{"id":2,"text":"cut`); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	if err := store.AppendEvents(context.Background(), "conv-native", []execution.RunEvent{{ID: 2, Text: "recovered"}}); err != nil {
+		t.Fatalf("append after crash tail: %v", err)
+	}
+	page, err := store.ReadEvents(context.Background(), "conv-native", 0, 10)
+	if err != nil || len(page.Events) != 2 || page.Events[1].Text != "recovered" {
+		t.Fatalf("recovered events = %#v, %v", page, err)
+	}
+}
+
+func TestConversationLockRecoversADeadOwnerAndSerializesAConversation(t *testing.T) {
+	store := newStore(t, t.TempDir())
+	lock, err := store.Lock(context.Background(), "conv-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := store.Lock(ctx, "conv-one"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second lock = %v, want deadline", err)
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.path("conv-dead")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadLock := strings.TrimSuffix(path, ".json") + ".lock"
+	if err := os.MkdirAll(deadLock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deadLock, "owner"), []byte("999999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Lock(context.Background(), "conv-dead")
+	if err != nil {
+		t.Fatalf("dead owner was not recovered: %v", err)
+	}
+	_ = recovered.Unlock()
+}
+
+// TestALegacyRecordOnDiskStaysReadableAndDeclaresItsLimit is the compatibility
+// guarantee of the native-sessions release, written against a file rather than
+// against a struct this package builds.
+//
+// A conversation recorded before native sessions existed has no `version` key,
+// no `session` object and carries its own events inside the single JSON file.
+// Nothing migrates it, and nothing may need to: it has to be readable exactly
+// as it is, and it has to say of itself that it cannot be resumed natively —
+// because Native() is what every caller branches on to decide between taking up
+// the harness session and seeding a new conversation with the old transcript.
+// A future field that quietly made an old record look native would send a
+// `--resume` to a session identifier that never existed.
+func TestALegacyRecordOnDiskStaysReadableAndDeclaresItsLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(conversationsDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Written by hand, in the shape the old viewer wrote: this is the point of
+	// the test, and a Record marshalled here would only prove that this package
+	// can read what this package writes today.
+	legacy := `{
+	  "id": "conv-legacy",
+	  "spec_code": "US-007",
+	  "title": "una conversazione di prima",
+	  "provider_id": "claude",
+	  "working_dir": "/somewhere/else",
+	  "opened_at": "2026-07-01T09:00:00Z",
+	  "last_message_at": "2026-07-01T09:05:00Z",
+	  "final_state": "CLOSED",
+	  "events": [
+	    {"id": 1, "kind": "user_message", "text": "ciao"},
+	    {"id": 2, "kind": "text", "text": "ciao a te"}
+	  ]
+	}`
+	path := filepath.Join(conversationsDir(root), "conv-legacy.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newStore(t, root)
+	record, err := store.Get(context.Background(), "conv-legacy")
+	if err != nil {
+		t.Fatalf("a record written before native sessions is unreadable: %v", err)
+	}
+	if record.Version != 0 || record.Session != nil {
+		t.Fatalf("the legacy record was reinterpreted as a native one: %#v", record)
+	}
+	if record.Native() {
+		t.Fatal("a record with no native reference must never claim it can be resumed natively")
+	}
+	if len(record.Events) != 2 || record.Events[0].Text != "ciao" || record.Events[1].Text != "ciao a te" {
+		t.Fatalf("the legacy transcript was lost: %#v", record.Events)
+	}
+	if record.SpecCode != "US-007" || record.Title != "una conversazione di prima" {
+		t.Fatalf("the legacy record lost what it was about: %#v", record)
+	}
+
+	// Reading it must not rewrite it: a migration nobody asked for is the one
+	// way a record that was fine before becomes a record that is not.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != legacy {
+		t.Fatalf("reading the legacy record rewrote it on disk:\n%s", after)
+	}
+
+	// And it is still listed beside the native ones, because "readable" means
+	// findable: a conversation nobody can reach from the index is deleted in
+	// every way that matters to a person.
+	listed, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != "conv-legacy" {
+		t.Fatalf("the legacy record is not listed: %#v", listed)
 	}
 }

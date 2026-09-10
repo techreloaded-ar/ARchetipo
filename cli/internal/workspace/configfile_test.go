@@ -209,7 +209,7 @@ func TestSetMappingFieldsInsertsAMissingKey(t *testing.T) {
 // rendering is exercised against the real asset and not a hand-made stub.
 func packagedConfigForTest(t *testing.T) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("..", "..", "..", ".archetipo", "config.yaml"))
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", ".archetipo", ConfigTemplateName))
 	if err != nil {
 		t.Fatalf("reading the packaged config template: %v", err)
 	}

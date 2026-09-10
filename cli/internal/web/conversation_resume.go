@@ -82,14 +82,21 @@ func transcriptOf(record conversationlog.Record) string {
 	return conversationContextOmissionNotice + "\n" + string(runes[len(runes)-conversationContextLimit:])
 }
 
-// handleResumeWorkspaceConversation takes up a past conversation by opening a
-// *new* one that has been given the old one as context.
+// handleResumeWorkspaceConversation takes up a past conversation, and what that
+// means depends on whether the conversation has a native session behind it.
 //
-// Nothing of the original session is reopened: its agent process is long gone
-// and its memory with it, and pretending otherwise would promise a continuity
-// the provider cannot honour. What continues is the history — the new
-// conversation carries the transcript in its prompt and declares, through
-// resumed_from, which conversation it is taking up.
+// A record that holds a NativeSessionReference is resumed *natively*: the same
+// conversation id, the same native session, the same history, and a runtime
+// given back to it. Nothing is re-sent as context, because the harness owns the
+// context and handing it its own transcript back would be a summary wearing the
+// clothes of a resume.
+//
+// A legacy record — one written before native sessions existed, which never had
+// a native reference — has no session to reopen: its agent process is long gone
+// and its memory with it. For that one, and only for that one, this route opens
+// a *new* conversation seeded with the old transcript and declares, through
+// resumed_from, which conversation it is taking up. It is an explicit gesture
+// and it is named as one in the payload; it is not the normal resume.
 //
 // The order of the checks is the one handleOpenWorkspaceConversation already
 // uses, because this is a variant of that route and not a second way of opening
@@ -139,12 +146,83 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 	// Resuming the conversation that is happening right now is refused rather
 	// than served: that one is written to with the message route, and taking it
 	// up would close it only to hand it its own history back as context.
-	if _, isLive := ws.conversation.get(record.ID); isLive {
+	//
+	// Held is not the same as happening. A viewer holds every native thread of
+	// its workspace, so that it can be written to again without changing
+	// identity; the one whose runtime was released has no process behind it, and
+	// resuming it is exactly the gesture that gives it one back.
+	_, held := ws.conversation.get(record.ID)
+	if held && record.Connection != execution.ConnectionReleased {
 		writeError(w, iox.NewConflict(
 			"the conversation "+record.ID+" is live on this workspace",
 			"write in it directly: a conversation that is still live is continued, not resumed",
 			nil,
 		))
+		return
+	}
+	if record.Native() {
+		if record.Archive == execution.ArchiveArchived {
+			writeError(w, iox.NewConflict(
+				"the conversation "+record.ID+" is archived",
+				"reopen it before resuming its native session",
+				nil,
+			))
+			return
+		}
+		if s.registry == nil {
+			writeError(w, iox.NewConflict("no execution provider registry is available", "start View with the original provider registered", nil))
+			return
+		}
+		provider, resolveErr := s.registry.Resolve(record.Session.ProviderID)
+		if resolveErr != nil {
+			writeError(w, iox.NewConflict(
+				"the original provider "+record.Session.ProviderID+" is not available",
+				"restore that provider; changing the workspace default does not move this session",
+				resolveErr,
+			))
+			return
+		}
+		sessions, supported := execution.SessionProviderFor(provider)
+		if !supported {
+			writeError(w, iox.NewConflict(
+				"the original provider no longer supports native sessions",
+				"restore a compatible provider adapter",
+				nil,
+			))
+			return
+		}
+		if err := ws.takeNativeRuntime(ctx, record.ID); err != nil {
+			writeError(w, err)
+			return
+		}
+		// Only when it is not already in the holder: a viewer that restored this
+		// workspace holds every native thread of it, and what a resume gives
+		// back is the runtime, not a second entry for the same conversation.
+		if !held {
+			if err := ws.conversation.open(conversationHold{
+				id: record.ID, providerID: record.Session.ProviderID, sessionProvider: sessions, session: *record.Session,
+				providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig), model: record.NextTurn.Model,
+				modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
+				openedAt: record.OpenedAt, specCode: record.SpecCode,
+			}); err != nil {
+				ws.nativeRuntime.drop(record.ID)
+				writeError(w, conversationOpenRefusal(ctx, ws, err))
+				return
+			}
+		}
+		snapshot, _ := ws.conversation.get(record.ID)
+		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: body.Message}); err != nil {
+			// What this route added is what it gives back: a thread it found
+			// already held stays held, exactly as the restore left it.
+			if !held {
+				ws.conversation.forget(record.ID)
+				ws.nativeRuntime.drop(record.ID)
+			}
+			writeError(w, err)
+			return
+		}
+		ws.startNativeFollower(snapshot)
+		writeJSON(w, http.StatusCreated, s.nativeConversationView(ctx, ws, snapshot, 0))
 		return
 	}
 	// Nothing is sealed and nothing is closed here any more. A resume used to

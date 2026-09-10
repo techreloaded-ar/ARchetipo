@@ -200,7 +200,7 @@ async function scenarioSeveralLiveConversations(runDir, dirA, dirB, env) {
     // The message goes in by the route, and the oracle is which process was
     // really handed the frame — asked of the fakes, which report every line they
     // read together with their own pid.
-    await apiJSON(`${conversationsURL}/${encodeURIComponent(b.id)}/messages`, postJSON({ message: SENTINEL_B }), 202);
+    await sendMessage(view, control, b, SENTINEL_B);
     const deliveredToB = await control.waitFor(
       userFrameCarrying(SENTINEL_B),
       1,
@@ -224,7 +224,7 @@ async function scenarioSeveralLiveConversations(runDir, dirA, dirB, env) {
 
     // …and symmetrically, so the claim is about both conversations and not
     // about the one that happened to be second.
-    await apiJSON(`${conversationsURL}/${encodeURIComponent(a.id)}/messages`, postJSON({ message: SENTINEL_A }), 202);
+    await sendMessage(view, control, a, SENTINEL_A);
     const deliveredToA = await control.waitFor(
       userFrameCarrying(SENTINEL_A),
       1,
@@ -288,7 +288,7 @@ async function scenarioSeveralLiveConversations(runDir, dirA, dirB, env) {
     assertSameSignature("AC-4", aBeforeClose, signatureOf(aAfterClose.events), `the history of ${a.id} across the close of ${b.id}`);
     // The surviving conversation is not merely readable: it is still reachable,
     // which only the process it belongs to can settle.
-    await apiJSON(`${conversationsURL}/${encodeURIComponent(a.id)}/messages`, postJSON({ message: SENTINEL_AFTER_CLOSE }), 202);
+    await sendMessage(view, control, a, SENTINEL_AFTER_CLOSE);
     const deliveredAfterClose = await control.waitFor(
       userFrameCarrying(SENTINEL_AFTER_CLOSE),
       1,
@@ -365,7 +365,7 @@ async function scenarioSeveralLiveConversations(runDir, dirA, dirB, env) {
     }
     ok(
       "AC-6",
-      `POST /api/workspaces/{B}/open on the same viewer pid ${pid} left no agent process of the previous workspace running — all ${livePIDs.length} pids (${livePIDs.join(", ")}) reported gone by the operating system — sealed all ${sealed.length} records under .archetipo/conversations/ with a non-empty final_state (${sealed.map((record) => `${record.id}:${record.final_state}`).join(", ")}), and none of its ${openedIDs.length} conversation ids appears anywhere in the ${rawIndexOfB.length}-byte index served for the workspace now open`,
+      `POST /api/workspaces/{B}/open on the same viewer pid ${pid} left no agent process of the previous workspace running — all ${livePIDs.length} pids (${livePIDs.join(", ")}) reported gone by the operating system — let go of all ${sealed.length} records under .archetipo/conversations/ (${sealed.map((record) => `${record.id}:${record.session ? record.connection : record.final_state}`).join(", ")}), and none of its ${openedIDs.length} conversation ids appears anywhere in the ${rawIndexOfB.length}-byte index served for the workspace now open`,
     );
 
     // The whole story happened on one viewer process.
@@ -397,7 +397,6 @@ async function openConversation(view, control, launcherDir, name) {
     id: "claude",
     config: { command: launcher, timeout_seconds: 600 },
   }));
-  channel.push(emit(initFrame(`conversation-${name}`)));
   const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
   const id = opened.conversation?.id;
   if (!id) {
@@ -411,8 +410,77 @@ async function openConversation(view, control, launcherDir, name) {
   if (!Number.isInteger(invocation.pid)) {
     throw new Error(`the agent process of the conversation ${name} reported no pid: ${JSON.stringify(invocation)}`);
   }
+  // The session id is the harness's, and ARchetipo generated it: the init frame
+  // has to carry that one and no other, because the provider refuses a process
+  // that announces itself as a different session. It is pushed only now, once
+  // the invocation has said which id this process was given.
+  channel.push(emit(initFrame(nativeSessionIDOf(invocation))));
   console.log(`-> conversation ${name}: ${id} (agent pid ${invocation.pid})`);
   return { name, id, channel, pid: invocation.pid, opened, invocation };
+}
+
+// argvCountOn and nextArgvOn are how a turn is told from the process that serves
+// it. nextArgvOn resolves with the invocation of the next process started on a
+// channel, or with null when none is started before the budget runs out — which
+// is an answer here and not a failure, because a reused process starts nothing.
+function argvCountOn(control, channelName) {
+  return control.reports().filter((entry) => entry.channel === channelName && entry.kind === "argv").length;
+}
+
+async function nextArgvOn(control, channelName, seen, timeoutMs = 20000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const invocations = control.reports().filter((entry) => entry.channel === channelName && entry.kind === "argv");
+    if (invocations.length > seen) return invocations[seen];
+    await delay(50);
+  }
+  return null;
+}
+
+// nativeSessionIDOf reads out of a real invocation the session the process was
+// told to be: `--session-id <uuid>` the first time, `--resume <uuid>` afterwards.
+function nativeSessionIDOf(invocation) {
+  const argv = invocation.argv || [];
+  for (const flag of ["--session-id", "--resume"]) {
+    const at = argv.indexOf(flag);
+    if (at >= 0 && argv[at + 1]) return argv[at + 1];
+  }
+  throw new Error(`the invocation names no native session: ${JSON.stringify(argv)}`);
+}
+
+// sendMessage writes into a conversation and serves the process the turn starts.
+//
+// Every turn of a native session runs in a harness process of its own, and the
+// provider does not consider the message delivered until that process has
+// announced itself. The route therefore does not answer until the fake has
+// emitted its init frame — so the request is sent and *not* awaited, the new
+// invocation is read to learn which session the process was told to resume, the
+// frame is pushed, and only then is the answer collected.
+async function sendMessage(view, control, conversation, message) {
+  const seen = argvCountOn(control, conversation.channel.name);
+  const accepted = apiJSON(
+    `${view.url}/api/workspace/conversations/${encodeURIComponent(conversation.id)}/messages`,
+    postJSON({ message }),
+    202,
+  );
+  // A turn either reuses the process of the previous one or starts a fresh one
+  // — the provider replaces it when the model or the effort of the turn differs
+  // from the one the process was started with. A new process has to be given
+  // its init frame before the route can answer, and a reused one announced
+  // itself long ago: so the two possibilities are raced and whichever happens
+  // is the one served.
+  const invocation = await Promise.race([
+    nextArgvOn(control, conversation.channel.name, seen),
+    accepted.then(() => null, () => null),
+  ]);
+  if (!invocation) return accepted;
+  conversation.channel.push(emit(initFrame(nativeSessionIDOf(invocation))));
+  // The pid of a conversation is the pid of the process serving it *now*. A
+  // native session outlives its processes — one per turn, all on the same
+  // durable session id — so remembering the pid of the open would make every
+  // later oracle ask about a process that has already done its work and gone.
+  conversation.pid = invocation.pid;
+  return accepted;
 }
 
 async function writeAgentLauncher(launcherDir, name, controlURL) {
@@ -541,8 +609,16 @@ async function waitForSealedRecords(root, ids, timeoutMs = 20000) {
         unsealed.push(`${id} (no readable record yet)`);
         continue;
       }
-      if (!String(record.final_state || "").trim()) {
-        unsealed.push(`${id} (final_state ${JSON.stringify(record.final_state ?? null)})`);
+      // A native conversation is not *ended* by a workspace switch: its durable
+      // session survives it and can be taken up again. What the switch owes it
+      // is the release of the runtime, and that is what the record says —
+      // connection RELEASED. `final_state` belongs to the legacy shape, where a
+      // conversation really did end with the process behind it.
+      const letGo = record.session
+        ? String(record.connection || "") === "RELEASED"
+        : Boolean(String(record.final_state || "").trim());
+      if (!letGo) {
+        unsealed.push(`${id} (connection ${JSON.stringify(record.connection ?? null)}, final_state ${JSON.stringify(record.final_state ?? null)})`);
         continue;
       }
       records.push(record);
@@ -551,7 +627,7 @@ async function waitForSealedRecords(root, ids, timeoutMs = 20000) {
     await delay(100);
   }
   throw new Error(
-    `Timed out after ${timeoutMs}ms waiting for every conversation of the workspace left behind to be sealed under ${dir}; still without a final state: ${unsealed.join(", ")}`,
+    `Timed out after ${timeoutMs}ms waiting for every conversation of the workspace left behind to be let go under ${dir}; still held: ${unsealed.join(", ")}`,
   );
 }
 

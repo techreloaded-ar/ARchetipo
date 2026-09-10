@@ -113,22 +113,15 @@ type Provider struct {
 	workingDir func() (string, error)
 	now        func() time.Time
 
-	// conversations holds the free conversations this provider is currently
-	// keeping alive, keyed by conversation id — the same bookkeeping the claude
-	// provider keeps, and for the same reason: it is deliberately separate from
-	// the session registry the Collaborator brings, which keeps every session
-	// forever because the history of a finished run stays readable, while this
-	// map holds only what is still running and therefore still has a process to
-	// release.
-	conversationsMu sync.Mutex
-	conversations   map[string]*liveConversation
+	nativeSessionsMu sync.Mutex
+	nativeSessions   map[string]*nativeSession
 }
 
 var (
 	_ execution.Provider             = (*Provider)(nil)
 	_ execution.AvailabilityReporter = (*Provider)(nil)
 	_ execution.RunCollaborator      = (*Provider)(nil)
-	_ execution.Conversationalist    = (*Provider)(nil)
+	_ execution.SessionProvider      = (*Provider)(nil)
 )
 
 // New builds a provider, defaulting every unset seam to its real
@@ -137,13 +130,12 @@ var (
 // effects.
 func New(options Options) *Provider {
 	p := &Provider{
-		Collaborator: localrun.NewCollaborator(localrun.NewRegistry()),
-		runner:       options.Runner,
-		starter:      options.Starter,
-		workingDir:   options.WorkingDir,
-		now:          options.Now,
-
-		conversations: make(map[string]*liveConversation),
+		Collaborator:   localrun.NewCollaborator(localrun.NewRegistry()),
+		runner:         options.Runner,
+		starter:        options.Starter,
+		workingDir:     options.WorkingDir,
+		now:            options.Now,
+		nativeSessions: make(map[string]*nativeSession),
 	}
 	if p.runner == nil {
 		p.runner = localrun.ExecRunner{}
@@ -305,7 +297,7 @@ type singleTurn struct {
 // Every failure closes the session before returning; a success deliberately
 // leaves it open.
 func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
-	live, err := p.openSession(runCtx, req, cfg, dir, prompt, false, false, 0)
+	live, err := p.openSession(runCtx, req, cfg, dir, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -359,30 +351,16 @@ type liveSession struct {
 }
 
 // openSession starts the process, opens the protocol on it, gives it its
-// instruction and makes the run followable and commandable. Everything in it
-// is identical for every caller but the mode of the session, the prompt and
-// how much history it keeps, which are the three parameters added for the
-// conversation.
-//
-// conversational and retain carry the same meaning they carry on the claude
-// provider's openSession: conversational is false for every dispatched
-// action and true for a conversation, and retain bounds the history a
-// conversation keeps — 0, what every dispatched action passes, is the
-// unlimited session of always.
-//
-// deferOpening decides when the turn is opened. false — what every dispatched
-// action passes — performs the handshake and opens the turn at once, exactly
-// as before. true holds the turn back for the first message of the person,
-// which is what a free conversation opens with: the thread exists and the
-// run is already followable, but no work has been asked of the agent yet.
+// instruction and makes the run followable and commandable. Everything in it is
+// identical for both actions but the prompt, which is the one parameter.
 //
 // A failure here always leaves the session closed and the process gone: a
 // registered run that nothing will ever end would stay ACTIVE forever.
-func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, conversational, deferOpening bool, retain int) (*liveSession, error) {
+func (p *Provider) openSession(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string) (*liveSession, error) {
 	// The session is registered before anything is started, so the run is
 	// followable from the instant it can produce history — including while this
 	// call is still inside the agent's work.
-	session := localrun.NewBoundedSession(req.ExecutionID, p.now, retain)
+	session := localrun.NewSession(req.ExecutionID, p.now)
 	p.Registry().Register(session)
 
 	startedAt := p.now()
@@ -392,24 +370,17 @@ func (p *Provider) openSession(runCtx context.Context, req execution.Request, cf
 		return nil, fmt.Errorf("the codex command %q could not be started: %w", cfg.Command, err)
 	}
 
-	client := newAppServer(process, session, conversational)
+	client := newAppServer(process, session)
 	go client.consume()
 
-	if deferOpening {
-		if _, err := client.handshake(runCtx, cfg, dir); err != nil {
-			_, _, _ = p.shutdown(process)
-			session.Close(execution.RunCrashed, err.Error())
-			return nil, err
-		}
-		client.hold(prompt)
-	} else if err := client.start(runCtx, cfg, dir, prompt); err != nil {
+	if err := client.start(runCtx, cfg, dir, prompt); err != nil {
 		_, _, _ = p.shutdown(process)
 		session.Close(execution.RunCrashed, err.Error())
 		return nil, err
 	}
-	// Only now can a command be delivered: before the thread exists there is
-	// nothing to steer or to open a turn on, and a command that arrives earlier
-	// is refused as transient rather than delivered into nothing.
+	// Only now can a command be delivered: before the turn exists there is
+	// nothing to steer, and a command that arrives earlier is refused as
+	// transient rather than delivered into nothing.
 	session.AttachDialogue(client)
 
 	return &liveSession{process: process, session: session, client: client, startedAt: startedAt}, nil

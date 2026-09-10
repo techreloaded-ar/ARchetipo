@@ -169,7 +169,7 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 |---|---|
 | `archetipo init [--template <id>]` | Installa nel progetto corrente le skill del Template di processo selezionato e crea `.archetipo/config.yaml` — con `id` e `version` del Template — più `.archetipo/shared-runtime.md`. |
 | `archetipo doctor` | Diagnostica l'installazione: data directory, skill nel pacchetto e installate, config di progetto, git e autenticazione gh (connettore github). |
-| `archetipo view` | Avvia una board Kanban locale per `.archetipo/backlog.yaml`, `.archetipo/specs/` e `.archetipo/plans/`. Il pannello Execution sceglie il provider predefinito del workspace fra quelli registrati — solo impostazioni non segrete — e ogni spec mostra le azioni che il Template di processo ammette nel suo stato corrente. |
+| `archetipo view` | Avvia una board Kanban locale per `.archetipo/backlog.yaml`, `.archetipo/specs/` e `.archetipo/plans/`. Il pannello Execution sceglie il provider predefinito del workspace fra quelli registrati — solo impostazioni non segrete — ogni spec mostra le azioni che il Template di processo ammette nel suo stato corrente, e una conversazione con l'agente è una sessione nativa e durevole dell'harness. Vedi [Le conversazioni sono sessioni native dell'harness](#le-conversazioni-sono-sessioni-native-dellharness). |
 | `archetipo config show` | Inizializza il connector e stampa i metadati, incluso il Template di processo del workspace (`id` e `version`). |
 | `archetipo prd write [--file PRD.md]` | Salva il markdown del PRD da `--file` o stdin. |
 | `archetipo validate prd [--file PRD.md]` | Valida il PRD contro le regole strutturali del PRD. |
@@ -199,6 +199,22 @@ ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza
 La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti. Tutti i comandi `archetipo validate ...` restituiscono `kind: "validation_result"` su stdout con `data.ok` a `true` o `false`; gli error envelope restano riservati agli errori di processo.
 
 I record delle execution sono stato runtime locale sotto `.archetipo/executions/` e sono ignorati da Git. La sezione opzionale `execution.default_provider` conserva l'ID di un provider registrato e una configurazione non segreta; token e credenziali devono restare fuori da `.archetipo/config.yaml`. `set-default` valida prima dell'aggiornamento atomico, mentre una run senza `--provider` valida nuovamente la configurazione salvata prima del dispatch. Un `--provider` esplicito prevale sempre e riceve una configurazione vuota. Tre provider sono registrati di serie — `arcipelago`, `codex` e `claude`; `archetipo execution provider list` mostra cosa accetta ciascuno. Sia i dispatch riusciti sia i fallimenti del provider già registrati restituiscono un envelope `kind: "execution"`; errori di lookup, configurazione o capability vengono rifiutati prima di creare record.
+
+### Le conversazioni sono sessioni native dell'harness
+
+Una conversazione in `archetipo view` non è una chat costruita attorno a un'invocazione usa e getta: è una **sessione durevole dell'harness di sviluppo** — Claude Code o Codex CLI — che gira sulla tua macchina, nella directory del tuo progetto, con i tuoi tool e le skill che il tuo runtime ha davvero.
+
+In pratica:
+
+- **Non scade.** Nessun timeout globale e nessun timeout di inattività chiudono una conversazione. Chiudere la tab del browser non interrompe il lavoro; interrompere un turn ferma quel turn e nient'altro. Una conversazione finisce quando la chiudi tu.
+- **Torna.** Riavvia `archetipo view` e la conversazione è ancora lì, con lo stesso id e la stessa sessione nativa: l'agente ricorda quello che ha fatto, perché il contesto è dell'harness e viene ripreso per riferimento. Niente viene riassunto e niente gli viene rimesso davanti.
+- **Può agire.** L'agente legge e modifica il workspace, usa i tool, avvia server e invoca skill, sotto la permission policy nativa del tuo harness — le cui domande ti arrivano come approval nel pannello. Non è un assistente in sola lettura che può soltanto proporre.
+- **Modello ed effort si cambiano in corsa.** Li scegli per il turn *successivo* mentre quello corrente sta ancora lavorando. Il catalogo offerto è quello che dichiara il runtime della sessione, e sceglierlo qui non riscrive mai il default del workspace in `.archetipo/config.yaml`.
+- **I passi di processo lavorano nel thread che stai leggendo.** Premere `plan`, `implement`, `review`, inception, backlog o bozza di spec avvia un turn nella conversazione aperta invece di lanciare un secondo agente accanto. Ogni passo conserva il proprio record execution con la propria verifica degli effetti, e la conversazione resta aperta e scrivibile durante e dopo — più passi di fila, con messaggi liberi in mezzo.
+- **Più conversazioni insieme.** Un workspace ne tiene quante ne apri, ognuna con il proprio processo agente, e non interferiscono fra loro. Un solo processo `archetipo view` alla volta possiede il runtime di una data conversazione; un secondo viewer sullo stesso workspace la legge, e se prova a scriverci glielo dice chiaramente.
+- **Fermare, archiviare ed eliminare sono tre cose diverse.** Fermare rilascia il runtime e conserva il contesto. Archiviare mette via il thread senza perdere la sessione nativa — riaprendolo si riprende. Eliminare rimuove il record e la timeline *di ARchetipo* e lo dichiara: il transcript nativo dell'harness e i tuoi file di lavoro non vengono mai toccati.
+
+Due limiti vale la pena conoscerli. Un server di sviluppo avviato dall'agente può sopravvivere o no al turn che l'ha avviato: dipende dall'harness, non da ARchetipo, e i due si comportano diversamente; quello che è promesso è che la conversazione torni e che da dentro tu possa verificare, fermare o riavviare il servizio. E le conversazioni sono una funzionalità del runtime locale: il provider remoto `arcipelago` esegue ancora `spec.plan` e `spec.implement` come run batch e non tiene sessioni native.
 
 ### Esecuzione remota su una flotta ARcipelago
 

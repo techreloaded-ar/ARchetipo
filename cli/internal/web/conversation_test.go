@@ -202,6 +202,7 @@ type conversationResponse struct {
 	} `json:"events"`
 	LastID    int64  `json:"last_id"`
 	Truncated bool   `json:"truncated"`
+	HasMore   bool   `json:"has_more"`
 	Notice    string `json:"notice"`
 	// Approvals are the decisions the agent of the conversation itself is
 	// waiting on — the ones that belong to no run, because the agent holding the
