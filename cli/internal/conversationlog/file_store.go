@@ -278,6 +278,24 @@ func (a *EventAppender) Append(event execution.RunEvent) error {
 	return nil
 }
 
+// Flush makes durable what has been appended so far.
+//
+// The appender syncs every 64 events, which is right for a stream nobody is
+// reading back; it is not right the moment somebody *is*, because a reader of
+// the journal file — the summary of the record, for one — would miss what the
+// appender is still holding. Flushing at the few points that are read back
+// costs one sync each and keeps the file and the reader in agreement.
+func (a *EventAppender) Flush() error {
+	if a == nil || a.file == nil || a.unsynced == 0 {
+		return nil
+	}
+	if err := a.file.Sync(); err != nil {
+		return err
+	}
+	a.unsynced = 0
+	return nil
+}
+
 func (a *EventAppender) LastID() int64 {
 	if a == nil {
 		return 0

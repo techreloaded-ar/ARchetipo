@@ -141,13 +141,16 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     console.log(`-> first view ready: ${viewOne.url} (pid ${pidOne}, launched in ${dirA})`);
     await useFakeProvider(viewOne.url);
 
-    control.push(emit(initFrame("conversation-yesterday")));
     const opened = await apiJSON(`${viewOne.url}/api/workspace/conversations`, postJSON({ spec_code: CODE_A }), 201);
     const yesterdayID = opened.conversation?.id;
     if (!yesterdayID) {
       throw new Error(`AC-1: unexpected payload on open: ${JSON.stringify(opened)}`);
     }
+    // The session id belongs to ARchetipo and the process was told which one to
+    // be: a frame announcing a different one is refused by the provider, so the
+    // announcement is pushed only once the invocation has said which id this is.
     const agentYesterday = await control.waitFor("argv", 1);
+    control.push(emit(initFrame(nativeSessionIDOf(agentYesterday))));
 
     control.push(emit(assistantText(AGENT_SENTINEL)));
     await waitForConversation(
@@ -157,7 +160,10 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
       (data) => (data.events || []).length === 1,
       "the assistant frame of the conversation of yesterday to become a text event",
     );
-    await apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}/messages`, postJSON({ message: HUMAN_SENTINEL }), 202);
+    await serveStartingProcesses(
+      control,
+      apiJSON(`${viewOne.url}/api/workspace/conversations/${yesterdayID}/messages`, postJSON({ message: HUMAN_SENTINEL }), 202),
+    );
     // There is no second frame to wait for. The instruction that opens a
     // conversation is not written at the open: it is held and travels in the
     // *same* frame as the first message of the person, as a block of its own
@@ -191,13 +197,22 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     if (record.spec_code !== CODE_A) {
       throw new Error(`AC-1: the record lost the spec it was opened about; got ${JSON.stringify(record.spec_code)}`);
     }
-    if (record.final_state !== "CLOSED") {
-      throw new Error(`AC-1: a conversation closed by the operator must be recorded closed; got ${JSON.stringify(record.final_state)}`);
+    // A native conversation is not ended by being closed: the runtime is
+    // released and the durable session stays, which is what makes taking it up
+    // again possible at all. `final_state` belongs to the legacy shape, where
+    // the conversation really did end with the process behind it.
+    if (record.connection !== "RELEASED") {
+      throw new Error(`AC-1: a conversation closed by the operator must record the release of its runtime; got ${JSON.stringify(record.connection)}`);
+    }
+    if (record.archive !== "OPEN") {
+      throw new Error(`AC-1: closing releases the runtime and does not archive the thread; got ${JSON.stringify(record.archive)}`);
     }
     if (record.title !== HUMAN_SENTINEL) {
       throw new Error(`AC-1: the record must be named by the first thing the person said; got ${JSON.stringify(record.title)}`);
     }
-    assertSameEvents(eventsBefore, record.events, "AC-1 the events written to the record file");
+    // The timeline of a native conversation lives in the sibling journal, one
+    // JSON object per line, and no longer inside the record.
+    assertSameEvents(eventsBefore, await readJournal(dirA, yesterdayID), "AC-1 the events written to the journal file");
 
     // --- ARchetipo is closed, and started again ------------------------------
     await stopProcess(viewOne.child);
@@ -269,13 +284,13 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     // *beside* whatever is open: the claim is about two processes and not only
     // about a payload.
     await useFakeProvider(viewTwo.url);
-    control.push(emit(initFrame("conversation-live")));
     const live = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, postJSON({}), 201);
     const liveID = live.conversation?.id;
     if (!liveID || liveID === yesterdayID) {
       throw new Error(`AC-4: the live conversation must be one of its own; got ${JSON.stringify(live.conversation)}`);
     }
     const agentLive = await control.waitFor("argv", 2);
+    control.push(emit(initFrame(nativeSessionIDOf(agentLive))));
     if (promptsCarryingTheTranscript(control).length !== 0) {
       throw new Error("AC-4: no agent process may have been given the transcript of yesterday before the resume was asked for");
     }
@@ -371,13 +386,13 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     await waitForProcessGone(agentResumed.pid, `the agent process of A (pid ${agentResumed.pid}) to be released by the workspace switch`);
 
     await useFakeProvider(viewTwo.url);
-    control.push(emit(initFrame("conversation-beta")));
     const openedInB = await apiJSON(`${viewTwo.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationB = openedInB.conversation?.id;
     if (!conversationB) {
       throw new Error(`AC-6: B must open a conversation of its own; got ${JSON.stringify(openedInB.conversation)}`);
     }
     const agentB = await control.waitFor("argv", 4);
+    control.push(emit(initFrame(nativeSessionIDOf(agentB))));
     control.push(emit(assistantText(BETA_SENTINEL)));
     await waitForConversation(viewTwo.url, conversationB, 0, (data) => (data.events || []).length === 1, "the history of the conversation of B");
 
@@ -525,6 +540,51 @@ async function waitForProcessGone(pid, what, timeoutMs = 20000) {
 
 function emit(frame) {
   return { kind: "emit", frame };
+}
+
+// readJournal reads the durable timeline of a native conversation: the sibling
+// `<id>.events.jsonl`, one event per line, which is where the events of a
+// native session are appended as they arrive.
+async function readJournal(root, conversationID) {
+  const file = path.join(root, ".archetipo", "conversations", `${conversationID}.events.jsonl`);
+  const body = await fs.readFile(file, "utf8");
+  return body
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
+// nativeSessionIDOf reads out of a real invocation the session the process was
+// told to be: `--session-id <uuid>` the first time, `--resume <uuid>` afterwards.
+function nativeSessionIDOf(invocation) {
+  const argv = invocation.argv || [];
+  for (const flag of ["--session-id", "--resume"]) {
+    const at = argv.indexOf(flag);
+    if (at >= 0 && argv[at + 1]) return argv[at + 1];
+  }
+  throw new Error(`the invocation names no native session: ${JSON.stringify(argv)}`);
+}
+
+// serveStartingProcesses answers, while a request is in flight, every harness
+// process that request starts. A turn of a native session runs in a process of
+// its own and the route does not answer until that process has announced
+// itself, so the request is sent and not awaited.
+async function serveStartingProcesses(control, request) {
+  let served = control.reports().filter((entry) => entry.kind === "argv").length;
+  let pending = true;
+  const answer = request.finally(() => {
+    pending = false;
+  });
+  answer.catch(() => {});
+  while (pending) {
+    const invocations = control.reports().filter((entry) => entry.kind === "argv");
+    while (served < invocations.length) {
+      control.push(emit(initFrame(nativeSessionIDOf(invocations[served]))));
+      served += 1;
+    }
+    await delay(25);
+  }
+  return answer;
 }
 
 function initFrame(sessionID) {

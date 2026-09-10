@@ -249,6 +249,21 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 				if appendErr := appender.Append(event); appendErr != nil {
 					return appendErr
 				}
+				// The summary of the record — its title, how many messages it
+				// holds, when the last one was said — is written here and not
+				// only when the stream returns, because a provider whose stream
+				// stays open for the life of the session never returns from it.
+				// A conversation would otherwise keep for ever the dated name it
+				// was given before anybody had spoken.
+				//
+				// The two kinds are the only ones that can change the answer and
+				// are rare, one per turn each; the flush is what makes the
+				// journal say, to the read that follows, what has just been
+				// appended.
+				if event.Kind == localrun.KindUserMessage || event.Kind == localrun.KindTurnEnd {
+					_ = appender.Flush()
+					_ = ws.updateNativeRecordFromEvent(context.WithoutCancel(ctx), record, event)
+				}
 				if event.Kind == localrun.KindTurnEnd {
 					select {
 					case ended <- struct{}{}:
@@ -262,7 +277,10 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 			})
 			_ = appender.Close()
 			if lastReceived != nil {
-				_ = ws.updateNativeRecordFromEvent(ctx, record, *lastReceived)
+				// Detached from the follower's own cancellation: the stream
+				// returns *because* the workspace is being left, and what it saw
+				// last would otherwise be lost on the way out.
+				_ = ws.updateNativeRecordFromEvent(context.WithoutCancel(ctx), record, *lastReceived)
 			}
 			if ctx.Err() != nil {
 				return

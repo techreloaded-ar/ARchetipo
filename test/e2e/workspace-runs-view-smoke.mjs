@@ -85,7 +85,6 @@ const SPEC_OPERATION_IDS = [
 	"review-tab",
 	"review-approve-btn",
 	"review-request-btn",
-	"review-integrate-btn",
 ];
 const SPEC_TABS = ["story", "plan", "review"];
 
@@ -191,10 +190,11 @@ async function scenario(runDir) {
 		// The press opens the native session the action works in, so the process
 		// starts *inside* the request: its invocation is read, and the frame that
 		// announces its session pushed, while the response is still in flight.
-		const closedRequest = apiJSON(`${view.url}/api/spec/${SPEC_CLOSED}/execution`, postJSON({ action: "plan" }), 201);
+		const closedStart = await serveStartingProcesses(
+			control,
+			apiJSON(`${view.url}/api/spec/${SPEC_CLOSED}/execution`, postJSON({ action: "plan" }), 201),
+		);
 		const closedProcess = await control.waitFor("argv", 1);
-		control.push(emit({ type: "system", subtype: "init", session_id: sessionIDOf(closedProcess.argv) }));
-		const closedStart = await closedRequest;
 		const closedID = closedStart.id;
 		control.push(emit({
 			type: "result",
@@ -215,13 +215,16 @@ async function scenario(runDir) {
 
 		// The conversation of the workspace, opened and given a history. It is
 		// the subject of AC-2 and it must survive everything that follows.
-		control.push(emit({ type: "system", subtype: "init", session_id: "conversation-1" }));
 		const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
 		const conversationID = opened.conversation?.id;
 		if (!conversationID) {
 			throw new Error(`the conversation did not open: ${JSON.stringify(opened)}`);
 		}
-		await control.waitFor("argv", 2);
+		// The session id is ARchetipo's and the process was told which one to be:
+		// announcing a different one makes the provider refuse it, so the frame
+		// is pushed only once the invocation has said which id this is.
+		const conversationProcess = await control.waitFor("argv", 2);
+		control.push(emit({ type: "system", subtype: "init", session_id: sessionIDOf(conversationProcess.argv) }));
 		control.push(emit(assistantText("Guardo il workspace mentre apri le spec.")));
 		const conversationBefore = await waitForConversation(
 			view.url,
@@ -233,10 +236,10 @@ async function scenario(runDir) {
 		// The run of workspace scope. Nothing is ever emitted to its process
 		// again: it stays in flight for the rest of the smoke, which is exactly
 		// what the rail has to be able to show.
-		const workspaceRequest = apiJSON(`${view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
-		const workspaceProcess = await control.waitFor("argv", 3);
-		control.push(emit({ type: "system", subtype: "init", session_id: sessionIDOf(workspaceProcess.argv) }));
-		const workspaceStart = await workspaceRequest;
+		const workspaceStart = await serveStartingProcesses(
+			control,
+			apiJSON(`${view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201),
+		);
 		const workspaceID = workspaceStart.id;
 		if (workspaceStart.status !== "RUNNING" || workspaceStart.spec_code !== "") {
 			throw new Error(`the workspace-scoped execution is not the expected one: ${JSON.stringify(workspaceStart)}`);
@@ -1251,7 +1254,46 @@ async function waitForHTTP(url) {
 // session the viewer assigned it.
 function sessionIDOf(argv) {
 	const args = argv || [];
-	return args[args.indexOf("--session-id") + 1];
+	for (const flag of ["--session-id", "--resume"]) {
+		const at = args.indexOf(flag);
+		if (at >= 0 && args[at + 1]) return args[at + 1];
+	}
+	return undefined;
+}
+
+// serveStartingProcesses answers, while a request is in flight, every harness
+// process that request starts.
+//
+// A press that works inside a native session can start more than one: the
+// session is created — one process — and the turn is then opened on it, which
+// starts another whenever the model of the turn differs from the one the first
+// was given. Neither answers the route until it has announced itself, so the
+// request is sent and *not* awaited, and every new invocation that appears
+// until it answers is served the init frame naming the session that process was
+// really told to be.
+async function serveStartingProcesses(control, request) {
+	const before = control.reports().filter((entry) => entry.kind === "argv").length;
+	let pending = true;
+	const answer = request.finally(() => {
+		pending = false;
+	});
+	// Swallowed here and re-thrown by the return: without it a request that
+	// fails while the loop is still polling is an unhandled rejection.
+	answer.catch(() => {});
+	// Pushed again on every turn of the loop, and not once each, because the
+	// fakes share one queue: a frame is taken by whichever of them polls first,
+	// so the one that is waiting for it may well not be the one that gets it.
+	// Repeating is safe — the processes a single press starts are all on the
+	// same native session, so they are all waiting to be told the same id, and
+	// an extra init frame produces no event in any conversation.
+	while (pending) {
+		const started = control.reports().filter((entry) => entry.kind === "argv").slice(before);
+		for (const invocation of started) {
+			control.push(emit({ type: "system", subtype: "init", session_id: sessionIDOf(invocation.argv) }));
+		}
+		await delay(25);
+	}
+	return answer;
 }
 
 function postJSON(payload) {
@@ -1282,10 +1324,20 @@ async function rawGet(url) {
 
 async function apiJSON(url, init = {}, expected = null) {
 	record(url, init);
-	const response = await fetch(url, {
-		...init,
-		headers: { Accept: "application/json", ...(init.headers || {}) },
-	});
+	let response;
+	try {
+		response = await fetch(url, {
+			...init,
+			headers: { Accept: "application/json", ...(init.headers || {}) },
+		});
+	} catch (error) {
+		// A request that never answers is the shape a missing frame takes here:
+		// the route holds until the harness process announces itself. Naming the
+		// request is the difference between a diagnosis and "fetch failed".
+		throw new Error(
+			`${init.method || "GET"} ${url} did not answer: ${error.message} (${error.cause?.code || error.cause?.message || "no cause"})`,
+		);
+	}
 	const text = await response.text();
 	viewerBodies.push(text);
 	let data = null;
