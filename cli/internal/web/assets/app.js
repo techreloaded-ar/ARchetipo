@@ -4486,8 +4486,15 @@
 			renderModelChoicePanel();
 			loadModelChoice(ctx);
 			await followExecution(record, ctx);
-			// Il thread della run è la run: si raggiunge con il suo stesso id.
-			await revealThread(record && record.id ? record.id : "");
+			// Quale sia il thread della run lo dice il server, non l'id
+			// dell'esecuzione: followExecution ha appena letto `thread_id` dalla
+			// proiezione della run e l'ha messo in executionThreadID. Per un
+			// provider a sessioni native quel thread ha un id suo — l'azione gira
+			// dentro una conversazione che le sopravvive — e cercarlo sotto l'id
+			// dell'esecuzione trovava una conversazione che non esiste. Vuoto
+			// significa "questa run non si legge in nessun thread", e allora non
+			// c'è niente da raggiungere.
+			await revealThread(executionThreadID);
 		} catch (err) {
 			showToast(err.message || String(err), "err");
 			if (button) button.disabled = false;

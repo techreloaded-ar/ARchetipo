@@ -167,17 +167,19 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		// che nell'elenco delle conversazioni comparisse niente. La risposta era
 		// aprire un thread prima di avviare — e quel thread era un secondo
 		// processo d'agente, inerte, aperto solo per raccontare il lavoro di un
-		// altro. Ora la run *è* una conversazione: il server tiene la sua stessa
-		// sessione sotto l'id dell'esecuzione, e il client la raggiunge con
-		// quell'id invece di aprirne una accanto.
+		// altro. Ora la run si legge in una conversazione, e quale sia lo dice il
+		// server — `thread_id` sulla proiezione della run: sotto l'id
+		// dell'esecuzione solo per un provider che non tiene sessioni, sotto un
+		// id suo per uno che le tiene. Il client la raggiunge da lì invece di
+		// dedurla o di aprirne una accanto.
 		const start = blockAfter(js, "async function startPanelAction(");
 		assert.ok(
 			!start.includes("threadForStart"),
 			"startPanelAction apre ancora un thread prima di avviare: sarebbero di nuovo due processi d'agente per una pressione sola",
 		);
 		assert.ok(
-			start.includes("revealThread(record"),
-			"l'avvio non porta più sullo schermo il thread della run: chi preme resterebbe senza il posto in cui l'agente sta lavorando",
+			/revealThread\(\s*executionThreadID\s*\)/.test(start),
+			"l'avvio non porta più sullo schermo il thread nominato dal server: con l'id dell'esecuzione cercherebbe una conversazione che, per un provider a sessioni native, non esiste — e chi preme resterebbe davanti a un rifiuto invece che al posto in cui l'agente sta lavorando",
 		);
 		assert.ok(
 			start.includes("body.conversation_id = from"),
@@ -331,3 +333,4 @@ describe("il visore disegna la run una volta sola", () => {
 		);
 	});
 });
+
