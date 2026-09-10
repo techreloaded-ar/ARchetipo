@@ -404,3 +404,82 @@ func TestConversationLockRecoversADeadOwnerAndSerializesAConversation(t *testing
 	}
 	_ = recovered.Unlock()
 }
+
+// TestALegacyRecordOnDiskStaysReadableAndDeclaresItsLimit is the compatibility
+// guarantee of the native-sessions release, written against a file rather than
+// against a struct this package builds.
+//
+// A conversation recorded before native sessions existed has no `version` key,
+// no `session` object and carries its own events inside the single JSON file.
+// Nothing migrates it, and nothing may need to: it has to be readable exactly
+// as it is, and it has to say of itself that it cannot be resumed natively —
+// because Native() is what every caller branches on to decide between taking up
+// the harness session and seeding a new conversation with the old transcript.
+// A future field that quietly made an old record look native would send a
+// `--resume` to a session identifier that never existed.
+func TestALegacyRecordOnDiskStaysReadableAndDeclaresItsLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(conversationsDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Written by hand, in the shape the old viewer wrote: this is the point of
+	// the test, and a Record marshalled here would only prove that this package
+	// can read what this package writes today.
+	legacy := `{
+	  "id": "conv-legacy",
+	  "spec_code": "US-007",
+	  "title": "una conversazione di prima",
+	  "provider_id": "claude",
+	  "working_dir": "/somewhere/else",
+	  "opened_at": "2026-07-01T09:00:00Z",
+	  "last_message_at": "2026-07-01T09:05:00Z",
+	  "final_state": "CLOSED",
+	  "events": [
+	    {"id": 1, "kind": "user_message", "text": "ciao"},
+	    {"id": 2, "kind": "text", "text": "ciao a te"}
+	  ]
+	}`
+	path := filepath.Join(conversationsDir(root), "conv-legacy.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newStore(t, root)
+	record, err := store.Get(context.Background(), "conv-legacy")
+	if err != nil {
+		t.Fatalf("a record written before native sessions is unreadable: %v", err)
+	}
+	if record.Version != 0 || record.Session != nil {
+		t.Fatalf("the legacy record was reinterpreted as a native one: %#v", record)
+	}
+	if record.Native() {
+		t.Fatal("a record with no native reference must never claim it can be resumed natively")
+	}
+	if len(record.Events) != 2 || record.Events[0].Text != "ciao" || record.Events[1].Text != "ciao a te" {
+		t.Fatalf("the legacy transcript was lost: %#v", record.Events)
+	}
+	if record.SpecCode != "US-007" || record.Title != "una conversazione di prima" {
+		t.Fatalf("the legacy record lost what it was about: %#v", record)
+	}
+
+	// Reading it must not rewrite it: a migration nobody asked for is the one
+	// way a record that was fine before becomes a record that is not.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != legacy {
+		t.Fatalf("reading the legacy record rewrote it on disk:\n%s", after)
+	}
+
+	// And it is still listed beside the native ones, because "readable" means
+	// findable: a conversation nobody can reach from the index is deleted in
+	// every way that matters to a person.
+	listed, err := store.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != "conv-legacy" {
+		t.Fatalf("the legacy record is not listed: %#v", listed)
+	}
+}

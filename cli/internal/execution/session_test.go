@@ -8,6 +8,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/claude"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
 )
 
@@ -340,9 +341,20 @@ func TestIncompleteAdaptersDoNotExposeNativeSessions(t *testing.T) {
 	}
 }
 
+// TestCompletedLocalAdaptersExposeNativeSessions covers *both* local adapters,
+// because "the local path is native" is a claim about the pair and not about
+// whichever of the two was migrated last: with only one of them listed, a
+// regression that dropped the other's SessionProvider methods would leave this
+// test green while half the product fell back to the batch lifecycle.
 func TestCompletedLocalAdaptersExposeNativeSessions(t *testing.T) {
-	if _, supported := execution.SessionProviderFor(codex.New(codex.Options{})); !supported {
-		t.Fatal("codex does not expose native session capabilities")
+	providers := []execution.Provider{
+		claude.New(claude.Options{}),
+		codex.New(codex.Options{}),
+	}
+	for _, provider := range providers {
+		if _, supported := execution.SessionProviderFor(provider); !supported {
+			t.Fatalf("local adapter %q does not expose native session capabilities", provider.ID())
+		}
 	}
 }
 

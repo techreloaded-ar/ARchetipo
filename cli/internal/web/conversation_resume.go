@@ -82,14 +82,21 @@ func transcriptOf(record conversationlog.Record) string {
 	return conversationContextOmissionNotice + "\n" + string(runes[len(runes)-conversationContextLimit:])
 }
 
-// handleResumeWorkspaceConversation takes up a past conversation by opening a
-// *new* one that has been given the old one as context.
+// handleResumeWorkspaceConversation takes up a past conversation, and what that
+// means depends on whether the conversation has a native session behind it.
 //
-// Nothing of the original session is reopened: its agent process is long gone
-// and its memory with it, and pretending otherwise would promise a continuity
-// the provider cannot honour. What continues is the history — the new
-// conversation carries the transcript in its prompt and declares, through
-// resumed_from, which conversation it is taking up.
+// A record that holds a NativeSessionReference is resumed *natively*: the same
+// conversation id, the same native session, the same history, and a runtime
+// given back to it. Nothing is re-sent as context, because the harness owns the
+// context and handing it its own transcript back would be a summary wearing the
+// clothes of a resume.
+//
+// A legacy record — one written before native sessions existed, which never had
+// a native reference — has no session to reopen: its agent process is long gone
+// and its memory with it. For that one, and only for that one, this route opens
+// a *new* conversation seeded with the old transcript and declares, through
+// resumed_from, which conversation it is taking up. It is an explicit gesture
+// and it is named as one in the payload; it is not the normal resume.
 //
 // The order of the checks is the one handleOpenWorkspaceConversation already
 // uses, because this is a variant of that route and not a second way of opening
