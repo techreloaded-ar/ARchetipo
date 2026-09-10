@@ -259,11 +259,13 @@ async function scenarioConversationsThatSurvive(dirA, dirB, dirC, env) {
     if (transcript.conversation?.id !== yesterdayID) {
       throw new Error(`AC-3: the transcript is about ${JSON.stringify(transcript.conversation?.id)}, want ${yesterdayID}`);
     }
-    // The read is the same route for a live conversation and for one that has
-    // ended, so what tells the two apart is the state inside the payload: a
-    // conversation nobody is holding any more reads as the record left it.
-    if (transcript.conversation.state !== "CLOSED") {
-      throw new Error(`AC-3: a conversation that has ended must not read as a live one; got ${JSON.stringify(transcript.conversation.state)}`);
+    // Rilasciata non vuol dire conclusa. Il viewer che riparte riprende in mano
+    // ogni thread nativo del workspace: il runtime di ieri è stato lasciato
+    // andare — l'indice qui sopra lo dice live:false — ma il thread è tenuto,
+    // non archiviato, e ci si scrive dentro, che è quello che AC-4 fa qui
+    // sotto. La lettura deve dirlo aperto e disponibile, non chiuso.
+    if (transcript.conversation.state !== "ACTIVE" || transcript.available !== true) {
+      throw new Error(`AC-3: a released but unarchived conversation must read as open and available; got state ${JSON.stringify(transcript.conversation.state)} and available ${JSON.stringify(transcript.available)}`);
     }
     assertSameEvents(eventsBefore, transcript.events, "AC-3 the transcript read after the restart");
     assertStrictlyIncreasing(transcript.events, "AC-3 the transcript read after the restart");
