@@ -918,11 +918,12 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		return openedConversation{}, wrapRunModelChoiceError(err)
 	}
 	target.availability.providerConfig = effectiveConfig
-	// The process vocabulary is resolved here and travels on the request,
-	// because the provider does not know the process and must not learn it: the
-	// agent may propose an action, and it can only name one that exists if the
-	// list reaches it. An unresolvable template is already an error of every
-	// other route that needs one, and it is answered the same way here.
+	// The process template is resolved here because an unresolvable one is an
+	// error of every other route that needs one, and it is answered the same way
+	// here. Its action vocabulary travels on the request only for a provider
+	// without native sessions: a native session receives no ARchetipo opening
+	// prompt at all — the harness reads the workspace instructions itself, and a
+	// conversation is not required to pass through propose/confirm.
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		return openedConversation{}, err
@@ -1316,6 +1317,16 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 		}
 		if view.Conversation != nil {
 			view.Conversation.State = execution.RunClosed
+		}
+		// The projection was rendered *before* the release, because rendering it
+		// after would mean rendering a conversation this viewer no longer holds.
+		// What the release changed therefore has to be written into it by hand,
+		// and the connection is part of that: answering CONNECTED to the very
+		// request that released the runtime told the browser the opposite of
+		// what had just happened, and only the next GET corrected it.
+		if view.Session != nil {
+			view.Session.Connection = execution.ConnectionReleased
+			view.Session.ConnectionID = ""
 		}
 		writeJSON(w, http.StatusOK, view)
 		return

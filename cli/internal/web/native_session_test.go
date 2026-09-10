@@ -438,6 +438,22 @@ func TestNativeConversationLifecycleThroughHTTPWithoutBrowser(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("release = %d: %s", status, body)
 	}
+	// The answer of the release describes the state the release produced. The
+	// projection it is built from is taken before the runtime is let go — it has
+	// to be, since afterwards this viewer no longer holds the conversation — so
+	// a field the release changes and nobody rewrites comes back stale: this one
+	// used to say CONNECTED about a runtime that had just been released, and
+	// only the next GET said otherwise.
+	var released struct {
+		Session *struct {
+			Connection   string `json:"connection"`
+			ConnectionID string `json:"connection_id"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(body, &released); err != nil || released.Session == nil ||
+		released.Session.Connection != string(execution.ConnectionReleased) || released.Session.ConnectionID != "" {
+		t.Fatalf("the release answers with the connection it just gave up: %s (%v)", body, err)
+	}
 	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/resume", map[string]any{"message": "same id"})
 	if status != http.StatusCreated || decodeConversation(t, string(body)).Conversation.ID != id {
 		t.Fatalf("native resume = %d: %s", status, body)
