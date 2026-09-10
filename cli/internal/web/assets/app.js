@@ -220,6 +220,13 @@
 		// Conversazione
 		conversationUnreadable: (reason) =>
 			`Questa conversazione non si può più leggere: ${reason}. Ricarica per seguirla di nuovo.`,
+		// La barra scritta e nessun elenco sotto: senza una riga che lo dica
+		// sembra che la ricerca sia rotta, e le due ragioni per cui l'elenco è
+		// vuoto sono diverse — non c'è niente che corrisponda, oppure non c'è
+		// ancora nessun catalogo da cercare.
+		skillNoMatch: (query) => `Nessuna skill contiene «${query}».`,
+		skillCatalogUnknown:
+			"Il runtime dichiara le sue skill al primo turn: mandane uno e l'elenco compare.",
 
 		// Nuova spec
 		chooseEpic: "Scegli un'epica…",
@@ -6121,7 +6128,7 @@
 			// filtra o lo chiude, e riparte sempre dalla prima voce perché
 			// l'elenco sotto è cambiato.
 			const wasOpen = !!conversationEl.querySelector(".conv-skill-menu");
-			const isOpen = conversationSkillMatches().length > 0;
+			const isOpen = conversationSkillQuery() !== null;
 			conversationSkillHighlight = 0;
 			if (wasOpen || isOpen) renderConversationPanel();
 		});
@@ -6592,8 +6599,21 @@
 
 	function conversationSkillMenuMarkup(view) {
 		if (!view || !view.session || view.session.work !== "IDLE") return "";
+		const query = conversationSkillQuery();
+		if (query === null) return "";
 		const matches = conversationSkillMatches();
-		if (!matches.length) return "";
+		if (!matches.length) {
+			// Il catalogo lo dichiara il runtime, e finché non l'ha dichiarato
+			// non c'è niente da elencare: inventarlo qui vorrebbe dire offrire
+			// nomi che l'invocazione poi rifiuta. Quello che si può dire è
+			// perché l'elenco non c'è.
+			const known =
+				(conversationModelChoiceView || {}).skills_known === true;
+			const note = known
+				? TEXT.skillNoMatch(query)
+				: TEXT.skillCatalogUnknown;
+			return `<p class="conv-skill-menu conv-skill-note" role="status">${escapeHtml(note)}</p>`;
+		}
 		const highlight = Math.min(conversationSkillHighlight, matches.length - 1);
 		const rows = matches.map((skill, index) => {
 			const current = index === highlight ? " is-current" : "";
@@ -7034,8 +7054,17 @@
 			conversationAfterID = view.last_id;
 		}
 		conversationView = view;
-		if (previousWork && previousWork !== "IDLE" && view.session && view.session.work === "IDLE") {
+		// Il catalogo skill lo dichiara il runtime quando il turn parte, non
+		// quando finisce: rileggerlo solo alla fine del turn teneva il menu
+		// delle skill vuoto per tutto il primo turn della sessione, e su una
+		// conversazione ripresa lo teneva vuoto finché non se ne concludeva uno.
+		// Il board invece cambia per quello che il turn ha fatto, quindi resta
+		// dov'era.
+		const work = view.session ? view.session.work : "";
+		if (previousWork && previousWork !== work) {
 			loadConversationModelChoice(conversationsCurrentId);
+		}
+		if (previousWork && previousWork !== "IDLE" && work === "IDLE") {
 			loadBoard();
 		}
 		// La spec della conversazione appena applicata potrebbe non essere

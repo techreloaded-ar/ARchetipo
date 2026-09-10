@@ -5183,6 +5183,16 @@ body.no-workspace [data-workspace-scoped] {
 	box-shadow: var(--shadow-lg);
 }
 
+/* La riga che sta al posto dell'elenco quando l'elenco non c'è: dice perché,
+   e non si può premere. */
+.conv-skill-note {
+	margin: 0;
+	padding: 8px;
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1.4;
+}
+
 .conv-skill-option {
 	display: flex;
 	align-items: baseline;
