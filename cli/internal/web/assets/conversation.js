@@ -103,8 +103,6 @@
 		// spariva, e con lei l'informazione; ora resta, inerte e con un
 		// lucchetto, e questa frase è il suo `title`.
 		modelLocked: "Impostazioni applicate al turn attivo",
-		nextTurn: "Prossimo turn",
-		activeTurn: "Turn attivo",
 		// Timeline
 		markPartialHistory: "storia parziale",
 		partialHistory:
@@ -153,7 +151,6 @@
 		markResume: "sessione",
 		resumeNote: "Il prossimo messaggio riprende la stessa sessione e la stessa conversation.",
 		steeringHint: "il messaggio entra nel turn attivo; modello ed effort scelti valgono dal prossimo turn",
-		nextTurnHint: "il messaggio avvia il prossimo turn con modello ed effort selezionati",
 		waitForTurnHint: "questo provider non supporta steering: attendi la fine del turn o interrompilo",
 		inputPending: "Input richiesto",
 		inputPlaceholder: "Risposta JSON",
@@ -1160,11 +1157,18 @@
 		// su una conversazione viva se lo trovava comparire come una novità. Ora
 		// dice sempre una delle due cose vere del campo — come si manda, oppure
 		// che non si scrive — e sta scritto minuto perché è un promemoria.
+		// Il turn ordinario non ha niente da dire: che il messaggio avvii il
+		// prossimo turn è ciò che il compositore fa sempre, e scriverlo sotto al
+		// campo era ripetere il campo. Restano le due frasi che dicono qualcosa
+		// che non si vede — lo steering dentro al turn attivo, e il campo che
+		// non risponde — e quando non c'è niente da dire la riga sparisce.
 		const hint = writable
-			? (ui.sendBehavior === "steer" ? TEXT.steeringHint : ui.sendBehavior === "turn" ? TEXT.nextTurnHint : TEXT.writeHint)
+			? (ui.sendBehavior === "steer" ? TEXT.steeringHint : ui.sendBehavior === "turn" ? "" : TEXT.writeHint)
 			: ui.sendBehavior === "wait" ? TEXT.waitForTurnHint
 			: TEXT.readOnly;
-		const hintHtml = `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`;
+		const hintHtml = hint
+			? `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`
+			: "";
 		// Si chiude come ogni altra nota del pannello: dopo la prima lettura la
 		// riga è del compositore. Il segnaposto del campo continua comunque a
 		// dire che si sta scrivendo per riprendere, quindi chiuderla non lascia
@@ -1281,29 +1285,16 @@
 		return parts.join(" · ");
 	}
 
-	function turnConfigurationLabel(configuration) {
-		const parts = [];
-		if (configuration && configuration.model) parts.push(String(configuration.model));
-		const options = objectAt(configuration, "options");
-		if (options) {
-			for (const key of Object.keys(options).sort()) {
-				if (options[key] !== undefined && options[key] !== null && String(options[key])) parts.push(String(options[key]));
-			}
-		}
-		return parts.join(" · ");
-	}
-
 	// La riga agente, nelle sue due forme. Finché la conversazione non è aperta
 	// è la riga di pastiglie che il renderer dei campi disegna — si sceglie. Da
 	// quando è aperta è la stessa riga inerte, con un lucchetto: la scelta non
 	// si cambia più, ma si continua a leggere con chi si sta parlando.
 	function renderConversationModelChoice(view, ui, active) {
 		if (ui && typeof ui.modelChoiceHtml === "string" && ui.modelChoiceHtml) {
-			const session = objectAt(view, "session");
-			const currentTurn = objectAt(session, "current_turn");
-			const applied = turnConfigurationLabel(objectAt(currentTurn, "applied"));
-			const current = applied ? `<span class="conv-agent-inert" title="${escapeHtml(TEXT.modelLocked)}">${escapeHtml(TEXT.activeTurn)}: ${escapeHtml(applied)}</span>` : "";
-			return `<span class="conv-next-turn">${current}<span class="conv-next-turn-label">${escapeHtml(TEXT.nextTurn)}</span>${ui.modelChoiceHtml}</span>`;
+			// Le pastiglie e nient'altro: che cosa valga per il turn in corso e
+			// che cosa per il prossimo lo dicono già le pastiglie stesse, e le
+			// due etichette accanto occupavano la riga per ripeterlo.
+			return `<span class="conv-next-turn">${ui.modelChoiceHtml}</span>`;
 		}
 		if (active) {
 			const label = fixedAgentLabel(view);

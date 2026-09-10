@@ -1139,7 +1139,10 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		writeError(w, err)
 		return
 	}
-	if strings.TrimSpace(body.Message) == "" {
+	// Una skill invocata da sola è un turn intero: `/review` non ha bisogno di
+	// parole in più, e il provider la scrive comunque davanti al messaggio. Solo
+	// un turn senza né skill né testo non dice niente.
+	if strings.TrimSpace(body.Message) == "" && strings.TrimSpace(body.Skill) == "" {
 		writeError(w, iox.NewInvalidInput("message is required", "send a non-empty message", nil))
 		return
 	}

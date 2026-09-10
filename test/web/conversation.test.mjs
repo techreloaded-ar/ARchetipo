@@ -131,12 +131,12 @@ describe("renderConversation", () => {
 		);
 	});
 
-	it("mostra la selezione skill nel composer senza interpretarne il catalogo", () => {
+	it("mostra il menu delle skill nel composer senza interpretarne il catalogo", () => {
 		const html = renderConversation(LIVE, "", {
-			skillChoiceHtml: '<label class="conv-skill-choice"><select data-conversation-skill><option>plugin:fixture</option></select></label>',
+			skillChoiceHtml: '<ul class="conv-skill-menu"><li><button data-conversation-skill-option="plugin:fixture">/plugin:fixture</button></li></ul>',
 		});
-		assert.ok(html.includes("data-conversation-skill"));
-		assert.ok(html.indexOf("data-conversation-skill") < html.indexOf('type="submit"'));
+		assert.ok(html.includes("data-conversation-skill-option"));
+		assert.ok(html.indexOf("data-conversation-skill-option") < html.indexOf('type="submit"'));
 	});
 
 	// A conversazione conclusa riprenderla apre una sessione nuova, e la riga
@@ -159,9 +159,10 @@ describe("renderConversation", () => {
 		);
 	});
 
-	// Prima il blocco spariva e con lui l'informazione: ora la riga resta,
-	// inerte e con un lucchetto.
-	it("una conversazione attiva distingue il turn attivo dalla scelta futura", () => {
+	// Le pastiglie dicono già da sole che cosa vale per il turn in corso e che
+	// cosa per il prossimo: le due etichette accanto lo ripetevano a parole, e
+	// la riga del compositore le pagava in larghezza.
+	it("la riga agente porta le pastiglie e nessuna etichetta di turn", () => {
 		const html = renderConversation(
 			withConversation({
 				model: "MODELLO-FISSATO",
@@ -177,9 +178,9 @@ describe("renderConversation", () => {
 		);
 		const text = visibleText(html);
 
-		assert.ok(text.includes("Turn attivo: MODELLO-FISSATO · LIVELLO-X"));
-		assert.ok(text.includes("Prossimo turn"));
 		assert.ok(text.includes("MODELLO-PROSSIMO"));
+		assert.ok(!text.includes("Turn attivo"));
+		assert.ok(!text.includes("Prossimo turn"));
 	});
 
 	it("senza steering non promette un invio durante il turn attivo", () => {
@@ -1757,6 +1758,14 @@ describe("la ripresa di una conversazione finita", () => {
 		const text = visibleText(renderConversation(LIVE, "", {}));
 		assert.match(text, /invio: invia/);
 		assert.match(text, /maiusc\+invio: a capo/);
+	});
+
+	it("il turn ordinario non porta nessun suggerimento", () => {
+		// «Il messaggio avvia il prossimo turn» era il campo che descriveva se
+		// stesso: la riga resta muta, e torna a parlare solo quando ha da dire
+		// qualcosa che non si vede.
+		const html = renderConversation(LIVE, "", { sendBehavior: "turn" });
+		assert.ok(!html.includes("conv-composer-hint"));
 	});
 
 	it("il suggerimento del campo c'è anche a conversazione finita", () => {

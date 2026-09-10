@@ -5165,28 +5165,52 @@ body.no-workspace [data-workspace-scoped] {
 	flex-wrap: wrap;
 }
 
-.conv-next-turn-label {
-	color: var(--muted);
-	font-size: 11px;
-	font-weight: 700;
-	text-transform: uppercase;
+.conv-skill-menu {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	left: var(--gutter);
+	z-index: 20;
+	margin: 0;
+	padding: 4px;
+	list-style: none;
+	min-width: 260px;
+	max-width: min(420px, calc(100% - var(--gutter) * 2));
+	max-height: 240px;
+	overflow-y: auto;
+	background: var(--surface);
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-lg);
 }
 
-.conv-skill-choice {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	font-size: 11px;
-	color: var(--muted);
+.conv-skill-option {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	width: 100%;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text);
+	font-family: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
 }
 
-.conv-skill-choice select {
-	max-width: 220px;
+.conv-skill-option:hover,
+.conv-skill-option.is-current {
+	background: var(--accent-soft);
 }
 
-.conv-skill-note {
+.conv-skill-name {
+	font-family: var(--font-mono);
+}
+
+.conv-skill-origin {
+	color: var(--text-dim);
 	font-size: 11px;
-	color: var(--muted);
 }
 
 .conv-input {
@@ -6086,6 +6110,9 @@ body.no-workspace [data-workspace-scoped] {
 	flex-direction: column;
 	gap: var(--space-2);
 	box-shadow: 0 -12px 24px -22px rgba(30, 30, 60, 0.5);
+	/* Il menu delle skill sale da qui: si apre sopra al campo e non allarga la
+	   riga, come il popup che si ha nelle dita scrivendo «/» altrove. */
+	position: relative;
 }
 
 .conv-composer-input {

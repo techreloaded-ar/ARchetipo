@@ -5650,7 +5650,10 @@
 	let conversationModelChoiceSelection = null;
 	let conversationModelChoiceLoadToken = 0;
 	let conversationCapabilities = [];
-	let conversationSkillSelection = "";
+	// Quale voce del menu delle skill è evidenziata. La skill scelta non sta
+	// qui: sta nel testo, come barra iniziale, ed è da lì che viene letta al
+	// momento dell'invio — così ciò che si è scelto è ciò che si legge.
+	let conversationSkillHighlight = 0;
 	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
 
@@ -5930,6 +5933,13 @@
 				);
 				return;
 			}
+			const skillOption = e.target.closest("[data-conversation-skill-option]");
+			if (skillOption) {
+				pickConversationSkill(
+					skillOption.getAttribute("data-conversation-skill-option") || "",
+				);
+				return;
+			}
 			const modelChoice = e.target.closest("[data-conversation-model-choice]");
 			if (modelChoice) {
 				conversationModelChoiceOpen = "";
@@ -6107,10 +6117,13 @@
 			if (!input) return;
 			conversationDraft = input.value;
 			adattaAltezzaCompositore(input);
-		});
-		container.addEventListener("change", (e) => {
-			const skill = e.target.closest("[data-conversation-skill]");
-			if (skill) conversationSkillSelection = skill.value || "";
+			// Il menu delle skill vive del testo: ogni battuta lo riapre, lo
+			// filtra o lo chiude, e riparte sempre dalla prima voce perché
+			// l'elenco sotto è cambiato.
+			const wasOpen = !!conversationEl.querySelector(".conv-skill-menu");
+			const isOpen = conversationSkillMatches().length > 0;
+			conversationSkillHighlight = 0;
+			if (wasOpen || isOpen) renderConversationPanel();
 		});
 		// Invio manda il messaggio, Maiusc+Invio va a capo: è il gesto che si ha
 		// nelle dita in una conversazione, e scrivere è ciò che qui si fa più
@@ -6144,6 +6157,15 @@
 			}
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
+			// Col menu delle skill aperto invio sceglie e non manda: si sta
+			// ancora decidendo che cosa dire, non lo si sta dicendo.
+			if (!e.isComposing && e.keyCode !== 229 && !e.shiftKey && !e.altKey) {
+				conversationDraft = input.value;
+				if (conversationSkillKeydown(e)) {
+					e.preventDefault();
+					return;
+				}
+			}
 			if (e.key !== "Enter") return;
 			if (e.isComposing || e.keyCode === 229) return;
 			if (e.shiftKey || e.altKey) return;
@@ -6522,21 +6544,100 @@
 			: "";
 	}
 
-	function conversationSkillChoiceMarkup(view) {
+	// Le skill che il runtime ha dichiarato in questa sessione. Finché non le ha
+	// dichiarate l'elenco è vuoto e nessun menu si apre: il catalogo lo pubblica
+	// l'harness dopo il primo turn, e inventarne uno qui sarebbe un elenco di
+	// nomi che nessuno può invocare.
+	function conversationSkills() {
 		const catalog = conversationModelChoiceView || {};
+		if (catalog.skills_known !== true) return [];
+		return (Array.isArray(catalog.skills) ? catalog.skills : [])
+			.map((skill) => ({
+				name: String((skill && skill.name) || ""),
+				origin: String((skill && (skill.namespace || skill.origin)) || ""),
+			}))
+			.filter((skill) => skill.name);
+	}
+
+	// Il menu si apre mentre si scrive la barra iniziale e si chiude appena
+	// arriva uno spazio: `/rev` cerca, `/review ` ha già scelto. Una barra in
+	// mezzo al messaggio non è una skill, e infatti la riga deve cominciare con
+	// essa perché la ricerca parta.
+	function conversationSkillQuery() {
+		const match = /^\/(\S*)$/.exec(conversationDraft);
+		return match ? match[1] : null;
+	}
+
+	function conversationSkillMatches() {
+		const query = conversationSkillQuery();
+		if (query === null) return [];
+		const wanted = query.toLowerCase();
+		return conversationSkills().filter((skill) =>
+			skill.name.toLowerCase().includes(wanted),
+		);
+	}
+
+	// Il messaggio che parte e la skill che lo apre. La barra si toglie dal
+	// testo perché è il provider a rimetterla davanti al turn: lasciarla
+	// avrebbe scritto due volte lo stesso comando. Un nome che il catalogo non
+	// conosce non è una skill e resta testo, esattamente com'è stato scritto.
+	function splitConversationSkill(text) {
+		const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
+		if (!match) return { message: text, skill: undefined };
+		const known = conversationSkills().some((skill) => skill.name === match[1]);
+		return known
+			? { message: match[2].trim(), skill: match[1] }
+			: { message: text, skill: undefined };
+	}
+
+	function conversationSkillMenuMarkup(view) {
 		if (!view || !view.session || view.session.work !== "IDLE") return "";
-		if (catalog.skills_known !== true) {
-			return '<span class="conv-skill-note" title="Il runtime pubblica il catalogo effettivo dopo l’avvio">Skill disponibili dopo il primo turn</span>';
+		const matches = conversationSkillMatches();
+		if (!matches.length) return "";
+		const highlight = Math.min(conversationSkillHighlight, matches.length - 1);
+		const rows = matches.map((skill, index) => {
+			const current = index === highlight ? " is-current" : "";
+			const origin = skill.origin
+				? `<span class="conv-skill-origin">${escapeHtml(skill.origin)}</span>`
+				: "";
+			return `<li><button type="button" class="conv-skill-option${current}" data-conversation-skill-option="${escapeHtml(skill.name)}"><span class="conv-skill-name">/${escapeHtml(skill.name)}</span>${origin}</button></li>`;
+		});
+		return `<ul class="conv-skill-menu" role="listbox" aria-label="Skill native">${rows.join("")}</ul>`;
+	}
+
+	// Scegliere una skill vuol dire scriverla: il campo resta il posto in cui si
+	// legge che cosa parte, e il cursore torna in fondo per continuare la frase.
+	function pickConversationSkill(name) {
+		if (!name) return;
+		conversationDraft = `/${name} `;
+		conversationSkillHighlight = 0;
+		renderConversationPanel();
+		const input = conversationEl && conversationEl.querySelector(".conv-composer-input");
+		if (input && !input.disabled) {
+			input.focus();
+			input.setSelectionRange(input.value.length, input.value.length);
 		}
-		const skills = Array.isArray(catalog.skills) ? catalog.skills : [];
-		if (!skills.length) return "";
-		const options = ['<option value="">Nessuna skill</option>'].concat(skills.map((skill) => {
-			const name = String((skill && skill.name) || "");
-			const origin = String((skill && (skill.namespace || skill.origin)) || "");
-			const selected = name === conversationSkillSelection ? " selected" : "";
-			return `<option value="${escapeHtml(name)}"${selected}>${escapeHtml(origin ? `${name} · ${origin}` : name)}</option>`;
-		}));
-		return `<label class="conv-skill-choice" title="Invoca la skill nel prossimo turn"><span>Skill</span><select data-conversation-skill>${options.join("")}</select></label>`;
+	}
+
+	// Le frecce percorrono il menu, invio e tab scelgono. Ritorna true quando il
+	// tasto è stato consumato dal menu, così il compositore non lo manda.
+	function conversationSkillKeydown(e) {
+		const matches = conversationSkillMatches();
+		if (!matches.length) return false;
+		const highlight = Math.min(conversationSkillHighlight, matches.length - 1);
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			const step = e.key === "ArrowDown" ? 1 : matches.length - 1;
+			conversationSkillHighlight = (highlight + step) % matches.length;
+			renderConversationPanel();
+			const input = conversationEl && conversationEl.querySelector(".conv-composer-input");
+			if (input && !input.disabled) input.focus();
+			return true;
+		}
+		if (e.key === "Enter" || e.key === "Tab") {
+			pickConversationSkill(matches[highlight].name);
+			return true;
+		}
+		return false;
 	}
 
 	// Il DOM del pannello è nuovo dopo ogni ridisegno: ciò che aveva il fuoco si
@@ -6621,7 +6722,7 @@
 		conversationModelChoiceSelection = null;
 		conversationModelChoiceView = null;
 		conversationCapabilities = [];
-		conversationSkillSelection = "";
+		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
 		conversationModelChoiceOpen = "";
 		renderConversationsRail();
@@ -6670,7 +6771,7 @@
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
 		conversationCapabilities = [];
-		conversationSkillSelection = "";
+		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
 		renderConversationsRail();
@@ -6713,8 +6814,9 @@
 	async function resumeConversationThread() {
 		const id = conversationsCurrentId;
 		if (conversationBusy || !id) return;
-		const message = conversationDraft.trim();
-		if (!message) return;
+		const typed = conversationDraft.trim();
+		if (!typed) return;
+		const { message, skill } = splitConversationSkill(typed);
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
@@ -6728,10 +6830,10 @@
 			applyConversationView(view);
 			view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
-				{ message, skill: conversationSkillSelection || undefined },
+				{ message, skill },
 			);
 			conversationDraft = "";
-			conversationPendingMessage = message;
+			conversationPendingMessage = typed;
 			conversationsRefusal = "";
 			applyConversationView(view);
 			startConversationPolling();
@@ -6867,7 +6969,7 @@
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
 		conversationCapabilities = [];
-		conversationSkillSelection = "";
+		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
 		// The answers given here and the block last reached belong to the
@@ -7141,8 +7243,11 @@
 			resumeConversationThread();
 			return;
 		}
-		const message = conversationDraft.trim();
-		if (!message) return;
+		const typed = conversationDraft.trim();
+		if (!typed) return;
+		// La barra iniziale è la skill, e da qui in poi le due cose viaggiano
+		// separate: il nome nel campo `skill`, il resto come messaggio.
+		const { message, skill } = splitConversationSkill(typed);
 		conversationBusy = true;
 		// Il campo si svuota e il messaggio compare in coda alla conversazione
 		// *adesso*, prima ancora di partire: chi ha premuto invio deve vedere
@@ -7150,20 +7255,20 @@
 		// di una risposta a qualcosa di visibile, non il silenzio di una schermata
 		// identica a un istante prima. Se la consegna viene rifiutata, sotto si
 		// rimette esattamente ciò che era stato scritto.
-		conversationPendingMessage = message;
+		conversationPendingMessage = typed;
 		conversationDraft = "";
 		renderConversationPanel();
 		try {
 			const view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
-				{ message, skill: conversationSkillSelection || undefined },
+				{ message, skill },
 			);
 			// Accepted means delivered, not published: the text stays out of the
 			// timeline until the agent carries it back. Quello che si vede in
 			// coda fino ad allora è l'eco locale qui sopra, e porta scritto che
 			// è in consegna — non si spaccia per storia.
 			conversationRefusal = "";
-			conversationSkillSelection = "";
+			conversationSkillHighlight = 0;
 			applyConversationView(view);
 			startConversationPolling();
 		} catch (err) {
@@ -7171,7 +7276,7 @@
 			// alla conversazione, e il testo torna nel campo da cui era uscito —
 			// chi l'ha scritto non deve riscriverlo per leggere il rifiuto.
 			conversationPendingMessage = "";
-			conversationDraft = message;
+			conversationDraft = typed;
 			showConversationRefusal(err);
 		} finally {
 			conversationBusy = false;
@@ -7427,7 +7532,7 @@
 				// rispetta lo stesso contratto di riga 6392: nessuna scelta di
 				// modello si legge da una vista che ancora non c'è.
 				modelChoiceHtml: conversationModelChoiceMarkup(),
-				skillChoiceHtml: conversationSkillChoiceMarkup(view),
+				skillChoiceHtml: conversationSkillMenuMarkup(view),
 				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
 				resumable: !!(view && view.session && view.session.recovery === "RESUMABLE"),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",

@@ -193,14 +193,17 @@ async function scenarioNativeCodexConversation(dirC, env) {
     await page.evaluate(`document.querySelector('[data-conversation-pill="option:effort"]').click()`);
     await page.evaluate(`document.querySelector('[data-conversation-option-choice="high"]').click()`);
     await waitForConversation(view.url, conversationID, 0, (data) => data.next_turn?.model === "gpt-fake" && data.next_turn?.options?.effort === "high", "la scelta model/effort fatta con click");
-    await page.waitFor(`!!document.querySelector('[data-conversation-skill] option[value="plugin:fixture"]')`, 20000, "il menu delle skill native");
-    const skillOptions = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-skill] option')).map((option) => option.value)`);
+    // Il menu delle skill non è più una combobox: si apre scrivendo «/» nel
+    // campo, come in ogni harness, e mostra i nomi che il catalogo dichiara.
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = '/'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-skill-option="plugin:fixture"]')`, 20000, "il menu delle skill native");
+    const skillOptions = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-skill-option]')).map((option) => option.getAttribute('data-conversation-skill-option'))`);
     if (!skillOptions.includes("codex-only") || !skillOptions.includes("shared") || skillOptions.includes("claude-only") || skillOptions.includes("disabled")) {
       throw new Error(`AC-4: il catalogo Codex non rispetta runtime e disabilitazioni: ${JSON.stringify(skillOptions)}`);
     }
-    await page.evaluate(`(() => { const select = document.querySelector('[data-conversation-skill]'); select.value = 'plugin:fixture'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
-    await page.evaluate(`document.querySelector('.conv-composer-input').focus()`);
-    await page.send("Input.insertText", { text: "turno codex uno" });
+    await page.evaluate(`document.querySelector('[data-conversation-skill-option="plugin:fixture"]').click()`);
+    await page.waitFor(`document.querySelector('.conv-composer-input').value === '/plugin:fixture '`, 20000, "la skill scelta scritta nel campo");
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = '/plugin:fixture turno codex uno'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
     await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     const firstTurn = await control.waitFor("turn/start", 1);
