@@ -503,7 +503,7 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	// this route is polled every couple of seconds for as long as the
 	// conversation lives. A poll with nothing to decide must cost exactly what
 	// it cost before this existed.
-	if proposal, proposalID, pending := pendingProposal(session, snapshot.decidedProposalID); pending {
+	if proposal, proposalID, pending := pendingProposal(session.Events(0), snapshot.decidedProposalID); pending {
 		view.Proposal = s.resolveProposal(ctx, ws, proposal, proposalID)
 	}
 	events := session.Events(afterID)

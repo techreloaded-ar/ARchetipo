@@ -229,11 +229,14 @@ async function scenarioRefusedThenConfirmed(dir, env) {
     );
 
     // --- AC-2, AC-5 ---------------------------------------------------------
-    const confirmed = await apiJSON(
+    // The confirmation starts the action *in this conversation*: the turn that
+    // carries it out is run by a process of its own, which has to be served
+    // while the route is still answering.
+    const confirmed = await serveStartingProcesses(control, apiJSON(
       `${view.url}/api/workspace/conversations/${conversationID}/proposal`,
       postJSON({ proposal_id: proposal.event_id, decision: "accept" }),
       201,
-    );
+    ));
     if (confirmed.proposal !== null) {
       throw new Error(`AC-2: a decided proposal is no longer pending; got ${JSON.stringify(confirmed.proposal)}`);
     }
@@ -362,10 +365,12 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
 
     // The conversation really carries on: the oracle is the agent process
     // saying it was given the message, never the 202 of the route.
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
-    // The first user frame carried the opening instruction; this is the second.
-    const delivered = await control.waitFor(userFrame, 2);
-    if (userFrameText(delivered) !== MESSAGE_SENTINEL) {
+    await serveStartingProcesses(control, apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202));
+    // The message is looked for among the blocks of the frame and not as its
+    // whole text: the instruction that opens a conversation is held until the
+    // first message and travels in the same frame, as a block of its own.
+    const delivered = await control.waitFor(userFrameCarrying(MESSAGE_SENTINEL), 1);
+    if (!userFrameBlocks(delivered).includes(MESSAGE_SENTINEL)) {
       throw new Error(`AC-4: the process received ${JSON.stringify(userFrameText(delivered))} instead of the sentinel`);
     }
     ok(
@@ -377,7 +382,7 @@ async function scenarioDeclinedAndBoardParity(dir, env, confirmed) {
     // Same workspace shape, same spec, same status, same provider: the only
     // difference is who asked. What the board writes here is the yardstick for
     // what the confirmation wrote there.
-    const fromBoard = await apiJSON(`${view.url}/api/spec/${CODE_RUNNABLE}/execution`, postJSON({ action: PROPOSED_ACTION }), 201);
+    const fromBoard = await serveStartingProcesses(control, apiJSON(`${view.url}/api/spec/${CODE_RUNNABLE}/execution`, postJSON({ action: PROPOSED_ACTION }), 201));
     const boardRecord = await readExecutionRecord(dir, fromBoard.id);
     const boardStatus = await readSpecStatus(dir, CODE_RUNNABLE);
     const compared = ["spec_code", "action", "capability", "provider_id", "spec_status_before", "status"];
@@ -467,6 +472,47 @@ async function listRecursively(root) {
 
 // --- the protocol -------------------------------------------------------------
 
+// serveStartingProcesses answers, while a request is in flight, every agent
+// process that request starts: each one is given the announcement of the very
+// session id ARchetipo assigned to it, which is the only one the provider
+// accepts from it. A route that starts a process answers only once that process
+// has announced itself, so the two have to happen at the same time.
+async function serveStartingProcesses(control, request) {
+  // The request is taken hold of first: anything that threw before this line
+  // would leave it floating, and a rejected promise nobody is waiting on takes
+  // the whole run down with an error that names none of this.
+  let pending = true;
+  const answer = request.finally(() => {
+    pending = false;
+  });
+  answer.catch(() => {});
+  let served = control.reports().filter((entry) => entry.kind === "argv").length;
+  while (pending) {
+    const invocations = control.reports().filter((entry) => entry.kind === "argv");
+    while (served < invocations.length) {
+      control.push(emit(initFrame(nativeSessionIDOf(invocations[served]))), invocations[served].pid);
+      served += 1;
+    }
+    await delay(25);
+  }
+  return answer;
+}
+
+// nativeSessionIDOf reads, from the command line of a process, which native
+// session ARchetipo told it to be — or to take up.
+function nativeSessionIDOf(invocation) {
+  const argv = invocation.argv || [];
+  for (const flag of ["--session-id", "--resume"]) {
+    const at = argv.indexOf(flag);
+    if (at >= 0 && argv[at + 1]) return argv[at + 1];
+  }
+  throw new Error(`the invocation names no native session: ${JSON.stringify(argv)}`);
+}
+
+function initFrame(sessionID) {
+  return { type: "system", subtype: "init", session_id: sessionID };
+}
+
 function emit(frame) {
   return { kind: "emit", frame };
 }
@@ -488,6 +534,21 @@ function userFrame(entry) {
   return entry.kind === "received" && entry.frame?.type === "user";
 }
 
+// userFrameBlocks keeps the blocks of a user frame apart, which is what
+// identifying one message requires: the opening instruction of a conversation
+// travels in the same frame as the first message, as a block of its own.
+function userFrameBlocks(entry) {
+  const content = entry.frame?.message?.content;
+  if (!Array.isArray(content)) return [];
+  return content.filter((block) => block?.type === "text").map((block) => block.text ?? "");
+}
+
+function userFrameCarrying(text) {
+  const matcher = (entry) => userFrame(entry) && userFrameBlocks(entry).includes(text);
+  Object.defineProperty(matcher, "name", { value: `a user frame carrying ${JSON.stringify(text)}` });
+  return matcher;
+}
+
 function userFrameText(entry) {
   return (entry.frame?.message?.content || []).map((block) => block.text || "").join("");
 }
@@ -506,7 +567,14 @@ async function startControlServer() {
 
   const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url.startsWith("/next")) {
-      sendJSON(res, 200, commands.shift() || { kind: "none" });
+      // A command may be addressed to one process. A native session is opened
+      // by one process and every turn in it is run by another, so several of
+      // them poll this server, and an announcement — valid only for the process
+      // ARchetipo told to be that session — must not be taken by whichever asks
+      // first.
+      const pid = Number(new URL(req.url, url).searchParams.get("pid")) || 0;
+      const index = commands.findIndex((entry) => entry.pid === 0 || entry.pid === pid);
+      sendJSON(res, 200, index < 0 ? { kind: "none" } : commands.splice(index, 1)[0].command);
       return;
     }
     if (req.method === "POST" && req.url.startsWith("/received")) {
@@ -525,8 +593,8 @@ async function startControlServer() {
 
   return {
     url,
-    push(command) {
-      commands.push(command);
+    push(command, pid = 0) {
+      commands.push({ command, pid });
     },
     reports() {
       return received;

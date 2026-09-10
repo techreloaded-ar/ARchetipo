@@ -791,7 +791,14 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	if refreshed, refreshErr := ws.conversationStore().GetMetadata(ctx, snapshot.id); refreshErr == nil {
 		record.ExecutionIDs = refreshed.ExecutionIDs
 	}
-	page, pageErr := ws.conversationStore().ReadEvents(ctx, snapshot.id, afterID, nativeConversationPageSize)
+	// The whole timeline is read once and the page is cut out of it here,
+	// rather than read again: the pending proposal is the *last* thing the agent
+	// declared and is not necessarily in the page this caller asked for — a
+	// client polling with its own cursor usually asks for a page with nothing in
+	// it — while a second read of the journal would double the cost of every
+	// poll for a fact that is already in the bytes just read.
+	history, pageErr := ws.conversationStore().ReadEvents(ctx, snapshot.id, 0, 0)
+	page := pageAfter(history.Events, afterID, nativeConversationPageSize)
 	view := conversationView{
 		Available: true, ProviderID: record.ProviderID, Model: record.NextTurn.Model,
 		ModelOptions: cloneModelOptions(record.NextTurn.Options), Events: page.Events, LastID: page.LastID,
@@ -802,6 +809,16 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	view.NextTurn = record.NextTurn
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
 	view.Runs = s.nativeConversationRuns(ctx, ws, record)
+	// A conversation may declare a step it would take, and offering it is the
+	// same act here as it was for a legacy run: read the process, resolve the
+	// declaration against it, write nothing. What has changed is only where the
+	// history and the watermark are read from — the durable journal and the
+	// record — and what a confirmation then does, which is to start the action
+	// in this very session instead of beside it.
+	if proposal, proposalID, pending := pendingProposal(history.Events, decidedProposalOf(record, snapshot)); pending {
+		view.Proposal = s.resolveProposal(ctx, ws, proposal, proposalID)
+	}
+	view.Outcome = newConversationOutcomeView(snapshot.outcome)
 	if record.Session != nil {
 		view.ProviderID = record.Session.ProviderID
 		view.Conversation.WorkingDir = record.Session.Environment.WorkingDir
@@ -1195,4 +1212,54 @@ func (s *Server) handleUpdateNativeConversationNextTurn(w http.ResponseWriter, r
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"next_turn": record.NextTurn})
+}
+
+// pageAfter cuts the page a caller asked for out of a whole history: the events
+// newer than its cursor, at most limit of them, and whether more were left.
+func pageAfter(events []execution.RunEvent, afterID int64, limit int) conversationlog.EventPage {
+	page := conversationlog.EventPage{Events: []execution.RunEvent{}, LastID: afterID}
+	for _, event := range events {
+		if event.ID <= afterID {
+			continue
+		}
+		if limit > 0 && len(page.Events) == limit {
+			page.HasMore = true
+			break
+		}
+		page.Events = append(page.Events, event)
+		page.LastID = event.ID
+	}
+	return page
+}
+
+// decidedProposalOf is the watermark past which a proposal counts as answered.
+//
+// It is the later of what the record keeps and what the holder does, because
+// the two remember it for different spans: the record survives a restart of
+// View, and the holder is what the decision route has just written. A proposal
+// answered before a restart must not come back and ask to be started a second
+// time.
+func decidedProposalOf(record conversationlog.Record, snapshot conversationSnapshot) int64 {
+	return max(record.DecidedProposalID, snapshot.decidedProposalID)
+}
+
+// rememberDecidedProposal writes the watermark where a later process can read
+// it. It is written after the decision has been taken, so a failure to record
+// it leaves a proposal that can be answered again rather than a start nobody
+// can explain.
+func (ws *workspaceSession) rememberDecidedProposal(ctx context.Context, id string, proposalID int64) error {
+	lock, err := ws.conversationStore().Lock(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+	record, err := ws.conversationStore().GetMetadata(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record.DecidedProposalID >= proposalID {
+		return nil
+	}
+	record.DecidedProposalID = proposalID
+	return ws.conversationStore().Save(ctx, record)
 }

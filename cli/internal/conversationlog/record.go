@@ -76,6 +76,13 @@ type Record struct {
 	Turns        []execution.SessionTurn     `json:"turns,omitempty"`
 	Deliveries   []execution.SessionDelivery `json:"deliveries,omitempty"`
 	ExecutionIDs []string                    `json:"execution_ids,omitempty"`
+
+	// DecidedProposalID is the id of the last event of this conversation whose
+	// proposal a person answered. It is kept here and not only in memory
+	// because a proposal answered before View restarted must not be offered
+	// again: the card would ask to start a second time what has already been
+	// started once.
+	DecidedProposalID int64 `json:"decided_proposal_id,omitempty"`
 }
 
 const CurrentVersion = 2

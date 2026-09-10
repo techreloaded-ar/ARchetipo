@@ -90,20 +90,16 @@ func newConversationOutcomeView(outcome *conversationOutcome) *conversationOutco
 // earlier one has been superseded by the conversation itself, and offering it
 // again would ask a person to confirm something the agent has moved past.
 //
-// It reads session.Events(0) — the whole retained history — and never the page
-// the caller is about to render. The after_id cursor belongs to the client and
-// tracks what it has already drawn; a proposal filtered out by it would vanish
-// from the payload on the very next poll after being delivered, which is the
-// one moment a person is about to answer it.
+// It is given the whole history and never the page the caller is about to
+// render. The after_id cursor belongs to the client and tracks what it has
+// already drawn; a proposal filtered out by it would vanish from the payload on
+// the very next poll after being delivered, which is the one moment a person is
+// about to answer it.
 //
 // A proposal whose event id is not newer than decidedID has already been
 // answered, and is not pending: that is what makes a decision hold while the
 // agent keeps talking, without any event being rewritten or removed.
-func pendingProposal(session *localrun.Session, decidedID int64) (execution.ActionProposal, int64, bool) {
-	if session == nil {
-		return execution.ActionProposal{}, 0, false
-	}
-	events := session.Events(0)
+func pendingProposal(events []execution.RunEvent, decidedID int64) (execution.ActionProposal, int64, bool) {
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
 		if event.Kind != localrun.KindText {
@@ -311,16 +307,16 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "decide a proposal"))
 		return
 	}
-	session, found := conversationSessionOf(snapshot)
-	if !found {
-		writeError(w, iox.NewConflict(
-			"the proposals of the conversation "+snapshot.id+" cannot be decided from this viewer",
-			"the history of this conversation is not readable from this viewer: close it and open a new one with a provider that exposes an interactive run",
-			nil,
-		))
+	ctx := r.Context()
+	// The history and the watermark are read where this conversation keeps
+	// them: the durable journal for a native session, the run in memory for a
+	// legacy one. Everything below this point is the same act for both.
+	events, decided, err := s.decidableHistoryOf(ctx, ws, snapshot)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	proposal, proposalID, pending := pendingProposal(session, snapshot.decidedProposalID)
+	proposal, proposalID, pending := pendingProposal(events, decided)
 	if !pending || proposalID != body.ProposalID {
 		// One decides what one is looking at. A proposal that is no longer the
 		// pending one has been superseded or already answered, and confirming it
@@ -332,7 +328,6 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		))
 		return
 	}
-	ctx := r.Context()
 	if decision == conversationDecisionDecline {
 		// A refusal starts nothing, transitions nothing and writes no record: the
 		// only thing that happens is the watermark moving, so the card disappears
@@ -351,8 +346,13 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 			writeError(w, iox.NewConflict(err.Error(), "read the conversation of this workspace before deciding a proposal", nil))
 			return
 		}
-		decided, stillOpen := ws.conversation.get(id)
-		writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(decided), decided, stillOpen, afterID))
+		answered, stillOpen := ws.conversation.get(id)
+		if snapshot.sessionProvider != nil {
+			_ = ws.rememberDecidedProposal(ctx, id, proposalID)
+			writeJSON(w, http.StatusOK, s.nativeConversationView(ctx, ws, answered, afterID))
+			return
+		}
+		writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(answered), answered, stillOpen, afterID))
 		return
 	}
 	// The resolution is the same one the GET renders, run again now: what it
@@ -397,12 +397,47 @@ func (s *Server) handleDecideWorkspaceConversationProposal(w http.ResponseWriter
 		))
 		return
 	}
-	decided, stillOpen := ws.conversation.get(id)
+	answered, stillOpen := ws.conversation.get(id)
 	// The holder has already retargeted the live conversation; the journal is
 	// the same fact written where the index reads it. The error is dropped for
 	// the reason every other journal write in this package drops it: the record
 	// is a trace of the conversation, and a trace that could not be written is
 	// not a reason to refuse a start that has already happened.
-	_ = ws.journal.retarget(ctx, id, decided.specCode)
-	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, ws, heldConversationTarget(decided), decided, stillOpen, afterID))
+	_ = ws.journal.retarget(ctx, id, answered.specCode)
+	if snapshot.sessionProvider != nil {
+		_ = ws.rememberDecidedProposal(ctx, id, proposalID)
+		writeJSON(w, http.StatusCreated, s.nativeConversationView(ctx, ws, answered, afterID))
+		return
+	}
+	writeJSON(w, http.StatusCreated, s.conversationViewOf(ctx, ws, heldConversationTarget(answered), answered, stillOpen, afterID))
+}
+
+// decidableHistoryOf is the history a proposal is looked for in, together with
+// the watermark past which one counts as answered.
+//
+// A native session keeps both on disk — the timeline in its journal, the
+// watermark in its record — and a legacy run keeps them in the memory of the
+// process that is holding it. A conversation this viewer can neither read nor
+// remember has no proposal to decide, and says so.
+func (s *Server) decidableHistoryOf(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot) ([]execution.RunEvent, int64, error) {
+	if snapshot.sessionProvider != nil {
+		history, err := ws.conversationStore().ReadEvents(ctx, snapshot.id, 0, 0)
+		if err != nil {
+			return nil, 0, iox.NewInternal("reading the timeline of the conversation "+snapshot.id, err)
+		}
+		record, err := ws.conversationStore().GetMetadata(ctx, snapshot.id)
+		if err != nil {
+			return nil, 0, iox.NewInternal("reading the record of the conversation "+snapshot.id, err)
+		}
+		return history.Events, decidedProposalOf(record, snapshot), nil
+	}
+	session, found := conversationSessionOf(snapshot)
+	if !found {
+		return nil, 0, iox.NewConflict(
+			"the proposals of the conversation "+snapshot.id+" cannot be decided from this viewer",
+			"the history of this conversation is not readable from this viewer: close it and open a new one with a provider that exposes an interactive run",
+			nil,
+		)
+	}
+	return session.Events(0), snapshot.decidedProposalID, nil
 }
