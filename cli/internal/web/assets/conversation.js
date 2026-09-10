@@ -150,7 +150,6 @@
 		send: "Invia",
 		markResume: "sessione",
 		resumeNote: "Il prossimo messaggio riprende la stessa sessione e la stessa conversation.",
-		steeringHint: "il messaggio entra nel turn attivo; modello ed effort scelti valgono dal prossimo turn",
 		waitForTurnHint: "questo provider non supporta steering: attendi la fine del turn o interrompilo",
 		inputPending: "Input richiesto",
 		inputPlaceholder: "Risposta JSON",
@@ -1157,13 +1156,13 @@
 		// su una conversazione viva se lo trovava comparire come una novità. Ora
 		// dice sempre una delle due cose vere del campo — come si manda, oppure
 		// che non si scrive — e sta scritto minuto perché è un promemoria.
-		// Il turn ordinario non ha niente da dire: che il messaggio avvii il
-		// prossimo turn è ciò che il compositore fa sempre, e scriverlo sotto al
-		// campo era ripetere il campo. Restano le due frasi che dicono qualcosa
-		// che non si vede — lo steering dentro al turn attivo, e il campo che
-		// non risponde — e quando non c'è niente da dire la riga sparisce.
+		// Un campo che accetta il messaggio non ha niente da dire: che il turn
+		// lo prenda subito o al prossimo giro è ciò che il compositore fa
+		// sempre, e scriverlo sotto al campo era ripetere il campo. Resta la
+		// sola frase che dice qualcosa che non si vede — il campo che non
+		// risponde — e quando non c'è niente da dire la riga sparisce.
 		const hint = writable
-			? (ui.sendBehavior === "steer" ? TEXT.steeringHint : ui.sendBehavior === "turn" ? "" : TEXT.writeHint)
+			? (ui.sendBehavior === "steer" || ui.sendBehavior === "turn" ? "" : TEXT.writeHint)
 			: ui.sendBehavior === "wait" ? TEXT.waitForTurnHint
 			: TEXT.readOnly;
 		const hintHtml = hint

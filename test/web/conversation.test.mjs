@@ -1760,12 +1760,14 @@ describe("la ripresa di una conversazione finita", () => {
 		assert.match(text, /maiusc\+invio: a capo/);
 	});
 
-	it("il turn ordinario non porta nessun suggerimento", () => {
-		// «Il messaggio avvia il prossimo turn» era il campo che descriveva se
-		// stesso: la riga resta muta, e torna a parlare solo quando ha da dire
-		// qualcosa che non si vede.
-		const html = renderConversation(LIVE, "", { sendBehavior: "turn" });
-		assert.ok(!html.includes("conv-composer-hint"));
+	it("un campo che accetta il messaggio non porta nessun suggerimento", () => {
+		// «Il messaggio avvia il prossimo turn» e «il messaggio entra nel turn
+		// attivo» erano il campo che descriveva se stesso: la riga resta muta,
+		// e torna a parlare solo quando ha da dire qualcosa che non si vede.
+		for (const sendBehavior of ["turn", "steer"]) {
+			const html = renderConversation(LIVE, "", { sendBehavior });
+			assert.ok(!html.includes("conv-composer-hint"), sendBehavior);
+		}
 	});
 
 	it("il suggerimento del campo c'è anche a conversazione finita", () => {

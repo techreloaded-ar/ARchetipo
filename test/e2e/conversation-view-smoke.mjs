@@ -214,7 +214,7 @@ async function scenarioNativeCodexConversation(dirC, env) {
     if (skillInput?.name !== "plugin:fixture" || !(firstTurn.params?.input || []).some((entry) => entry?.type === "text" && entry.text.includes("$plugin:fixture"))) {
       throw new Error(`AC-4: la skill non è stata invocata come input nativo nello stesso turn: ${JSON.stringify(firstTurn.params)}`);
     }
-    await page.waitFor(`document.querySelector('.conv-composer-hint')?.textContent.includes('turn attivo')`, 20000, "la dichiarazione dello steering");
+    await page.waitFor(`!!document.querySelector('[data-conversation-interrupt]') && !document.querySelector('.conv-composer-input').disabled`, 20000, "il compositore aperto durante il turn attivo");
     await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = 'correzione nel turn'; input.dispatchEvent(new Event('input', {bubbles:true})); input.form.requestSubmit(); })()`);
     await control.waitFor("turn/steer", 1);
     if (exceptions.length) throw new Error(`la View ha emesso eccezioni JS: ${JSON.stringify(exceptions)}`);
