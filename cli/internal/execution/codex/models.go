@@ -75,7 +75,10 @@ func (p *Provider) Models(ctx context.Context, raw map[string]any) ([]execution.
 	}
 	defer func() { _, _, _ = p.shutdown(process) }()
 
-	client := newAppServer(process, localrun.NewSession("codex-model-catalog", nil))
+	// Not conversational, and the argument is not a detail: this probe opens no
+	// turn at all — it initializes, pages through model/list and leaves — so
+	// nothing here ever has a turn to steer or to reopen.
+	client := newAppServer(process, localrun.NewSession("codex-model-catalog", nil), false)
 	go client.consume()
 	if err := client.initialize(listCtx); err != nil {
 		return nil, fmt.Errorf("listing models from the codex command %q: %w", cfg.Command, err)

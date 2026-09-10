@@ -254,7 +254,6 @@ func (a *appServer) notify(method string, params any) error {
 // asked for. A dispatched action has no such moment to wait in, so start
 // still does both in one call.
 func (a *appServer) handshake(ctx context.Context, cfg settings, dir string) (string, error) {
-		return fmt.Errorf("the codex app server did not accept the handshake: %w", err)
 	if err := a.initialize(ctx); err != nil {
 		return "", err
 	}
