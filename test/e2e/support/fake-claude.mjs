@@ -102,7 +102,10 @@ async function pump() {
   for (;;) {
     let command = null;
     try {
-      const response = await fetch(`${control}/next`);
+      // The pid travels so a control server holding several processes can
+      // address a command to one of them: a frame that announces a session id
+      // is only valid for the process that was told to be that session.
+      const response = await fetch(`${control}/next?pid=${process.pid}`);
       command = await response.json();
     } catch {
       return;

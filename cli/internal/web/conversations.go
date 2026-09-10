@@ -147,11 +147,16 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 	for _, snapshot := range ws.conversation.list() {
 		alive[snapshot.id] = true
 	}
+	// Holding a thread is not the same as running it. A viewer that has just
+	// started holds every native conversation of the workspace, so it can be
+	// written to again without changing identity; the ones whose runtime was
+	// released have no process behind them, and answering "live" about those
+	// would tell a person that something is going on where nothing is.
 	views := make([]conversationEntryView, 0, min(len(records), closedLimit+len(alive)))
 	closedCount := 0
 	hasMoreClosed := false
 	for _, record := range records {
-		live := alive[record.ID]
+		live := alive[record.ID] && record.Connection != execution.ConnectionReleased
 		if !live {
 			if closedCount >= closedLimit {
 				hasMoreClosed = true

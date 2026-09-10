@@ -135,40 +135,56 @@ func (ws *workspaceSession) restoreNativeConversations(registry *execution.Regis
 			ws.nativeRuntime.drop(record.ID)
 			continue
 		}
-		provider, resolveErr := registry.Resolve(record.Session.ProviderID)
-		if resolveErr != nil {
-			ws.nativeRuntime.drop(record.ID)
-			continue
-		}
-		sessions, supported := execution.SessionProviderFor(provider)
-		if !supported {
-			ws.nativeRuntime.drop(record.ID)
-			continue
-		}
-		openedAt := record.OpenedAt
-		if openedAt.IsZero() {
-			openedAt = time.Now().UTC()
-		}
-		if err := ws.conversation.open(conversationHold{
-			id:              record.ID,
-			providerID:      record.Session.ProviderID,
-			sessionProvider: sessions,
-			session:         *record.Session,
-			providerConfig:  execution.CloneConfig(record.Session.Environment.ProviderConfig),
-			model:           record.NextTurn.Model,
-			modelOptions:    cloneModelOptions(record.NextTurn.Options),
-			workingDir:      record.Session.Environment.WorkingDir,
-			openedAt:        openedAt,
-			specCode:        record.SpecCode,
-		}); err != nil {
+		if held, err := ws.holdNativeConversation(registry, record); err != nil {
 			// Every hold taken by this restore goes back, and not only the one
 			// that failed: the session being built is discarded by its caller,
 			// so nothing would be left to release the others.
 			ws.nativeRuntime.dropAll()
 			return err
+		} else if !held {
+			ws.nativeRuntime.drop(record.ID)
 		}
 	}
 	return nil
+}
+
+// holdNativeConversation puts one native record in the holder of this
+// workspace, so its session can be read and written as the conversation it
+// already was. It reports false — without an error — when this viewer has
+// nothing to hold it with: a provider that is gone, or one that no longer
+// speaks native sessions. The runtime hold is the caller's to take and to give
+// back, because the caller is the one that knows whether it took it.
+func (ws *workspaceSession) holdNativeConversation(registry *execution.Registry, record conversationlog.Record) (bool, error) {
+	if registry == nil || record.Session == nil {
+		return false, nil
+	}
+	provider, resolveErr := registry.Resolve(record.Session.ProviderID)
+	if resolveErr != nil {
+		return false, nil
+	}
+	sessions, supported := execution.SessionProviderFor(provider)
+	if !supported {
+		return false, nil
+	}
+	openedAt := record.OpenedAt
+	if openedAt.IsZero() {
+		openedAt = time.Now().UTC()
+	}
+	if err := ws.conversation.open(conversationHold{
+		id:              record.ID,
+		providerID:      record.Session.ProviderID,
+		sessionProvider: sessions,
+		session:         *record.Session,
+		providerConfig:  execution.CloneConfig(record.Session.Environment.ProviderConfig),
+		model:           record.NextTurn.Model,
+		modelOptions:    cloneModelOptions(record.NextTurn.Options),
+		workingDir:      record.Session.Environment.WorkingDir,
+		openedAt:        openedAt,
+		specCode:        record.SpecCode,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (ws *workspaceSession) startNativeFollowers() {
@@ -176,9 +192,18 @@ func (ws *workspaceSession) startNativeFollowers() {
 		return
 	}
 	for _, snapshot := range ws.conversation.list() {
-		if snapshot.sessionProvider != nil {
-			ws.startNativeFollower(snapshot)
+		if snapshot.sessionProvider == nil {
+			continue
 		}
+		// A thread whose runtime was released has no stream: following it would
+		// fail on the first read and, failing, would record the session as
+		// DISCONNECTED — turning "the operator let this runtime go" into "it
+		// dropped", which is a different thing to tell somebody. The follower
+		// starts again with the session, when it is resumed.
+		if record, err := ws.conversationStore().GetMetadata(context.Background(), snapshot.id); err == nil && record.Connection == execution.ConnectionReleased {
+			continue
+		}
+		ws.startNativeFollower(snapshot)
 	}
 }
 
@@ -328,6 +353,15 @@ func (ws *workspaceSession) releaseNativeConversation(ctx context.Context, snaps
 		return err
 	}
 	record.Connection = execution.ConnectionReleased
+	// The summary is written here and not left to the follower alone: the
+	// follower writes it after the event that changes it, without holding this
+	// lock and without being waited for, so a close that answered before it got
+	// there would hand back a record still named after the day it was opened.
+	// The close is the moment somebody reads the record, so the close is where
+	// it has to be true.
+	if page, readErr := ws.conversationStore().ReadEvents(ctx, snapshot.id, 0, 0); readErr == nil {
+		applyNativeSummary(&record, page.Events)
+	}
 	if err := ws.conversationStore().Save(ctx, record); err != nil {
 		return err
 	}
@@ -356,11 +390,20 @@ func (ws *workspaceSession) updateNativeRecordFromEvent(ctx context.Context, pri
 	if pageErr != nil {
 		return pageErr
 	}
-	record.MessageCount = conversationMessageCount(page.Events)
-	if (record.Title == "" || strings.HasPrefix(record.Title, "Conversazione del ")) && len(page.Events) > 0 {
-		record.Title = conversationTitleOf(page.Events, record.OpenedAt)
-	}
+	applyNativeSummary(&record, page.Events)
 	return ws.conversationStore().Save(ctx, record)
+}
+
+// applyNativeSummary writes into the record what the timeline says about it:
+// the name it goes by and how many messages it holds.
+//
+// The dated name given at the open is a placeholder and is replaced by the
+// first thing the person said; a name somebody chose is never overwritten.
+func applyNativeSummary(record *conversationlog.Record, events []execution.RunEvent) {
+	record.MessageCount = conversationMessageCount(events)
+	if (record.Title == "" || strings.HasPrefix(record.Title, "Conversazione del ")) && len(events) > 0 {
+		record.Title = conversationTitleOf(events, record.OpenedAt)
+	}
 }
 
 func (ws *workspaceSession) persistNativeSnapshot(ctx context.Context, id string, snapshot execution.SessionSnapshot) error {
@@ -723,6 +766,15 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	record, err := ws.conversationStore().GetMetadata(ctx, snapshot.id)
 	if err != nil {
 		return conversationView{Conversation: &conversationSnapshotView{ID: snapshot.id}, Events: []execution.RunEvent{}, Runs: []conversationRunView{}, Approvals: []execution.PendingApproval{}, Notice: err.Error()}
+	}
+	// A released runtime is not started again by somebody reading. Opening a
+	// thread to look at what was said must cost nothing: the session is resumed
+	// by whatever writes into it — a message, an action, a resume — and until
+	// then the record and its journal are the whole answer. It is also what
+	// keeps "released" readable as itself: a read that resumed would report the
+	// thread active a moment after the person had closed it.
+	if record.Connection == execution.ConnectionReleased {
+		return pastNativeConversationView(ws, record, afterID)
 	}
 	observed, observeErr := s.ensureNativeSession(ctx, ws, snapshot)
 	if observeErr == nil {

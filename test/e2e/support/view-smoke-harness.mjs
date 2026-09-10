@@ -114,7 +114,13 @@ export async function stopProcess(child, runCommand) {
   }
   child.kill("SIGTERM");
   await Promise.race([new Promise((resolve) => child.once("exit", resolve)), delay(3000)]);
-  if (!child.killed) child.kill("SIGKILL");
+  // Whether it is still there is asked of the child, never of `killed`: that
+  // flag says a signal was *sent*, so it is already true here and a process
+  // that did not act on SIGTERM would keep the whole smoke waiting for ever.
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
 }
 
 export async function waitForHTTP(url) {

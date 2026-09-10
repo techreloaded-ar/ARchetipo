@@ -139,7 +139,13 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 	// Resuming the conversation that is happening right now is refused rather
 	// than served: that one is written to with the message route, and taking it
 	// up would close it only to hand it its own history back as context.
-	if _, isLive := ws.conversation.get(record.ID); isLive {
+	//
+	// Held is not the same as happening. A viewer holds every native thread of
+	// its workspace, so that it can be written to again without changing
+	// identity; the one whose runtime was released has no process behind it, and
+	// resuming it is exactly the gesture that gives it one back.
+	_, held := ws.conversation.get(record.ID)
+	if held && record.Connection != execution.ConnectionReleased {
 		writeError(w, iox.NewConflict(
 			"the conversation "+record.ID+" is live on this workspace",
 			"write in it directly: a conversation that is still live is continued, not resumed",
@@ -182,20 +188,29 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 			writeError(w, err)
 			return
 		}
-		if err := ws.conversation.open(conversationHold{
-			id: record.ID, providerID: record.Session.ProviderID, sessionProvider: sessions, session: *record.Session,
-			providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig), model: record.NextTurn.Model,
-			modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
-			openedAt: record.OpenedAt, specCode: record.SpecCode,
-		}); err != nil {
-			ws.nativeRuntime.drop(record.ID)
-			writeError(w, conversationOpenRefusal(ctx, ws, err))
-			return
+		// Only when it is not already in the holder: a viewer that restored this
+		// workspace holds every native thread of it, and what a resume gives
+		// back is the runtime, not a second entry for the same conversation.
+		if !held {
+			if err := ws.conversation.open(conversationHold{
+				id: record.ID, providerID: record.Session.ProviderID, sessionProvider: sessions, session: *record.Session,
+				providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig), model: record.NextTurn.Model,
+				modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
+				openedAt: record.OpenedAt, specCode: record.SpecCode,
+			}); err != nil {
+				ws.nativeRuntime.drop(record.ID)
+				writeError(w, conversationOpenRefusal(ctx, ws, err))
+				return
+			}
 		}
 		snapshot, _ := ws.conversation.get(record.ID)
 		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: body.Message}); err != nil {
-			ws.conversation.forget(record.ID)
-			ws.nativeRuntime.drop(record.ID)
+			// What this route added is what it gives back: a thread it found
+			// already held stays held, exactly as the restore left it.
+			if !held {
+				ws.conversation.forget(record.ID)
+				ws.nativeRuntime.drop(record.ID)
+			}
 			writeError(w, err)
 			return
 		}

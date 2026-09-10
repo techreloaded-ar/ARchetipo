@@ -215,7 +215,13 @@ func (ws *workspaceSession) reconcileInterruptedTurn(ctx context.Context, record
 		stored.Turns = upsertTurn(stored.Turns, *stored.CurrentTurn)
 	}
 	stored.Work = execution.SessionIdle
-	stored.Connection = execution.ConnectionDisconnected
+	// A runtime the operator released stays released: what the restart found is
+	// a turn that nobody was carrying any more, not a session that dropped.
+	// Overwriting it would tell a person their thread had fallen over when they
+	// had closed it themselves.
+	if stored.Connection != execution.ConnectionReleased {
+		stored.Connection = execution.ConnectionDisconnected
+	}
 	_ = ws.conversationStore().Save(ctx, stored)
 	_ = lock.Unlock()
 	// Only now, and outside the lock the settle path takes for itself: the

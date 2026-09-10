@@ -535,8 +535,19 @@ func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
 		return result.exitCode, result.stderr, result.err
 	case <-time.After(shutdownGrace):
 		_ = process.Signal()
-		result := <-done
+	}
+	// The wait that follows the kill is bounded as well, and it is not
+	// belt-and-braces: `Wait` returns when the process has gone *and* its pipes
+	// have been drained, so a killed process whose standard output is still held
+	// open somewhere else leaves this call inside a process that no longer
+	// exists. Whoever asked for the release — the close of a conversation, the
+	// shutdown of the whole viewer — must get an answer either way, and a
+	// session whose runtime was killed is released whatever its pipes do.
+	select {
+	case result := <-done:
 		return result.exitCode, result.stderr, result.err
+	case <-time.After(shutdownGrace):
+		return -1, "", fmt.Errorf("the claude session process did not report its exit after being killed")
 	}
 }
 
