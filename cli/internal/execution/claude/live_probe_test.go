@@ -9,9 +9,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -647,5 +651,245 @@ func waitForLivePermission(t *testing.T, ctx context.Context, client *streamSess
 			t.Fatalf("%s never arrived", what)
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+}
+
+// TestLiveClaudeHTTPServerLifecycle starts a real development server through
+// the real harness and then observes it at the three boundaries View has to
+// keep apart: the end of the turn that started it, the interrupt of a turn, and
+// the release of the runtime that owns the session.
+//
+// It is the probe behind the one promise this feature must not overstate. A
+// server started by the harness is a child of the harness process, and the
+// harness process is a child of View: nothing here claims it survives a
+// restart. What is demonstrated instead is the thing a person actually needs —
+// the session comes back, and from inside it the service can be checked and
+// stopped, or started again.
+//
+// Whatever is still listening when the test ends is stopped by pid, so a probe
+// that fails halfway leaves no process behind.
+//
+//	LIVE_CLAUDE=1 go test -tags liveprobe -run TestLiveClaudeHTTPServerLifecycle -timeout 15m ./internal/execution/claude/
+func TestLiveClaudeHTTPServerLifecycle(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to run the live Claude HTTP lifecycle probe")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "http-probe.txt"), []byte("HTTP_CLAUDE_OK\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	detachedPort := reserveLivePort(t)
+	foregroundPort := reserveLivePort(t)
+	detachedURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", detachedPort)
+	foregroundURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", foregroundPort)
+	detachedPID := filepath.Join(root, "detached.pid")
+	foregroundPID := filepath.Join(root, "foreground.pid")
+	t.Cleanup(func() { stopLivePID(detachedPID); stopLivePID(foregroundPID) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	config := map[string]any{"command": "claude", "model": "sonnet", "effort": "low", "permission_mode": "bypassPermissions"}
+	provider := New(Options{})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{
+		ConversationID: "live-http-claude",
+		Environment:    execution.SessionEnvironment{WorkingDir: root, ProviderConfig: config, Location: "local"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One: a development server started in the background, and a turn that ends
+	// while it keeps serving. This is the ordinary shape — somebody asks for the
+	// server, gets an answer, and goes on talking.
+	detachedPrompt := fmt.Sprintf(
+		"Sei dentro una sandbox usa e getta di un test automatico: la directory di lavoro contiene solo il file di fixture http-probe.txt. "+
+			"Il test verifica che un server di sviluppo avviato da te sopravviva alla fine del turno. "+
+			"Avvia quindi con il tool Bash un server statico sulla porta %d di 127.0.0.1 in background, scrivendone il PID nel file detached.pid della directory di lavoro, "+
+			"per esempio con `nohup python3 -m http.server %d --bind 127.0.0.1 >/dev/null 2>&1 & echo $! > detached.pid`. "+
+			"Il test lo fermerà da sé alla fine. Quando il PID è scritto rispondi soltanto DETACHED_STARTED.",
+		detachedPort, detachedPort)
+	if started, err := provider.StartTurn(ctx, execution.StartTurnRequest{
+		Session: created.Session, TurnID: "turn-http-1", SubmissionID: "submission-http-1", Message: detachedPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("starting the background server: %#v, %v", started, err)
+	}
+	waitForLiveNativeIdle(t, ctx, provider, created.Session)
+	defer dumpLiveSession(t, provider, created.Session)
+	detachedCtx, cancelDetached := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelDetached()
+	waitForLiveFileIn(t, detachedCtx, detachedPID, "the background server PID")
+	httpCtx, cancelHTTP := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelHTTP()
+	waitForLiveHTTP(t, httpCtx, detachedURL, "HTTP_CLAUDE_OK\n")
+	afterTurn := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+
+	// Two: a server held in the foreground of a turn, and that turn interrupted.
+	foregroundPrompt := fmt.Sprintf(
+		"Sempre nella stessa sandbox del test: adesso serve un secondo server statico, questa volta tenuto in primo piano dal tuo comando, "+
+			"così il test può interrompere il turno mentre gira e misurare che ne è del processo. "+
+			"Esegui con il tool Bash `sh -c 'echo $$ > foreground.pid; exec python3 -m http.server %d --bind 127.0.0.1'` e resta in attesa mentre il comando è attivo.",
+		foregroundPort)
+	if started, err := provider.StartTurn(ctx, execution.StartTurnRequest{
+		Session: created.Session, TurnID: "turn-http-2", SubmissionID: "submission-http-2", Message: foregroundPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("starting the foreground server: %#v, %v", started, err)
+	}
+	foregroundFileCtx, cancelForegroundFile := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelForegroundFile()
+	waitForLiveFileIn(t, foregroundFileCtx, foregroundPID, "the foreground server PID")
+	foregroundCtx, cancelForeground := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelForeground()
+	waitForLiveHTTP(t, foregroundCtx, foregroundURL, "HTTP_CLAUDE_OK\n")
+	if _, err := provider.InterruptTurn(ctx, execution.SessionCommandRequest{
+		Session: created.Session, TurnID: "turn-http-2", SubmissionID: "submission-http-2-interrupt",
+	}); err != nil {
+		t.Fatalf("interrupting the foreground turn: %v", err)
+	}
+	waitForLiveNativeIdle(t, ctx, provider, created.Session)
+	foregroundAfterInterrupt := liveHTTPAvailable(foregroundURL, "HTTP_CLAUDE_OK\n")
+	detachedAfterInterrupt := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+
+	// Three: the runtime released, which is what View does when it leaves a
+	// workspace or is shut down. Both servers are measured, not assumed.
+	if err := provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+	detachedAfterRelease := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+	foregroundAfterRelease := liveHTTPAvailable(foregroundURL, "HTTP_CLAUDE_OK\n")
+
+	// Four: the session is resumed by a new provider — a new View process — and
+	// from inside it the service is checked and stopped. Whatever the three
+	// measurements above turned out to be, this is what a person can always do.
+	restarted := New(Options{})
+	resumed, err := restarted.ResumeSession(ctx, execution.ResumeSessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatalf("resuming the session that owns the servers: %v", err)
+	}
+	checkPrompt := fmt.Sprintf(
+		"Siamo sempre nella sandbox del test, ed è la stessa conversazione in cui hai avviato i due server: la sessione è stata ripresa dopo che il runtime era stato rilasciato. "+
+			"Con il tool Bash verifica se qualcosa è ancora in ascolto sulle porte %d e %d di 127.0.0.1 e ferma i server che trovi, "+
+			"usando i PID nei file detached.pid e foreground.pid della directory di lavoro quando esistono. Poi rispondi soltanto SERVERS_STOPPED.",
+		detachedPort, foregroundPort)
+	if started, err := restarted.StartTurn(ctx, execution.StartTurnRequest{
+		Session: resumed.Session, TurnID: "turn-http-3", SubmissionID: "submission-http-3", Message: checkPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("asking the resumed session about the servers: %#v, %v", started, err)
+	}
+	waitForLiveNativeIdle(t, ctx, restarted, resumed.Session)
+	dumpLiveSession(t, restarted, resumed.Session)
+	// Measured before anything else touches the machine: this is whether the
+	// resumed session really did the work, and not whether the cleanup below
+	// can kill a pid.
+	detachedAfterResumedTurn := liveHTTPAvailable(detachedURL, "HTTP_CLAUDE_OK\n")
+	// Belt and braces, and the guarantee this test owes the machine it runs on:
+	// nothing is left listening whatever the agent decided to do.
+	stopLivePID(detachedPID)
+	stopLivePID(foregroundPID)
+	waitForLiveHTTPDown(t, ctx, detachedURL, "HTTP_CLAUDE_OK\n")
+	waitForLiveHTTPDown(t, ctx, foregroundURL, "HTTP_CLAUDE_OK\n")
+	if err := restarted.ReleaseSession(ctx, execution.SessionRequest{Session: resumed.Session}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("background server reachable: after its turn=%v, after an interrupt of another turn=%v, after the runtime was released=%v", afterTurn, detachedAfterInterrupt, detachedAfterRelease)
+	t.Logf("foreground server reachable: after the interrupt of its own turn=%v, after the runtime was released=%v", foregroundAfterInterrupt, foregroundAfterRelease)
+	t.Logf("the session was resumed by a second provider and asked to check and stop the services: background server still reachable afterwards=%v", detachedAfterResumedTurn)
+	t.Log("nothing was left listening when the probe returned")
+}
+
+// dumpLiveSession writes what the harness actually said into the test log. A
+// live probe that fails on a missing file is otherwise a failure with no
+// evidence: the interesting part is the transcript, and it lives in the
+// provider's own session.
+func dumpLiveSession(t *testing.T, provider *Provider, metadata execution.SessionMetadata) {
+	t.Helper()
+	session := provider.nativeSession(metadata.Native.ID)
+	if session == nil {
+		t.Log("the session is no longer held by this provider")
+		return
+	}
+	session.mu.Lock()
+	events := append([]execution.RunEvent(nil), session.events...)
+	session.mu.Unlock()
+	for _, event := range events {
+		t.Logf("[%d] %s %s", event.ID, event.Kind, strings.TrimSpace(event.Text))
+	}
+}
+
+func reserveLivePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func waitForLiveFileIn(t *testing.T, ctx context.Context, name, what string) {
+	t.Helper()
+	for {
+		if info, err := os.Stat(name); err == nil && info.Size() > 0 {
+			return
+		} else if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("checking %s: %v", what, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s did not appear", what)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func liveHTTPAvailable(url, wanted string) bool {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	response, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	return err == nil && response.StatusCode == http.StatusOK && string(body) == wanted
+}
+
+func waitForLiveHTTP(t *testing.T, ctx context.Context, url, wanted string) {
+	t.Helper()
+	for {
+		if liveHTTPAvailable(url, wanted) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the HTTP fixture at %s never served %q", url, wanted)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func waitForLiveHTTPDown(t *testing.T, ctx context.Context, url, wanted string) {
+	t.Helper()
+	for liveHTTPAvailable(url, wanted) {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the HTTP fixture at %s stayed reachable after its PID was stopped", url)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func stopLivePID(name string) {
+	body, err := os.ReadFile(name)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil || pid <= 0 {
+		return
+	}
+	if process, err := os.FindProcess(pid); err == nil {
+		_ = process.Kill()
 	}
 }

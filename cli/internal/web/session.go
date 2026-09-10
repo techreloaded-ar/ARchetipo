@@ -57,6 +57,13 @@ type workspaceSession struct {
 	journal         *conversationJournal
 	nativeFollowers *nativeSessionFollowers
 
+	// nativeRuntime is which native sessions this View process owns. It is per
+	// session for the same reason the journal is — the locks live under this
+	// project root — and it is what keeps a second viewer opened on the same
+	// workspace from starting a second harness process on the same native
+	// session.
+	nativeRuntime *nativeRuntimeHolds
+
 	// broker is how a change this session makes on its own — an action of the
 	// process closing inside a conversation — reaches the clients that are
 	// looking at the board. It is set when the session starts, and is nil for a
@@ -115,6 +122,7 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		conversation:    newConversationSet(),
 		journal:         journal,
 		nativeFollowers: newNativeSessionFollowers(),
+		nativeRuntime:   newNativeRuntimeHolds(),
 	}
 	if providers != nil {
 		service, serviceErr := execution.NewService(providers, store, execution.RandomID, time.Now, cfg.ProjectRoot)
@@ -223,6 +231,10 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 			ws.sealConversation(closeCtx, snapshot)
 		}
 		_ = ws.conversation.shutdown(closeCtx)
+		// Last, and only after every runtime has actually been asked to go: a
+		// hold released while its harness process is still shutting down would
+		// let another viewer start a second one on the same native session.
+		ws.nativeRuntime.dropAll()
 	})
 }
 

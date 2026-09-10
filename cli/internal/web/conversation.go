@@ -979,11 +979,19 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
 			return openedConversation{}, iox.NewInternal("persisting the native conversation: "+err.Error(), err)
 		}
+		// A conversation nobody has seen before cannot be owned by anybody else,
+		// so this claim always succeeds; it is taken all the same, because what
+		// releases it is the very code that releases every other one.
+		if err := ws.takeNativeRuntime(ctx, id); err != nil {
+			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
+			return openedConversation{}, err
+		}
 		if err := ws.conversation.open(conversationHold{
 			id: id, providerID: created.Session.ProviderID, sessionProvider: target.sessions, session: created.Session,
 			providerConfig: providerConfig, model: model, modelOptions: modelOptions,
 			workingDir: environment.WorkingDir, openedAt: openedAt, specCode: spec.specCode,
 		}); err != nil {
+			ws.nativeRuntime.drop(id)
 			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
 			return openedConversation{}, conversationOpenRefusal(ctx, ws, err)
 		}
@@ -1340,6 +1348,17 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 func (s *Server) conversationGoneRefusal(ctx context.Context, ws *workspaceSession, id, intent string) error {
 	if _, err := s.readPastConversation(ctx, ws, id); err != nil {
 		return err
+	}
+	// A thread this viewer is not holding is not necessarily a thread that has
+	// ended: another View process opened on the same workspace may be running
+	// it right now, and telling this person to resume it would ask them to start
+	// a second harness runtime on a session that already has one.
+	if ws.heldByAnotherViewer(ctx, id) {
+		return iox.NewConflict(
+			"the conversation "+id+" is held by another View process on this workspace",
+			"continue it there, or stop that viewer: two runtimes on one native session would write the same transcript",
+			nil,
+		)
 	}
 	return iox.NewConflict(
 		"the conversation "+id+" is no longer live on this workspace",

@@ -22,12 +22,35 @@ type persistentFakeNativeStore struct {
 	next     int
 	sessions map[string]*persistentFakeNativeSession
 	starts   int
+	resumes  int
 }
 
 type persistentFakeNativeSession struct {
 	snapshot execution.SessionSnapshot
 	events   []execution.RunEvent
 	notify   chan struct{}
+	// runtimeLost models the harness process dying with the View process that
+	// started it: the durable native session is still there and still
+	// resumable, but nothing is attached to it any more. It is what the real
+	// providers answer once their in-memory handle is gone — an error on every
+	// read, stream and turn — and it is cleared only by an explicit resume.
+	runtimeLost bool
+}
+
+// loseRuntime is the View process that owned these sessions going away. Every
+// stream in flight is woken so it observes the loss instead of waiting for an
+// event that is never coming.
+func (s *persistentFakeNativeStore) loseRuntime() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, session := range s.sessions {
+		session.runtimeLost = true
+		session.snapshot.Connection = execution.ConnectionDisconnected
+		select {
+		case session.notify <- struct{}{}:
+		default:
+		}
+	}
 }
 
 type persistentFakeNativeProvider struct {
@@ -42,6 +65,13 @@ type persistentFakeNativeProvider struct {
 	// starts is every turn this fake was asked to open, in order, so a test can
 	// assert which action each turn was carrying out.
 	turnStarts []execution.StartTurnRequest
+	// workingDir and providerConfig are what this fake reports as the
+	// environment of a session it is asked to discover. They are empty by
+	// default, which means "whatever the workspace asked for"; a test about a
+	// session that runs somewhere else — a git worktree — or about what a
+	// configuration is allowed to carry sets them.
+	workingDir     string
+	providerConfig map[string]any
 }
 
 func newPersistentFakeNativeProvider(id string, store *persistentFakeNativeStore) *persistentFakeNativeProvider {
@@ -69,7 +99,19 @@ func (p *persistentFakeNativeProvider) DiscoverSession(_ context.Context, reques
 		Models:      []execution.ModelOption{{ID: "fake-large", Default: true, Options: []execution.ModelOptionField{{Name: "effort", Choices: []execution.ModelOptionChoice{{Value: "high"}, {Value: "low"}}}}}},
 		Skills:      []execution.SessionSkill{{Name: "plugin:fixture", Description: "Fixture", Namespace: "plugin", Origin: "repo", Invocation: "$plugin:fixture"}},
 		SkillsKnown: true,
-		Environment: execution.SessionEnvironment{WorkingDir: request.WorkingDir, ProviderConfig: execution.CloneConfig(request.ProviderConfig), Location: "local"}}, nil
+		Environment: p.environmentFor(request)}, nil
+}
+
+func (p *persistentFakeNativeProvider) environmentFor(request execution.SessionDiscoveryRequest) execution.SessionEnvironment {
+	workingDir := request.WorkingDir
+	if p.workingDir != "" {
+		workingDir = p.workingDir
+	}
+	config := request.ProviderConfig
+	if p.providerConfig != nil {
+		config = p.providerConfig
+	}
+	return execution.SessionEnvironment{WorkingDir: workingDir, ProviderConfig: execution.CloneConfig(config), Location: "local"}
 }
 func (p *persistentFakeNativeProvider) CreateSession(_ context.Context, request execution.CreateSessionRequest) (execution.SessionSnapshot, error) {
 	p.store.mu.Lock()
@@ -89,7 +131,15 @@ func (p *persistentFakeNativeProvider) ResumeSession(_ context.Context, request 
 	if session == nil {
 		return execution.SessionSnapshot{}, fmt.Errorf("missing native session")
 	}
+	// A resumed harness knows nothing of the turn that was in flight when the
+	// previous runtime died: it is a new process on the same durable session.
+	if session.runtimeLost {
+		session.runtimeLost = false
+		session.snapshot.CurrentTurn = nil
+		session.snapshot.Work = execution.SessionIdle
+	}
 	session.snapshot.Connection = execution.ConnectionConnected
+	p.store.resumes++
 	return session.snapshot, nil
 }
 func (p *persistentFakeNativeProvider) ReadSession(_ context.Context, request execution.SessionRequest) (execution.SessionSnapshot, error) {
@@ -99,12 +149,18 @@ func (p *persistentFakeNativeProvider) ReadSession(_ context.Context, request ex
 	if session == nil {
 		return execution.SessionSnapshot{}, fmt.Errorf("missing native session")
 	}
+	if session.runtimeLost {
+		return execution.SessionSnapshot{}, fmt.Errorf("native session %q is not connected", request.Session.Native.ID)
+	}
 	return session.snapshot, nil
 }
 func (p *persistentFakeNativeProvider) StartTurn(_ context.Context, request execution.StartTurnRequest) (execution.SessionTurnStarted, error) {
 	p.store.mu.Lock()
 	defer p.store.mu.Unlock()
 	session := p.store.sessions[request.Session.Native.ID]
+	if session.runtimeLost {
+		return execution.SessionTurnStarted{}, fmt.Errorf("native session %q is not connected", request.Session.Native.ID)
+	}
 	if session.snapshot.Work != execution.SessionIdle {
 		return execution.SessionTurnStarted{}, fmt.Errorf("turn already active")
 	}
@@ -129,9 +185,13 @@ func (p *persistentFakeNativeProvider) StartTurn(_ context.Context, request exec
 func (p *persistentFakeNativeProvider) StreamSessionEvents(ctx context.Context, request execution.SessionRequest, afterID int64, sink func(execution.RunEvent) error) error {
 	p.store.mu.Lock()
 	session := p.store.sessions[request.Session.Native.ID]
+	lost := session.runtimeLost
 	notify := session.notify
 	events := append([]execution.RunEvent(nil), session.events...)
 	p.store.mu.Unlock()
+	if lost {
+		return fmt.Errorf("native session %q is not connected", request.Session.Native.ID)
+	}
 	if len(events) == 0 || events[len(events)-1].ID <= afterID {
 		select {
 		case <-ctx.Done():
@@ -139,8 +199,12 @@ func (p *persistentFakeNativeProvider) StreamSessionEvents(ctx context.Context, 
 		case <-notify:
 		}
 		p.store.mu.Lock()
+		lost = session.runtimeLost
 		events = append([]execution.RunEvent(nil), session.events...)
 		p.store.mu.Unlock()
+		if lost {
+			return fmt.Errorf("native session %q is not connected", request.Session.Native.ID)
+		}
 	}
 	for _, event := range events {
 		if event.ID > afterID {
@@ -174,6 +238,11 @@ func (p *persistentFakeNativeProvider) ReleaseSession(_ context.Context, request
 	p.store.mu.Lock()
 	defer p.store.mu.Unlock()
 	session := p.store.sessions[request.Session.Native.ID]
+	if session == nil {
+		// A harness that no longer knows the session has nothing to release,
+		// which is success: there is no process left to end.
+		return nil
+	}
 	session.snapshot.Connection = execution.ConnectionReleased
 	return nil
 }

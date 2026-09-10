@@ -476,7 +476,25 @@ func (s *FileStore) List(ctx context.Context) ([]Record, error) {
 // pid, so a crash cannot leave the session permanently locked.
 type ConversationLock struct{ path string }
 
+// ErrLockHeld says a live process already holds the lock. Only TryLock returns
+// it: Lock waits instead, which is what every writer of a record wants. A
+// caller that must not wait — one deciding whether it, and not another View,
+// owns a native runtime — asks with TryLock and treats this as "somebody else
+// owns it", never as a failure.
+var ErrLockHeld = errors.New("the conversation lock is held by a live process")
+
+// Lock waits until the lock is free. TryLock makes a single attempt and answers
+// ErrLockHeld when a live owner holds it. Both recover a lock whose owner
+// process is gone.
 func (s *FileStore) Lock(ctx context.Context, id string) (*ConversationLock, error) {
+	return s.lock(ctx, id, true)
+}
+
+func (s *FileStore) TryLock(ctx context.Context, id string) (*ConversationLock, error) {
+	return s.lock(ctx, id, false)
+}
+
+func (s *FileStore) lock(ctx context.Context, id string, wait bool) (*ConversationLock, error) {
 	path, err := s.path(id)
 	if err != nil {
 		return nil, err
@@ -515,6 +533,9 @@ func (s *FileStore) Lock(ctx context.Context, id string) (*ConversationLock, err
 		if readErr != nil || parseErr != nil || !processAlive(pid) {
 			_ = os.RemoveAll(lockPath)
 			continue
+		}
+		if !wait {
+			return nil, ErrLockHeld
 		}
 		select {
 		case <-ctx.Done():

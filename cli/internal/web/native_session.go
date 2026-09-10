@@ -112,16 +112,37 @@ func (ws *workspaceSession) restoreNativeConversations(registry *execution.Regis
 	if err != nil {
 		return err
 	}
+
+	ctx := context.Background()
 	for _, record := range records {
-		if !record.Native() || record.Archive == execution.ArchiveArchived {
+		if !record.Native() {
+			continue
+		}
+		// Claimed before anything is decided about this conversation: a viewer
+		// that does not own the runtime must neither reconcile its turns nor
+		// follow its stream, because the process that does own it is still
+		// working in that very session.
+		if err := ws.nativeRuntime.take(ctx, ws.conversationStore(), record.ID); err != nil {
+			continue
+		}
+		// Before the provider is resolved and before the archive is looked at,
+		// so the conversations that would otherwise be skipped — an unavailable
+		// provider, an archived thread, a session that will turn out to be
+		// unresumable — are reconciled too. A turn this record still calls
+		// running belongs to a runtime that died with the previous View process.
+		ws.reconcileInterruptedTurn(ctx, record)
+		if record.Archive == execution.ArchiveArchived {
+			ws.nativeRuntime.drop(record.ID)
 			continue
 		}
 		provider, resolveErr := registry.Resolve(record.Session.ProviderID)
 		if resolveErr != nil {
+			ws.nativeRuntime.drop(record.ID)
 			continue
 		}
 		sessions, supported := execution.SessionProviderFor(provider)
 		if !supported {
+			ws.nativeRuntime.drop(record.ID)
 			continue
 		}
 		openedAt := record.OpenedAt
@@ -140,6 +161,10 @@ func (ws *workspaceSession) restoreNativeConversations(registry *execution.Regis
 			openedAt:        openedAt,
 			specCode:        record.SpecCode,
 		}); err != nil {
+			// Every hold taken by this restore goes back, and not only the one
+			// that failed: the session being built is discarded by its caller,
+			// so nothing would be left to release the others.
+			ws.nativeRuntime.dropAll()
 			return err
 		}
 	}
@@ -289,6 +314,9 @@ func (ws *workspaceSession) releaseNativeConversation(ctx context.Context, snaps
 		return err
 	}
 	ws.conversation.forget(snapshot.id)
+	// The runtime is gone, so the ownership of it goes too: another viewer of
+	// this workspace may now take the session up.
+	ws.nativeRuntime.drop(snapshot.id)
 	return nil
 }
 
@@ -441,6 +469,12 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	if record.Archive == execution.ArchiveArchived {
 		return iox.NewConflict("the conversation "+snapshot.id+" is archived", "reopen it before sending another turn", nil)
 	}
+	// Before the provider is asked anything: resuming a session whose directory
+	// has gone fails inside the harness, as a chdir error that names neither
+	// this conversation nor what has to be restored.
+	if err := requireSessionDirectory(snapshot); err != nil {
+		return err
+	}
 	observed, readErr := snapshot.sessionProvider.ReadSession(ctx, execution.SessionRequest{Session: snapshot.session})
 	if readErr != nil || observed.Connection != execution.ConnectionConnected {
 		observed, err = snapshot.sessionProvider.ResumeSession(ctx, execution.ResumeSessionRequest{Session: snapshot.session})
@@ -465,6 +499,7 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 		}
 		record.CurrentTurn = &live
 	}
+	ws.reconcileUncertainDeliveries(ctx, &record, observed)
 	for _, delivery := range record.Deliveries {
 		if delivery.State == execution.DeliveryUncertain {
 			return iox.NewConflict("the last command delivery is uncertain", "reconcile the native session before sending another command", nil)
@@ -588,6 +623,82 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	}
 	ws.startNativeFollower(snapshot)
 	return nil
+}
+
+// reconcileUncertainDeliveries settles the commands a crash left in doubt,
+// against the native session itself.
+//
+// A command is written UNCERTAIN before it is submitted, because from that
+// moment on a crash cannot prove whether the harness saw it, and an automatic
+// retry could double an effect. What the boundary must not do is keep the
+// conversation shut for ever: without a way out, one crashed submission would
+// leave a thread that refuses every further message.
+//
+// Three facts together, and nothing less, settle one: the turn it names is over
+// in the durable record, the session is not running it, and the timeline holds
+// not one event of it. A turn that ended without ever existing anywhere is a
+// turn that never began, so the command never landed and its delivery becomes
+// UNSENT — the person writes again, and this time it is a first attempt and not
+// a repetition.
+//
+// Everything else stays UNCERTAIN. A submission that has just failed in this
+// very process is the case the boundary was written for: its turn is still the
+// live one, nobody has declared it over, and only a person can say what the
+// harness did with it.
+func (ws *workspaceSession) reconcileUncertainDeliveries(ctx context.Context, record *conversationlog.Record, observed execution.SessionSnapshot) {
+	if record == nil {
+		return
+	}
+	uncertain := map[string]struct{}{}
+	for _, delivery := range record.Deliveries {
+		if delivery.State != execution.DeliveryUncertain {
+			continue
+		}
+		state, known := recordedTurnState(*record, delivery.TurnID)
+		if !known || !terminalTurn(state) {
+			continue
+		}
+		if observed.CurrentTurn != nil && observed.CurrentTurn.ID == delivery.TurnID && !terminalTurn(observed.CurrentTurn.State) {
+			continue
+		}
+		uncertain[delivery.TurnID] = struct{}{}
+	}
+	if len(uncertain) == 0 {
+		return
+	}
+	page, err := ws.conversationStore().ReadEvents(ctx, record.ID, 0, 0)
+	if err != nil {
+		return
+	}
+	for _, event := range page.Events {
+		delete(uncertain, event.TurnID)
+	}
+	if len(uncertain) == 0 {
+		return
+	}
+	for index := range record.Deliveries {
+		if record.Deliveries[index].State != execution.DeliveryUncertain {
+			continue
+		}
+		if _, unlanded := uncertain[record.Deliveries[index].TurnID]; unlanded {
+			record.Deliveries[index].State = execution.DeliveryUnsent
+		}
+	}
+	_ = ws.conversationStore().Save(ctx, *record)
+}
+
+// recordedTurnState is what the durable record says about one turn, and whether
+// it says anything at all.
+func recordedTurnState(record conversationlog.Record, turnID string) (execution.TurnState, bool) {
+	if record.CurrentTurn != nil && record.CurrentTurn.ID == turnID {
+		return record.CurrentTurn.State, true
+	}
+	for _, turn := range record.Turns {
+		if turn.ID == turnID {
+			return turn.State, true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, afterID int64) conversationView {
@@ -734,8 +845,16 @@ func (s *Server) handleReopenNativeConversation(w http.ResponseWriter, r *http.R
 		writeError(w, iox.NewConflict("the original provider no longer supports native sessions", "restore a compatible provider adapter", nil))
 		return
 	}
+	// Claimed before the archive flag is lifted: reopening is where a second
+	// viewer would otherwise start its own runtime on a session this workspace
+	// is already holding elsewhere.
+	if err := ws.takeNativeRuntime(r.Context(), id); err != nil {
+		writeError(w, err)
+		return
+	}
 	record.Archive = execution.ArchiveOpen
 	if err := ws.conversationStore().Save(r.Context(), record); err != nil {
+		ws.nativeRuntime.drop(id)
 		writeError(w, iox.NewInternal("reopening the conversation "+id, err))
 		return
 	}
@@ -743,13 +862,21 @@ func (s *Server) handleReopenNativeConversation(w http.ResponseWriter, r *http.R
 		session: *record.Session, providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig),
 		model: record.NextTurn.Model, modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
 		openedAt: record.OpenedAt, specCode: record.SpecCode}); err != nil {
+		ws.nativeRuntime.drop(id)
 		writeError(w, conversationOpenRefusal(r.Context(), ws, err))
 		return
 	}
 	snapshot, _ := ws.conversation.get(id)
+	if err := requireSessionDirectory(snapshot); err != nil {
+		ws.conversation.forget(id)
+		ws.nativeRuntime.drop(id)
+		writeError(w, err)
+		return
+	}
 	if _, err := s.ensureNativeSession(r.Context(), ws, snapshot); err != nil {
 		ws.conversation.forget(id)
-		writeError(w, iox.NewConflict("the native session could not be resumed", "restore its provider runtime and try again", err))
+		ws.nativeRuntime.drop(id)
+		writeError(w, iox.NewConflict("the native session could not be resumed", "restore its provider runtime and try again; nothing of this conversation has been deleted", err))
 		return
 	}
 	ws.startNativeFollower(snapshot)

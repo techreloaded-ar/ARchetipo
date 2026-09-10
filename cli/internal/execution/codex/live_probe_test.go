@@ -292,12 +292,20 @@ func TestLiveCodexApprovalAndUserInput(t *testing.T) {
 	t.Log("accepted and declined real command approvals; answered a real item/tool/requestUserInput request")
 }
 
-// TestLiveCodexHTTPServerLifecycle observes a real tool process at the three
-// lifecycle boundaries View must keep distinct: while the turn is active,
-// after turn/interrupt settles, and after the app-server runtime is released.
-// Whatever survives is stopped explicitly before the test returns.
+// TestLiveCodexHTTPServerLifecycle starts real development servers through the
+// real harness and observes them at the boundaries View has to keep apart: the
+// end of the turn that started one, the interrupt of a turn holding one, and
+// the release of the app-server runtime that owns the session. It is the twin
+// of the Claude probe of the same name, at the same production boundary, so the
+// two answers can be read side by side.
 //
-// LIVE_CODEX=1 go test -tags liveprobe -run TestLiveCodexHTTPServerLifecycle -timeout 10m ./internal/execution/codex/
+// Nothing here claims a service survives a restart of View. What is
+// demonstrated is what a person actually needs: the session comes back, and
+// from inside it the service can be checked and stopped.
+//
+// Whatever is still listening when the test ends is stopped by pid.
+//
+//	LIVE_CODEX=1 go test -tags liveprobe -run TestLiveCodexHTTPServerLifecycle -timeout 15m ./internal/execution/codex/
 func TestLiveCodexHTTPServerLifecycle(t *testing.T) {
 	if os.Getenv("LIVE_CODEX") == "" {
 		t.Skip("set LIVE_CODEX=1 to run the live Codex HTTP lifecycle probe")
@@ -306,47 +314,278 @@ func TestLiveCodexHTTPServerLifecycle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "http-probe.txt"), []byte("HTTP_CODEX_OK\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	port := reserveLiveCodexPort(t)
-	serverURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", port)
-	pidFile := filepath.Join(root, "server.pid")
-	t.Cleanup(func() { stopLiveCodexPID(pidFile) })
+	detachedPort := reserveLiveCodexPort(t)
+	foregroundPort := reserveLiveCodexPort(t)
+	detachedURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", detachedPort)
+	foregroundURL := fmt.Sprintf("http://127.0.0.1:%d/http-probe.txt", foregroundPort)
+	detachedPID := filepath.Join(root, "detached.pid")
+	foregroundPID := filepath.Join(root, "foreground.pid")
+	t.Cleanup(func() { stopLiveCodexPID(detachedPID); stopLiveCodexPID(foregroundPID) })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	process, client := startLiveCodexProtocol(t, ctx, root)
-	threadResult := callLiveCodex(t, ctx, client, methodThreadStart, map[string]any{
-		"cwd": root, "sandbox": "danger-full-access", "approvalPolicy": "never", "ephemeral": true,
-	})
-	threadID, _, _ := decodeLiveCodexThread(t, threadResult)
-	client.mu.Lock()
-	client.threadID = threadID
-	client.mu.Unlock()
-
-	prompt := fmt.Sprintf("Esegui con il tool shell esattamente `sh -c 'echo $$ > server.pid; exec python3 -m http.server %d --bind 127.0.0.1'` e resta in attesa mentre il comando è attivo.", port)
-	beginLiveCodexTurn(t, ctx, client, threadID, prompt, nil)
-	waitForLiveCodexFile(t, ctx, pidFile, "the HTTP server PID")
-	waitForLiveEvent(t, ctx, client.session, func(event execution.RunEvent) bool {
-		return event.Kind == localrun.KindToolStart && strings.Contains(event.Text, "python3 -m http.server")
-	}, "the foreground HTTP server tool")
-	httpStartContext, cancelHTTPStart := context.WithTimeout(ctx, 90*time.Second)
-	defer cancelHTTPStart()
-	waitForLiveCodexHTTP(t, httpStartContext, serverURL, "HTTP_CODEX_OK\n")
-	if err := client.Interrupt(ctx); err != nil {
-		t.Fatalf("interrupting the HTTP lifecycle turn: %v", err)
+	provider := New(Options{WorkingDir: func() (string, error) { return root, nil }})
+	config := map[string]any{"sandbox": "danger-full-access"}
+	discovery, err := provider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{ProviderConfig: config, WorkingDir: root})
+	if err != nil {
+		t.Fatal(err)
 	}
-	_ = waitLiveCodexTurn(t, ctx, client)
-	afterTurn := liveCodexHTTPAvailable(serverURL, "HTTP_CODEX_OK\n")
-
-	_ = process.Close()
-	select {
-	case <-client.Gone():
-	case <-ctx.Done():
-		t.Fatal("the app-server runtime did not release")
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "live-http-codex", Environment: discovery.Environment})
+	if err != nil {
+		t.Fatal(err)
 	}
-	afterRuntime := liveCodexHTTPAvailable(serverURL, "HTTP_CODEX_OK\n")
-	stopLiveCodexPID(pidFile)
-	waitForLiveCodexHTTPDown(t, ctx, serverURL)
-	t.Logf("HTTP reachable while turn active=true, after turn=%v, after app-server release=%v, stopped=true", afterTurn, afterRuntime)
+
+	// One: a development server started in the background, and a turn that ends
+	// while it keeps serving.
+	detachedPrompt := fmt.Sprintf(
+		"Sei dentro una sandbox usa e getta di un test automatico: la directory di lavoro contiene solo il file di fixture http-probe.txt. "+
+			"Il test verifica che un server di sviluppo avviato da te sopravviva alla fine del turno. "+
+			"Avvia con il tool shell un server statico sulla porta %d di 127.0.0.1 in background, scrivendone il PID nel file detached.pid della directory di lavoro, "+
+			"con `nohup python3 -m http.server %d --bind 127.0.0.1 </dev/null >/dev/null 2>&1 & echo $! > detached.pid; disown` — i tre redirect e il disown servono perché il comando torni subito. "+
+			"Il test lo fermerà da sé alla fine. Quando il PID è scritto rispondi soltanto DETACHED_STARTED.",
+		detachedPort, detachedPort)
+	if started, err := provider.StartTurn(ctx, execution.StartTurnRequest{
+		Session: created.Session, TurnID: "turn-http-1", SubmissionID: "submission-http-1", Message: detachedPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("starting the background server: %#v, %v", started, err)
+	}
+	defer dumpLiveCodexSession(t, provider, created.Session)
+	detachedFileCtx, cancelDetachedFile := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancelDetachedFile()
+	waitForLiveCodexFileAnsweringApprovals(t, detachedFileCtx, provider, created.Session, detachedPID, "the background server PID")
+	waitLiveCodexNativeState(t, ctx, provider, created.Session, execution.TurnCompleted)
+	// Measured and not asserted: whether a process the harness detaches outlives
+	// the tool call that started it is the harness's answer, not ARchetipo's,
+	// and the two harnesses do not give the same one.
+	httpCtx, cancelHTTP := context.WithTimeout(ctx, 20*time.Second)
+	defer cancelHTTP()
+	afterTurn := pollLiveCodexHTTP(httpCtx, detachedURL, "HTTP_CODEX_OK\n")
+
+	// Two: a server held in the foreground of a turn, and that turn interrupted.
+	foregroundPrompt := fmt.Sprintf(
+		"Sempre nella stessa sandbox del test: adesso serve un secondo server statico, questa volta tenuto in primo piano dal tuo comando, "+
+			"così il test può interrompere il turno mentre gira e misurare che ne è del processo. "+
+			"Esegui con il tool shell `sh -c 'echo $$ > foreground.pid; exec python3 -m http.server %d --bind 127.0.0.1'` e resta in attesa mentre il comando è attivo.",
+		foregroundPort)
+	if started, err := provider.StartTurn(ctx, execution.StartTurnRequest{
+		Session: created.Session, TurnID: "turn-http-2", SubmissionID: "submission-http-2", Message: foregroundPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("starting the foreground server: %#v, %v", started, err)
+	}
+	foregroundFileCtx, cancelForegroundFile := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancelForegroundFile()
+	waitForLiveCodexFileAnsweringApprovals(t, foregroundFileCtx, provider, created.Session, foregroundPID, "the foreground server PID")
+	foregroundCtx, cancelForeground := context.WithTimeout(ctx, 90*time.Second)
+	defer cancelForeground()
+	waitForLiveCodexHTTPAnsweringApprovals(t, foregroundCtx, provider, created.Session, foregroundURL, "HTTP_CODEX_OK\n")
+	if _, err := provider.InterruptTurn(ctx, execution.SessionCommandRequest{
+		Session: created.Session, TurnID: "turn-http-2", SubmissionID: "submission-http-2-interrupt",
+	}); err != nil {
+		t.Fatalf("interrupting the foreground turn: %v", err)
+	}
+	waitLiveCodexTurnEnd(t, ctx, provider, created.Session)
+	foregroundAfterInterrupt := liveCodexHTTPAvailable(foregroundURL, "HTTP_CODEX_OK\n")
+	detachedAfterInterrupt := liveCodexHTTPAvailable(detachedURL, "HTTP_CODEX_OK\n")
+
+	// Three: the runtime released, which is what View does when it leaves a
+	// workspace or is shut down.
+	if err := provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+	detachedAfterRelease := liveCodexHTTPAvailable(detachedURL, "HTTP_CODEX_OK\n")
+	foregroundAfterRelease := liveCodexHTTPAvailable(foregroundURL, "HTTP_CODEX_OK\n")
+
+	// Four: the session resumed by a new provider — a new View process — and
+	// used to check and stop the service from inside the conversation.
+	restarted := New(Options{WorkingDir: func() (string, error) { return root, nil }})
+	resumed, err := restarted.ResumeSession(ctx, execution.ResumeSessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatalf("resuming the session that owns the servers: %v", err)
+	}
+	restartPrompt := fmt.Sprintf(
+		"Siamo sempre nella sandbox del test, ed è la stessa conversazione in cui avevi avviato i server: la sessione è stata ripresa dopo che il runtime era stato rilasciato. "+
+			"Con il tool shell verifica prima se qualcosa è ancora in ascolto sulle porte %d e %d di 127.0.0.1, poi riavvia il servizio sulla porta %d con "+
+			"`sh -c 'echo $$ > foreground.pid; exec python3 -m http.server %d --bind 127.0.0.1'` e resta in attesa mentre il comando è attivo.",
+		detachedPort, foregroundPort, foregroundPort, foregroundPort)
+	if started, err := restarted.StartTurn(ctx, execution.StartTurnRequest{
+		Session: resumed.Session, TurnID: "turn-http-3", SubmissionID: "submission-http-3", Message: restartPrompt,
+	}); err != nil || started.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("asking the resumed session to restart the service: %#v, %v", started, err)
+	}
+	defer dumpLiveCodexSession(t, restarted, resumed.Session)
+	restartCtx, cancelRestart := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancelRestart()
+	// The whole point of the resume: the service can be brought back from
+	// inside the conversation that was holding it.
+	waitForLiveCodexHTTPAnsweringApprovals(t, restartCtx, restarted, resumed.Session, foregroundURL, "HTTP_CODEX_OK\n")
+	if _, err := restarted.InterruptTurn(ctx, execution.SessionCommandRequest{
+		Session: resumed.Session, TurnID: "turn-http-3", SubmissionID: "submission-http-3-interrupt",
+	}); err != nil {
+		t.Fatalf("interrupting the restarted service turn: %v", err)
+	}
+	waitLiveCodexTurnEnd(t, ctx, restarted, resumed.Session)
+	stopLiveCodexPID(detachedPID)
+	stopLiveCodexPID(foregroundPID)
+	waitForLiveCodexHTTPDown(t, ctx, detachedURL)
+	waitForLiveCodexHTTPDown(t, ctx, foregroundURL)
+	if err := restarted.ReleaseSession(ctx, execution.SessionRequest{Session: resumed.Session}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("background server reachable: after its turn=%v, after an interrupt of another turn=%v, after the runtime was released=%v", afterTurn, detachedAfterInterrupt, detachedAfterRelease)
+	t.Logf("foreground server reachable: after the interrupt of its own turn=%v, after the runtime was released=%v", foregroundAfterInterrupt, foregroundAfterRelease)
+	t.Log("the session was resumed by a second provider and the service was restarted and reached from inside it")
+	t.Log("nothing was left listening when the probe returned")
+}
+
+// pollLiveCodexHTTP answers whether the fixture ever became reachable within
+// the budget, instead of failing when it does not. It is for the measurements
+// this probe records rather than requires.
+func pollLiveCodexHTTP(ctx context.Context, url, wanted string) bool {
+	for {
+		if liveCodexHTTPAvailable(url, wanted) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// waitForLiveCodexHTTPAnsweringApprovals waits for the fixture to answer while
+// granting the permissions the harness asks for on the way, which a turn that
+// holds a server in the foreground needs.
+func waitForLiveCodexHTTPAnsweringApprovals(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata, url, wanted string) {
+	t.Helper()
+	for {
+		if liveCodexHTTPAvailable(url, wanted) {
+			return
+		}
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: session})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answerLiveCodexApprovals(t, ctx, provider, session, snapshot)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the HTTP fixture at %s never served %q", url, wanted)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// answerLiveCodexApprovals grants whatever the harness is asking permission for.
+//
+// The native session deliberately opens its thread with the "untrusted"
+// approval policy, because in View there is a person on the other end of the
+// permission bridge. In this probe the test is that person: without it the
+// first shell command of every turn waits for an answer nobody gives, which is
+// exactly how this probe failed before — the tool started and never returned.
+func answerLiveCodexApprovals(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata, snapshot execution.SessionSnapshot) {
+	t.Helper()
+	if snapshot.CurrentTurn == nil {
+		return
+	}
+	for _, approval := range snapshot.PendingApprovals {
+		if _, err := provider.RespondSessionApproval(ctx, execution.SessionCommandRequest{
+			Session: session, TurnID: snapshot.CurrentTurn.ID, SubmissionID: "live-approval-" + approval.ID,
+			InteractionID: approval.ID, OptionID: localrun.ApprovalAllow,
+		}); err != nil {
+			t.Fatalf("answering live Codex approval %s: %v", approval.ID, err)
+		}
+	}
+}
+
+// waitForLiveCodexFileAnsweringApprovals waits for a file the harness has been
+// asked to write, granting the permissions it asks for while it waits. A turn
+// that holds a server in the foreground never ends, so waiting for the turn
+// first is not an option here.
+func waitForLiveCodexFileAnsweringApprovals(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata, name, what string) {
+	t.Helper()
+	for {
+		if info, err := os.Stat(name); err == nil && info.Size() > 0 {
+			return
+		} else if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("checking %s: %v", what, err)
+		}
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: session})
+		if err != nil {
+			t.Fatal(err)
+		}
+		answerLiveCodexApprovals(t, ctx, provider, session, snapshot)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%s did not appear", what)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// waitLiveCodexTurnEndAnsweringApprovals is waitLiveCodexTurnEnd for a turn
+// that still has permissions to ask for.
+func waitLiveCodexTurnEndAnsweringApprovals(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata) execution.TurnState {
+	t.Helper()
+	for {
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: session})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.CurrentTurn != nil {
+			switch snapshot.CurrentTurn.State {
+			case execution.TurnCompleted, execution.TurnInterrupted, execution.TurnFailed:
+				return snapshot.CurrentTurn.State
+			}
+		}
+		answerLiveCodexApprovals(t, ctx, provider, session, snapshot)
+		select {
+		case <-ctx.Done():
+			t.Fatal("the Codex turn never ended")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// waitLiveCodexTurnEnd waits for the turn to be over, whichever way it ended.
+// It is deliberately not waitLiveCodexNativeState: an interrupted turn never
+// becomes COMPLETED, and asking for that state after an interrupt is asking for
+// a failure.
+func waitLiveCodexTurnEnd(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata) execution.TurnState {
+	t.Helper()
+	for {
+		snapshot, err := provider.ReadSession(ctx, execution.SessionRequest{Session: session})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.CurrentTurn != nil {
+			switch snapshot.CurrentTurn.State {
+			case execution.TurnCompleted, execution.TurnInterrupted, execution.TurnFailed:
+				return snapshot.CurrentTurn.State
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the Codex turn never ended")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// dumpLiveCodexSession writes what the harness actually said into the test log,
+// so a live probe that fails on a missing file fails with its evidence.
+func dumpLiveCodexSession(t *testing.T, provider *Provider, metadata execution.SessionMetadata) {
+	t.Helper()
+	session := provider.nativeSession(metadata.Native.ID)
+	if session == nil {
+		t.Log("the session is no longer held by this provider")
+		return
+	}
+	session.mu.Lock()
+	events := append([]execution.RunEvent(nil), session.events...)
+	session.mu.Unlock()
+	for _, event := range events {
+		t.Logf("[%d] %s %s", event.ID, event.Kind, strings.TrimSpace(event.Text))
+	}
 }
 
 type liveCodexModel struct {
@@ -561,36 +800,6 @@ func reserveLiveCodexPort(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return port
-}
-
-func waitForLiveCodexFile(t *testing.T, ctx context.Context, name, what string) {
-	t.Helper()
-	for {
-		if _, err := os.Stat(name); err == nil {
-			return
-		} else if !os.IsNotExist(err) {
-			t.Fatalf("checking %s: %v", what, err)
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("%s did not appear", what)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-}
-
-func waitForLiveCodexHTTP(t *testing.T, ctx context.Context, url, wanted string) {
-	t.Helper()
-	for {
-		if liveCodexHTTPAvailable(url, wanted) {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("HTTP fixture never served %q", wanted)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
 }
 
 func liveCodexHTTPAvailable(url, wanted string) bool {

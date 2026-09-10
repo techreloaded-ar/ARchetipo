@@ -178,18 +178,24 @@ func (s *Server) handleResumeWorkspaceConversation(w http.ResponseWriter, r *htt
 			))
 			return
 		}
+		if err := ws.takeNativeRuntime(ctx, record.ID); err != nil {
+			writeError(w, err)
+			return
+		}
 		if err := ws.conversation.open(conversationHold{
 			id: record.ID, providerID: record.Session.ProviderID, sessionProvider: sessions, session: *record.Session,
 			providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig), model: record.NextTurn.Model,
 			modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
 			openedAt: record.OpenedAt, specCode: record.SpecCode,
 		}); err != nil {
+			ws.nativeRuntime.drop(record.ID)
 			writeError(w, conversationOpenRefusal(ctx, ws, err))
 			return
 		}
 		snapshot, _ := ws.conversation.get(record.ID)
 		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: body.Message}); err != nil {
 			ws.conversation.forget(record.ID)
+			ws.nativeRuntime.drop(record.ID)
 			writeError(w, err)
 			return
 		}
