@@ -210,6 +210,25 @@ func (f *fakeCodex) methodsCalled() []string {
 	return out
 }
 
+// lastParamsOf reads the params of the *last* request of a method, which is
+// what a conversation needs: it opens several turns, and paramsOf answers
+// about the first one.
+func (f *fakeCodex) lastParamsOf(method string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.requests) - 1; i >= 0; i-- {
+		if f.requests[i].Method != method {
+			continue
+		}
+		var params map[string]any
+		if json.Unmarshal(f.requests[i].Params, &params) != nil {
+			return nil
+		}
+		return params
+	}
+	return nil
+}
+
 func (f *fakeCodex) paramsOf(method string) map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -614,6 +633,79 @@ func TestAppServerConversationalSendOpensANewTurnOnceThePreviousOneCompleted(t *
 	}
 	if turnDoneNow(client) {
 		t.Fatal("TurnDone must re-arm for the new turn instead of staying closed")
+	}
+}
+
+// The end of a turn is a fact that arrives, not one that is known: the
+// notification is read on another goroutine, so a message written in the
+// instant between the agent finishing and this side learning it still steers a
+// turn that no longer exists. That is the moment people write — while the
+// answer they are reading is being finished — and in a conversation the
+// refusal it earns must not be the answer: the message opens the next turn
+// instead of being lost.
+func TestAppServerConversationalSendOpensANewTurnWhenTheSteerFindsNoneLeft(t *testing.T) {
+	fake := newFakeCodex()
+	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
+
+	if err := client.Send(context.Background(), "prima domanda"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	// The turn is over for the process and not yet for this side: no
+	// turn/completed has been read, so turnOpen is still true and the steer is
+	// the first thing that learns the truth.
+	fake.steerErr = &rpcError{Code: -32600, Message: "no active turn to steer"}
+
+	const second = "seconda domanda"
+	if err := client.Send(context.Background(), second); err != nil {
+		t.Fatalf("the message was lost to a turn that had just ended: %v", err)
+	}
+	if got := fake.messagesSteered(); len(got) != 1 || got[0] != second {
+		t.Fatalf("the steer was not even attempted: %v", got)
+	}
+	starts := 0
+	for _, method := range fake.methodsCalled() {
+		if method == methodTurnStart {
+			starts++
+		}
+	}
+	if starts != 2 {
+		t.Fatalf("turn/start was called %d time(s); want the refused steer to have opened the next turn", starts)
+	}
+	if got := textOfInputMap(fake.lastParamsOf(methodTurnStart)); got != second {
+		t.Fatalf("the new turn carried %q; want the message the steer could not deliver", got)
+	}
+}
+
+// Only that one refusal falls back. A protocol failure decided nothing — a
+// retry can still change its outcome — so it stays an error and never opens a
+// turn behind the caller's back.
+func TestAppServerConversationalSendDoesNotOpenATurnOnAProtocolFailure(t *testing.T) {
+	fake := newFakeCodex()
+	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
+
+	if err := client.Send(context.Background(), "prima domanda"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	fake.steerErr = &rpcError{Code: -32000, Message: "the model provider is unreachable"}
+
+	err := client.Send(context.Background(), "seconda domanda")
+	if err == nil {
+		t.Fatal("a protocol failure was reported as a delivered message")
+	}
+	if _, refused := execution.RefusalOf(err); refused {
+		t.Fatalf("a protocol failure must not become a refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("the diagnostic lost the cause: %v", err)
+	}
+	starts := 0
+	for _, method := range fake.methodsCalled() {
+		if method == methodTurnStart {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("turn/start was called %d time(s); a protocol failure must open no turn", starts)
 	}
 }
 

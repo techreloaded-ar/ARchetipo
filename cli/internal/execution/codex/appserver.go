@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -407,6 +408,18 @@ func (a *appServer) openingEchoOf(text string) (rest string, echo bool) {
 // active turn to steer", which classify turns into the typed refusal. In a
 // conversation the end of a turn is the agent's question, and the answer
 // opens the next one.
+//
+// "Once the turn is over" is a fact that arrives, not one that is known: the
+// turn is over when the process says turn/completed, and that notification is
+// read on another goroutine. A message written in the instant between the
+// agent finishing and this side learning it therefore still finds turnOpen
+// true and steers a turn that no longer exists — which is exactly the moment
+// people write, while the answer they are reading is being finished. In a
+// conversation the refusal that earns is not the answer: the turn it was about
+// is over, the message still has to be delivered, so it opens the next turn
+// instead. Every other protocol error stays an error, and a dispatched action
+// keeps refusing, because there the end of the turn really is the end of the
+// work.
 func (a *appServer) Send(ctx context.Context, text string) error {
 	threadID, turnID, turnOpen := a.ids()
 	if threadID == "" {
@@ -415,6 +428,14 @@ func (a *appServer) Send(ctx context.Context, text string) error {
 			RunID:  a.session.RunID(),
 			Err:    fmt.Errorf("the codex thread is not open yet"),
 		}
+	}
+	if a.conversational && turnOpen {
+		err := a.classify(a.steer(ctx, threadID, turnID, text))
+		if err == nil || !refusedAsNotActive(err) {
+			return err
+		}
+		// The turn ended under the message. Fall through and open the next one.
+		turnOpen = false
 	}
 	if a.conversational && !turnOpen {
 		texts := []string{text}
@@ -430,12 +451,26 @@ func (a *appServer) Send(ctx context.Context, text string) error {
 			Err:    fmt.Errorf("the codex turn is not open yet"),
 		}
 	}
+	return a.classify(a.steer(ctx, threadID, turnID, text))
+}
+
+// steer delivers a message into the turn in progress and reports the
+// protocol's own answer, unclassified: what a refusal means is the caller's
+// to decide, and the two modes decide it differently.
+func (a *appServer) steer(ctx context.Context, threadID, turnID, text string) error {
 	_, err := a.call(ctx, methodTurnSteer, map[string]any{
 		"threadId":       threadID,
 		"expectedTurnId": turnID,
 		"input":          []any{map[string]any{"type": "text", "text": text}},
 	})
-	return a.classify(err)
+	return err
+}
+
+// refusedAsNotActive reports whether an error is the refusal of a turn that is
+// over, as opposed to any other failure.
+func refusedAsNotActive(err error) bool {
+	var refused *execution.RunCommandError
+	return errors.As(err, &refused) && refused.Reason == execution.RunRefusedNotActive
 }
 
 // Interrupt asks the process to stop the turn in progress. Between two turns
