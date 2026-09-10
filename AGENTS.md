@@ -15,7 +15,8 @@ skills/                  # Main skills (one directory per skill)
     references/          # Supporting files loaded by the skill
 skills-extra/            # Extra skills (same structure)
 .archetipo/              # Files installed in the target project (mirrors target structure)
-  config.yaml            # Configuration template for the target project
+  config.template.yaml   # Configuration template for the target project (shipped as runtime/config.yaml)
+  config.yaml            # Live configuration of THIS repository's own workspace — not shipped
   shared-runtime.md      # Shared rules (Language Policy, Persona, etc.)
 cli/                     # Go module implementing the `archetipo` CLI
   cmd/archetipo/         # Binary entry point

@@ -128,11 +128,16 @@ async function stagePackages(version, platform) {
 
 	await copyDir(path.join(repoRoot, "skills"), path.join(mainDst, "skills"));
 	await fs.mkdir(path.join(mainDst, "runtime"), { recursive: true });
-	for (const name of ["config.yaml", "shared-runtime.md"]) {
-		const src = path.join(repoRoot, ".archetipo", name);
-		if (await exists(src)) {
-			await fs.copyFile(src, path.join(mainDst, "runtime", name));
-		}
+	// config.template.yaml here, config.yaml there: .archetipo/config.yaml is
+	// the live configuration of *this* workspace and the CLI rewrites it, so
+	// staging it would install somebody's own provider as everyone's default.
+	await fs.copyFile(
+		path.join(repoRoot, ".archetipo", "config.template.yaml"),
+		path.join(mainDst, "runtime", "config.yaml"),
+	);
+	const sharedSrc = path.join(repoRoot, ".archetipo", "shared-runtime.md");
+	if (await exists(sharedSrc)) {
+		await fs.copyFile(sharedSrc, path.join(mainDst, "runtime", "shared-runtime.md"));
 	}
 
 	const mainPkg = JSON.parse(
