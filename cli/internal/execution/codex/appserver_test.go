@@ -37,13 +37,20 @@ type fakeCodex struct {
 	interruptErr *rpcError
 	reemitSteer  bool
 
-	turnStarted chan struct{}
-	done        chan struct{}
+	turnStarted     chan struct{}
+	turnStartedOnce sync.Once
+	done            chan struct{}
 
 	// startDir is the directory the process was really started in — the
 	// cmd.Dir the Starter receives — so a test can assert where the run
 	// executes instead of asserting a configuration value that stands for it.
 	startDir string
+	// starts, startName and startArgs record every call to Start, so a
+	// conversation test can assert it spawned exactly one process, and what it
+	// spawned.
+	starts    int
+	startName string
+	startArgs []string
 }
 
 var _ localrun.Process = (*fakeCodex)(nil)
@@ -56,9 +63,12 @@ func newFakeCodex() *fakeCodex {
 	}
 }
 
-func (f *fakeCodex) Start(_ context.Context, dir, _ string, _ []string) (localrun.Process, error) {
+func (f *fakeCodex) Start(_ context.Context, dir, name string, args []string) (localrun.Process, error) {
 	f.mu.Lock()
 	f.startDir = dir
+	f.starts++
+	f.startName = name
+	f.startArgs = args
 	f.mu.Unlock()
 	return f, nil
 }
@@ -67,6 +77,19 @@ func (f *fakeCodex) startedIn() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.startDir
+}
+
+func (f *fakeCodex) spawned() (starts int, name string, args []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.starts, f.startName, f.startArgs
+}
+
+// alive reports whether the process's output has not been ended yet.
+func (f *fakeCodex) alive() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.ended
 }
 
 func (f *fakeCodex) Send(line []byte) error {
@@ -86,7 +109,9 @@ func (f *fakeCodex) Send(line []byte) error {
 		f.reply(message.ID, `{"thread":{"id":"thread-1"}}`, f.threadErr)
 	case methodTurnStart:
 		f.reply(message.ID, `{"turn":{"id":"turn-1"}}`, f.turnErr)
-		close(f.turnStarted)
+		// A conversation can open more than one turn; turnStarted signals only
+		// the first, which is all every existing single-turn test waits for.
+		f.turnStartedOnce.Do(func() { close(f.turnStarted) })
 	case methodTurnSteer:
 		text := textOfInput(message.Params)
 		f.mu.Lock()
@@ -223,7 +248,7 @@ func textOfInput(params json.RawMessage) string {
 func openSession(t *testing.T, fake *fakeCodex, cfg settings) (*appServer, *localrun.Session) {
 	t.Helper()
 	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(fake, session)
+	client := newAppServer(fake, session, false)
 	go client.consume()
 	if err := client.start(context.Background(), cfg, "/workspace", "PROMPT"); err != nil {
 		t.Fatalf("handshake failed: %v", err)
@@ -395,7 +420,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			session := localrun.NewSession("run-1", nil)
-			client := newAppServer(newFakeCodex(), session)
+			client := newAppServer(newFakeCodex(), session, false)
 			client.project(tc.method, json.RawMessage(tc.params))
 
 			events := session.Events(0)
@@ -423,7 +448,7 @@ func TestAppServerTranslatesEveryNotificationThatCarriesHistory(t *testing.T) {
 // translation that dropped it would lose history the day Codex adds a type.
 func TestAppServerNeverDropsAnUnknownNotification(t *testing.T) {
 	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(newFakeCodex(), session)
+	client := newAppServer(newFakeCodex(), session, false)
 	const params = `{"something":"entirely new"}`
 	client.project("thread/somethingNobodyHasSeen", json.RawMessage(params))
 
@@ -509,6 +534,161 @@ func TestAppServerInterruptsWithoutClosingTheSession(t *testing.T) {
 	}
 }
 
+// --- conversational multi-turn -----------------------------------------------
+
+// openConversationalSession starts a conversational client against the fake,
+// past the handshake but before any turn: exactly the state a codex
+// conversation is in right after OpenConversation returns. opening, when not
+// empty, is held exactly as OpenConversation holds the instruction it opens
+// on.
+func openConversationalSession(t *testing.T, fake *fakeCodex, cfg settings, opening string) (*appServer, *localrun.Session) {
+	t.Helper()
+	session := localrun.NewSession("run-1", nil)
+	client := newAppServer(fake, session, true)
+	go client.consume()
+	if _, err := client.handshake(context.Background(), cfg, "/workspace"); err != nil {
+		t.Fatalf("handshake failed: %v", err)
+	}
+	if opening != "" {
+		client.hold(opening)
+	}
+	session.AttachDialogue(client)
+	t.Cleanup(fake.end)
+	return client, session
+}
+
+func turnDoneNow(client *appServer) bool {
+	select {
+	case <-client.TurnDone():
+		return true
+	default:
+		return false
+	}
+}
+
+// A conversation opens no turn until the first message, and that message
+// opens one via turn/start rather than steering a turn that does not exist.
+func TestAppServerConversationalFirstMessageOpensATurn(t *testing.T) {
+	fake := newFakeCodex()
+	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
+
+	if turnDoneNow(client) {
+		t.Fatal("TurnDone must not report a turn over before any turn has opened")
+	}
+	if err := client.Send(context.Background(), "prima domanda"); err != nil {
+		t.Fatalf("the first message of the conversation was refused: %v", err)
+	}
+	got := fake.methodsCalled()
+	if len(got) == 0 || got[len(got)-1] != methodTurnStart {
+		t.Fatalf("methods = %v; the first message must open a turn via turn/start", got)
+	}
+	if turn := fake.paramsOf(methodTurnStart); textOfInputMap(turn) != "prima domanda" {
+		t.Fatalf("turn/start input = %v", turn["input"])
+	}
+}
+
+// Once the turn the first message opened completes, a conversation is not
+// over: the next message opens a second turn on the same thread instead of
+// being refused, and TurnDone re-arms for it.
+func TestAppServerConversationalSendOpensANewTurnOnceThePreviousOneCompleted(t *testing.T) {
+	fake := newFakeCodex()
+	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
+
+	if err := client.Send(context.Background(), "prima domanda"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	fake.completeTurn()
+	waitFor(t, func() bool { return turnDoneNow(client) })
+
+	if err := client.Send(context.Background(), "seconda domanda"); err != nil {
+		t.Fatalf("the conversation refused a message after its turn completed: %v", err)
+	}
+	starts := 0
+	for _, method := range fake.methodsCalled() {
+		if method == methodTurnStart {
+			starts++
+		}
+	}
+	if starts != 2 {
+		t.Fatalf("turn/start was called %d time(s); want exactly two, one per turn", starts)
+	}
+	if turnDoneNow(client) {
+		t.Fatal("TurnDone must re-arm for the new turn instead of staying closed")
+	}
+}
+
+// The instruction a conversation opens on travels ahead of the first message,
+// in the same turn, and is stripped back out of the history once the process
+// re-emits the two joined: the conversation's history must open on what the
+// person actually said.
+func TestAppServerConversationalOpeningTravelsWithTheFirstMessageAndIsStrippedFromHistory(t *testing.T) {
+	fake := newFakeCodex()
+	const opening = "ISTRUZIONI DI APERTURA"
+	const first = "Di cosa parla questo workspace?"
+	client, session := openConversationalSession(t, fake, defaultSettings(), opening)
+
+	if err := client.Send(context.Background(), first); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	turnStart := fake.paramsOf(methodTurnStart)
+	input, _ := turnStart["input"].([]any)
+	if len(input) != 2 {
+		t.Fatalf("turn/start input = %#v, want two blocks: the opening and the first message", input)
+	}
+
+	// The process re-emits the whole turn's input as one userMessage item,
+	// exactly as the real binary joins several content blocks of one message.
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"ISTRUZIONI DI APERTURA"},{"type":"text","text":"Di cosa parla questo workspace?"}]}}`)
+	waitFor(t, func() bool { return len(session.Events(0)) == 1 })
+	events := session.Events(0)
+	if events[0].Kind != localrun.KindUserMessage || events[0].Text != first {
+		t.Fatalf("history = %#v; want the opening instruction stripped, leaving only %q", events[0], first)
+	}
+}
+
+// Between two turns of a conversation there is no turn to interrupt: what is
+// cancelled is the conversation itself, by closing the process's input.
+func TestAppServerConversationalInterruptBetweenTurnsClosesTheProcess(t *testing.T) {
+	fake := newFakeCodex()
+	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
+
+	if err := client.Interrupt(context.Background()); err != nil {
+		t.Fatalf("interrupting a conversation that has not opened a turn yet failed: %v", err)
+	}
+	waitFor(t, func() bool {
+		select {
+		case <-client.Gone():
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// The same is true once a turn has completed, and not only before the first
+// one ever opened.
+func TestAppServerConversationalInterruptAfterATurnCompletesClosesTheProcess(t *testing.T) {
+	fake := newFakeCodex()
+	client, _ := openConversationalSession(t, fake, defaultSettings(), "")
+	if err := client.Send(context.Background(), "domanda"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	fake.completeTurn()
+	waitFor(t, func() bool { return turnDoneNow(client) })
+
+	if err := client.Interrupt(context.Background()); err != nil {
+		t.Fatalf("Interrupt between turns failed: %v", err)
+	}
+	waitFor(t, func() bool {
+		select {
+		case <-client.Gone():
+			return true
+		default:
+			return false
+		}
+	})
+}
+
 // AC-5 — the refusal the process expressed becomes the typed one, and a
 // protocol error that decided nothing does not.
 func TestAppServerClassifiesTheProcessRefusal(t *testing.T) {
@@ -546,7 +726,7 @@ func TestAppServerReportsARefusedHandshake(t *testing.T) {
 	fake := newFakeCodex()
 	fake.threadErr = &rpcError{Code: -32602, Message: "invalid sandbox"}
 	session := localrun.NewSession("run-1", nil)
-	client := newAppServer(fake, session)
+	client := newAppServer(fake, session, false)
 	go client.consume()
 	t.Cleanup(fake.end)
 

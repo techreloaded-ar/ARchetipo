@@ -101,7 +101,7 @@ async function main() {
     const dirB = await createWorkspace(runDir, targetsDir, "beta", "claude", CODE_B, env);
     const dirC = await createWorkspace(runDir, targetsDir, "gamma", "codex", CODE_C, env);
 
-    await scenarioNotOfferedWithoutTheCapability(dirC, env);
+    await scenarioCodexConversationWorks(dirC, env);
     await scenarioConversationOfTheOpenWorkspace(dirA, dirB, env);
     await assertNoSessionMaterialLeaked([dirA, dirB, dirC]);
   } catch (error) {
@@ -127,22 +127,23 @@ async function main() {
 
 // --- AC-4 -------------------------------------------------------------------
 //
-// A provider that is perfectly available and simply does not hold conversations
-// must not be asked to. The workspace default is the real `codex` provider
-// pointed at its own fake, which answers `--version` like the real binary: the
-// runtime is usable, and the capability is the only thing missing.
-async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
+// codex-workspace-converse: the codex provider now holds a free conversation
+// too, over its own app-server JSON-RPC protocol rather than claude's
+// stream-json. The two protocols differ enough that the guarantee is worth
+// proving on codex directly rather than assumed from the claude scenario
+// below: a thread opens with no turn, the first message is what opens the
+// first turn — carrying the held instruction ahead of it, in the same
+// turn — and the end of that turn is not the end of the conversation: the
+// next message opens a second turn on the same thread instead of being
+// refused, which is the one fact a single-turn dispatched action never
+// exercises.
+async function scenarioCodexConversationWorks(dirC, env) {
+  const realC = await fs.realpath(dirC);
   let view;
   let control;
   try {
     control = await startControlServer();
-    // Both fakes are pointed at this server on purpose: it is what makes "no
-    // agent process was started" an observation and not an assumption.
-    view = await startViewServer(dirC, {
-      ...env,
-      FAKE_CODEX_CONTROL: control.url,
-      FAKE_CLAUDE_CONTROL: control.url,
-    });
+    view = await startViewServer(dirC, { ...env, FAKE_CODEX_CONTROL: control.url });
     console.log(`-> view ready on the codex workspace: ${view.url}`);
 
     await apiJSON(`${view.url}/api/execution/provider/default`, putJSON({
@@ -158,42 +159,93 @@ async function scenarioNotOfferedWithoutTheCapability(dirC, env) {
     if (codex.available !== true) {
       throw new Error(`AC-4: the codex runtime must be usable for this case to mean anything; got ${JSON.stringify(codex)}`);
     }
-    if ((codex.capabilities || []).includes("workspace.converse")) {
-      throw new Error(`AC-4: codex must not declare workspace.converse; got ${JSON.stringify(codex.capabilities)}`);
+    if (!(codex.capabilities || []).includes("workspace.converse")) {
+      throw new Error(`AC-4: codex must declare workspace.converse; got ${JSON.stringify(codex.capabilities)}`);
     }
 
-    const listingBefore = await listRecursively(dirC);
+    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
+    if (opened.available !== true || !opened.conversation?.id) {
+      throw new Error(`AC-4: unexpected payload on open: ${JSON.stringify(opened)}`);
+    }
+    const conversationC = opened.conversation.id;
+    await assertSamePath(opened.conversation.working_dir, dirC, "AC-4: the directory the conversation reports");
 
-    const offered = await apiJSON(`${view.url}/api/workspace/conversations`, {}, 200);
-    if (offered.available !== false) {
-      throw new Error(`AC-4: the conversation must not be offered; got ${JSON.stringify(offered)}`);
+    const invocation = await control.waitFor("argv", 1);
+    const startedIn = await fs.realpath(invocation.cwd);
+    if (startedIn !== realC) {
+      throw new Error(`AC-4: the codex process was started in ${invocation.cwd}, want the project root of the open workspace ${dirC}`);
     }
-    if ((offered.conversations || []).length !== 0) {
-      throw new Error(`AC-4: a workspace that is not offered a conversation holds none; got ${JSON.stringify(offered)}`);
+    const threadStart = await control.waitFor("thread/start", 1);
+    if (threadStart.params?.cwd !== dirC && (await fs.realpath(threadStart.params?.cwd || "/")) !== realC) {
+      throw new Error(`AC-4: thread/start named ${JSON.stringify(threadStart.params?.cwd)}, want ${dirC}`);
     }
-    if (offered.provider_id !== "codex") {
-      throw new Error(`AC-4: the refusal must name the provider it is about; got ${JSON.stringify(offered.provider_id)}`);
-    }
-    if (!String(offered.unavailable_reason || "").includes("workspace.converse")) {
-      throw new Error(`AC-4: the reason must name workspace.converse; got ${JSON.stringify(offered.unavailable_reason)}`);
-    }
-
-    const refused = await expectStatus(`${view.url}/api/workspace/conversations`, 409, postJSON({}));
-    if (String(refused.error || "") !== String(offered.unavailable_reason || "")) {
-      throw new Error(
-        `AC-4: pressing the button must be refused with the very sentence the payload declared\n  read:    ${JSON.stringify(offered.unavailable_reason)}\n  refusal: ${JSON.stringify(refused.error)}`,
-      );
+    if (control.reports().some((entry) => entry.kind === "turn/start")) {
+      throw new Error("AC-4: opening the conversation must open no turn before anybody has said anything");
     }
 
-    if (control.reports().length !== 0) {
-      throw new Error(
-        `AC-4: no agent process may be started for a conversation that is not offered; the control server saw ${JSON.stringify(control.reports().map((entry) => entry.kind))}`,
-      );
+    const accepted = await apiJSON(`${view.url}/api/workspace/conversations/${conversationC}/messages`, postJSON({ message: MESSAGE_SENTINEL }), 202);
+    if (JSON.stringify(accepted).includes(MESSAGE_SENTINEL)) {
+      throw new Error("AC-4: the accepted message must not be echoed into the history before the process re-emits it");
     }
-    await assertSameListing("AC-4", listingBefore, await listRecursively(dirC), dirC);
+    const firstTurn = await control.waitFor("turn/start", 1);
+    const firstInput = firstTurn.params?.input || [];
+    const lastBlock = firstInput[firstInput.length - 1];
+    if (firstInput.length < 2 || lastBlock?.text !== MESSAGE_SENTINEL) {
+      throw new Error(`AC-4: the first turn's input was ${JSON.stringify(firstInput)}, want the opening instruction followed by the sentinel`);
+    }
+    const openingBlocks = firstInput.slice(0, -1).map((block) => ({ type: "text", text: block.text }));
+
+    // The process re-emits the whole turn's input as one userMessage item,
+    // exactly as codex-cli joins several content blocks of one message, and
+    // the opening instruction must be stripped back out of the history.
+    control.push(emitCodex("item/started", {
+      item: { type: "userMessage", content: [...openingBlocks, { type: "text", text: MESSAGE_SENTINEL }] },
+    }));
+    const first = await waitForConversation(
+      view.url,
+      conversationC,
+      0,
+      (data) => (data.events || []).some((event) => event.kind === "user_message"),
+      "the re-emitted message to enter the history",
+    );
+    const echoed = first.events.filter((event) => event.kind === "user_message");
+    if (echoed.length !== 1 || echoed[0].text !== MESSAGE_SENTINEL) {
+      throw new Error(`AC-4: the history must open on the person's own message, with the instruction stripped; got ${JSON.stringify(echoed)}`);
+    }
+
+    // The end of this turn is the agent finishing an answer, not the end of
+    // the conversation: a second message must open a second turn on the same
+    // thread instead of being refused.
+    control.push(emitCodex("turn/completed", { turn: { id: "turn-1" } }));
+    await waitForConversation(
+      view.url,
+      conversationC,
+      0,
+      (data) => (data.events || []).some((event) => event.kind === "turn_end"),
+      "the first turn to close",
+    );
+    const survives = await readConversation(view.url, conversationC, 0);
+    if (!survives.conversation?.id || survives.conversation.state !== "ACTIVE") {
+      throw new Error(`AC-4: the conversation must survive the end of its first turn; got ${JSON.stringify(survives.conversation)}`);
+    }
+
+    const SECOND_SENTINEL = `${MESSAGE_SENTINEL}-2`;
+    await apiJSON(`${view.url}/api/workspace/conversations/${conversationC}/messages`, postJSON({ message: SECOND_SENTINEL }), 202);
+    const secondTurn = await control.waitFor("turn/start", 2);
+    const secondInput = secondTurn.params?.input || [];
+    if (secondInput.length !== 1 || secondInput[0]?.text !== SECOND_SENTINEL) {
+      throw new Error(`AC-4: the second turn's input was ${JSON.stringify(secondInput)}, want exactly the second message with no instruction repeated`);
+    }
+
+    const closed = await apiJSON(`${view.url}/api/workspace/conversations/${conversationC}?after_id=0`, { method: "DELETE" }, 200);
+    if (closed.conversation?.state !== "CLOSED") {
+      throw new Error(`AC-4: the close must report the conversation CLOSED; got ${JSON.stringify(closed.conversation)}`);
+    }
+    await waitForProcessGone(invocation.pid, `the codex conversation process (pid ${invocation.pid}) to be released by the close`);
+
     ok(
       "AC-4",
-      `with the available codex provider as default, GET /api/workspace/conversations answers 200 available:false stating ${JSON.stringify(truncate(offered.unavailable_reason))}, POST answers 409 with the identical sentence, no agent process was ever started and the ${listingBefore.length} paths of the sandbox are unchanged`,
+      `codex declares workspace.converse, starts its process in ${dirC}, opens its thread with no turn, opens a turn only once the first message arrives — the opening instruction ahead of it in the same turn, stripped from the history — survives the end of that turn by opening a second turn carrying only the second message, and closing releases the process`,
     );
   } finally {
     if (view) await stopProcess(view.child);
@@ -669,6 +721,12 @@ async function listExecutionRecords(root) {
 
 function emit(frame) {
   return { kind: "emit", frame };
+}
+
+// emitCodex is emit's counterpart for the codex fake, which speaks JSON-RPC
+// notifications (method + params) rather than stream-json frames.
+function emitCodex(method, params) {
+  return { kind: "emit", method, params };
 }
 
 function assistantText(text) {

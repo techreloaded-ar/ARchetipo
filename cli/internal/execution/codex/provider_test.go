@@ -183,6 +183,33 @@ func TestProviderDeclaresIdentityAndItsCapabilities(t *testing.T) {
 	}
 }
 
+// workspace.converse is not among Capabilities, on purpose: it is derived
+// from the interface the provider implements and would otherwise be a second
+// declaration of the same fact, free to drift from it — the very mismatch
+// DeclaredCapabilities exists to make impossible.
+func TestProviderDeclaresTheConversationThroughTheInterface(t *testing.T) {
+	provider := New(Options{})
+	conversationalist, ok := execution.ConversationalistFor(provider)
+	if !ok || conversationalist == nil {
+		t.Fatal("the provider does not expose a free conversation")
+	}
+	declared, err := provider.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Supports(declared, execution.CapabilityWorkspaceConverse) {
+		t.Fatalf("Capabilities = %#v, want workspace.converse absent: it is derived, not declared", declared)
+	}
+	got, err := execution.DeclaredCapabilities(context.Background(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityRunDialog, execution.CapabilityWorkspaceConverse})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
+	}
+}
+
 // ValidateConfig must stay runnable on the machine a person configures before
 // installing Codex, so it may not look the command up on PATH.
 func TestValidateConfigAcceptsAnAbsentCommandAndRejectsAnUnknownKey(t *testing.T) {

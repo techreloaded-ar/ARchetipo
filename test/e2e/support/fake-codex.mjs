@@ -50,6 +50,13 @@ function noActiveTurn(id, what) {
   write({ id, error: { code: -32600, message: `no active turn to ${what}` } });
 }
 
+// Reported once at startup, exactly like fake-claude.mjs does and for the
+// same reason: where the process was started and its pid are facts no viewer
+// field can stand in for — "the provider released the agent process" is a
+// statement about the process, settled only by asking the operating system
+// whether it is still there.
+report("argv", { argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
+
 const rl = readline.createInterface({ input: process.stdin });
 
 rl.on("line", async (line) => {

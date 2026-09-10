@@ -72,7 +72,7 @@ func TestLiveCodexDialogue(t *testing.T) {
 		t.Fatalf("starting the codex app server: %v", err)
 	}
 	session := localrun.NewSession("live-probe", nil)
-	client := newAppServer(process, session)
+	client := newAppServer(process, session, false)
 	go client.consume()
 
 	const prompt = "Conta lentamente da 1 a 40, un numero per riga, senza usare strumenti."

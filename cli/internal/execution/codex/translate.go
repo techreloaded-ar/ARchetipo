@@ -56,11 +56,16 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.mu.Lock()
 		a.seq++
 		a.agent.Reset()
+		// completed describes the turn that just started, not the one before
+		// it: a conversation's second turn must not inherit the verdict of its
+		// first.
+		a.completed = false
 		a.mu.Unlock()
 		return
 	case "turn/completed":
 		a.mu.Lock()
 		a.completed = true
+		a.turnOpen = false
 		a.mu.Unlock()
 		a.append(localrun.KindTurnEnd, "", "", params)
 		a.endTurn()
@@ -76,7 +81,7 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.append(localrun.KindThinking, decodeDelta(params), "", params)
 		return
 	case "item/started":
-		kind, text, tool, carries := startedItem(params)
+		kind, text, tool, carries := startedItem(a, params)
 		if carries {
 			a.append(kind, text, tool, params)
 		}
@@ -139,7 +144,13 @@ func decodeErrorText(params json.RawMessage) string {
 // appears in the history exactly once. An agent message is rendered by its
 // deltas, and reasoning by its own delta notifications, so neither carries
 // history at this point.
-func startedItem(params json.RawMessage) (kind, text, tool string, carries bool) {
+//
+// a is consulted only for a userMessage: a conversation's opening turn can
+// carry the held instruction ahead of the person's own words, in the same
+// item, and openingEchoOf is what strips it back out — see its doc for why.
+// Every other kind of item is translated exactly as before, with no reference
+// to the server's state.
+func startedItem(a *appServer, params json.RawMessage) (kind, text, tool string, carries bool) {
 	var notification itemNotification
 	if json.Unmarshal(params, &notification) != nil {
 		return "", "", "", false
@@ -147,7 +158,11 @@ func startedItem(params json.RawMessage) (kind, text, tool string, carries bool)
 	item := notification.Item
 	switch item.Type {
 	case "userMessage":
-		return localrun.KindUserMessage, joinContent(item.Content, item.Text), "", true
+		text := joinContent(item.Content, item.Text)
+		if rest, echoed := a.openingEchoOf(text); echoed {
+			text = rest
+		}
+		return localrun.KindUserMessage, text, "", true
 	case "agentMessage", "reasoning", "plan":
 		return "", "", "", false
 	default:
