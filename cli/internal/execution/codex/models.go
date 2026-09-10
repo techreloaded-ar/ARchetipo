@@ -219,7 +219,7 @@ func modelOption(entry codexModel) (execution.ModelOption, error) {
 		return execution.ModelOption{}, fmt.Errorf("the codex app server marked %d default reasoning efforts for model %q, expected exactly one", defaults, id)
 	}
 	option.Options = []execution.ModelOptionField{{
-		Name:    reasoningEffortField,
+		Name:    effortField,
 		Label:   "Reasoning effort",
 		Help:    "How much reasoning Codex spends on the run. Left empty, no override is sent and Codex applies its own setting.",
 		Choices: choices,

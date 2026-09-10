@@ -62,7 +62,7 @@ func TestModelsLoadsTheLiveCatalogAndReasoningOptions(t *testing.T) {
 			Label:   "Provider default",
 			Default: true,
 			Options: []execution.ModelOptionField{{
-				Name:  reasoningEffortField,
+				Name:  effortField,
 				Label: "Reasoning effort",
 				Help:  "How much reasoning Codex spends on the run. Left empty, no override is sent and Codex applies its own setting.",
 				Choices: []execution.ModelOptionChoice{

@@ -190,7 +190,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	if request.Model != "" {
 		cfg.Model = request.Model
 	}
-	if effort, ok := request.Options["effort"]; ok {
+	if effort, ok := request.Options[effortField]; ok {
 		cfg.ReasoningEffort = effort
 	}
 	client := session.client
@@ -209,7 +209,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 		return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, err
 	}
 	turn.NativeID = nativeID
-	turn.Applied = execution.TurnConfiguration{Model: cfg.Model, Options: codexMapIfSet("effort", cfg.ReasoningEffort)}
+	turn.Applied = execution.TurnConfiguration{Model: cfg.Model, Options: codexMapIfSet(effortField, cfg.ReasoningEffort)}
 	session.mu.Lock()
 	session.cfg, session.current = cfg, &turn
 	session.mu.Unlock()
@@ -377,26 +377,14 @@ func (p *Provider) startNativeClient(ctx context.Context, cfg settings, dir stri
 	return process, client, nil
 }
 
-// sessionTurnEffortOption is the name a turn of a native session gives to the
-// reasoning budget. It deliberately differs from reasoningEffortField, which
-// names the same thing in the provider configuration: a turn carries options
-// under their session names, and StartTurn reads this one.
-const sessionTurnEffortOption = "effort"
-
-// discoverModels asks the session's own app server for the catalog, through
-// the shared decoder, and renames the reasoning option to the name a turn
-// carries it under.
+// discoverModels asks the session's own app server for the catalog, through the
+// decoder the provider configuration already uses. Nothing is renamed on the
+// way out: a turn carries its reasoning budget under the very name the
+// configuration gives it.
 func (a *appServer) discoverModels(ctx context.Context) ([]execution.ModelOption, error) {
 	models, err := listModels(ctx, a)
 	if err != nil {
 		return nil, fmt.Errorf("discovering Codex models: %w", err)
-	}
-	for i := range models {
-		for j := range models[i].Options {
-			if models[i].Options[j].Name == reasoningEffortField {
-				models[i].Options[j].Name = sessionTurnEffortOption
-			}
-		}
 	}
 	return models, nil
 }
@@ -440,7 +428,7 @@ func validateCodexTurn(ctx context.Context, client *appServer, request execution
 	if _, err := parseModel(cfg.Model); err != nil {
 		return err
 	}
-	if _, err := parseReasoningEffort(optionalCodexString(cfg.ReasoningEffort)); err != nil {
+	if _, err := parseEffort(map[string]any{effortField: optionalCodexString(cfg.ReasoningEffort)}); err != nil {
 		return err
 	}
 	available, err := client.discoverSkills(ctx, request.Session.Environment.WorkingDir)

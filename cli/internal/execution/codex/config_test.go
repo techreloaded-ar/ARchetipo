@@ -149,6 +149,13 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 	// is deliberately not one of them: it belongs to the model that declares
 	// it, and declaring it in both places would draw it twice in the form.
 	for name := range knownConfigKeys {
+		// The one exception, named rather than tolerated: the option's former
+		// name is still accepted so an existing configuration keeps loading,
+		// and is deliberately not offered anywhere — nobody should be invited
+		// to write it again. When it goes, this line goes with it.
+		if name == legacyEffortField {
+			continue
+		}
 		found := false
 		for _, declared := range names {
 			if declared == name {
@@ -179,31 +186,48 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 // declaredModelOptionNames is every option name the catalog declares, without
 // duplicates.
 func declaredModelOptionNames() []string {
-	return []string{reasoningEffortField}
+	return []string{effortField}
 }
 
-// --- reasoning_effort ------------------------------------------------------
+// --- effort -----------------------------------------------------------------
 
-// An absent reasoning_effort is "not set", not a default: no override is sent
-// at all and Codex applies its own setting.
+// A configuration written before the option was renamed must keep loading:
+// somebody's .archetipo/config.yaml says reasoning_effort, and the rename is
+// ours, not theirs. Carrying both names at once is refused instead, because two
+// values for one setting is a question this package cannot answer.
+func TestEffortIsAlsoReadFromItsFormerName(t *testing.T) {
+	cfg, err := parseConfig(map[string]any{legacyEffortField: "xhigh"})
+	if err != nil {
+		t.Fatalf("a configuration written with %q no longer loads: %v", legacyEffortField, err)
+	}
+	if cfg.ReasoningEffort != "xhigh" {
+		t.Fatalf("effort = %q, want the value written under the former name", cfg.ReasoningEffort)
+	}
+	if _, err := parseConfig(map[string]any{effortField: "low", legacyEffortField: "high"}); err == nil {
+		t.Fatal("both names at once were accepted: one of the two values was silently dropped")
+	}
+}
+
+// An absent effort is "not set", not a default: no override is sent at all and
+// Codex applies its own setting.
 func TestReasoningEffortIsUnsetWhenAbsent(t *testing.T) {
 	cfg, err := parseConfig(map[string]any{})
 	if err != nil {
 		t.Fatalf("an empty configuration failed: %v", err)
 	}
 	if cfg.ReasoningEffort != "" {
-		t.Fatalf("reasoning_effort = %q, want the empty string when the key is absent", cfg.ReasoningEffort)
+		t.Fatalf("effort = %q, want the empty string when the key is absent", cfg.ReasoningEffort)
 	}
 }
 
 func TestReasoningEffortAcceptsProviderDeclaredAndFutureLevels(t *testing.T) {
 	for _, effort := range []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra", "future-level"} {
-		cfg, err := parseConfig(map[string]any{"reasoning_effort": effort})
+		cfg, err := parseConfig(map[string]any{effortField: effort})
 		if err != nil {
 			t.Fatalf("level %q was rejected: %v", effort, err)
 		}
 		if cfg.ReasoningEffort != effort {
-			t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, effort)
+			t.Fatalf("effort = %q, want %q", cfg.ReasoningEffort, effort)
 		}
 	}
 }
@@ -213,15 +237,19 @@ func TestReasoningEffortAcceptsProviderDeclaredAndFutureLevels(t *testing.T) {
 func TestReasoningEffortRejectionNamesTheOption(t *testing.T) {
 	cases := []struct {
 		name  string
+		field string
 		value any
 	}{
-		{"an empty string", ""},
-		{"blanks only", "   "},
-		{"a value that is not a string", 3},
+		{"an empty string", effortField, ""},
+		{"blanks only", effortField, "   "},
+		{"a value that is not a string", effortField, 3},
+		// Written under the former name, the rejection names that one: what the
+		// panel highlights has to be the key the person actually wrote.
+		{"an empty string under the former name", legacyEffortField, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := parseConfig(map[string]any{"reasoning_effort": tc.value})
+			_, err := parseConfig(map[string]any{tc.field: tc.value})
 			if err == nil {
 				t.Fatalf("value %#v was accepted", tc.value)
 			}
@@ -229,8 +257,8 @@ func TestReasoningEffortRejectionNamesTheOption(t *testing.T) {
 			if !errors.As(err, &configErr) {
 				t.Fatalf("error is %T, want *execution.ConfigurationError: %v", err, err)
 			}
-			if configErr.Field != "reasoning_effort" {
-				t.Fatalf("the rejection names field %q, want %q", configErr.Field, "reasoning_effort")
+			if configErr.Field != tc.field {
+				t.Fatalf("the rejection names field %q, want %q", configErr.Field, tc.field)
 			}
 		})
 	}

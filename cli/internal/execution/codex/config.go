@@ -18,7 +18,17 @@ const (
 	defaultCommand = "codex"
 	defaultTimeout = 3600
 
-	reasoningEffortField = "reasoning_effort"
+	// effortField names the reasoning budget of a turn. It is the same name the
+	// claude provider gives the same thing, deliberately: one word for one
+	// concept, in the configuration and inside a turn alike.
+	effortField = "effort"
+	// legacyEffortField is what this option was called before that alignment. A
+	// configuration already written with it keeps loading, and is written back
+	// under the new name the first time the provider is saved, because the
+	// saved configuration is the one the form composes.
+	//
+	// ponytail: transitional, delete once no configuration in the wild carries it
+	legacyEffortField = "reasoning_effort"
 
 	minTimeout = 1
 	maxTimeout = 86400
@@ -46,11 +56,12 @@ type settings struct {
 }
 
 var knownConfigKeys = map[string]any{
-	"command":            true,
-	"model":              true,
-	reasoningEffortField: true,
-	"sandbox":            true,
-	"timeout_seconds":    true,
+	"command":         true,
+	"model":           true,
+	effortField:       true,
+	legacyEffortField: true,
+	"sandbox":         true,
+	"timeout_seconds": true,
 }
 
 // ConfigFields declares the non-secret settings this provider accepts, so a
@@ -119,7 +130,7 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	reasoningEffort, err := parseReasoningEffort(raw[reasoningEffortField])
+	reasoningEffort, err := parseEffort(raw)
 	if err != nil {
 		return settings{}, err
 	}
@@ -166,22 +177,33 @@ func parseModel(value any) (string, error) {
 	return providerconfig.String(value, "model", "", true)
 }
 
-// parseReasoningEffort accepts the non-empty value selected from Codex's live
-// model catalog. Unlike sandbox it has no default: an absent key means "not
-// set", and then no override is sent at all, so Codex applies its own setting.
-// The vocabulary deliberately stays open here because model/list is the
-// authority and can add an effort without requiring an ARchetipo release.
-func parseReasoningEffort(value any) (string, error) {
+// parseEffort accepts the non-empty value selected from Codex's live model
+// catalog. Unlike sandbox it has no default: an absent key means "not set", and
+// then no override is sent at all, so Codex applies its own setting. The
+// vocabulary deliberately stays open here because model/list is the authority
+// and can add an effort without requiring an ARchetipo release.
+//
+// It reads the whole configuration rather than one value because the option has
+// two names, the current one and the one it is migrating from. Carrying both at
+// once is refused instead of silently preferring one: two values for one
+// setting is a question only the person who wrote them can answer.
+func parseEffort(raw map[string]any) (string, error) {
+	value, field := raw[effortField], effortField
+	if value == nil {
+		value, field = raw[legacyEffortField], legacyEffortField
+	} else if raw[legacyEffortField] != nil {
+		return "", configErr(effortField, "must not be given together with "+legacyEffortField+": keep "+effortField)
+	}
 	if value == nil {
 		return "", nil
 	}
 	text, ok := value.(string)
 	if !ok {
-		return "", configErr(reasoningEffortField, "must be a string")
+		return "", configErr(field, "must be a string")
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return "", configErr(reasoningEffortField, "must not be empty")
+		return "", configErr(field, "must not be empty")
 	}
 	return text, nil
 }

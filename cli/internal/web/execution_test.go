@@ -987,7 +987,7 @@ func TestListExecutionProvidersKeepsModelOptionsOutOfTheConfigFields(t *testing.
 		option string
 	}{
 		{claude.ProviderID, claudeConfig(t, nil), "effort"},
-		{codex.ProviderID, codexConfig(t, nil), "reasoning_effort"},
+		{codex.ProviderID, codexConfig(t, nil), "effort"},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			srv := newLocalProviderServer(t, tc.id, tc.config)
