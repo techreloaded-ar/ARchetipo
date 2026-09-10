@@ -18,6 +18,8 @@ const (
 	defaultCommand = "codex"
 	defaultTimeout = 3600
 
+	reasoningEffortField = "reasoning_effort"
+
 	minTimeout = 1
 	maxTimeout = 86400
 )
@@ -44,11 +46,11 @@ type settings struct {
 }
 
 var knownConfigKeys = map[string]any{
-	"command":          true,
-	"model":            true,
-	"reasoning_effort": true,
-	"sandbox":          true,
-	"timeout_seconds":  true,
+	"command":            true,
+	"model":              true,
+	reasoningEffortField: true,
+	"sandbox":            true,
+	"timeout_seconds":    true,
 }
 
 // ConfigFields declares the non-secret settings this provider accepts, so a
@@ -70,7 +72,7 @@ func (p *Provider) ConfigFields() []execution.ConfigField {
 			Label:       "Model",
 			Type:        "text",
 			Help:        "Model Codex is asked to use. Left empty, no model flag is passed and Codex picks its own default.",
-			Placeholder: "gpt-5-codex",
+			Placeholder: "model-id",
 		},
 		{
 			Name:  "sandbox",
@@ -117,7 +119,7 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	reasoningEffort, err := parseReasoningEffort(raw["reasoning_effort"])
+	reasoningEffort, err := parseReasoningEffort(raw[reasoningEffortField])
 	if err != nil {
 		return settings{}, err
 	}
@@ -164,30 +166,24 @@ func parseModel(value any) (string, error) {
 	return providerconfig.String(value, "model", "", true)
 }
 
-// parseReasoningEffort accepts one of the levels this package offers for the
-// reasoning budget. Unlike sandbox it has no default: an absent key means "not
+// parseReasoningEffort accepts the non-empty value selected from Codex's live
+// model catalog. Unlike sandbox it has no default: an absent key means "not
 // set", and then no override is sent at all, so Codex applies its own setting.
-// A key that is present must carry one of the declared levels — a value outside
-// the set would travel to the thread and be refused there, with a diagnostic
-// that points at the protocol instead of at the option.
+// The vocabulary deliberately stays open here because model/list is the
+// authority and can add an effort without requiring an ARchetipo release.
 func parseReasoningEffort(value any) (string, error) {
 	if value == nil {
 		return "", nil
 	}
 	text, ok := value.(string)
 	if !ok {
-		return "", configErr("reasoning_effort", "must be a string")
+		return "", configErr(reasoningEffortField, "must be a string")
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return "", configErr("reasoning_effort", "must not be empty")
+		return "", configErr(reasoningEffortField, "must not be empty")
 	}
-	for _, effort := range reasoningEfforts {
-		if text == effort {
-			return text, nil
-		}
-	}
-	return "", configErr("reasoning_effort", "must be one of "+strings.Join(reasoningEfforts, ", "))
+	return text, nil
 }
 
 // parseSandbox accepts one of the policies the Codex session understands. A key

@@ -26,6 +26,7 @@ import (
 const (
 	methodInitialize    = "initialize"
 	methodInitialized   = "initialized"
+	methodModelList     = "model/list"
 	methodThreadStart   = "thread/start"
 	methodTurnStart     = "turn/start"
 	methodTurnSteer     = "turn/steer"
@@ -46,6 +47,20 @@ var noiseNotifications = map[string]struct{}{
 	"mcpServer/startupStatus/updated": {},
 	"remoteControl/status/changed":    {},
 	"thread/tokenUsage/updated":       {},
+}
+
+// initialize performs the protocol handshake shared by a working session and
+// by the short-lived client that only asks Codex for its model catalog.
+func (a *appServer) initialize(ctx context.Context) error {
+	if _, err := a.call(ctx, methodInitialize, map[string]any{
+		"clientInfo": map[string]any{"name": "archetipo", "title": "ARchetipo", "version": "1"},
+	}); err != nil {
+		return fmt.Errorf("the codex app server did not accept the handshake: %w", err)
+	}
+	if err := a.notify(methodInitialized, map[string]any{}); err != nil {
+		return fmt.Errorf("notifying the codex app server that initialization completed: %w", err)
+	}
+	return nil
 }
 
 type rpcError struct {
@@ -239,12 +254,8 @@ func (a *appServer) notify(method string, params any) error {
 // asked for. A dispatched action has no such moment to wait in, so start
 // still does both in one call.
 func (a *appServer) handshake(ctx context.Context, cfg settings, dir string) (string, error) {
-	if _, err := a.call(ctx, methodInitialize, map[string]any{
-		"clientInfo": map[string]any{"name": "archetipo", "title": "ARchetipo", "version": "1"},
-	}); err != nil {
-		return "", fmt.Errorf("the codex app server did not accept the handshake: %w", err)
-	}
-	if err := a.notify(methodInitialized, map[string]any{}); err != nil {
+		return fmt.Errorf("the codex app server did not accept the handshake: %w", err)
+	if err := a.initialize(ctx); err != nil {
 		return "", err
 	}
 

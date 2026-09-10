@@ -9,168 +9,174 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 )
 
-// The catalog is what the configuration form offers, so every entry must carry
-// an identifier a person can pick and read. The default is checked by count and
-// not by name: which model a provider defaults to is the vendor's business and
-// may change, but "exactly one entry is the default" is what the UI relies on.
-func TestModelCatalogHoldsItsInvariants(t *testing.T) {
-	models, err := (&Provider{}).Models(context.Background(), map[string]any{})
-	if err != nil {
-		t.Fatalf("listing models with an empty configuration failed: %v", err)
-	}
-	if len(models) == 0 {
-		t.Fatal("the declared catalog is empty: the configuration form would have nothing to offer")
-	}
-	seen := make(map[string]bool, len(models))
-	defaults := 0
-	for _, model := range models {
-		if model.ID == "" || strings.TrimSpace(model.ID) != model.ID {
-			t.Fatalf("model identifier %q is empty or carries surrounding blanks", model.ID)
-		}
-		if seen[model.ID] {
-			t.Fatalf("model identifier %q is declared twice", model.ID)
-		}
-		seen[model.ID] = true
-		if strings.TrimSpace(model.Label) == "" {
-			t.Fatalf("model %q has no label to read", model.ID)
-		}
-		if model.Default {
-			defaults++
-		}
-	}
-	if defaults != 1 {
-		t.Fatalf("the catalog marks %d entries as the provider default, want exactly 1", defaults)
-	}
+func providerWithCatalog(fake *fakeCodex) *Provider {
+	return New(Options{
+		Starter: fake,
+		WorkingDir: func() (string, error) {
+			return "/catalog-workspace", nil
+		},
+	})
 }
 
-// The placeholder of the model field is an example of what to type, so it must
-// name a model the catalog actually offers. Without this test the example and
-// the catalog could drift apart without anything noticing.
-func TestModelFieldPlaceholderBelongsToTheCatalog(t *testing.T) {
-	provider := &Provider{}
-	placeholder := ""
-	found := false
-	for _, field := range provider.ConfigFields() {
-		if field.Name == execution.ModelFieldName {
-			placeholder = field.Placeholder
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("no configuration field is named %q", execution.ModelFieldName)
-	}
-	models, err := provider.Models(context.Background(), nil)
+func TestModelsLoadsTheLiveCatalogAndReasoningOptions(t *testing.T) {
+	fake := newFakeCodex()
+	fake.modelPages = map[string]string{"": `{
+		"data": [
+			{
+				"id": "catalog-entry-1",
+				"model": "gpt-provider-default",
+				"displayName": "Provider default",
+				"hidden": false,
+				"defaultReasoningEffort": "xhigh",
+				"supportedReasoningEfforts": [
+					{"reasoningEffort": "minimal", "description": "quick"},
+					{"reasoningEffort": "xhigh", "description": "deep"}
+				],
+				"isDefault": true
+			},
+			{
+				"id": "id-fallback-model",
+				"displayName": "ID fallback",
+				"hidden": false,
+				"supportedReasoningEfforts": [],
+				"isDefault": false
+			},
+			{
+				"id": "hidden-model",
+				"model": "hidden-model",
+				"displayName": "Hidden",
+				"hidden": true,
+				"isDefault": false
+			}
+		],
+		"nextCursor": null
+	}`}
+
+	models, err := providerWithCatalog(fake).Models(context.Background(), map[string]any{"model": "not-used-for-listing"})
 	if err != nil {
 		t.Fatalf("listing models failed: %v", err)
 	}
-	for _, model := range models {
-		if model.ID == placeholder {
-			return
-		}
+	want := []execution.ModelOption{
+		{
+			ID:      "gpt-provider-default",
+			Label:   "Provider default",
+			Default: true,
+			Options: []execution.ModelOptionField{{
+				Name:  reasoningEffortField,
+				Label: "Reasoning effort",
+				Help:  "How much reasoning Codex spends on the run. Left empty, no override is sent and Codex applies its own setting.",
+				Choices: []execution.ModelOptionChoice{
+					{Value: "minimal", Label: "minimal"},
+					{Value: "xhigh", Label: "xhigh", Default: true},
+				},
+			}},
+		},
+		{ID: "id-fallback-model", Label: "ID fallback"},
 	}
-	t.Fatalf("the %q field suggests %q, which the catalog does not offer", execution.ModelFieldName, placeholder)
+	if !reflect.DeepEqual(models, want) {
+		t.Fatalf("models = %#v\nwant   = %#v", models, want)
+	}
+	if got := fake.methodsCalled(); !reflect.DeepEqual(got, []string{methodInitialize, methodInitialized, methodModelList}) {
+		t.Fatalf("protocol methods = %v, want initialize, initialized, model/list only", got)
+	}
+	if fake.startedIn() != "/catalog-workspace" {
+		t.Fatalf("the catalog process started in %q", fake.startedIn())
+	}
+	params := fake.paramsOf(methodModelList)
+	if params["includeHidden"] != false || params["limit"] != float64(modelListPageLimit) {
+		t.Fatalf("model/list params = %#v", params)
+	}
+	if params["cursor"] != nil {
+		t.Fatalf("the first model/list request carried a cursor: %#v", params["cursor"])
+	}
 }
 
-// A configuration that cannot be read is a reason the catalog is not
-// obtainable, and the reason has to reach the caller as an error rather than as
-// a panic or an empty list.
-func TestModelListingReportsAnUnreadableConfiguration(t *testing.T) {
-	models, err := (&Provider{}).Models(context.Background(), map[string]any{execution.ModelFieldName: true})
-	if err == nil {
-		t.Fatal("a non-string model was accepted: the caller would have no reason to show")
+func TestModelsFollowsEveryNextCursorInOrder(t *testing.T) {
+	fake := newFakeCodex()
+	fake.modelPages = map[string]string{
+		"":       `{"data":[{"model":"first","displayName":"First","isDefault":true}],"nextCursor":"page-2"}`,
+		"page-2": `{"data":[{"model":"second","displayName":"Second"}],"nextCursor":null}`,
 	}
-	if models != nil {
-		t.Fatalf("a failed listing still returned %d models", len(models))
-	}
-}
 
-// A caller that sorts or trims the slice it got must not be able to corrupt the
-// catalog every later caller reads.
-func TestModelCatalogIsDetachedFromTheCaller(t *testing.T) {
-	provider := &Provider{}
-	first, err := provider.Models(context.Background(), nil)
+	models, err := providerWithCatalog(fake).Models(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("listing models failed: %v", err)
+		t.Fatalf("listing paginated models failed: %v", err)
 	}
-	original := make([]execution.ModelOption, len(first))
-	copy(original, first)
-	for i := range first {
-		first[i] = execution.ModelOption{ID: "mutated", Label: "mutated", Default: true}
+	if got := []string{models[0].ID, models[1].ID}; !reflect.DeepEqual(got, []string{"first", "second"}) {
+		t.Fatalf("model order = %v", got)
 	}
-	second, err := provider.Models(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("listing models a second time failed: %v", err)
+	requests := fake.allParamsOf(methodModelList)
+	if len(requests) != 2 {
+		t.Fatalf("model/list was called %d times, want 2", len(requests))
 	}
-	if len(second) != len(original) {
-		t.Fatalf("the catalog now holds %d entries, want %d", len(second), len(original))
-	}
-	for i, model := range second {
-		if !reflect.DeepEqual(model, original[i]) {
-			t.Fatalf("entry %d is now %+v, want %+v", i, model, original[i])
-		}
+	if requests[0]["cursor"] != nil || requests[1]["cursor"] != "page-2" {
+		t.Fatalf("pagination cursors = %#v", requests)
 	}
 }
 
-// --- model options ---------------------------------------------------------
-
-// The option is what the panel draws under the model, so every entry of this
-// catalog has to declare it: both models of Codex take a reasoning budget.
-func TestCatalogDeclaresTheReasoningEffortOptionOnEveryModel(t *testing.T) {
-	models, err := (&Provider{}).Models(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("listing models failed: %v", err)
+func TestModelsRejectsInvalidProviderCatalogs(t *testing.T) {
+	cases := []struct {
+		name string
+		page string
+		want string
+	}{
+		{"missing data", `{"nextCursor":null}`, "without a data list"},
+		{"model without id", `{"data":[{"displayName":"Nameless","isDefault":true}],"nextCursor":null}`, "without an identifier"},
+		{"duplicate models", `{"data":[{"model":"same","isDefault":true},{"model":"same"}],"nextCursor":null}`, "more than once"},
+		{"no default model", `{"data":[{"model":"only"}],"nextCursor":null}`, "marked 0 default models"},
+		{"two default models", `{"data":[{"model":"one","isDefault":true},{"model":"two","isDefault":true}],"nextCursor":null}`, "marked 2 default models"},
+		{"effort without default", `{"data":[{"model":"only","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"}]}],"nextCursor":null}`, "0 default reasoning efforts"},
+		{"duplicate effort", `{"data":[{"model":"only","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"low"}]}],"nextCursor":null}`, "more than once"},
 	}
-	if len(models) == 0 {
-		t.Fatal("the declared catalog is empty")
-	}
-	wantEfforts := []string{"minimal", "low", "medium", "high"}
-	for _, model := range models {
-		if len(model.Options) != 1 {
-			t.Fatalf("model %q declares %d options, want 1: %#v", model.ID, len(model.Options), model.Options)
-		}
-		option := model.Options[0]
-		if option.Name != "reasoning_effort" {
-			t.Fatalf("model %q declares option %q, want %q", model.ID, option.Name, "reasoning_effort")
-		}
-		if strings.TrimSpace(option.Label) == "" {
-			t.Fatalf("the option of model %q has no label to read", model.ID)
-		}
-		if strings.TrimSpace(option.Help) == "" {
-			t.Fatalf("the option of model %q does not say what leaving it unset does", model.ID)
-		}
-		if len(option.Choices) != len(wantEfforts) {
-			t.Fatalf("option %q offers %d choices, want %d: %#v", option.Name, len(option.Choices), len(wantEfforts), option.Choices)
-		}
-		defaults := 0
-		for i, effort := range wantEfforts {
-			if option.Choices[i].Value != effort {
-				t.Fatalf("choice %d of %q is %q, want %q (declaration order must be preserved)", i, option.Name, option.Choices[i].Value, effort)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeCodex()
+			fake.modelPages = map[string]string{"": tc.page}
+			models, err := providerWithCatalog(fake).Models(context.Background(), nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want one containing %q", err, tc.want)
 			}
-			if strings.TrimSpace(option.Choices[i].Label) == "" {
-				t.Fatalf("choice %q has no label to read", effort)
+			if models != nil {
+				t.Fatalf("failed catalog returned models: %#v", models)
 			}
-			if option.Choices[i].Default {
-				defaults++
-			}
-		}
-		if defaults != 1 {
-			t.Fatalf("option %q marks %d choices as the provider default, want exactly 1", option.Name, defaults)
-		}
+		})
 	}
 }
 
-// Every level the catalog offers has to be a level the parser accepts:
-// offering a value the configuration then rejects would make the panel produce
-// an error out of its own list.
-func TestEveryOfferedReasoningEffortIsAccepted(t *testing.T) {
-	for _, choice := range reasoningEffortOption.Choices {
-		cfg, err := parseConfig(map[string]any{"reasoning_effort": choice.Value})
-		if err != nil {
-			t.Fatalf("the catalog offers %q but the configuration rejects it: %v", choice.Value, err)
-		}
-		if cfg.ReasoningEffort != choice.Value {
-			t.Fatalf("reasoning_effort = %q, want %q", cfg.ReasoningEffort, choice.Value)
-		}
+func TestModelsStopsOnARepeatedPaginationCursor(t *testing.T) {
+	fake := newFakeCodex()
+	fake.modelPages = map[string]string{
+		"":      `{"data":[{"model":"first","isDefault":true}],"nextCursor":"again"}`,
+		"again": `{"data":[{"model":"second"}],"nextCursor":"again"}`,
 	}
+
+	_, err := providerWithCatalog(fake).Models(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "repeated model-list cursor") {
+		t.Fatalf("error = %v, want repeated-cursor diagnostic", err)
+	}
+}
+
+func TestModelListingReportsConfigurationAndProtocolFailures(t *testing.T) {
+	t.Run("configuration", func(t *testing.T) {
+		fake := newFakeCodex()
+		models, err := providerWithCatalog(fake).Models(context.Background(), map[string]any{execution.ModelFieldName: true})
+		if err == nil {
+			t.Fatal("a non-string model was accepted")
+		}
+		if models != nil || len(fake.methodsCalled()) != 0 {
+			t.Fatalf("invalid configuration started the provider: models=%#v methods=%v", models, fake.methodsCalled())
+		}
+	})
+
+	t.Run("model list refusal", func(t *testing.T) {
+		fake := newFakeCodex()
+		fake.modelErr = &rpcError{Code: -32000, Message: "catalog unavailable"}
+		models, err := providerWithCatalog(fake).Models(context.Background(), nil)
+		if err == nil || !strings.Contains(err.Error(), "catalog unavailable") {
+			t.Fatalf("error = %v, want provider refusal", err)
+		}
+		if models != nil {
+			t.Fatalf("a refused listing returned models: %#v", models)
+		}
+	})
 }

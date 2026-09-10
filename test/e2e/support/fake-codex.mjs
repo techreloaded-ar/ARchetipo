@@ -4,7 +4,8 @@
 //
 // It answers `--version` like the real binary, and under `app-server --listen
 // stdio://` it speaks the same JSON-RPC protocol on stdin and stdout:
-// `initialize`, `thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`.
+// `initialize`, `model/list`, `thread/start`, `turn/start`, `turn/steer`,
+// `turn/interrupt`.
 // The shapes are the ones observed on codex-cli 0.147.0, including the refusal
 // `-32600 no active turn to steer` once the turn is over.
 //
@@ -72,6 +73,29 @@ rl.on("line", async (line) => {
       write({ id: message.id, result: { userAgent: "fake-codex" } });
       break;
     case "initialized":
+      break;
+    case "model/list":
+      write({
+        id: message.id,
+        result: {
+          data: [
+            {
+              id: "gpt-fake-codex",
+              model: "gpt-fake-codex",
+              displayName: "GPT Fake Codex",
+              hidden: false,
+              defaultReasoningEffort: "medium",
+              supportedReasoningEfforts: [
+                { reasoningEffort: "low", description: "Quick fake run" },
+                { reasoningEffort: "medium", description: "Default fake run" },
+                { reasoningEffort: "xhigh", description: "Deep fake run" },
+              ],
+              isDefault: true,
+            },
+          ],
+          nextCursor: null,
+        },
+      });
       break;
     case "thread/start":
       await report("thread/start", { params: message.params });

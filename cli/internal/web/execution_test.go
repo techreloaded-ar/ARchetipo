@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/claude"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/codex"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
@@ -807,11 +809,61 @@ func (usableRuntime) Run(context.Context, string, string, []string) (string, str
 	return "2.1.236", "", 0, nil
 }
 
+// Start is the interactive half of the same usable runtime. Codex now asks its
+// app server for the catalog, so viewer tests provide the protocol response
+// instead of depending on whichever Codex version is installed on the machine.
+func (usableRuntime) Start(context.Context, string, string, []string) (localrun.Process, error) {
+	return newCodexCatalogProcess(), nil
+}
+
+type codexCatalogProcess struct {
+	lines chan []byte
+	once  sync.Once
+}
+
+func newCodexCatalogProcess() *codexCatalogProcess {
+	return &codexCatalogProcess{lines: make(chan []byte, 4)}
+}
+
+func (p *codexCatalogProcess) Send(line []byte) error {
+	var request struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if err := json.Unmarshal(line, &request); err != nil {
+		return err
+	}
+	var result string
+	switch request.Method {
+	case "initialize":
+		result = `{"userAgent":"viewer-test"}`
+	case "model/list":
+		result = `{"data":[{"id":"gpt-5-codex","model":"gpt-5-codex","displayName":"GPT-5 Codex","defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],"isDefault":true},{"id":"gpt-5","model":"gpt-5","displayName":"GPT-5"}],"nextCursor":null}`
+	default:
+		return nil
+	}
+	p.lines <- []byte(`{"id":` + string(request.ID) + `,"result":` + result + `}`)
+	return nil
+}
+
+func (p *codexCatalogProcess) Lines() <-chan []byte { return p.lines }
+func (p *codexCatalogProcess) Signal() error        { return p.Close() }
+func (p *codexCatalogProcess) Wait() (int, string, error) {
+	return 0, "", nil
+}
+func (p *codexCatalogProcess) Close() error {
+	p.once.Do(func() { close(p.lines) })
+	return nil
+}
+
 // fakeExecutable writes an executable file and returns its absolute path. The
 // availability probe of a local provider looks its command up on the
 // filesystem, so a real path is what lets the probe succeed deterministically.
 func fakeExecutable(t *testing.T, name string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -832,7 +884,7 @@ func newLocalProviderServer(t *testing.T, id string, providerConfig map[string]a
 	if err := registry.Register(claude.New(claude.Options{Runner: probe})); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Register(codex.New(codex.Options{Runner: probe})); err != nil {
+	if err := registry.Register(codex.New(codex.Options{Runner: probe, Starter: probe})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := config.UpdateDefaultProvider(cfg.ProjectRoot, config.DefaultProviderConfig{ID: id, Config: providerConfig}); err != nil {
@@ -1051,7 +1103,6 @@ func TestSaveDefaultExecutionProviderRejectsAnUnknownOptionValue(t *testing.T) {
 		model    string
 	}{
 		{claude.ProviderID, "effort", "high", "sonnet"},
-		{codex.ProviderID, "reasoning_effort", "high", "gpt-5-codex"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {

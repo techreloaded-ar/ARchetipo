@@ -60,9 +60,9 @@ type ModelOption struct {
 	// already *is* the per-model declaration: ListModels produces it in one
 	// pass, while a second interface would add a second call, a second way to
 	// fail, and two lists describing the same model that have to be kept in
-	// sync. The accepted trade-off is that a provider whose options depend on
-	// runtime state cannot express them, since the catalog is declared
-	// statically — the same constraint the catalog itself already carries.
+	// sync. Providers may populate both the catalog and its per-model options
+	// dynamically from their runtime; callers consume the returned snapshot as
+	// one coherent declaration.
 	Options []ModelOptionField `json:"options,omitempty"`
 }
 

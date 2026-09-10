@@ -36,6 +36,8 @@ type fakeCodex struct {
 	steerErr     *rpcError
 	interruptErr *rpcError
 	reemitSteer  bool
+	modelErr     *rpcError
+	modelPages   map[string]string
 
 	turnStarted     chan struct{}
 	turnStartedOnce sync.Once
@@ -105,6 +107,16 @@ func (f *fakeCodex) Send(line []byte) error {
 	case methodInitialize:
 		f.reply(message.ID, `{"userAgent":"fake"}`, nil)
 	case methodInitialized:
+	case methodModelList:
+		var params struct {
+			Cursor string `json:"cursor"`
+		}
+		_ = json.Unmarshal(message.Params, &params)
+		result := `{"data":[],"nextCursor":null}`
+		if page, ok := f.modelPages[params.Cursor]; ok {
+			result = page
+		}
+		f.reply(message.ID, result, f.modelErr)
 	case methodThreadStart:
 		f.reply(message.ID, `{"thread":{"id":"thread-1"}}`, f.threadErr)
 	case methodTurnStart:
@@ -242,6 +254,22 @@ func (f *fakeCodex) paramsOf(method string) map[string]any {
 		}
 	}
 	return nil
+}
+
+func (f *fakeCodex) allParamsOf(method string) []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []map[string]any{}
+	for _, request := range f.requests {
+		if request.Method != method {
+			continue
+		}
+		var params map[string]any
+		if json.Unmarshal(request.Params, &params) == nil {
+			out = append(out, params)
+		}
+	}
+	return out
 }
 
 func (f *fakeCodex) messagesSteered() []string {

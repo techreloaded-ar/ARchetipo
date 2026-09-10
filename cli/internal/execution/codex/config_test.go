@@ -179,19 +179,7 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 // declaredModelOptionNames is every option name the catalog declares, without
 // duplicates.
 func declaredModelOptionNames() []string {
-	seen := map[string]struct{}{}
-	names := []string{}
-	for _, model := range models {
-		for _, option := range model.Options {
-			if _, ok := seen[option.Name]; ok {
-				continue
-			}
-			seen[option.Name] = struct{}{}
-			names = append(names, option.Name)
-		}
-	}
-	sort.Strings(names)
-	return names
+	return []string{reasoningEffortField}
 }
 
 // --- reasoning_effort ------------------------------------------------------
@@ -208,8 +196,8 @@ func TestReasoningEffortIsUnsetWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortAcceptsEveryDeclaredLevel(t *testing.T) {
-	for _, effort := range reasoningEfforts {
+func TestReasoningEffortAcceptsProviderDeclaredAndFutureLevels(t *testing.T) {
+	for _, effort := range []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra", "future-level"} {
 		cfg, err := parseConfig(map[string]any{"reasoning_effort": effort})
 		if err != nil {
 			t.Fatalf("level %q was rejected: %v", effort, err)
@@ -227,7 +215,6 @@ func TestReasoningEffortRejectionNamesTheOption(t *testing.T) {
 		name  string
 		value any
 	}{
-		{"a level outside the declared set", "turbo"},
 		{"an empty string", ""},
 		{"blanks only", "   "},
 		{"a value that is not a string", 3},
@@ -246,17 +233,5 @@ func TestReasoningEffortRejectionNamesTheOption(t *testing.T) {
 				t.Fatalf("the rejection names field %q, want %q", configErr.Field, "reasoning_effort")
 			}
 		})
-	}
-}
-
-func TestReasoningEffortRejectionListsTheAcceptedLevels(t *testing.T) {
-	_, err := parseConfig(map[string]any{"reasoning_effort": "turbo"})
-	if err == nil {
-		t.Fatal("an unknown level was accepted")
-	}
-	for _, effort := range reasoningEfforts {
-		if !strings.Contains(err.Error(), effort) {
-			t.Fatalf("the rejection does not quote the accepted level %q: %s", effort, err.Error())
-		}
 	}
 }
