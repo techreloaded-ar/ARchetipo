@@ -774,7 +774,19 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	// keeps "released" readable as itself: a read that resumed would report the
 	// thread active a moment after the person had closed it.
 	if record.Connection == execution.ConnectionReleased {
-		return pastNativeConversationView(ws, record, afterID)
+		view := pastNativeConversationView(ws, record, afterID)
+		// Rilasciata non vuol dire conclusa. Il runtime è stato lasciato andare,
+		// la conversazione no: finché non è archiviata questo workspace la
+		// tiene, ci si scrive dentro, ed è il messaggio successivo a riprendere
+		// la sessione nativa. Dirla chiusa e non disponibile qui mandava chi
+		// scriveva sulla strada del `reopen` — che la rifiutava, perché aperta
+		// lo era già — e metteva in testa al pannello un rifiuto che non era
+		// vero.
+		if record.Archive != execution.ArchiveArchived {
+			view.Available = true
+			view.Conversation.State = execution.RunActive
+		}
+		return view
 	}
 	observed, observeErr := s.ensureNativeSession(ctx, ws, snapshot)
 	if observeErr == nil {

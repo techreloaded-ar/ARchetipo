@@ -501,3 +501,49 @@ func nativeHTTPRequest(t *testing.T, baseURL, method, path string, payload any) 
 
 var _ execution.Provider = (*persistentFakeNativeProvider)(nil)
 var _ execution.SessionProvider = (*persistentFakeNativeProvider)(nil)
+
+// TestRestoredReleasedNativeConversationIsWritableWithoutReopen is the
+// conversation the viewer finds again after a restart: archive OPEN, connection
+// RELEASED, and this workspace holding it. It used to be read as a conversation
+// that had ended and that no conversation could be opened beside, so the page
+// sent the next message down the resume route — where `reopen` refused it,
+// because open it already was. Held and released is not ended: the thread takes
+// a message, and the message is what resumes the session.
+func TestRestoredReleasedNativeConversationIsWritableWithoutReopen(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, cfg, conn := newRunServer(t, provider, true)
+	id := openConversationOK(t, srv).Conversation.ID
+	if w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "first"}); w.Code != http.StatusAccepted {
+		t.Fatalf("first message = %d: %s", w.Code, w.Body.String())
+	}
+	if w := doJSON(t, srv, http.MethodDelete, conversationsRoute+"/"+id, nil); w.Code != http.StatusOK {
+		t.Fatalf("release = %d: %s", w.Code, w.Body.String())
+	}
+
+	// The viewer started again on the same workspace: the record is restored
+	// into the holder exactly as production restores it.
+	registry := execution.NewRegistry()
+	if err := registry.Register(provider); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewServer(conn, cfg, registry, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.session().dispatch.wait(5 * time.Second) })
+
+	w := doJSON(t, restarted, http.MethodGet, conversationsRoute+"/"+id, nil)
+	view := decodeConversation(t, w.Body.String())
+	if w.Code != http.StatusOK || view.Conversation == nil {
+		t.Fatalf("read = %d: %s", w.Code, w.Body.String())
+	}
+	if !view.Available || view.Conversation.State != string(execution.RunActive) {
+		t.Fatalf("a released conversation this workspace holds reads as ended: available=%v state=%q", view.Available, view.Conversation.State)
+	}
+	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/reopen", map[string]any{}); w.Code != http.StatusConflict {
+		t.Fatalf("reopen of a held conversation = %d, want the refusal that says it is already open: %s", w.Code, w.Body.String())
+	}
+	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "second"}); w.Code != http.StatusAccepted {
+		t.Fatalf("message into a restored released conversation = %d: %s", w.Code, w.Body.String())
+	}
+}
