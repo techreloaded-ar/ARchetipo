@@ -214,15 +214,58 @@ func (s *streamSession) append(kind, text, tool string, raw json.RawMessage) {
 	})
 }
 
+// Claude Code descrive il contenuto di un messaggio in due forme: la lista di
+// blocchi, e — quando l'operatore ha scritto un comando con la barra — una
+// stringa sola. Le due dicono la stessa cosa, quindi da qui escono uguali: un
+// blocco di testo. Prima la seconda non si decodificava, e un messaggio scritto
+// come `/skill ...` non entrava nella storia — restava un evento senza testo,
+// e la riga «in consegna» del compositore non trovava mai la sua e restava
+// appesa in coda, sotto la risposta che le era arrivata dopo.
 func decodeBlocks(message json.RawMessage) ([]contentBlock, bool) {
 	if len(message) == 0 {
 		return nil, false
 	}
 	var decoded streamMessage
-	if json.Unmarshal(message, &decoded) != nil {
+	if json.Unmarshal(message, &decoded) == nil {
+		return decoded.Content, true
+	}
+	var plain struct {
+		Content string `json:"content"`
+	}
+	if json.Unmarshal(message, &plain) != nil || plain.Content == "" {
 		return nil, false
 	}
-	return decoded.Content, true
+	return []contentBlock{{Type: "text", Text: commandText(plain.Content)}}, true
+}
+
+// Un comando con la barra arriva avvolto nei tag con cui l'harness lo descrive
+// a se stesso. Quello che la persona ha scritto sono il nome e gli argomenti,
+// e quello entra nella storia: il resto è impalcatura, e leggerlo nel thread
+// sarebbe leggere il protocollo invece della conversazione.
+func commandText(content string) string {
+	name := taggedValue(content, "command-name")
+	if name == "" {
+		return content
+	}
+	args := taggedValue(content, "command-args")
+	if args == "" {
+		return name
+	}
+	return name + " " + args
+}
+
+func taggedValue(content, tag string) string {
+	opening, closing := "<"+tag+">", "</"+tag+">"
+	from := strings.Index(content, opening)
+	if from == -1 {
+		return ""
+	}
+	rest := content[from+len(opening):]
+	to := strings.Index(rest, closing)
+	if to == -1 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:to])
 }
 
 func thinkingText(block contentBlock) string {
