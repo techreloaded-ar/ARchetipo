@@ -51,3 +51,4 @@ cli/archetipo-bin
 graphify-out
 .taskman
 .pi-subagents
+update.sh
