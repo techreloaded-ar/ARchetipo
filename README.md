@@ -227,7 +227,7 @@ The `arcipelago` provider dispatches `spec.plan` and `spec.implement` to a remot
 Once, on the hub, by an administrator:
 
 ```bash
-arcipelago workspaces create demo --cwd /workspace --requires project:demo --model <provider/model>
+arcipelago workspaces create demo --cwd /workspace --requires archetipo,project:demo --model <provider/model>
 arcipelago apps create archetipo --workspace demo    # prints the token exactly once
 ```
 
@@ -242,7 +242,7 @@ archetipo execution run US-001 plan
 
 `execution setup` reads the token from the environment to verify it, and never writes it anywhere: `.archetipo/config.yaml` records only the *name* of the variable, `token_env`, defaulting to `ARCIPELAGO_TOKEN`. Keep the export in your shell profile, or in whatever your CI uses for secrets.
 
-The provider requires the runner's working directory to be a checkout of this project, with the ARchetipo skills installed and the same connector configured. `--requires project:<slug>` on the workspace is how that requirement is stated: a runner that does not advertise the tag is refused at once, naming what is missing, instead of leaving the work queued until the local wait times out. `archetipo doctor` reports the same thing before you dispatch anything. See [`docs/wiki/decisions/remote-plan-ownership.md`](docs/wiki/decisions/remote-plan-ownership.md).
+The provider requires two things of the machine that takes the work, and states them separately because they have different owners: the ARchetipo CLI and skills must be installed on it — `archetipo` — and its working directory must be a checkout of this project, with the same connector configured — `project:<slug>`. A runner that does not advertise a required tag is refused at once, naming what is missing, instead of leaving the work queued until the local wait times out; `archetipo doctor` reports the same thing before you dispatch anything. [`docs/running-on-arcipelago.md`](docs/running-on-arcipelago.md) is how a fleet is provisioned; [`docs/wiki/decisions/remote-plan-ownership.md`](docs/wiki/decisions/remote-plan-ownership.md) is why the boundary sits where it does.
 
 ### Hybrid model workflow
 

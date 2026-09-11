@@ -19,6 +19,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { devVersion } from "./lib/dev-version.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -78,22 +79,6 @@ async function copyDir(src, dst) {
 		if (e.isDirectory()) await copyDir(s, d);
 		else if (e.isFile()) await fs.copyFile(s, d);
 	}
-}
-
-function computeDevVersion() {
-	const sha = runOrDie(
-		"git", ["rev-parse", "--short", "HEAD"], {},
-		"install:dev needs a git checkout to derive the dev version.",
-	).stdout.trim();
-
-	// Exit code 1 = tracked files (staged or unstaged) differ from HEAD.
-	// Untracked files are ignored on purpose: scratch files must not mark
-	// every build as dirty.
-	const dirty = run("git", ["diff-index", "--quiet", "HEAD", "--"]).status !== 0;
-
-	// The "g" prefix (git-describe convention) keeps the prerelease identifier
-	// alphanumeric: an all-digit sha with a leading zero would be invalid semver.
-	return `0.0.0-dev.g${sha}${dirty ? ".dirty" : ""}`;
 }
 
 function detectPlatform() {
@@ -244,7 +229,7 @@ function verifyAndPrint(version, platform) {
 }
 
 async function main() {
-	const version = computeDevVersion();
+	const version = devVersion(repoRoot);
 	const platform = detectPlatform();
 	console.log(`Packaging ${platform.pkgName} + @techreloaded/archetipo @ ${version}\n`);
 

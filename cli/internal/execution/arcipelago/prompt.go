@@ -12,7 +12,7 @@ const plannedStatus = execution.PlannedStatus
 // the hub: the agent stands in the runner's checkout, not in the directory the
 // person has open. It lives in one place because the difference between the
 // prompts is the work they ask for, never where the work happens.
-const runnerOpening = "Work in the runner working directory: it is a checkout of the ARchetipo project with the archetipo CLI and the ARchetipo skills already installed."
+const runnerOpening = "Work in the runner working directory: it is a checkout of the project, with the archetipo CLI and the ARchetipo skills already installed on the machine."
 
 // buildTask renders the remote task title, prompt and metadata for one spec
 // action. The fork is on the action and nothing else: both actions are

@@ -223,7 +223,7 @@ Il provider `arcipelago` manda `spec.plan` e `spec.implement` a una flotta remot
 Una volta sola, sull'hub, da amministratore:
 
 ```bash
-arcipelago workspaces create demo --cwd /workspace --requires project:demo --model <provider/modello>
+arcipelago workspaces create demo --cwd /workspace --requires archetipo,project:demo --model <provider/modello>
 arcipelago apps create archetipo --workspace demo    # stampa il token una volta sola
 ```
 
@@ -238,7 +238,7 @@ archetipo execution run US-001 plan
 
 `execution setup` legge il token dall'ambiente per verificarlo, e non lo scrive da nessuna parte: `.archetipo/config.yaml` registra solo il *nome* della variabile, `token_env`, che di default è `ARCIPELAGO_TOKEN`. L'export sta nel profilo della shell, o in quello che la CI usa per i segreti.
 
-Il provider richiede che la working directory del runner sia un checkout di questo progetto, con le skill ARchetipo installate e lo stesso connector configurato. `--requires project:<slug>` sul workspace è il modo di dichiararlo: un runner che non espone quel tag viene rifiutato subito, nominando ciò che manca, invece di lasciare il lavoro in coda fino allo scadere dell'attesa locale. `archetipo doctor` dice la stessa cosa prima ancora di spedire qualcosa. Vedi [`docs/wiki/decisions/remote-plan-ownership.md`](docs/wiki/decisions/remote-plan-ownership.md).
+Il provider chiede due cose alla macchina che prende il lavoro, e le dichiara separate perché hanno proprietari diversi: la CLI e le skill ARchetipo devono essere installate su di essa — `archetipo` — e la sua working directory dev'essere un checkout di questo progetto, con lo stesso connector configurato — `project:<slug>`. Un runner che non espone un tag richiesto viene rifiutato subito, nominando ciò che manca, invece di lasciare il lavoro in coda fino allo scadere dell'attesa locale; `archetipo doctor` dice la stessa cosa prima ancora di spedire qualcosa. [`docs/running-on-arcipelago.md`](docs/running-on-arcipelago.md) racconta come si provisiona una flotta; [`docs/wiki/decisions/remote-plan-ownership.md`](docs/wiki/decisions/remote-plan-ownership.md) perché il confine sta dove sta.
 
 Per sviluppo locale della CLI senza pubblicare pacchetti npm, vedi [`guides/dev-local-cli.md`](guides/dev-local-cli.md).
 
