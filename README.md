@@ -78,6 +78,10 @@ After that, use the `/archetipo-*` skills inside your AI coding agent. The skill
 
 To use ARchetipo as the software-delivery tool inside [Hermes](https://github.com/nousresearch/hermes-agent), with one Hermes Project and Kanban board per repository, see [`integrations/hermes/`](integrations/hermes/README.md).
 
+### Using with Copilot Studio
+
+To run inception and design as a single Copilot Studio agent powered by the GitHub Copilot harness, with the PRD and the mockups handed back as downloads instead of written to a repository, see [`integrations/copilot/`](integrations/copilot/README.md).
+
 ---
 
 ## Workflow
