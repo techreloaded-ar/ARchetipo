@@ -176,6 +176,13 @@
 		deliveredOpen: "Rivedi e crea",
 		// Passo successivo
 		nextStepRun: "Avvia",
+		// Le azioni del processo, dal compositore. Il menu e' l'unico posto in
+		// cui si scelgono: quelle di workspace e, se il thread e' di una spec,
+		// quelle della spec, ciascuna con il motivo per cui non si puo' premere.
+		actions: "Azioni",
+		actionsMenuLabel: "Azioni del processo",
+		actionsLoading: "Lettura delle azioni…",
+		actionsNone: "Nessuna azione del processo si può avviare adesso.",
 		// Il dettaglio tecnico, ripiegato.
 		//
 		// Una conversazione la si legge per le risposte dell'agente: gli
@@ -1208,10 +1215,52 @@
 				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
 				${typeof agentRow === "string" ? agentRow : ""}
 				${hintHtml}
+				${renderActionsMenu(objectAt(ui, "actionsMenu"), ui)}
 				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 			</div>
 			${await_}
 		</form>`;
+	}
+
+	// Il menu delle azioni del processo, accanto a Invia. Chiuso e' un
+	// bottone; aperto elenca le voci che il chiamante ha letto dal server —
+	// {scope, action, code, label, runnable, reason} — e una voce che non si
+	// puo' avviare resta, inerte, col suo motivo: e' il motivo che dice a chi
+	// legge che cosa manca. Nessuna regola del processo vive qui: il modulo non
+	// sa quali azioni esistano ne' quando siano ammesse.
+	function renderActionsMenu(menu, ui) {
+		if (!menu) return "";
+		const open = menu.open === true;
+		const busy = !!(ui && ui.busy);
+		const button = `<button type="button" class="ghost-btn conv-actions-btn" data-conversation-actions-toggle aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}"${busy ? " disabled" : ""}>${escapeHtml(TEXT.actions)}</button>`;
+		if (!open) return `<div class="conv-actions">${button}</div>`;
+		let body;
+		if (menu.loading === true) {
+			body = `<p class="conv-actions-note" role="status">${escapeHtml(TEXT.actionsLoading)}</p>`;
+		} else {
+			const items = arrayAt(menu, "items").filter((item) => item && typeof item === "object" && textAt(item, "action"));
+			if (!items.length) {
+				body = `<p class="conv-actions-note" role="status">${escapeHtml(TEXT.actionsNone)}</p>`;
+			} else {
+				const rows = items.map((item) => {
+					const label = textAt(item, "label") || textAt(item, "action");
+					const code = textAt(item, "code");
+					const reason = item.runnable === true ? "" : textAt(item, "reason");
+					const attrs =
+						` data-conversation-action="${escapeHtml(textAt(item, "action"))}"` +
+						` data-conversation-action-scope="${escapeHtml(textAt(item, "scope"))}"` +
+						` data-conversation-action-spec="${escapeHtml(code)}"`;
+					const disabled = item.runnable === true ? "" : " disabled";
+					return `<li role="none"><button type="button" role="menuitem" class="conv-actions-option"${attrs}${disabled}>
+						<span class="conv-actions-label">${escapeHtml(label)}</span>
+						${code ? `<code class="conv-actions-code">${escapeHtml(code)}</code>` : ""}
+						${reason ? `<span class="conv-actions-reason">${escapeHtml(reason)}</span>` : ""}
+					</button></li>`;
+				});
+				body = `<ul class="conv-actions-menu" role="menu" aria-label="${escapeHtml(TEXT.actionsMenuLabel)}">${rows.join("")}</ul>`;
+			}
+		}
+		return `<div class="conv-actions is-open">${button}${body}</div>`;
 	}
 
 	function renderConversationInputs(view, ui) {

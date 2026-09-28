@@ -220,13 +220,25 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 	// chip del pannello, il passo raccomandato e la dichiarazione della
 	// funzione stessa.
 	it("nessun nuovo punto di avvio è comparso in app.js", () => {
-		// Due avvii, ciascuno nominato una volta oltre la propria dichiarazione:
-		// startPanelAction dalle chip di un pannello montato, startActionOnTarget
-		// dal passo raccomandato. Un terzo nome sarebbe un terzo cammino.
+		// Due avvii. startPanelAction dalle chip di un pannello montato;
+		// startActionOnTarget dal passo raccomandato e dal menu delle azioni
+		// del compositore, che sono le due facce dello stesso gesto nel
+		// thread. Un terzo nome sarebbe un terzo cammino.
 		const panel = js.split("startPanelAction(").length - 1;
 		const direct = js.split("startActionOnTarget(").length - 1;
 		assert.equal(panel, 2, `i punti che nominano startPanelAction( sono ${panel} invece di 2`);
-		assert.equal(direct, 2, `i punti che nominano startActionOnTarget( sono ${direct} invece di 2`);
+		assert.equal(direct, 3, `i punti che nominano startActionOnTarget( sono ${direct} invece di 3`);
+	});
+
+	it("la modale del PRD non offre più le azioni: segue solo un'esecuzione in corso", () => {
+		const load = blockAfter(js, "async function loadWorkspaceActions(");
+		assert.ok(!load.includes("renderSpecActions("), "la modale del PRD disegna ancora le chip delle azioni: l'inception tornerebbe a nascondersi lì");
+		assert.ok(load.includes("isExecutionTerminal("), "la modale del PRD non guarda più se c'è un'esecuzione in corso da seguire");
+		assert.ok(!html.includes("Azioni sul workspace"), "la modale del PRD intitola ancora una sezione «Azioni sul workspace»");
+		// Le azioni si scelgono dal compositore, con lo stesso avvio del passo.
+		const load2 = blockAfter(js, "async function loadConversationActions(");
+		assert.ok(load2.includes("/api/workspace/actions"), "il menu del compositore non legge le azioni di workspace");
+		assert.ok(load2.includes("action.offered !== true"), "il menu del compositore mostra azioni che il workspace non offre");
 	});
 
 	it("il pannello conversazione riceve il passo dallo stato del workspace", () => {

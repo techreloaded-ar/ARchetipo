@@ -1199,6 +1199,49 @@ describe("renderConversation — la run dentro il flusso", () => {
 // behaviour. The step arrives as local, non-payload state of the panel
 // (`ui.nextStep`), because it is a fact of the workspace and not of this
 // conversation.
+describe("renderConversation — il menu delle azioni nel compositore", () => {
+	const MENU = {
+		open: true,
+		items: [
+			{ scope: "spec", action: "plan", code: "US-002", label: "Pianifica", runnable: true },
+			{ scope: "workspace", action: "backlog", code: "", label: "Genera backlog", runnable: false, reason: "MOTIVO-DEL-SERVER" },
+		],
+	};
+
+	it("chiuso è un bottone accanto a Invia, aperto elenca le azioni con il loro motivo", () => {
+		const closed = renderConversation(LIVE, "", { actionsMenu: { open: false, items: [] } });
+		assert.match(closed, /data-conversation-actions-toggle/, "manca il bottone delle azioni");
+		assert.match(closed, /aria-expanded="false"/);
+		assert.ok(!closed.includes("conv-actions-menu"), "il menu è disegnato da chiuso");
+		assert.ok(
+			closed.indexOf("data-conversation-actions-toggle") < closed.lastIndexOf("Invia"),
+			"il bottone delle azioni non sta prima di Invia",
+		);
+
+		const open = renderConversation(LIVE, "", { actionsMenu: MENU });
+		assert.match(open, /aria-expanded="true"/);
+		const text = visibleText(open);
+		assert.match(text, /Pianifica/, "l'azione della spec non è elencata");
+		assert.match(text, /US-002/, "l'azione della spec non nomina la spec");
+		assert.match(text, /Genera backlog/, "l'azione di workspace non è elencata");
+		assert.match(text, /MOTIVO-DEL-SERVER/, "il motivo per cui un'azione non si avvia non si legge");
+		assert.match(open, /data-conversation-action="plan"[^>]*data-conversation-action-scope="spec"[^>]*data-conversation-action-spec="US-002"/);
+		assert.match(open, /data-conversation-action="backlog"[^>]*disabled/, "un'azione non avviabile è premibile");
+	});
+
+	it("senza azioni lo dice, e mentre legge lo dice", () => {
+		const none = renderConversation(LIVE, "", { actionsMenu: { open: true, items: [] } });
+		assert.match(visibleText(none), /Nessuna azione del processo/);
+		const loading = renderConversation(LIVE, "", { actionsMenu: { open: true, loading: true, items: [] } });
+		assert.match(visibleText(loading), /Lettura delle azioni/);
+	});
+
+	it("senza menu passato non disegna niente: il modulo non inventa azioni", () => {
+		const html = renderConversation(LIVE, "", {});
+		assert.ok(!html.includes("conv-actions"), "un menu compare senza che il chiamante l'abbia passato");
+	});
+});
+
 describe("renderConversation — passo successivo", () => {
 	const RUNNABLE = {
 		scope: "spec",

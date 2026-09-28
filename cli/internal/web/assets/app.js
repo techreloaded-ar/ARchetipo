@@ -5772,6 +5772,12 @@
 	// process action, so touching one surface can never change the other.
 	let conversationModelChoiceView = null;
 	let conversationModelChoiceSelection = null;
+	// Il menu delle azioni del compositore: aperto o no, e le voci lette dal
+	// server l'ultima volta che e' stato aperto. Si rilegge a ogni apertura,
+	// perche' che cosa si puo' avviare cambia con lo stato del workspace.
+	let conversationActionsOpen = false;
+	let conversationActionsLoading = false;
+	let conversationActionsItems = [];
 	let conversationModelChoiceLoadToken = 0;
 	let conversationCapabilities = [];
 	// Quale voce del menu delle skill è evidenziata. La skill scelta non sta
@@ -6056,6 +6062,33 @@
 					pill.getAttribute("data-conversation-pill") || "",
 				);
 				return;
+			}
+			// Il menu delle azioni: il bottone lo apre e lo chiude, una voce
+			// avvia l'azione che nomina — dallo stesso avvio del passo
+			// raccomandato — e un click fuori dal menu lo chiude.
+			if (e.target.closest("[data-conversation-actions-toggle]")) {
+				toggleConversationActions();
+				return;
+			}
+			const actionOption = e.target.closest("[data-conversation-action]");
+			if (actionOption) {
+				conversationActionsOpen = false;
+				renderConversationPanel();
+				startActionOnTarget(
+					{
+						scope: actionOption.getAttribute("data-conversation-action-scope") || "",
+						action: actionOption.getAttribute("data-conversation-action") || "",
+						code: actionOption.getAttribute("data-conversation-action-spec") || "",
+					},
+					null,
+				).catch((err) => {
+					showToast(err.message || String(err), "err");
+				});
+				return;
+			}
+			if (conversationActionsOpen && !e.target.closest(".conv-actions")) {
+				conversationActionsOpen = false;
+				renderConversationPanel();
 			}
 			const skillOption = e.target.closest("[data-conversation-skill-option]");
 			if (skillOption) {
@@ -6789,6 +6822,60 @@
 			: { message: text, skill: undefined };
 	}
 
+	// Apre il menu delle azioni e ne rilegge le voci: quelle di workspace da
+	// /api/workspace/actions — solo le offerte, come ovunque — e, se il thread
+	// e' di una spec, quelle della spec dal suo dettaglio. Ogni voce porta il
+	// motivo del server quando non si puo' avviare.
+	function toggleConversationActions() {
+		if (conversationActionsOpen) {
+			conversationActionsOpen = false;
+			renderConversationPanel();
+			return;
+		}
+		conversationActionsOpen = true;
+		conversationActionsLoading = true;
+		conversationActionsItems = [];
+		renderConversationPanel();
+		loadConversationActions().catch(() => {});
+	}
+
+	async function loadConversationActions() {
+		const specCode = currentConversationSpecCode();
+		const [workspace, spec] = await Promise.all([
+			apiGet("/api/workspace/actions").catch(() => null),
+			specCode
+				? apiGet(`/api/spec/${encodeURIComponent(specCode)}`).catch(() => null)
+				: Promise.resolve(null),
+		]);
+		if (!conversationActionsOpen) return;
+		const items = [];
+		((spec && spec.actions) || []).forEach((action) => {
+			if (!action || !action.id) return;
+			items.push({
+				scope: "spec",
+				action: action.id,
+				code: specCode,
+				label: action.label || action.id,
+				runnable: action.runnable === true,
+				reason: action.unlocked_by || action.unavailable_reason || "",
+			});
+		});
+		((workspace && workspace.actions) || []).forEach((action) => {
+			if (!action || !action.id || action.offered !== true) return;
+			items.push({
+				scope: "workspace",
+				action: action.id,
+				code: "",
+				label: action.label || action.id,
+				runnable: action.runnable === true,
+				reason: action.unlocked_by || action.unavailable_reason || "",
+			});
+		});
+		conversationActionsItems = items;
+		conversationActionsLoading = false;
+		renderConversationPanel();
+	}
+
 	function conversationSkillMenuMarkup(view) {
 		if (!view || !view.session || view.session.work !== "IDLE") return "";
 		const query = conversationSkillQuery();
@@ -6960,6 +7047,7 @@
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
+		conversationActionsOpen = false;
 		// L'eco locale appartiene alla conversazione che si sta lasciando: sotto
 		// un'altra sarebbe una frase detta a qualcun altro.
 		conversationPendingMessage = "";
@@ -7768,6 +7856,11 @@
 				// it has one, workspace-wide otherwise. The thread hosts it at
 				// its tail — it does not own it, and it does not decide whether
 				// it can be taken.
+				actionsMenu: {
+					open: conversationActionsOpen,
+					loading: conversationActionsLoading,
+					items: conversationActionsItems,
+				},
 				nextStep: (() => {
 					const status = nextStepStatusView();
 					return status && typeof status === "object"
@@ -8792,16 +8885,13 @@
 			return;
 		}
 		if (prdModal.classList.contains("hidden")) return;
-		// The assisted spec creation is offered beside the manual form, in the
-		// New spec modal, so it is deliberately not drawn here: see
-		// enterAssistedMode. Everything else the process declares is.
-		const offered = ((view && view.actions) || []).filter(
-			(a) => a.offered && a.id !== SPEC_DRAFT_ACTION,
-		);
-		// Nothing to offer and nothing left running is the only case where the
-		// panel has no reason to exist: an execution to resume keeps it up even
-		// when the action that started it is no longer offered.
-		if (!offered.length && !(view && view.execution)) {
+		// Le azioni non si avviano piu' da qui: si scelgono dal compositore
+		// della conversazione, e lo stato vuoto propone la prima. Il pannello
+		// resta per una cosa sola — seguire un'esecuzione di workspace ancora
+		// in corso, per un provider che non la legge in una conversazione —
+		// e senza niente in corso non c'e'.
+		const running = view && view.execution && !isExecutionTerminal(view.execution);
+		if (!running) {
 			hideWorkspaceActions();
 			return;
 		}
@@ -8815,14 +8905,10 @@
 			modelChoice: inceptionModelChoice,
 			settle: settleWorkspaceAction,
 		});
-		// Only the offered actions are drawn: an offered action that is not
-		// runnable stays a disabled chip carrying its `unavailable_reason`.
-		renderSpecActions(offered);
 		// The server hands back the workspace's last execution on every read, so
 		// reopening the modal finds the conversation it left behind and resumes
 		// following it without ever starting a second one.
 		resumeExecution(view.execution, WORKSPACE_CONTEXT);
-		loadModelChoice(WORKSPACE_CONTEXT);
 	}
 
 	function hideWorkspaceActions() {
