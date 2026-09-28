@@ -302,6 +302,19 @@ describe("renderConversationIndex", () => {
 		assert.ok(html.indexOf("Aperte") < html.indexOf("Ha una domanda"));
 	});
 
+	it("un'azione ferma su una domanda aspetta chi legge, anche se l'harness si dichiara fermo", () => {
+		const html = renderConversationIndex(
+			{
+				conversations: [
+					{ id: "conv-domanda", title: "Inception ferma", work: "IDLE", awaiting: true },
+				],
+			},
+			{ now: NOW },
+		);
+		assert.match(visibleText(threadWithTitle(html, "Inception ferma")), /aspetta te/);
+		assert.doesNotMatch(visibleText(html), /Al lavoro/);
+	});
+
 	it("segna con il puntino la conversazione con una risposta da leggere", () => {
 		const html = renderConversationIndex(
 			{

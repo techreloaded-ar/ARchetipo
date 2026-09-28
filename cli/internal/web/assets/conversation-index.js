@@ -138,6 +138,9 @@
 		const work = textAt(entry, "work");
 		if (work === WORK_ACTIVE) return "working";
 		if (WORK_WAITING.indexOf(work) >= 0) return "waiting";
+		// Il server sa anche quando un'azione e' ferma su una domanda che
+		// l'harness non dichiara come tale: lo dice con `awaiting`.
+		if (entry.awaiting === true) return "waiting";
 		return "open";
 	}
 

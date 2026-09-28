@@ -27,6 +27,7 @@ type conversationsRouteTestEntry struct {
 	MessageCount  int    `json:"message_count"`
 	ResumedFrom   string `json:"resumed_from"`
 	State         string `json:"state"`
+	Awaiting      bool   `json:"awaiting"`
 	Live          bool   `json:"live"`
 }
 
@@ -676,5 +677,50 @@ func TestRestoreConversationRefusesAnIDThatIsNotItsOwn(t *testing.T) {
 	}
 	if status, _, _ := conversationsRouteTestReadTranscript(t, srv, "conv-un-altra"); status != http.StatusNotFound {
 		t.Error("the refused restore wrote the record anyway")
+	}
+}
+
+// A thread carrying an action of the process that has not ended, while the
+// harness is not working, is stopped on a person: the index says so, because
+// a harness that reports idle after asking a question would otherwise leave
+// the question invisible.
+func TestConversationsIndexMarksAThreadStoppedOnAPersonAsAwaiting(t *testing.T) {
+	provider := newConversingProvider("chatty", 0)
+	srv := newConversationServer(t, provider)
+	store := conversationsRouteTestStore(t, srv)
+	ws := srv.session()
+
+	running := execution.Execution{ID: "exec-in-corso", Action: execution.ActionInception, Status: execution.StatusRunning, CreatedAt: time.Now().UTC()}
+	if err := ws.store.Create(context.Background(), running); err != nil {
+		t.Fatal(err)
+	}
+	ended := execution.Execution{ID: "exec-finita", Action: execution.ActionInception, Status: execution.StatusSucceeded, CreatedAt: time.Now().UTC()}
+	if err := ws.store.Create(context.Background(), ended); err != nil {
+		t.Fatal(err)
+	}
+	opened := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID: "conv-domanda", Title: "Ferma su una domanda", OpenedAt: opened, LastMessageAt: opened,
+		Work: execution.SessionIdle, Archive: execution.ArchiveOpen, ExecutionIDs: []string{running.ID}, Events: []execution.RunEvent{},
+	})
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID: "conv-lavora", Title: "Al lavoro", OpenedAt: opened, LastMessageAt: opened,
+		Work: execution.SessionTurnActive, Archive: execution.ArchiveOpen, ExecutionIDs: []string{running.ID}, Events: []execution.RunEvent{},
+	})
+	conversationsRouteTestSave(t, store, conversationlog.Record{
+		ID: "conv-conclusa", Title: "Azione finita", OpenedAt: opened, LastMessageAt: opened,
+		Work: execution.SessionIdle, Archive: execution.ArchiveOpen, ExecutionIDs: []string{ended.ID}, Events: []execution.RunEvent{},
+	})
+
+	view, body := conversationsRouteTestReadIndex(t, srv)
+	want := map[string]bool{"conv-domanda": true, "conv-lavora": false, "conv-conclusa": false}
+	for _, entry := range view.Conversations {
+		expected, known := want[entry.ID]
+		if !known {
+			continue
+		}
+		if entry.Awaiting != expected {
+			t.Errorf("%s: awaiting = %v, want %v: %s", entry.ID, entry.Awaiting, expected, body)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -38,8 +39,14 @@ type conversationEntryView struct {
 	// it. They travel apart because a reader needs them apart: "this thread
 	// is waiting for you" and "this thread has no process behind it right
 	// now" are different sentences, and the index draws only the first.
-	Work        string `json:"work,omitempty"`
-	Connection  string `json:"connection,omitempty"`
+	Work       string `json:"work,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	// Awaiting says the thread is stopped on a person: an action of the
+	// process is still running in it and the harness is not working — it
+	// asked something and is waiting for the answer. A harness that reports
+	// idle after asking would otherwise leave the thread looking like any
+	// other open one, and the question unanswered.
+	Awaiting    bool   `json:"awaiting"`
 	Live        bool   `json:"live"`
 	Native      bool   `json:"native"`
 	Resumable   bool   `json:"resumable"`
@@ -65,6 +72,42 @@ type conversationsView struct {
 	ProviderID        string `json:"provider_id,omitempty"`
 }
 
+// runningExecutionIDs is the set of executions of the workspace still under
+// way, read once for the whole index.
+func runningExecutionIDs(ctx context.Context, ws *workspaceSession) map[string]bool {
+	running := map[string]bool{}
+	if ws == nil || ws.store == nil {
+		return running
+	}
+	records, err := ws.store.List(ctx)
+	if err != nil {
+		return running
+	}
+	for _, record := range records {
+		if record.Status == execution.StatusRunning {
+			running[record.ID] = true
+		}
+	}
+	return running
+}
+
+// awaitingPerson says whether a thread is stopped on a person: open, not
+// working, and carrying an action of the process that has not ended.
+func awaitingPerson(record conversationlog.Record, running map[string]bool) bool {
+	if record.Archive == execution.ArchiveArchived || record.Work == execution.SessionTurnActive {
+		return false
+	}
+	if record.Work == execution.SessionWaitingInput || record.Work == execution.SessionWaitingApproval {
+		return true
+	}
+	for _, id := range record.ExecutionIDs {
+		if running[id] {
+			return true
+		}
+	}
+	return false
+}
+
 func closedConversationLimit(r *http.Request) (int, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get("closed_limit"))
 	if raw == "" {
@@ -83,7 +126,7 @@ func closedConversationLimit(r *http.Request) (int, error) {
 
 // conversationEntryOf renders one record. live is decided by the caller, which
 // is the only place that can see the holder.
-func conversationEntryOf(record conversationlog.Record, live bool) conversationEntryView {
+func conversationEntryOf(record conversationlog.Record, live bool, running map[string]bool) conversationEntryView {
 	state := record.FinalState
 	if record.Native() {
 		state = string(record.Work)
@@ -105,6 +148,7 @@ func conversationEntryOf(record conversationlog.Record, live bool) conversationE
 		State:         state,
 		Work:          string(record.Work),
 		Connection:    string(record.Connection),
+		Awaiting:      awaitingPerson(record, running),
 		Live:          live,
 		Native:        record.Native(),
 		Resumable:     record.Native() && record.Recovery == execution.RecoveryResumable,
@@ -157,6 +201,7 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 	for _, snapshot := range ws.conversation.list() {
 		alive[snapshot.id] = true
 	}
+	running := runningExecutionIDs(ctx, ws)
 	// Holding a thread is not the same as running it. A viewer that has just
 	// started holds every native conversation of the workspace, so it can be
 	// written to again without changing identity; the ones whose runtime was
@@ -174,7 +219,7 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 			}
 			closedCount++
 		}
-		views = append(views, conversationEntryOf(record, live))
+		views = append(views, conversationEntryOf(record, live, running))
 	}
 	openability := s.conversationOpenabilityOf(ctx, ws)
 	writeJSON(w, http.StatusOK, conversationsView{

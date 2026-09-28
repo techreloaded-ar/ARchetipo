@@ -72,7 +72,7 @@
 			"Definisci almeno un'epica nel backlog prima di creare una spec",
 		backlogUnreadable: "Il backlog non si è potuto leggere",
 		boardError: (reason) => `Errore: ${reason}`,
-		boardNoBacklog: "Questo workspace non ha ancora un backlog.",
+		boardMissingBacklog: "Questo workspace non ha ancora un backlog.",
 		boardGoConversation: "Vai alla conversazione",
 		stepNotStartable: "Questo passo non si può avviare adesso",
 		loadFailed: (reason) => `Lettura fallita: ${reason}`,
@@ -985,6 +985,19 @@
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && isTopModal(prdModal)) closePRD();
 	});
+	// Il menu delle azioni del compositore si chiude come ogni altro menu:
+	// con Esc, o con un click ovunque fuori da esso — anche fuori dal pannello.
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && conversationActionsOpen) {
+			conversationActionsOpen = false;
+			renderConversationPanel();
+		}
+	});
+	document.addEventListener("click", (e) => {
+		if (!conversationActionsOpen || e.target.closest(".conv-actions")) return;
+		conversationActionsOpen = false;
+		renderConversationPanel();
+	});
 
 	metricsBtn.addEventListener("click", openMetrics);
 	metricsModalClose.addEventListener("click", closeMetrics);
@@ -1851,10 +1864,17 @@
 			// avvia. Il percorso assoluto del file resta nel messaggio del
 			// server per chi lo vuole, in un `title`.
 			if (err && err.code === "E_PRECONDITION") {
-				const stage = workspaceStatusSnapshot && workspaceStatusSnapshot.stage;
+				// Lo stadio si legge dallo stato del workspace; alla prima
+				// apertura la board arriva prima di quella lettura, e allora si
+				// aspetta di averla, invece di tacere.
+				let status = workspaceStatusSnapshot;
+				if (!status) {
+					status = await apiGet("/api/workspace/status").catch(() => null);
+				}
+				const stage = status && status.stage;
 				const summary = stage && stage.summary ? String(stage.summary) : "";
 				boardEl.innerHTML = `<div class="board-columns"><div class="empty-board empty-board-guided" title="${escapeHtml(err.message || "")}">
-					<p class="empty-board-title">${escapeHtml(TEXT.boardNoBacklog)}</p>
+					<p class="empty-board-title">${escapeHtml(TEXT.boardMissingBacklog)}</p>
 					${summary ? `<p class="empty-board-stage">${escapeHtml(summary)}</p>` : ""}
 					<button type="button" class="ghost-btn" data-board-go-conversation>${escapeHtml(TEXT.boardGoConversation)}</button>
 				</div></div>`;
@@ -6085,10 +6105,6 @@
 					showToast(err.message || String(err), "err");
 				});
 				return;
-			}
-			if (conversationActionsOpen && !e.target.closest(".conv-actions")) {
-				conversationActionsOpen = false;
-				renderConversationPanel();
 			}
 			const skillOption = e.target.closest("[data-conversation-skill-option]");
 			if (skillOption) {
