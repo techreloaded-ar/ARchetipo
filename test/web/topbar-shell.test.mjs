@@ -111,8 +111,9 @@ function idsIn(markup) {
 	return [...markup.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
 }
 
-// The seven entries the bar used to keep one click away, and that the menu
-// must still hold. Losing one is losing a command, which no amount of tidying
+// The six entries the bar used to keep one click away, and that the menu
+// must still hold. «Ricarica» non c'e' piu': la pagina si aggiorna da sola
+// e il tasto R resta per chi lo aveva imparato. Losing one is losing a command, which no amount of tidying
 // makes acceptable.
 const COLLECTED = [
 	"metrics-btn",
@@ -121,7 +122,6 @@ const COLLECTED = [
 	"new-workspace-btn",
 	"workspaces-btn",
 	"config-btn",
-	"refresh-btn",
 ];
 
 describe("AC-5 — la barra superiore espone quattro cose a un click", () => {

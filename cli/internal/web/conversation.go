@@ -44,8 +44,12 @@ type conversationSnapshotView struct {
 	// free conversation. ResumedFrom is the past conversation it was resumed
 	// from, omitted for one that started on its own. Both are additive: a
 	// client that ignores them reads the payload exactly as before.
-	SpecCode    string `json:"spec_code,omitempty"`
-	ResumedFrom string `json:"resumed_from,omitempty"`
+	SpecCode string `json:"spec_code,omitempty"`
+	// ExecutionIDs are the actions of the process this conversation has been
+	// carrying out, so a client can tell "the step still running in this very
+	// thread" from a step running somewhere else.
+	ExecutionIDs []string `json:"execution_ids,omitempty"`
+	ResumedFrom  string   `json:"resumed_from,omitempty"`
 	// Action is the step of the process this conversation *is*, omitted for a
 	// free one. It is what tells a client that the agent it is reading is doing
 	// something rather than answering questions: the thread has an outcome, its

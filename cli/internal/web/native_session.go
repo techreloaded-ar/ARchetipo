@@ -831,7 +831,8 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 		ModelOptions: cloneModelOptions(record.NextTurn.Options), Events: page.Events, LastID: page.LastID,
 		HasMore: page.HasMore, Approvals: []execution.PendingApproval{}, Runs: []conversationRunView{},
 		Conversation: &conversationSnapshotView{ID: record.ID, WorkingDir: record.WorkingDir,
-			OpenedAt: record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"), SpecCode: record.SpecCode},
+			OpenedAt: record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"), SpecCode: record.SpecCode,
+			ExecutionIDs: append([]string(nil), record.ExecutionIDs...)},
 	}
 	view.NextTurn = record.NextTurn
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
@@ -878,7 +879,8 @@ func pastNativeConversationView(ws *workspaceSession, record conversationlog.Rec
 		ProviderID: record.ProviderID, Model: record.NextTurn.Model, ModelOptions: cloneModelOptions(record.NextTurn.Options),
 		Events: page.Events, LastID: page.LastID, HasMore: page.HasMore, Approvals: []execution.PendingApproval{}, Runs: []conversationRunView{},
 		Conversation: &conversationSnapshotView{ID: record.ID, State: execution.RunClosed, WorkingDir: record.WorkingDir,
-			OpenedAt: record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"), SpecCode: record.SpecCode},
+			OpenedAt: record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"), SpecCode: record.SpecCode,
+			ExecutionIDs: append([]string(nil), record.ExecutionIDs...)},
 	}
 	view.NextTurn = record.NextTurn
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)

@@ -479,6 +479,12 @@ html[data-theme="dark"] .brand-mark {
 	padding: var(--space-2);
 }
 
+.topbar-more-menu .menu-sep {
+	height: 1px;
+	margin: var(--space-1) var(--space-2);
+	background: var(--border);
+}
+
 .topbar-more-menu > .ghost-btn,
 .topbar-more-menu .dropdown > .ghost-btn {
 	width: 100%;
@@ -6898,6 +6904,14 @@ body.no-workspace [data-workspace-scoped] {
    same badge — because it is the same kind of thing to a reader, an agent at
    work. Every word comes from the payload through workspace-runs.js. */
 .workspace-runs:empty {
+	display: none;
+}
+
+/* Nella vista Conversazione la striscia tace: che cosa sta lavorando, che
+   cosa aspetta una risposta e che cosa c'e' da leggere lo dice gia' l'elenco
+   dei thread accanto, e la stessa cosa detta in due posti e' rumore. Sulla
+   board e nel dettaglio di una spec, dove l'elenco non c'e', resta. */
+#workspace-shell[data-view="conversation"] .workspace-runs {
 	display: none;
 }
 

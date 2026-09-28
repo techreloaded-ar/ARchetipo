@@ -344,7 +344,6 @@
 		if (!e.target.closest("[data-board-go-conversation]")) return;
 		setShellView("conversation");
 	});
-	const refreshBtn = document.getElementById("refresh-btn");
 	// The shell: one primary column holding one view at a time — the
 	// conversation, the board or the spec detail — plus the permanent view
 	// switcher that reaches whichever view is off screen. Which of them is on
@@ -749,7 +748,6 @@
 	let runSeams = new Set(); // event ids the timeline resumed at after a dropped channel
 	let runSeamPending = false; // the channel dropped: the next appended event opens a seam
 
-	refreshBtn.addEventListener("click", refreshBoardAndStatus);
 	modalClose.addEventListener("click", leaveSpecDetail);
 	// One command in the head of the spec detail: talk about *this* spec
 	// (US-058). It opens a conversation carrying the code of the spec on screen,
@@ -1362,6 +1360,9 @@
 			WorkspaceLayout.SHELL_CLASS_NARROW,
 		);
 		shellEl.classList.add(layout.shellClass);
+		// La vista corrente sta scritta sulla shell, cosi' il foglio di stile
+		// puo' decidere che cosa ha senso mostrare in ciascuna.
+		shellEl.dataset.view = layout.view;
 		applyPaneState(conversationEl, layout.panes.conversation);
 		applyPaneState(boardEl, layout.panes.board);
 		applyPaneState(modal, layout.panes.spec);
@@ -7879,9 +7880,17 @@
 				},
 				nextStep: (() => {
 					const status = nextStepStatusView();
-					return status && typeof status === "object"
-						? status.next_step
-						: null;
+					const step = status && typeof status === "object" ? status.next_step : null;
+					// Il passo che questo stesso thread sta gia' eseguendo non e'
+					// un passo da proporre: la run e' qui sopra, e ripeterlo in
+					// coda con «aspetta che finisca» direbbe a chi legge di
+					// aspettare cio' che sta guardando.
+					const running = step && step.running_execution_id ? String(step.running_execution_id) : "";
+					const mine = view && view.conversation && Array.isArray(view.conversation.execution_ids)
+						? view.conversation.execution_ids.map(String)
+						: [];
+					if (running && mine.indexOf(running) >= 0) return null;
+					return step;
 				})(),
 				// Lo stadio del workspace, nelle parole del processo: nello
 				// stato vuoto e' la frase che dice a chi arriva perche' il
