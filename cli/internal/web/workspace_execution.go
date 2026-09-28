@@ -360,9 +360,9 @@ func (s *Server) workspaceAvailability(ctx context.Context, ws *workspaceSession
 	}
 	reader, ok := ws.conn.(connector.PRDReader)
 	if !ok {
-		availability.prdUnreadable = "this connector does not expose a PRD"
+		availability.prdUnreadable = "questo connettore non espone un PRD"
 	} else if body, err := reader.ReadPRD(ctx); err != nil {
-		availability.prdUnreadable = "the PRD could not be read: " + err.Error()
+		availability.prdUnreadable = "il PRD non si è potuto leggere: " + err.Error()
 	} else {
 		availability.hasPRD = strings.TrimSpace(body) != ""
 	}
@@ -376,7 +376,7 @@ func (s *Server) workspaceAvailability(ctx context.Context, ws *workspaceSession
 		if errors.As(err, &coded) && coded.Code == iox.CodePreconditionMissing {
 			availability.hasBacklog = false
 		} else {
-			availability.backlogUnreadable = "the backlog could not be read: " + err.Error()
+			availability.backlogUnreadable = "il backlog non si è potuto leggere: " + err.Error()
 		}
 	} else {
 		availability.hasBacklog = len(summary.Codes) > 0
@@ -396,13 +396,13 @@ func (s *Server) workspaceAvailability(ctx context.Context, ws *workspaceSession
 func (a workspaceAvailability) reasonFor(actionID string) string {
 	capability, err := execution.RequiredCapability(execution.ActionID(actionID))
 	if err != nil {
-		return "this action cannot be started from the viewer yet"
+		return "questa azione non si può ancora avviare dal visore"
 	}
 	if a.workspaceHasRunning {
 		if a.runningID != "" {
-			return "execution " + a.runningID + " is already running for this workspace"
+			return "l'esecuzione " + a.runningID + " è già in corso su questo workspace"
 		}
-		return "an execution is already running for this workspace"
+		return "un'esecuzione è già in corso su questo workspace"
 	}
 	if reason := a.offers(actionID); reason != "" {
 		return reason
@@ -423,7 +423,7 @@ func (a workspaceAvailability) offers(actionID string) string {
 			return a.prdUnreadable
 		}
 		if a.hasPRD {
-			return "this workspace already has a PRD: a first inception would overwrite it"
+			return "questo workspace ha già un PRD: una prima inception lo sovrascriverebbe"
 		}
 		return ""
 	case execution.ActionBacklog:
@@ -434,13 +434,13 @@ func (a workspaceAvailability) offers(actionID string) string {
 			return a.prdUnreadable
 		}
 		if !a.hasPRD {
-			return "this workspace has no PRD yet: generate it with a first inception before the backlog"
+			return "questo workspace non ha ancora un PRD: producilo con una prima inception, poi il backlog"
 		}
 		if a.backlogUnreadable != "" {
 			return a.backlogUnreadable
 		}
 		if a.hasBacklog {
-			return "this workspace already has a backlog: the initial generation would replace it"
+			return "questo workspace ha già un backlog: la generazione iniziale lo sostituirebbe"
 		}
 		return ""
 	case execution.ActionSpecDraft:
@@ -455,11 +455,11 @@ func (a workspaceAvailability) offers(actionID string) string {
 			return a.backlogUnreadable
 		}
 		if !a.hasBacklog {
-			return "this workspace has no backlog yet: generate it before adding a spec"
+			return "questo workspace non ha ancora un backlog: generalo prima di aggiungere una spec"
 		}
 		return ""
 	default:
-		return "this action cannot be started from the viewer yet"
+		return "questa azione non si può ancora avviare dal visore"
 	}
 }
 
@@ -470,10 +470,10 @@ func (a workspaceAvailability) offers(actionID string) string {
 // generation, and each deserves its own next step.
 func workspaceRemedy(a workspaceAvailability, actionID string) string {
 	if a.workspaceHasRunning {
-		return "wait for it to finish before starting another one"
+		return "aspetta che finisca prima di avviarne un'altra"
 	}
 	if a.prdUnreadable != "" {
-		return "use a connector that exposes the PRD"
+		return "usa un connettore che espone il PRD"
 	}
 	// Each action answers only for the facts that can stop *it*. The switch is
 	// exhaustive on purpose: an action falling through to another one's remedy
@@ -483,27 +483,27 @@ func workspaceRemedy(a workspaceAvailability, actionID string) string {
 	case execution.ActionSpecDraft:
 		switch {
 		case a.backlogUnreadable != "":
-			return "use a connector that exposes the backlog"
+			return "usa un connettore che espone il backlog"
 		case !a.hasBacklog:
-			return "generate the initial backlog first, then come back to add a spec"
+			return "genera prima il backlog iniziale, poi torna qui per aggiungere una spec"
 		}
 	case execution.ActionBacklog:
 		switch {
 		case !a.hasPRD:
-			return "run a first inception to obtain the PRD before generating the backlog"
+			return "fai una prima inception per ottenere il PRD, poi genera il backlog"
 		case a.backlogUnreadable != "":
-			return "use a connector that exposes the backlog"
+			return "usa un connettore che espone il backlog"
 		case a.hasBacklog:
-			return "add specs with archetipo spec add instead, or remove the existing backlog deliberately before generating it again"
+			return "aggiungi le spec con archetipo spec add, oppure rimuovi di proposito il backlog esistente prima di generarlo di nuovo"
 		}
 	case execution.ActionInception:
 		if a.hasPRD {
-			return "edit the existing PRD instead, or remove it deliberately before running a first inception"
+			return "modifica il PRD esistente, oppure rimuovilo di proposito prima di fare una prima inception"
 		}
 	}
 	// Nothing about the state of the workspace stops this action, so what is
 	// left is the provider.
-	return "fix the default provider in the Execution panel of the configuration"
+	return "sistema il provider predefinito nella scheda Esecuzione della configurazione"
 }
 
 // prdDiscarder returns the connector as the workspace's own undo, or nil when

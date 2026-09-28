@@ -253,7 +253,7 @@ func TestWorkspaceInceptionRefusedWithoutADefaultProvider(t *testing.T) {
 	if action.Runnable {
 		t.Fatalf("an unconfigured workspace offers the inception: %#v", action)
 	}
-	if !strings.Contains(action.UnavailableReason, "no default execution provider is configured") {
+	if !strings.Contains(action.UnavailableReason, "nessun provider di esecuzione predefinito è configurato") {
 		t.Fatalf("the reason does not invite to pick a provider: %q", action.UnavailableReason)
 	}
 
@@ -261,7 +261,7 @@ func TestWorkspaceInceptionRefusedWithoutADefaultProvider(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("POST: %d %v", status, body)
 	}
-	if message, _ := body["error"].(string); !strings.Contains(message, "no default execution provider is configured") {
+	if message, _ := body["error"].(string); !strings.Contains(message, "nessun provider di esecuzione predefinito è configurato") {
 		t.Fatalf("the refusal does not invite to pick a provider: %q", message)
 	}
 	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {
@@ -947,7 +947,7 @@ func TestWorkspaceSpecDraftIsNotOfferedWithoutABacklog(t *testing.T) {
 	if action.Offered || action.Runnable {
 		t.Fatalf("a spec draft is offered on a workspace with no backlog: %#v", action)
 	}
-	if !strings.Contains(strings.ToLower(action.UnavailableReason), "no backlog") {
+	if !strings.Contains(strings.ToLower(action.UnavailableReason), "non ha ancora un backlog") {
 		t.Fatalf("the reason does not name the missing backlog: %q", action.UnavailableReason)
 	}
 
@@ -958,7 +958,7 @@ func TestWorkspaceSpecDraftIsNotOfferedWithoutABacklog(t *testing.T) {
 	if message, _ := body["error"].(string); message != action.UnavailableReason {
 		t.Fatalf("the refusal and the payload disagree:\n%q\n%q", message, action.UnavailableReason)
 	}
-	if hint, _ := body["hint"].(string); !strings.Contains(hint, "generate the initial backlog") {
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, "genera prima il backlog") {
 		t.Fatalf("the refusal does not say what to do instead: %q", hint)
 	}
 	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {
@@ -1206,7 +1206,7 @@ func TestWorkspaceSpecDraftRefusedWhenTheProviderLacksTheCapability(t *testing.T
 	// action falling through to another one's remedy is how a workspace blocked
 	// by an unusable provider ends up being told to edit its PRD.
 	hint, _ := body["hint"].(string)
-	if !strings.Contains(hint, "default provider") {
+	if !strings.Contains(hint, "provider predefinito") {
 		t.Fatalf("the refusal points elsewhere than at the provider: %q", hint)
 	}
 	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {

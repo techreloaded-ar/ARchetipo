@@ -263,7 +263,7 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 		)
 	}
 	if ws.service == nil {
-		return nil, iox.NewConflict("no execution provider is registered in this viewer", "start the viewer from a build that registers execution providers", nil)
+		return nil, iox.NewConflict("nessun provider di esecuzione è registrato in questo visore", "start the viewer from a build that registers execution providers", nil)
 	}
 	// The default is read from disk, not from the config the server booted with:
 	// the Execution panel can change it while the viewer runs, and starting an
@@ -590,12 +590,12 @@ func (s *Server) providerAvailabilityFor(ctx context.Context, ws *workspaceSessi
 }
 
 // reasonFor returns the reason the action cannot be started, or "" when it can.
-// The texts are English like the rest of the viewer, and every one of them names
+// The texts are Italian like the rest of the viewer, and every one of them names
 // what to do about it rather than only what is missing.
 func (a actionAvailability) reasonFor(actionID string) string {
 	capability, err := execution.RequiredCapability(execution.ActionID(actionID))
 	if err != nil {
-		return "this action cannot be started from the viewer yet"
+		return "questa azione non si può ancora avviare dal visore"
 	}
 	// A running execution blocks only the action it is running: since the
 	// dispatchGroup decision, a second start is not refused, because an action
@@ -604,9 +604,9 @@ func (a actionAvailability) reasonFor(actionID string) string {
 	// conservative refusal stays.
 	if a.specHasRunning && (a.runningAction == "" || a.runningAction == actionID) {
 		if a.runningID != "" {
-			return "execution " + a.runningID + " is already running for this spec"
+			return "l'esecuzione " + a.runningID + " è già in corso su questa spec"
 		}
-		return "an execution is already running for this spec"
+		return "un'esecuzione è già in corso su questa spec"
 	}
 	if reason := a.providerAvailability.reasonFor(capability); reason != "" {
 		return reason
@@ -616,7 +616,7 @@ func (a actionAvailability) reasonFor(actionID string) string {
 	// for the same reason the route refuses in that order — an incompatible
 	// provider is the more fundamental obstacle.
 	if execution.ActionID(actionID) == execution.ActionImplement && !a.specHasPlan {
-		return "this spec has no persisted plan: plan it before implementing it"
+		return "questa spec non ha un piano salvato: pianificala prima di implementarla"
 	}
 	return ""
 }
@@ -627,19 +627,19 @@ func (a actionAvailability) reasonFor(actionID string) string {
 // same sentence about the same configuration.
 func (a providerAvailability) reasonFor(capability execution.Capability) string {
 	if a.noRegistry {
-		return "no execution provider is registered in this viewer"
+		return "nessun provider di esecuzione è registrato in questo visore"
 	}
 	if a.noDefault {
-		return "no default execution provider is configured: pick one in the Execution panel of the configuration"
+		return "nessun provider di esecuzione predefinito è configurato: scegline uno nella scheda Esecuzione della configurazione"
 	}
 	if a.providerErr != nil {
-		return "the default execution provider " + quoted(a.providerID) + " is unavailable: " + a.providerErr.Error()
+		return "il provider di esecuzione predefinito " + quoted(a.providerID) + " non è disponibile: " + a.providerErr.Error()
 	}
 	if a.unavailableReason != "" {
-		return "the default execution provider " + quoted(a.providerID) + " is not usable: " + a.unavailableReason
+		return "il provider di esecuzione predefinito " + quoted(a.providerID) + " non è utilizzabile: " + a.unavailableReason
 	}
 	if !execution.Supports(a.capabilities, capability) {
-		return "the default execution provider " + quoted(a.providerID) + " does not declare the " + quoted(string(capability)) + " capability"
+		return "il provider di esecuzione predefinito " + quoted(a.providerID) + " non dichiara la capacità " + quoted(string(capability))
 	}
 	return ""
 }

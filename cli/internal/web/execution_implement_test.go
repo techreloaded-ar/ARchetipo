@@ -266,7 +266,7 @@ func TestRunSpecActionImplementRefusesASpecWithoutAPersistedPlan(t *testing.T) {
 		t.Fatalf("a refused implementation moved the spec to %s", detail.Spec.Status)
 	}
 	found, runnable, reason := actionChip(detail, "implement")
-	if !found || runnable || !strings.Contains(reason, "plan") {
+	if !found || runnable || !strings.Contains(reason, "piano") {
 		t.Fatalf("the chip does not explain the missing plan: found=%v runnable=%v reason=%q", found, runnable, reason)
 	}
 }
