@@ -106,8 +106,23 @@ func (s *Server) handleGetWorkspaceRuns(w http.ResponseWriter, r *http.Request) 
 			view.ConversationID = conversationID
 			view.AnchorEventID = anchor
 		}
+		// An action carried out inside a conversation has no run of its own to
+		// ask: the thread is where it lives, and what the thread is doing is
+		// what the rail must say. A turn in flight is work; anything else —
+		// idle after a question, waiting for an answer or an approval — is
+		// the agent waiting for a person, and the rail says so instead of
+		// declaring the action running while nobody is running it.
+		if view.ConversationID != "" {
+			if thread, readErr := ws.conversationStore().GetMetadata(ctx, view.ConversationID); readErr == nil && thread.Work != "" && thread.Work != execution.SessionTurnActive {
+				view.AwaitingResponse = true
+			}
+		}
 		target, notice, resolveErr := s.resolveRunTarget(ctx, ws, record.ID)
 		switch {
+		case view.ConversationID != "" && target.follower == nil:
+			// The thread is the run: there is no runner to be assigned, and a
+			// notice saying so would be telling the reader that something is
+			// missing when nothing is.
 		case resolveErr != nil:
 			// A run that could not be asked is reported, not hidden and not
 			// turned into an HTTP error: one unreachable run must not cost the

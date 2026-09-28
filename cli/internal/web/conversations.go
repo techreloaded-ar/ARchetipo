@@ -32,11 +32,19 @@ type conversationEntryView struct {
 	MessageCount  int    `json:"message_count"`
 	ResumedFrom   string `json:"resumed_from"`
 	State         string `json:"state"`
-	Live          bool   `json:"live"`
-	Native        bool   `json:"native"`
-	Resumable     bool   `json:"resumable"`
-	Archived      bool   `json:"archived"`
-	LegacyLimit   string `json:"legacy_limit,omitempty"`
+	// Work and Connection are the two facts State used to fold into one word:
+	// what the harness is doing in the thread — idle, a turn in flight, a
+	// question waiting for an answer — and whether a runtime is attached to
+	// it. They travel apart because a reader needs them apart: "this thread
+	// is waiting for you" and "this thread has no process behind it right
+	// now" are different sentences, and the index draws only the first.
+	Work        string `json:"work,omitempty"`
+	Connection  string `json:"connection,omitempty"`
+	Live        bool   `json:"live"`
+	Native      bool   `json:"native"`
+	Resumable   bool   `json:"resumable"`
+	Archived    bool   `json:"archived"`
+	LegacyLimit string `json:"legacy_limit,omitempty"`
 }
 
 // conversationsView is the index of the open workspace. Conversations is never
@@ -95,6 +103,8 @@ func conversationEntryOf(record conversationlog.Record, live bool) conversationE
 		MessageCount:  record.MessageCount,
 		ResumedFrom:   record.ResumedFrom,
 		State:         state,
+		Work:          string(record.Work),
+		Connection:    string(record.Connection),
 		Live:          live,
 		Native:        record.Native(),
 		Resumable:     record.Native() && record.Recovery == execution.RecoveryResumable,

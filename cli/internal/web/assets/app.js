@@ -6345,6 +6345,7 @@
 			window.ConversationIndex.renderConversationIndex(conversationsIndex, {
 				currentId: conversationsCurrentId,
 				undo: conversationsUndo,
+				unread: conversationsUnread(),
 			});
 		const nextList = conversationsRailEl.querySelector(".rail-list");
 		if (nextList) {
@@ -6451,6 +6452,80 @@
 		if (token !== conversationsIndexLoadToken) return;
 		conversationsIndex = view;
 		renderConversationsRail();
+	}
+
+	// ---- Da leggere ---------------------------------------------------------
+	//
+	// Quali thread hanno una risposta che chi guarda non ha ancora letto. E' un
+	// fatto di questo browser e di nessun altro: il server sa quanti messaggi
+	// ha un thread, non chi li ha visti. Percio' la memoria sta qui, per
+	// conversazione, come numero di messaggi visti l'ultima volta che il thread
+	// era a schermo. Una conversazione mai vista prima da questo browser e' da
+	// leggere se ha qualcosa dentro; la prima lettura in assoluto, invece,
+	// prende tutto per gia' letto — altrimenti ogni thread di un workspace
+	// aperto per la prima volta si accenderebbe insieme, e un segnale su tutto
+	// non segnala niente.
+	const CONVERSATIONS_SEEN_KEY = "archetipo.conversations.seen";
+	let conversationsSeen;
+
+	function readConversationsSeen() {
+		if (conversationsSeen !== undefined) return conversationsSeen;
+		try {
+			const raw = window.localStorage.getItem(CONVERSATIONS_SEEN_KEY);
+			const parsed = raw ? JSON.parse(raw) : null;
+			conversationsSeen = parsed && typeof parsed === "object" ? parsed : null;
+		} catch (_) {
+			conversationsSeen = null;
+		}
+		return conversationsSeen;
+	}
+
+	function writeConversationsSeen() {
+		try {
+			window.localStorage.setItem(
+				CONVERSATIONS_SEEN_KEY,
+				JSON.stringify(conversationsSeen || {}),
+			);
+		} catch (_) {
+			// Senza memoria il puntino non sopravvive al ricaricamento: il resto
+			// della pagina non ne risente.
+		}
+	}
+
+	function conversationsUnread() {
+		const entries =
+			conversationsIndex && Array.isArray(conversationsIndex.conversations)
+				? conversationsIndex.conversations
+				: [];
+		let seen = readConversationsSeen();
+		let changed = false;
+		if (seen === null) {
+			seen = {};
+			entries.forEach((entry) => {
+				if (entry && entry.id) seen[entry.id] = Number(entry.message_count) || 0;
+			});
+			conversationsSeen = seen;
+			changed = true;
+		}
+		const unread = {};
+		entries.forEach((entry) => {
+			if (!entry || !entry.id) return;
+			const count = Number(entry.message_count) || 0;
+			if (entry.id === conversationsCurrentId) {
+				// Quello a schermo e' letto per definizione, fino all'ultimo
+				// messaggio che l'indice gli conosce.
+				if (seen[entry.id] !== count) {
+					seen[entry.id] = count;
+					changed = true;
+				}
+				return;
+			}
+			if (entry.archived === true) return;
+			const known = seen[entry.id];
+			if (known === undefined ? count > 0 : count > known) unread[entry.id] = true;
+		});
+		if (changed) writeConversationsSeen();
+		return unread;
 	}
 
 	// The entries the index says are live — all of them, because a workspace

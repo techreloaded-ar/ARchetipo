@@ -7579,6 +7579,26 @@ body.no-workspace [data-workspace-scoped] {
 	animation: thread-pulse 1.4s var(--ease) infinite;
 }
 
+/* Chi aspetta una risposta e' fermo: il colore lo distingue, e niente pulsa. */
+.thread-flag.is-waiting {
+	color: var(--accent);
+}
+
+/* Il puntino di una risposta da leggere: solo il segno, nessuna parola. */
+.thread-flag.is-unread {
+	gap: 0;
+}
+
+.thread-flag.is-unread::before {
+	width: 8px;
+	height: 8px;
+	background: var(--accent);
+}
+
+.thread.is-unread .thread-title {
+	font-weight: 700;
+}
+
 @keyframes thread-pulse {
 	0%,
 	100% {

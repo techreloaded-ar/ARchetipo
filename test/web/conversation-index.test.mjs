@@ -22,9 +22,13 @@
 //   - ogni nota del pannello — la dichiarazione di ripresa e il rifiuto della
 //     colonna — porta il comando per chiuderla
 //   - a group with no members leaves no orphan heading
-//   - the live conversation is listed as such even when it has a spec code
-//   - US-059 AC-3 several live conversations stand together under "In corso"
-//     while a closed one stays out of that group
+//   - a conversation whose turn is in flight is listed under "Al lavoro" even
+//     when it has a spec code; one that is idle, or waiting for an answer, is
+//     listed under "Aperte" — whether or not a process is attached to it
+//   - US-059 AC-3 several working conversations stand together under "Al
+//     lavoro" while an archived one stays out of that group
+//   - a thread waiting for the person says so, and a thread with a reply not
+//     yet read carries the mark — and neither is declared "in corso"
 //   - US-059 AC-3 only the conversation on screen is marked current, even when
 //     more than one is live
 //   - US-059 AC-5 the limit notice renders the server's refusal verbatim, knows
@@ -160,7 +164,7 @@ describe("renderConversationIndex", () => {
 
 		// Le due stanno nello stesso gruppo: quello che le distingue è il codice
 		// sopra al titolo, non un'intestazione che le separa.
-		assert.match(visibleText(html), /Concluse/);
+		assert.match(visibleText(html), /Aperte/);
 		assert.doesNotMatch(visibleText(html), /Progetto/);
 
 		const free = threadWithTitle(html, "Conversazione di progetto");
@@ -215,26 +219,29 @@ describe("renderConversationIndex", () => {
 			{ now: NOW },
 		);
 
-		assert.match(html, /Concluse/);
-		assert.doesNotMatch(html, /In corso/);
+		assert.match(html, /Aperte/);
+		assert.doesNotMatch(html, /Al lavoro/);
 	});
 
-	it("elenca sotto «In corso» la conversazione viva, anche se ha un codice spec", () => {
+	it("elenca sotto «Al lavoro» la conversazione con un turno in corso, anche se ha un codice spec", () => {
 		const html = renderConversationIndex(
 			{
 				conversations: [
 					{
 						id: "conv-viva",
-						title: "Quella aperta adesso",
+						title: "Quella che lavora adesso",
 						last_message_at: ago(5 * 60 * 1000),
 						spec_code: "US-058",
+						work: "TURN_ACTIVE",
 						live: true,
 					},
 					{
-						id: "conv-vecchia",
-						title: "Quella di ieri",
+						id: "conv-ferma",
+						title: "Quella ferma da ieri",
 						last_message_at: ago(30 * HOUR),
 						spec_code: "US-057",
+						work: "IDLE",
+						live: true,
 					},
 				],
 			},
@@ -242,38 +249,90 @@ describe("renderConversationIndex", () => {
 		);
 
 		const visible = visibleText(html);
-		assert.match(visible, /In corso/);
+		assert.match(visible, /Al lavoro/);
 
-		const live = threadWithTitle(html, "Quella aperta adesso");
-		assert.match(visibleText(live), /in corso/);
+		const working = threadWithTitle(html, "Quella che lavora adesso");
+		assert.match(visibleText(working), /sta lavorando/);
 
-		// The live one is drawn first, under its own heading, and the spec
+		// The working one is drawn first, under its own heading, and the open
 		// group opens only after it.
 		assert.ok(
-			html.indexOf("In corso") < html.indexOf("Quella aperta adesso"),
+			html.indexOf("Al lavoro") < html.indexOf("Quella che lavora adesso"),
 		);
 		assert.ok(
-			html.indexOf("Quella aperta adesso") < html.indexOf("Quella di ieri"),
+			html.indexOf("Quella che lavora adesso") < html.indexOf("Quella ferma da ieri"),
 		);
-		assert.doesNotMatch(
-			visibleText(threadWithTitle(html, "Quella di ieri")),
-			/in corso/,
+		// Ferma con un processo attaccato: e' aperta, non «in corso». Il
+		// processo e' un fatto dell'infrastruttura, non della conversazione.
+		const idle = threadWithTitle(html, "Quella ferma da ieri");
+		assert.doesNotMatch(visibleText(idle), /sta lavorando|in corso/);
+		assert.ok(
+			html.indexOf("Aperte") < html.indexOf("Quella ferma da ieri"),
+			"an idle thread stands under Aperte even while a runtime is attached to it",
 		);
 	});
 
-	it("rende compatte le concluse e lascia prominenti quelle vive", () => {
+	it("una conversazione ferma senza processo sta fra le aperte, non fra le archiviate", () => {
 		const html = renderConversationIndex(
 			{
 				conversations: [
-					{id: "live", title: "Conversazione viva", live: true},
-					{id: "closed", title: "Conclusa", live: false},
+					{ id: "conv-rilasciata", title: "Rilasciata da ferma", work: "IDLE", connection: "RELEASED", live: false },
 				],
 			},
 			{ now: NOW },
 		);
-		assert.match(threadWithTitle(html, "Conversazione viva"), /is-live/);
-		assert.doesNotMatch(threadWithTitle(html, "Conversazione viva"), /is-closed/);
-		assert.match(threadWithTitle(html, "Conclusa"), /is-closed/);
+		assert.match(visibleText(html), /Aperte/);
+		assert.doesNotMatch(visibleText(html), /Archiviate/);
+		assert.doesNotMatch(threadWithTitle(html, "Rilasciata da ferma"), /is-closed/);
+	});
+
+	it("dice quando una conversazione aspetta chi legge, senza dichiararla al lavoro", () => {
+		const html = renderConversationIndex(
+			{
+				conversations: [
+					{ id: "conv-domanda", title: "Ha una domanda", work: "WAITING_INPUT", live: true },
+					{ id: "conv-permesso", title: "Chiede un permesso", work: "WAITING_APPROVAL", live: true },
+				],
+			},
+			{ now: NOW },
+		);
+		assert.doesNotMatch(visibleText(html), /Al lavoro/);
+		assert.match(visibleText(threadWithTitle(html, "Ha una domanda")), /aspetta te/);
+		assert.match(visibleText(threadWithTitle(html, "Chiede un permesso")), /aspetta te/);
+		assert.ok(html.indexOf("Aperte") < html.indexOf("Ha una domanda"));
+	});
+
+	it("segna con il puntino la conversazione con una risposta da leggere", () => {
+		const html = renderConversationIndex(
+			{
+				conversations: [
+					{ id: "conv-nuova", title: "Ha risposto", work: "IDLE", message_count: 4 },
+					{ id: "conv-letta", title: "Letta ieri", work: "IDLE", message_count: 2 },
+				],
+			},
+			{ now: NOW, unread: { "conv-nuova": true } },
+		);
+		const fresh = threadWithTitle(html, "Ha risposto");
+		assert.match(fresh, /is-unread/);
+		assert.match(fresh, /aria-label="da leggere"/);
+		assert.doesNotMatch(threadWithTitle(html, "Letta ieri"), /is-unread/);
+		// Da leggere non vuol dire in corso: nessuna etichetta di lavoro.
+		assert.doesNotMatch(visibleText(fresh), /sta lavorando|in corso/);
+	});
+
+	it("rende compatte le archiviate e lascia prominenti le aperte", () => {
+		const html = renderConversationIndex(
+			{
+				conversations: [
+					{id: "open", title: "Conversazione aperta", work: "IDLE"},
+					{id: "closed", title: "Archiviata", archived: true},
+				],
+			},
+			{ now: NOW },
+		);
+		assert.match(threadWithTitle(html, "Conversazione aperta"), /is-live/);
+		assert.doesNotMatch(threadWithTitle(html, "Conversazione aperta"), /is-closed/);
+		assert.match(threadWithTitle(html, "Archiviata"), /is-closed/);
 	});
 
 	it("offre di caricare le precedenti soltanto quando il server ne dichiara altre", () => {
@@ -384,10 +443,10 @@ describe("renderResumeBanner", () => {
 	});
 });
 
-describe("renderConversationIndex con più conversazioni vive", () => {
-	// The payload of a workspace holding two live conversations — one tied to a
-	// spec, one free — beside a third that has ended. It is the state US-059
-	// introduces, and the one the singular rail could not describe.
+describe("renderConversationIndex con più conversazioni al lavoro", () => {
+	// The payload of a workspace holding two working conversations — one tied
+	// to a spec, one free — beside a third that was archived. It is the state
+	// US-059 introduces, and the one the singular rail could not describe.
 	const twoLiveAndOneClosed = {
 		conversations: [
 			{
@@ -395,6 +454,7 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 				title: "Implementiamo US-059",
 				last_message_at: ago(2 * 60 * 1000),
 				spec_code: "US-059",
+				work: "TURN_ACTIVE",
 				live: true,
 			},
 			{
@@ -402,6 +462,7 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 				title: "Che ne pensi della rail",
 				last_message_at: ago(10 * 60 * 1000),
 				spec_code: "",
+				work: "TURN_ACTIVE",
 				live: true,
 			},
 			{
@@ -409,7 +470,8 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 				title: "Conversazione finita ieri",
 				last_message_at: ago(30 * HOUR),
 				spec_code: "US-058",
-				state: "CLOSED",
+				state: "ARCHIVED",
+				archived: true,
 				live: false,
 			},
 		],
@@ -428,10 +490,10 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 		return next === -1 ? after : after.slice(0, next);
 	}
 
-	it("tiene due conversazioni vive insieme sotto «In corso» e la chiusa fuori (AC-3)", () => {
+	it("tiene due conversazioni al lavoro insieme sotto «Al lavoro» e l'archiviata fuori (AC-3)", () => {
 		const html = renderConversationIndex(twoLiveAndOneClosed, { now: NOW });
 
-		const live = groupBody(html, "In corso");
+		const live = groupBody(html, "Al lavoro");
 		assert.ok(
 			live.includes("conv-viva-spec"),
 			"the live conversation tied to a spec is missing from the live group",
@@ -442,7 +504,7 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 		);
 		assert.ok(
 			!live.includes("conv-chiusa"),
-			"a conversation that has ended must not stand under In corso",
+			"a conversation that has ended must not stand under Al lavoro",
 		);
 		// Both of them carry the live flag, and only them.
 		assert.equal(
@@ -458,8 +520,8 @@ describe("renderConversationIndex con più conversazioni vive", () => {
 		// And the one that ended is still listed, under the group of what is
 		// over: closed is not hidden, it is elsewhere.
 		assert.ok(
-			groupBody(html, "Concluse").includes("conv-chiusa"),
-			"the closed conversation must still be listed under Concluse",
+			groupBody(html, "Archiviate").includes("conv-chiusa"),
+			"the archived conversation must still be listed under Archiviate",
 		);
 	});
 
@@ -553,29 +615,41 @@ describe("il comando di cancellazione di un thread", () => {
 						id: "conv-viva",
 						title: "Quella in corso",
 						last_message_at: ago(HOUR),
+						work: "TURN_ACTIVE",
 						live: true,
+					},
+					{
+						id: "conv-ferma",
+						title: "Quella ferma",
+						last_message_at: ago(HOUR),
+						work: "IDLE",
 					},
 					{
 						id: "conv-chiusa",
 						title: "Quella conclusa",
 						last_message_at: ago(3 * DAY),
+						archived: true,
 					},
 				],
 			},
 			{ now: NOW },
 		);
 
-	it("sta su ogni conversazione conclusa e dice quale cancella", () => {
+	it("sta su ogni conversazione archiviata e dice quale cancella", () => {
 		const html = rail();
 		assert.match(html, /data-conversation-delete="conv-chiusa"/);
 		assert.match(html, /Elimina la conversazione Quella conclusa/);
 	});
 
-	it("non compare su una conversazione ancora viva", () => {
+	it("non compare su una conversazione ancora aperta, al lavoro o ferma che sia", () => {
 		const html = rail();
 		assert.ok(
 			!html.includes('data-conversation-delete="conv-viva"'),
-			`a live conversation must carry no trash, got ${html}`,
+			`a working conversation must carry no trash, got ${html}`,
+		);
+		assert.ok(
+			!html.includes('data-conversation-delete="conv-ferma"'),
+			`an open conversation must carry no trash, got ${html}`,
 		);
 		assert.equal(html.match(/data-conversation-delete=/g).length, 1);
 	});

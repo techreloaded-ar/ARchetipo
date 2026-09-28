@@ -63,16 +63,22 @@
 	// The words this module owns. None of them names a step or a state of
 	// anybody's method: they are the furniture of a list — what its groups are,
 	// what the standing offer is, and what the list says when it is empty.
-	// I due gruppi dicono l'unica cosa che cambia il modo di leggere un thread:
-	// se sta ancora girando o se è finito. Raggrupparli invece per spec o
-	// progetto divideva la lista su un fatto che il codice accanto al titolo già
-	// dice, e lasciava le conversazioni senza spec sotto un'intestazione che non
-	// significa niente.
+	// I gruppi dicono l'unica cosa che cambia il modo di leggere un thread: che
+	// cosa sta facendo l'agente. Sta lavorando; e' fermo — magari con una
+	// domanda per chi legge, o con una risposta ancora da leggere; oppure e'
+	// archiviato. Raggrupparli invece per spec o progetto divideva la lista su
+	// un fatto che il codice accanto al titolo gia' dice. E raggrupparli per
+	// "processo attaccato o no" — com'era — diceva «in corso» di una
+	// conversazione ferma da ore, perche' quello e' un fatto dell'infrastruttura
+	// e non della conversazione.
 	const TEXT = {
 		newThread: "Nuova conversazione",
-		groupLive: "In corso",
-		groupDone: "Concluse",
-		live: "in corso",
+		groupWorking: "Al lavoro",
+		groupOpen: "Aperte",
+		groupDone: "Archiviate",
+		working: "sta lavorando",
+		waiting: "aspetta te",
+		unread: "da leggere",
 		empty: "Su questo workspace non c'è ancora nessuna conversazione.",
 		// Il comando di cancellazione dice sempre *quale* thread cancella: sta
 		// dentro una lista di righe che si somigliano, e un'etichetta uguale su
@@ -112,20 +118,64 @@
 		return !!(entry && typeof entry === "object" && entry.live);
 	}
 
-	function threadClasses(entry, currentId) {
+	// I valori con cui il server descrive che cosa sta facendo l'harness in un
+	// thread. Sono letti, mai derivati: il modulo li confronta e basta.
+	const WORK_ACTIVE = "TURN_ACTIVE";
+	const WORK_WAITING = ["WAITING_INPUT", "WAITING_APPROVAL"];
+
+	/**
+	 * Che cosa sta succedendo in un thread, in una parola sola: `working`
+	 * mentre un turno e' in corso, `waiting` quando l'agente ha una domanda
+	 * per chi legge, `done` per un thread archiviato o per una trascrizione
+	 * che non si puo' piu' riprendere, `open` in ogni altro caso. Se un
+	 * processo sia attaccato al thread non entra nella risposta: non cambia
+	 * niente di quello che chi legge deve fare.
+	 */
+	function activityOf(entry) {
+		if (!entry || typeof entry !== "object") return "open";
+		if (entry.archived === true) return "done";
+		if (entry.native === false) return "done";
+		const work = textAt(entry, "work");
+		if (work === WORK_ACTIVE) return "working";
+		if (WORK_WAITING.indexOf(work) >= 0) return "waiting";
+		return "open";
+	}
+
+	function isUnread(entry, ui) {
+		const unread = objectAt(ui, "unread");
+		const id = textAt(entry, "id");
+		return !!(unread && id && unread[id] === true);
+	}
+
+	function threadClasses(entry, currentId, ui) {
 		const classes = ["thread"];
-		classes.push(isLive(entry) ? "is-live" : "is-closed");
+		const activity = activityOf(entry);
+		classes.push(`is-${activity}`);
+		classes.push(activity === "done" ? "is-closed" : "is-live");
+		if (isUnread(entry, ui)) classes.push("is-unread");
 		if (!textAt(entry, "spec_code")) classes.push("is-free");
 		const id = textAt(entry, "id");
 		if (currentId && id && id === currentId) classes.push("is-current");
 		return classes;
 	}
 
-	function renderMeta(entry, now) {
+	function renderMeta(entry, now, ui) {
 		const parts = [];
-		if (isLive(entry)) {
+		const activity = activityOf(entry);
+		if (activity === "working") {
 			parts.push(
-				`<span class="thread-flag is-live">${TEXT.live}</span>`,
+				`<span class="thread-flag is-live is-working">${TEXT.working}</span>`,
+			);
+		} else if (activity === "waiting") {
+			parts.push(
+				`<span class="thread-flag is-waiting">${TEXT.waiting}</span>`,
+			);
+		} else if (isUnread(entry, ui)) {
+			// Il puntino di chi ha qualcosa da leggere: una risposta arrivata
+			// mentre si guardava altrove. Non e' «in corso» — niente sta
+			// succedendo — ed e' esattamente quello che lo distingue.
+			parts.push(
+				`<span class="thread-flag is-unread" role="img" aria-label="${escapeHtml(TEXT.unread)}"></span>`,
 			);
 		}
 		const when = relativeTime(textAt(entry, "last_message_at"), now);
@@ -138,25 +188,26 @@
 	// sinistra e occupava una colonna anche per le conversazioni che una spec non
 	// ce l'hanno, dove disegnava un segnaposto di tre puntini che non diceva
 	// niente e stringeva il titolo di tutte le altre.
-	function renderThread(entry, currentId, now) {
+	function renderThread(entry, currentId, now, ui) {
 		if (!entry || typeof entry !== "object") return "";
 		const id = textAt(entry, "id");
 		const code = textAt(entry, "spec_code");
-		const classes = threadClasses(entry, currentId).join(" ");
+		const classes = threadClasses(entry, currentId, ui).join(" ");
 		const current = classes.indexOf("is-current") >= 0 ? ` aria-current="true"` : "";
 		const codeHtml = code
 			? `<span class="thread-code">${escapeHtml(code)}</span>`
 			: "";
-		// Solo i thread conclusi portano il comando di cancellazione, ed è la
-		// stessa regola che il server applica: una conversazione ancora viva si
-		// chiude, non si butta via. Disegnarlo anche là offrirebbe un comando
-		// che verrebbe rifiutato.
+		// Solo i thread archiviati portano il comando di cancellazione: una
+		// conversazione aperta si archivia, non si butta via, e il server
+		// rifiuta comunque di cancellarne una che sta ancora tenendo.
+		// Disegnarlo anche là offrirebbe un comando che verrebbe rifiutato, o
+		// che porterebbe via un thread in cui l'agente sta ancora aspettando.
 		//
 		// Il comando è fratello del thread e non figlio suo: un bottone dentro
 		// un bottone non è markup valido, e il puntatore finirebbe per aprire il
 		// thread che si sta cancellando. Per questo la riga li tiene entrambi.
 		const label = textAt(entry, "title") || id;
-		const remove = isLive(entry)
+		const remove = activityOf(entry) !== "done" || isLive(entry)
 			? ""
 			: `<button type="button" class="thread-delete-btn" data-conversation-delete="${escapeHtml(id)}" title="${escapeHtml(TEXT.deleteThread(label))}" aria-label="${escapeHtml(TEXT.deleteThread(label))}">
 				<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 4.5h9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M6 2.5h4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 4.5v8h6v-8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.75 6.5v4.25M9.25 6.5v4.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -165,7 +216,7 @@
 			<button type="button" class="${classes}" data-conversation-id="${escapeHtml(id)}"${current}>
 				${codeHtml}
 				<span class="thread-title">${escapeHtml(textAt(entry, "title"))}</span>
-				${renderMeta(entry, now)}
+				${renderMeta(entry, now, ui)}
 			</button>
 			${remove}
 		</div>`;
@@ -176,10 +227,10 @@
 	 * an orphan heading standing over nothing, which reads as a list that failed
 	 * to load rather than as a group that has no members.
 	 */
-	function renderGroup(label, entries, currentId, now) {
+	function renderGroup(label, entries, currentId, now, ui) {
 		if (!entries.length) return "";
 		const threads = entries
-			.map((entry) => renderThread(entry, currentId, now))
+			.map((entry) => renderThread(entry, currentId, now, ui))
 			.join("");
 		return `<p class="rail-group">${label}</p>${threads}`;
 	}
@@ -303,17 +354,22 @@
 		${dock}`;
 		}
 
-		// Every entry the payload marks as live, and not "the" live one: a
-		// workspace holds more than one at a time (US-059, AC-3). The filter is
-		// what makes that true — a `find` here would draw one and silently hide
-		// the others, which is precisely the assumption of uniqueness this rail
-		// must not make.
-		const live = entries.filter(isLive);
-		const done = entries.filter((entry) => !isLive(entry));
+		// Ogni thread sta nel gruppo di cio' che l'agente vi sta facendo, e un
+		// gruppo puo' tenerne quanti ne arrivano: un workspace ne ha piu' d'uno
+		// al lavoro insieme (US-059, AC-3), e un `find` qui ne disegnerebbe uno
+		// nascondendo gli altri. Chi aspetta una risposta sta fra le aperte, con
+		// la sua etichetta: e' ferma, e la fermata e' il fatto da leggere.
+		const working = entries.filter((entry) => activityOf(entry) === "working");
+		const open = entries.filter((entry) => {
+			const activity = activityOf(entry);
+			return activity === "open" || activity === "waiting";
+		});
+		const done = entries.filter((entry) => activityOf(entry) === "done");
 
 		const groups = [
-			renderGroup(TEXT.groupLive, live, currentId, now),
-			renderGroup(TEXT.groupDone, done, currentId, now),
+			renderGroup(TEXT.groupWorking, working, currentId, now, ui),
+			renderGroup(TEXT.groupOpen, open, currentId, now, ui),
+			renderGroup(TEXT.groupDone, done, currentId, now, ui),
 		]
 			.filter(Boolean)
 			.join("");
