@@ -183,6 +183,19 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 				}
 				text = rest
 			}
+			// Two more user frames are not the person's either. The
+			// instruction a caller composed is shown as what it asked for,
+			// not as the prompt it took to ask it; the body of a skill the
+			// harness expanded is the working of the agent, not a message,
+			// and it is filed with the tool that loaded it.
+			if display, echo := s.instructionEchoOf(text); echo {
+				s.append(localrun.KindUserMessage, display, "", raw)
+				continue
+			}
+			if name, ok := skillPreambleOf(text); ok {
+				s.append(localrun.KindInstruction, name, "Skill", raw)
+				continue
+			}
 			s.append(localrun.KindUserMessage, text, "", raw)
 		default:
 			s.append(kindOf(f), "", "", raw)

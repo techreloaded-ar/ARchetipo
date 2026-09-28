@@ -13,6 +13,11 @@ package localrun
 // history the day an agent adds a message type.
 const (
 	KindUserMessage = "user_message"
+	// KindInstruction is a user frame nobody wrote: the text a harness injects
+	// on its own — the body of a skill it expanded, for one. It is part of the
+	// transcript and not of the exchange, which is why it has its own kind
+	// instead of passing for a message of the person.
+	KindInstruction = "instruction"
 	KindText        = "text"
 	KindThinking    = "thinking"
 	KindToolStart   = "tool_start"

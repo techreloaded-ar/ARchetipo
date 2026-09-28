@@ -704,3 +704,31 @@ func TestAppServerOmitsAnUnconfiguredReasoningEffort(t *testing.T) {
 		t.Fatalf("thread/start carried config = %#v", thread["config"])
 	}
 }
+
+// The prompt that starts an ARchetipo action is the viewer's, not the person's:
+// re-emitted, it is shown as what the person pressed, once, and the raw item
+// keeps the instruction whole.
+func TestAppServerShowsAnInstructionAsWhatWasAskedFor(t *testing.T) {
+	fake := newFakeCodex()
+	client, session := openSession(t, fake, defaultSettings())
+
+	before := len(session.Events(0))
+	client.expectInstruction("Plan the spec US-005", "Pianifica US-005")
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"Plan the spec US-005"}]}}`)
+	waitFor(t, func() bool { return len(session.Events(0)) > before })
+	events := session.Events(0)
+	last := events[len(events)-1]
+	if last.Kind != localrun.KindUserMessage || last.Text != "Pianifica US-005" {
+		t.Fatalf("the instruction entered the history as %#v", last)
+	}
+	if !strings.Contains(string(last.Raw), "Plan the spec US-005") {
+		t.Fatalf("the raw item lost the instruction: %s", last.Raw)
+	}
+
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"Plan the spec US-005"}]}}`)
+	waitFor(t, func() bool { return len(session.Events(0)) > before+1 })
+	events = session.Events(0)
+	if got := events[len(events)-1].Text; got != "Plan the spec US-005" {
+		t.Fatalf("a message of the person was rewritten: %q", got)
+	}
+}

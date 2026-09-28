@@ -1116,6 +1116,12 @@ type sendConversationMessageReq struct {
 	// still in flight — so the turn the provider opens can be told apart later
 	// from every turn that belongs to no action at all.
 	executionID string
+	// display is the text the history shows in place of the message when the
+	// message is an instruction composed by the viewer — the prompt that
+	// starts an action — and not words the person wrote. Not a JSON field for
+	// the same reason executionID is not: what the browser sends is what the
+	// person said, and it is shown as it is.
+	display string
 }
 
 // handleSendWorkspaceConversationMessage delivers a message to the open

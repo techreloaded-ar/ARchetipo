@@ -94,9 +94,41 @@ type appServer struct {
 	serverRequest func(rpcMessage)
 	notification  func(string, json.RawMessage)
 
+	// instructions are the messages a caller composed rather than the person,
+	// each with the text the history shows in its place, kept until the
+	// process re-emits them as user items. See streamSession.instructions in
+	// the claude provider: the reason is the same, and so is the rule.
+	instructions map[string]string
+
 	turnOnce sync.Once
 	turnDone chan struct{}
 	gone     chan struct{}
+}
+
+// expectInstruction remembers that prompt is an instruction the caller
+// composed, to be shown as display when the process re-emits it.
+func (a *appServer) expectInstruction(prompt, display string) {
+	if strings.TrimSpace(display) == "" || prompt == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.instructions == nil {
+		a.instructions = map[string]string{}
+	}
+	a.instructions[prompt] = display
+	a.mu.Unlock()
+}
+
+// instructionEchoOf answers the text the history shows in place of the
+// instruction a re-emitted user item echoes, consuming the memory of it.
+func (a *appServer) instructionEchoOf(text string) (display string, echo bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	display, echo = a.instructions[text]
+	if echo {
+		delete(a.instructions, text)
+	}
+	return display, echo
 }
 
 var _ localrun.Dialogue = (*appServer)(nil)

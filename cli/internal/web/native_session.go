@@ -674,7 +674,7 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	}
 	started, startErr := snapshot.sessionProvider.StartTurn(ctx, execution.StartTurnRequest{
 		Session: snapshot.session, TurnID: turnID, SubmissionID: submissionID, ExecutionID: executionID,
-		Message: body.Message, Model: requested.Model, Options: cloneModelOptions(requested.Options), Skills: selectedSkills,
+		Message: body.Message, Display: body.display, Model: requested.Model, Options: cloneModelOptions(requested.Options), Skills: selectedSkills,
 	})
 	if started.Delivery.State != "" {
 		delivery = started.Delivery

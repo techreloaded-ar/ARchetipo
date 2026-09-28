@@ -5766,6 +5766,15 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--text-dim);
 }
 
+.cev-instruction .conv-event-glyph {
+	background: none;
+	border: 1px solid var(--border-strong);
+}
+
+.cev-instruction .conv-event-kind {
+	color: var(--text-dim);
+}
+
 .cev-unknown .conv-event-glyph {
 	background: none;
 	border: 1px dashed var(--border-strong);

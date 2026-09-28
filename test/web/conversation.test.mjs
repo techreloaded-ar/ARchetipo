@@ -1832,6 +1832,28 @@ describe("la ripresa di una conversazione finita", () => {
 		);
 	});
 
+	// Il corpo di una skill che l'harness ha espanso arriva come frame utente,
+	// ma nessuno l'ha scritto: e' lavorazione, sta nella piega e la piega la
+	// nomina come skill, col nome che porta.
+	const CON_SKILL = withConversation({
+		events: [
+			{ id: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "AVVIA-INCEPTION" },
+			{ id: 2, at: "2026-08-21T10:00:02.000Z", kind: "tool_start", tool: "Skill", text: "" },
+			{ id: 3, at: "2026-08-21T10:00:03.000Z", kind: "instruction", tool: "Skill", text: "archetipo-inception" },
+			{ id: 4, at: "2026-08-21T10:00:04.000Z", kind: "text", text: "RISPOSTA-AGENTE" },
+		],
+		last_id: 4,
+	});
+
+	it("il corpo di una skill espansa sta nella piega, non fra le frasi di chi scrive", () => {
+		const html = renderConversation(CON_SKILL, "", {});
+		const text = visibleText(html);
+		assert.match(text, /AVVIA-INCEPTION/, "la frase che ha avviato l'azione non si legge");
+		assert.match(text, /RISPOSTA-AGENTE/, "la risposta dell'agente non si legge");
+		assert.match(text, /2 passaggi tecnici/, "la skill espansa non e' contata fra i passaggi tecnici");
+		assert.ok(!/cev-you[^]*archetipo-inception/.test(html), "la skill espansa e' disegnata come frase di chi scrive");
+	});
+
 	it("aperta, la piega rende esattamente le righe che teneva", () => {
 		const chiusa = renderConversation(CON_STRUMENTI, "", {});
 		const chiave = (chiusa.match(/data-conversation-technical-toggle="([^"]+)"/) || [])[1];

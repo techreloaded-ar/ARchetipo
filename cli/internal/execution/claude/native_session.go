@@ -159,6 +159,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	}
 	client.correlate(request.TurnID, request.SubmissionID)
 	message := nativeTurnMessage(request)
+	client.expectInstruction(message, request.Display)
 	turn := execution.SessionTurn{ID: request.TurnID, ExecutionID: request.ExecutionID, State: execution.TurnActive, Requested: execution.TurnConfiguration{Model: request.Model, Options: cloneStringMap(request.Options)}, StartedAt: p.now().UTC()}
 	session.process, session.client, session.current = process, client, &turn
 	session.connected = true

@@ -230,13 +230,19 @@ type SessionRequest struct {
 }
 
 type StartTurnRequest struct {
-	Session      SessionMetadata   `json:"session"`
-	TurnID       string            `json:"turn_id"`
-	SubmissionID string            `json:"submission_id"`
-	ExecutionID  string            `json:"execution_id,omitempty"`
-	Message      string            `json:"message"`
-	Model        string            `json:"model,omitempty"`
-	Options      map[string]string `json:"options,omitempty"`
+	Session      SessionMetadata `json:"session"`
+	TurnID       string          `json:"turn_id"`
+	SubmissionID string          `json:"submission_id"`
+	ExecutionID  string          `json:"execution_id,omitempty"`
+	Message      string          `json:"message"`
+	// Display is how the message is shown in the history when it is an
+	// instruction the caller composed rather than words the person wrote: the
+	// prompt that starts an ARchetipo action is such a message. Empty, the
+	// message enters the history as it is. Set, the history carries this text
+	// in its place, and the instruction itself travels only in the raw frame.
+	Display string            `json:"display,omitempty"`
+	Model   string            `json:"model,omitempty"`
+	Options map[string]string `json:"options,omitempty"`
 	// Skills are references selected from DiscoverSession. A provider validates
 	// them against the current native catalog before invocation.
 	Skills []SessionSkill `json:"skills,omitempty"`

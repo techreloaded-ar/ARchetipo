@@ -92,6 +92,11 @@ func (a *appServer) project(method string, params json.RawMessage) {
 	case "item/started":
 		kind, text, tool, carries := startedItem(params)
 		if carries {
+			if kind == localrun.KindUserMessage {
+				if display, echo := a.instructionEchoOf(text); echo {
+					text = display
+				}
+			}
 			a.append(kind, text, tool, params)
 		}
 		return

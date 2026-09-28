@@ -203,7 +203,9 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 		Requested: execution.TurnConfiguration{Model: request.Model, Options: cloneCodexStringMap(request.Options)}, StartedAt: p.now().UTC(),
 	}
 	client.correlate(request.TurnID, request.SubmissionID)
-	nativeID, err := client.startTurn(ctx, codexTurnMessage(request), cfg.Model, cfg.ReasoningEffort, request.Skills)
+	message := codexTurnMessage(request)
+	client.expectInstruction(message, request.Display)
+	nativeID, err := client.startTurn(ctx, message, cfg.Model, cfg.ReasoningEffort, request.Skills)
 	if err != nil {
 		delivery.State = execution.DeliveryUncertain
 		return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, err

@@ -865,3 +865,67 @@ func TestStreamSessionReportsAFailedWriteAsAFaultWhileTheProcessIsAlive(t *testi
 		t.Fatalf("the diagnostic lost the cause: %v", err)
 	}
 }
+
+// The prompt that starts an ARchetipo action is written by the viewer, not by
+// the person, and it comes back like every other user frame. The history shows
+// in its place what the person pressed, and the frame keeps the instruction
+// whole for whoever opens the technical detail.
+func TestStreamSessionShowsAnInstructionAsWhatWasAskedFor(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+
+	client.expectInstruction("Run the product inception for this workspace", "Avvia inception")
+	fake.emit(userFrame("Run the product inception for this workspace", true))
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+	events := session.Events(0)
+	last := events[len(events)-1]
+	if last.Text != "Avvia inception" {
+		t.Fatalf("the instruction entered the history as itself: %#v", last)
+	}
+	if !strings.Contains(string(last.Raw), "Run the product inception") {
+		t.Fatalf("the raw frame lost the instruction: %s", last.Raw)
+	}
+
+	// Consumed once: the same words written by the person afterwards are
+	// history as they are.
+	fake.emit(userFrame("Run the product inception for this workspace", true))
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 2 })
+	events = session.Events(0)
+	if got := events[len(events)-1].Text; got != "Run the product inception for this workspace" {
+		t.Fatalf("a message of the person was rewritten: %q", got)
+	}
+}
+
+// The body of a skill Claude Code expanded arrives as a user frame nobody wrote.
+// It is filed as the working of the agent, under the tool that loaded it and
+// with the name of the skill, and never as a message of the person.
+func TestStreamSessionFilesAnExpandedSkillAsAnInstruction(t *testing.T) {
+	fake := newFakeClaude()
+	_, session := openConversation(t, fake)
+
+	fake.emit(userFrame("Base directory for this skill: /ws/.claude/skills/archetipo-inception\n\n# ARchetipo - Product Inception Skill\n\nYou are...", true))
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindInstruction) == 1 })
+	if n := countEvents(session.Events(0), localrun.KindUserMessage); n != 0 {
+		t.Fatalf("the skill body entered the history as a message: %#v", session.Events(0))
+	}
+	events := session.Events(0)
+	last := events[len(events)-1]
+	if last.Text != "archetipo-inception" || last.Tool != "Skill" {
+		t.Fatalf("the expanded skill is filed as %#v", last)
+	}
+}
+
+func TestSkillPreambleOf(t *testing.T) {
+	cases := map[string]string{
+		"Base directory for this skill: /ws/.claude/skills/archetipo-plan\n\n# body": "archetipo-plan",
+		"Base directory for this skill: /ws/.claude/skills/archetipo-plan/":          "archetipo-plan",
+		"Base directory for this skill: ":                                            "",
+		"Run the product inception":                                                  "",
+	}
+	for text, want := range cases {
+		got, ok := skillPreambleOf(text)
+		if got != want || ok != (want != "") {
+			t.Fatalf("skillPreambleOf(%q) = %q, %v; want %q", text, got, ok, want)
+		}
+	}
+}

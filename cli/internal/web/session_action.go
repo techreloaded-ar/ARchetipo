@@ -128,7 +128,7 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 		ws.settleSessionAction(ctx, opened.ID, nil, err)
 		return nil, iox.NewConflict(err.Error(), "run this action from a coding agent instead", err)
 	}
-	if err := s.startActionTurn(ctx, ws, snapshot, opened.ID, prompt); err != nil {
+	if err := s.startActionTurn(ctx, ws, snapshot, opened.ID, prompt, actionDisplayOf(s.actionLabelOf(ws, plan.action, plan.specCode), plan.specCode)); err != nil {
 		ws.settleSessionAction(ctx, opened.ID, nil, err)
 		return nil, err
 	}
@@ -191,10 +191,22 @@ func (s *Server) conversationForAction(ctx context.Context, ws *workspaceSession
 // carries the execution id, so every later reader — the reconciliation, a
 // restart, a second tab — can tell which turns of this thread belong to which
 // action without holding anything in memory.
-func (s *Server) startActionTurn(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, executionID, prompt string) error {
+func (s *Server) startActionTurn(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, executionID, prompt, display string) error {
 	return s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{
-		Message: prompt, executionID: executionID,
+		Message: prompt, executionID: executionID, display: display,
 	})
+}
+
+// actionDisplayOf is the line the history shows for the start of an action:
+// the process's own word for it, and the spec it is about when it is about
+// one. It is what the person pressed, which is what they expect to read back —
+// and, being the first thing said in a thread opened for the action, it is
+// also what the thread is titled with.
+func actionDisplayOf(label, specCode string) string {
+	if code := strings.TrimSpace(specCode); code != "" {
+		return label + " " + code
+	}
+	return label
 }
 
 // actionAlreadyRunningIn reports the execution a conversation is already

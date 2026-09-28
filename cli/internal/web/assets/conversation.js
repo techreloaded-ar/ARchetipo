@@ -271,6 +271,14 @@
 			failed: true,
 		},
 		turn_end: { label: "fine turno", variant: "cev-turn-end", technical: true },
+		// Un frame utente che nessuno ha scritto: il corpo di una skill che
+		// l'harness ha espanso. E' lavorazione, non una frase di chi scrive,
+		// e sta nella piega col nome della skill.
+		instruction: {
+			label: "skill caricata",
+			variant: "cev-instruction",
+			technical: true,
+		},
 		error: { label: "errore", variant: "cev-error" },
 	};
 

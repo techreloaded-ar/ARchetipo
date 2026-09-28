@@ -119,7 +119,14 @@ type streamSession struct {
 	// openingHeld says the instruction has not been written yet, because this
 	// session opened without starting anything. It is given up to the first
 	// message, which carries it.
-	openingHeld       bool
+	openingHeld bool
+	// instructions are the messages written by a caller rather than by the
+	// person, each with the text the history shows in its place, kept until
+	// the process replays them. The prompt that starts an ARchetipo action is
+	// one: replayed as it is, it would be the longest thing the person never
+	// said. The replay carries the instruction whole in the raw frame, so
+	// nothing is lost — only the history reads what was asked, not how.
+	instructions      map[string]string
 	completed         bool
 	finalMessage      string
 	lastAssistantText string
@@ -419,6 +426,61 @@ func (s *streamSession) takeHeldOpening() (string, bool) {
 	}
 	s.openingHeld = false
 	return s.openingPrompt, true
+}
+
+// expectInstruction remembers that message is an instruction the caller
+// composed, to be shown as display when the process replays it. Remembered
+// before it is written, for the reason start gives: the replay can arrive while
+// the write is still returning.
+func (s *streamSession) expectInstruction(message, display string) {
+	if strings.TrimSpace(display) == "" || message == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.instructions == nil {
+		s.instructions = map[string]string{}
+	}
+	s.instructions[message] = display
+	s.mu.Unlock()
+}
+
+// instructionEchoOf answers, for a replayed block, the text the history shows
+// in place of the instruction it echoes, and false when the block is not one.
+// It consumes the memory of the instruction, so a person who later writes the
+// same words is heard as writing them.
+func (s *streamSession) instructionEchoOf(text string) (display string, echo bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	display, echo = s.instructions[text]
+	if echo {
+		delete(s.instructions, text)
+	}
+	return display, echo
+}
+
+// skillPreamble is how Claude Code opens the frame that carries the body of a
+// skill it expanded: a user frame nobody wrote, whose first line names where
+// the skill lives. The name of the skill is the last segment of that path.
+const skillPreamble = "Base directory for this skill: "
+
+// skillPreambleOf answers the name of the skill a replayed user block is the
+// expansion of, and false when the block is not one.
+func skillPreambleOf(text string) (name string, ok bool) {
+	if !strings.HasPrefix(text, skillPreamble) {
+		return "", false
+	}
+	line := text[len(skillPreamble):]
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	line = strings.TrimRight(strings.TrimSpace(line), "/")
+	if line == "" {
+		return "", false
+	}
+	if i := strings.LastIndexByte(line, '/'); i >= 0 {
+		line = line[i+1:]
+	}
+	return line, line != ""
 }
 
 // openingEchoOf answers what is left of a replayed block once the opening
