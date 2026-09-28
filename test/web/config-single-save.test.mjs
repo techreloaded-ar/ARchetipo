@@ -53,6 +53,14 @@ describe("la configurazione si salva con un bottone solo", () => {
 		assert.match(states, /configConnectorGrid/, "lo stato della modale ignora il connettore scelto");
 	});
 
+	it("il rilascio per inattivita' si legge e si scrive dal form guidato", () => {
+		assert.ok(html.includes('name="execution_idle_release_seconds"'), "la scheda Esecuzione non ha il campo del rilascio per inattivita'");
+		const settings = sectionOf(js, "function executionSettings()");
+		assert.match(settings, /idle_release_seconds/, "il form guidato non scrive execution.idle_release_seconds");
+		const build = sectionOf(js, "function buildGuidedConfig()");
+		assert.match(build, /executionSettings\(\)/, "buildGuidedConfig non porta le impostazioni di esecuzione");
+	});
+
 	it("il footer dice in quali schede ci sono modifiche non salvate", () => {
 		assert.ok(html.includes('id="config-dirty"'), "il footer non ha piu' la riga delle modifiche non salvate");
 		assert.match(js, /configUnsaved:/, "manca la frase per le modifiche non salvate");

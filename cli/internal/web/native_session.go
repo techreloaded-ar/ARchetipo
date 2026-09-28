@@ -936,65 +936,75 @@ func (s *Server) handleReopenNativeConversation(w http.ResponseWriter, r *http.R
 		writeError(w, iox.NewConflict("the conversation "+id+" is already open", "continue it directly", nil))
 		return
 	}
-	record, err := ws.conversationStore().GetMetadata(r.Context(), id)
+	snapshot, err := s.reopenNativeConversation(r.Context(), ws, id, true)
 	if err != nil {
-		writeError(w, conversationNotFound(id, err))
+		writeError(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, s.nativeConversationView(r.Context(), ws, snapshot, 0))
+}
+
+// reopenNativeConversation gives a conversation its runtime back: it takes the
+// ownership of the native session, holds the thread again, resumes the harness
+// process on it and starts following it. It is the one gesture behind two
+// routes — the explicit reopen, which also lifts the archive flag, and a
+// message written into a thread whose runtime was released while nobody was
+// looking, which must not need a person to notice that first.
+func (s *Server) reopenNativeConversation(ctx context.Context, ws *workspaceSession, id string, unarchive bool) (conversationSnapshot, error) {
+	record, err := ws.conversationStore().GetMetadata(ctx, id)
+	if err != nil {
+		return conversationSnapshot{}, conversationNotFound(id, err)
 	}
 	if !record.Native() {
-		writeError(w, iox.NewConflict("the conversation "+id+" has no native session reference", "keep reading the legacy transcript or explicitly create a new seeded conversation", nil))
-		return
+		return conversationSnapshot{}, iox.NewConflict("the conversation "+id+" has no native session reference", "keep reading the legacy transcript or export it into a new native conversation", nil)
+	}
+	if !unarchive && record.Archive == execution.ArchiveArchived {
+		return conversationSnapshot{}, iox.NewConflict("the conversation "+id+" is archived", "reopen it before sending another turn", nil)
 	}
 	if s.registry == nil {
-		writeError(w, iox.NewConflict("no execution provider registry is available", "start View with the original provider registered", nil))
-		return
+		return conversationSnapshot{}, iox.NewConflict("no execution provider registry is available", "start View with the original provider registered", nil)
 	}
 	provider, err := s.registry.Resolve(record.Session.ProviderID)
 	if err != nil {
-		writeError(w, iox.NewConflict("the original provider "+record.Session.ProviderID+" is not available", "restore that provider; changing the default does not move this session", err))
-		return
+		return conversationSnapshot{}, iox.NewConflict("the original provider "+record.Session.ProviderID+" is not available", "restore that provider; changing the workspace default does not move this session", err)
 	}
 	sessions, ok := execution.SessionProviderFor(provider)
 	if !ok {
-		writeError(w, iox.NewConflict("the original provider no longer supports native sessions", "restore a compatible provider adapter", nil))
-		return
+		return conversationSnapshot{}, iox.NewConflict("the original provider no longer supports native sessions", "restore a compatible provider adapter", nil)
 	}
 	// Claimed before the archive flag is lifted: reopening is where a second
 	// viewer would otherwise start its own runtime on a session this workspace
 	// is already holding elsewhere.
-	if err := ws.takeNativeRuntime(r.Context(), id); err != nil {
-		writeError(w, err)
-		return
+	if err := ws.takeNativeRuntime(ctx, id); err != nil {
+		return conversationSnapshot{}, err
 	}
-	record.Archive = execution.ArchiveOpen
-	if err := ws.conversationStore().Save(r.Context(), record); err != nil {
-		ws.nativeRuntime.drop(id)
-		writeError(w, iox.NewInternal("reopening the conversation "+id, err))
-		return
+	if unarchive && record.Archive != execution.ArchiveOpen {
+		record.Archive = execution.ArchiveOpen
+		if err := ws.conversationStore().Save(ctx, record); err != nil {
+			ws.nativeRuntime.drop(id)
+			return conversationSnapshot{}, iox.NewInternal("reopening the conversation "+id, err)
+		}
 	}
 	if err := ws.conversation.open(conversationHold{id: id, providerID: record.Session.ProviderID, sessionProvider: sessions,
 		session: *record.Session, providerConfig: execution.CloneConfig(record.Session.Environment.ProviderConfig),
 		model: record.NextTurn.Model, modelOptions: cloneModelOptions(record.NextTurn.Options), workingDir: record.Session.Environment.WorkingDir,
 		openedAt: record.OpenedAt, specCode: record.SpecCode}); err != nil {
 		ws.nativeRuntime.drop(id)
-		writeError(w, conversationOpenRefusal(r.Context(), ws, err))
-		return
+		return conversationSnapshot{}, conversationOpenRefusal(ctx, ws, err)
 	}
 	snapshot, _ := ws.conversation.get(id)
 	if err := requireSessionDirectory(snapshot); err != nil {
 		ws.conversation.forget(id)
 		ws.nativeRuntime.drop(id)
-		writeError(w, err)
-		return
+		return conversationSnapshot{}, err
 	}
-	if _, err := s.ensureNativeSession(r.Context(), ws, snapshot); err != nil {
+	if _, err := s.ensureNativeSession(ctx, ws, snapshot); err != nil {
 		ws.conversation.forget(id)
 		ws.nativeRuntime.drop(id)
-		writeError(w, iox.NewConflict("the native session could not be resumed", "restore its provider runtime and try again; nothing of this conversation has been deleted", err))
-		return
+		return conversationSnapshot{}, iox.NewConflict("the native session could not be resumed", "restore its provider runtime and try again; nothing of this conversation has been deleted", err)
 	}
 	ws.startNativeFollower(snapshot)
-	writeJSON(w, http.StatusOK, s.nativeConversationView(r.Context(), ws, snapshot, 0))
+	return snapshot, nil
 }
 
 func (s *Server) handleInterruptNativeConversation(w http.ResponseWriter, r *http.Request) {

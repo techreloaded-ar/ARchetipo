@@ -171,6 +171,7 @@ func (ws *workspaceSession) start(parent context.Context, broker *Broker) {
 		ws.dispatch.bind(ctx)
 		ws.nativeFollowers.bind(ctx)
 		ws.startNativeFollowers()
+		go ws.runIdleReleaser(ctx)
 
 		// A watcher failure is non-fatal — the viewer keeps working, just without
 		// live updates (clients fall back to the manual refresh button).

@@ -83,6 +83,31 @@ type TemplateConfig struct {
 
 type ExecutionConfig struct {
 	DefaultProvider *DefaultProviderConfig `yaml:"default_provider,omitempty" json:"default_provider,omitempty"`
+	// IdleReleaseSeconds is how long the viewer keeps the harness process of
+	// an idle conversation alive before releasing it. The conversation stays
+	// open and resumes on its next message — only the process goes, and with
+	// it the memory it held for nothing. Absent, DefaultIdleReleaseSeconds
+	// applies; zero means never, which is a pointer so that it can be told
+	// apart from absent.
+	IdleReleaseSeconds *int `yaml:"idle_release_seconds,omitempty" json:"idle_release_seconds,omitempty"`
+}
+
+// DefaultIdleReleaseSeconds is the release delay of an idle conversation when
+// the configuration names none: long enough that a person answering a question
+// finds the process still there, short enough that a thread forgotten for the
+// afternoon does not hold a quarter of a gigabyte for it.
+const DefaultIdleReleaseSeconds = 600
+
+// IdleRelease answers the delay after which the viewer releases the harness
+// process of an idle conversation, and zero when it never should.
+func (e ExecutionConfig) IdleRelease() time.Duration {
+	if e.IdleReleaseSeconds == nil {
+		return DefaultIdleReleaseSeconds * time.Second
+	}
+	if *e.IdleReleaseSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(*e.IdleReleaseSeconds) * time.Second
 }
 
 type DefaultProviderConfig struct {
@@ -638,6 +663,9 @@ func (c *Config) validate() error {
 		if err := checkPathWritable(c.AbsPath(ck.path)); err != nil {
 			return fmt.Errorf("config %s (%s): %w", ck.key, ck.path, err)
 		}
+	}
+	if c.Execution.IdleReleaseSeconds != nil && *c.Execution.IdleReleaseSeconds < 0 {
+		return fmt.Errorf("config execution.idle_release_seconds must be 0 (never) or a positive number of seconds, got %d", *c.Execution.IdleReleaseSeconds)
 	}
 	if c.Connector == ConnectorJira {
 		// project_key is optional: the connector auto-detects (or creates) the

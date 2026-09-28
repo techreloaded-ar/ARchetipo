@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
@@ -1057,5 +1058,32 @@ func assertSameDir(t *testing.T, got, want string) {
 	t.Helper()
 	if !sameDir(t, got, want) {
 		t.Fatalf("root = %q, want %q", got, want)
+	}
+}
+
+func TestExecutionIdleReleaseDefaultsZeroMeansNeverAndRejectsNegative(t *testing.T) {
+	var absent ExecutionConfig
+	if got := absent.IdleRelease(); got != DefaultIdleReleaseSeconds*time.Second {
+		t.Fatalf("absent: IdleRelease = %s, want the default", got)
+	}
+	never := 0
+	if got := (ExecutionConfig{IdleReleaseSeconds: &never}).IdleRelease(); got != 0 {
+		t.Fatalf("zero: IdleRelease = %s, want never", got)
+	}
+	half := 30
+	if got := (ExecutionConfig{IdleReleaseSeconds: &half}).IdleRelease(); got != 30*time.Second {
+		t.Fatalf("30: IdleRelease = %s", got)
+	}
+
+	root := t.TempDir()
+	if _, err := ValidateRaw(root, []byte("connector: file\nexecution:\n  idle_release_seconds: -5\n")); err == nil || !strings.Contains(err.Error(), "idle_release_seconds") {
+		t.Fatalf("a negative delay was accepted: %v", err)
+	}
+	cfg, err := ValidateRaw(root, []byte("connector: file\nexecution:\n  idle_release_seconds: 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Execution.IdleReleaseSeconds == nil || *cfg.Execution.IdleReleaseSeconds != 0 {
+		t.Fatalf("zero was not kept apart from absent: %#v", cfg.Execution.IdleReleaseSeconds)
 	}
 }

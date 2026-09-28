@@ -1156,6 +1156,16 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 	id := strings.TrimSpace(r.PathValue("id"))
 	snapshot, live := ws.conversation.get(id)
 	if !live {
+		// A native thread whose runtime was released — by the person, or by
+		// the viewer after a while of silence — is not a thread that has
+		// ended: writing in it is what gives it its runtime back, and the
+		// message goes on into the same session. Only the archive is a
+		// decision the person took, and it is lifted by the person.
+		if reopened, ok := s.reopenReleasedForMessage(r.Context(), ws, id); ok {
+			snapshot, live = reopened, true
+		}
+	}
+	if !live {
 		// Not being held is not the same as not existing: an id the journal
 		// knows is a conversation that has ended, and one it does not know is a
 		// conversation of no workspace. The refusal says which of the two it is,
@@ -1356,6 +1366,29 @@ func (s *Server) handleCloseWorkspaceConversation(w http.ResponseWriter, r *http
 	// holding it — heldConversationTarget carries no reason, so the payload says
 	// available, which is true: closing one has just made room for another.
 	writeJSON(w, http.StatusOK, s.conversationViewOf(ctx, ws, heldConversationTarget(snapshot), snapshot, true, afterID))
+}
+
+// reopenReleasedForMessage takes up again, for a message about to be written,
+// a native conversation that is open but not held: the one whose runtime was
+// released. It answers false, without refusing, for every other thread — the
+// message route then explains why the thread cannot be written in.
+func (s *Server) reopenReleasedForMessage(ctx context.Context, ws *workspaceSession, id string) (conversationSnapshot, bool) {
+	store := ws.conversationStore()
+	if store == nil {
+		return conversationSnapshot{}, false
+	}
+	record, err := store.GetMetadata(ctx, id)
+	if err != nil || !record.Native() || record.Archive == execution.ArchiveArchived {
+		return conversationSnapshot{}, false
+	}
+	if ws.heldByAnotherViewer(ctx, id) {
+		return conversationSnapshot{}, false
+	}
+	snapshot, err := s.reopenNativeConversation(ctx, ws, id, false)
+	if err != nil {
+		return conversationSnapshot{}, false
+	}
+	return snapshot, true
 }
 
 // conversationGoneRefusal explains why a command cannot reach the conversation

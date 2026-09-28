@@ -91,7 +91,13 @@ e2e:
 # <ws> --cwd <dir> --requires project:<slug>` — and a runner without it is
 # refused immediately instead of leaving the work queued.
 # See docs/wiki/decisions/remote-plan-ownership.md.
+# `archetipo view` keeps the agent process of a conversation alive between one
+# turn and the next, so that an answer arrives in the same context. A thread
+# nobody has written in for idle_release_seconds has its process released; the
+# conversation stays open and resumes on the next message. Default 600; 0 keeps
+# every process alive until the viewer stops.
 # execution:
+#   idle_release_seconds: 600
 #   default_provider:
 #     id: arcipelago
 #     config:

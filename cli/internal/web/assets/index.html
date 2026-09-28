@@ -803,6 +803,16 @@
                                 <p class="config-copy">Il default del workspace per eseguire le azioni di processo. Solo impostazioni non segrete: un provider che ha bisogno di una credenziale nomina la variabile d'ambiente che la contiene, mai la credenziale.</p>
                             </div>
                         </div>
+                        <div class="config-group" id="execution-session-fields">
+                            <h4>Sessioni</h4>
+                            <div class="form-grid config-form-grid">
+                                <label class="field">
+                                    <span>Rilascio per inattività (secondi)</span>
+                                    <input type="number" name="execution_idle_release_seconds" min="0" step="1" placeholder="600" />
+                                </label>
+                            </div>
+                            <p class="config-copy">Il processo dell'agente di una conversazione ferma viene chiuso dopo questi secondi di inattività. La conversazione resta aperta e riparte al prossimo messaggio. Vuoto usa 600; 0 non chiude mai.</p>
+                        </div>
                         <div class="config-group">
                             <h4>Provider registrati</h4>
                             <div class="config-connector-grid" id="execution-provider-grid"></div>

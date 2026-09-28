@@ -507,6 +507,7 @@
 	const configSummaryProvider = document.getElementById("config-summary-provider");
 	const executionProviderGrid = document.getElementById("execution-provider-grid");
 	const executionFields = document.getElementById("execution-fields");
+	const executionSessionFields = document.getElementById("execution-session-fields");
 	const executionStatus = document.getElementById("execution-status");
 	const storyModelChoice = document.getElementById("story-model-choice");
 	const storyActions = document.getElementById("story-actions");
@@ -3693,6 +3694,9 @@
 			cfg.e2e && cfg.e2e.record_demo_video
 		);
 		configField("git_auto_commit").checked = !!(cfg.git && cfg.git.auto_commit);
+		const idleRelease = cfg.execution && cfg.execution.idle_release_seconds;
+		configField("execution_idle_release_seconds").value =
+			idleRelease === null || idleRelease === undefined ? "" : String(idleRelease);
 		setConnectorSelection(cfg.connector || "file");
 		configField("github_owner").value = (cfg.github && cfg.github.owner) || "";
 		configField("github_project_number").value =
@@ -3802,7 +3806,17 @@
 			git: {
 				auto_commit: !!configField("git_auto_commit").checked,
 			},
+			execution: executionSettings(),
 		};
+	}
+
+	// Le impostazioni di esecuzione che non appartengono a un provider. Il
+	// campo vuoto non e' zero: e' "il default", e non viene scritto.
+	function executionSettings() {
+		const raw = configField("execution_idle_release_seconds").value.trim();
+		const seconds = parseInt(raw, 10);
+		if (raw === "" || !Number.isFinite(seconds)) return {};
+		return { idle_release_seconds: seconds };
 	}
 
 	function activateConfigTab(name) {
@@ -5513,7 +5527,7 @@
 		return {
 			guided: formState(configGuidedForm),
 			connector: controlsState(configConnectorGrid),
-			execution: `${selectedProviderID()}\n${controlsState(executionFields)}`,
+			execution: `${selectedProviderID()}\n${controlsState(executionFields)}\n${controlsState(executionSessionFields)}`,
 			advanced: configRaw.value,
 		};
 	}
