@@ -97,6 +97,11 @@
 		dismissNotice: "Chiudi questo avviso",
 		// Stato vuoto
 		empty: "Su questo workspace non c'è nessuna conversazione aperta.",
+		// Lo stato vuoto con un passo da proporre: prima il passo, poi
+		// l'alternativa. Chi arriva sa cosa fare senza cercarlo in un menu.
+		emptyGuidedOr: "Oppure apri una conversazione libera per parlare del progetto con l'agente.",
+		nextStepFresh:
+			"Si apre una conversazione nuova, con contesto pulito: l'agente legge i documenti del workspace, non le altre conversazioni.",
 		open: "Apri una conversazione",
 		openingSpec: (code) => `Questa conversazione sarà collegata a ${code}.`,
 		// A conversazione aperta la scelta non si cambia più. Prima la riga
@@ -1435,7 +1440,7 @@
 	// they are. The disabled attribute on a refused step is a hint to the
 	// pointer; the refusal itself belongs to the caller's dispatcher, which
 	// answers anyone reaching the handler by any route.
-	function renderNextStep(step, ui) {
+	function renderNextStep(step, ui, prominent) {
 		if (!step || typeof step !== "object") return "";
 		const label = textAt(step, "label") || textAt(step, "action");
 		// A step with no name is not proposable: there would be nothing to press.
@@ -1481,11 +1486,18 @@
 		}
 
 		const disabled = ui && ui.busy ? " disabled" : "";
-		return `<div class="conv-nextstep">
+		// In evidenza — nello stato vuoto — il passo dice anche che cosa
+		// succede premendolo: si apre una conversazione nuova, e il perche'
+		// sta scritto li' e non in un menu.
+		const fresh = prominent
+			? `<p class="conv-nextstep-fresh">${escapeHtml(TEXT.nextStepFresh)}</p>`
+			: "";
+		return `<div class="conv-nextstep${prominent ? " is-prominent" : ""}">
 			${head}
 			<div class="conv-nextstep-controls">
-				<button type="button" class="conv-nextstep-run"${attrs}${disabled}>${escapeHtml(TEXT.nextStepRun)}</button>
+				<button type="button" class="conv-nextstep-run${prominent ? " primary-btn" : ""}"${attrs}${disabled}>${escapeHtml(TEXT.nextStepRun)}</button>
 			</div>
+			${fresh}
 		</div>`;
 	}
 
@@ -1563,8 +1575,29 @@
 		}
 
 		if (!conversation) {
-			// Nothing open. The invitation is the whole answer, and the button is
-			// the only control.
+			// Nothing open. Quando il processo ha un passo da proporre, il passo
+			// e' la risposta: lo stadio del workspace nelle parole del processo,
+			// il passo con il suo comando, e sotto l'alternativa di una
+			// conversazione libera. Senza un passo resta l'invito di sempre.
+			const step = objectAt(local, "nextStep");
+			const stage = objectAt(local, "stage");
+			const guided = step && (textAt(step, "label") || textAt(step, "action"));
+			if (guided) {
+				const summary = stage ? textAt(stage, "summary") : "";
+				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">
+					${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}
+					<div class="conv-empty conv-empty-guided">
+						${summary ? `<p class="conv-empty-stage">${escapeHtml(summary)}</p>` : ""}
+						${renderNextStep(step, local, true)}
+						<p class="conv-empty-text">${escapeHtml(TEXT.emptyGuidedOr)}</p>
+						${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
+						<div class="conv-empty-command">
+							${renderConversationModelChoice(value, local, false)}
+							${renderOpenButton(local, TEXT.open)}
+						</div>
+					</div>
+				</section>`;
+			}
 			return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">
 				${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}
 				<div class="conv-empty">

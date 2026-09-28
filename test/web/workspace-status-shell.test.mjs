@@ -126,18 +126,27 @@ describe("AC-1 — la fascia di stato non esiste più", () => {
 });
 
 describe("AC-2 — il cammino di avvio è uno solo", () => {
-	it("ogni URL di avvio esecuzione è un valore startURL: del pannello montato", () => {
+	it("ogni URL di avvio esecuzione nasce in actionStartURL", () => {
+		// Una rotta di avvio scritta altrove sarebbe un secondo cammino di
+		// avvio: due modi di partire che possono divergere. La funzione e' una
+		// e la usano tutti — i pannelli montati e l'avvio dal thread.
 		const startish = /\/api\/workspace\/execution|api\/spec\/[^\n]*\/execution/;
-		const offenders = js
+		const builder = blockAfter(js, "function actionStartURL(");
+		assert.match(builder, /\/api\/workspace\/execution/);
+		assert.match(builder, /\/api\/spec\//);
+		const outside = js.replace(builder, "");
+		const offenders = outside
 			.split("\n")
 			.map((line, i) => ({ line, n: i + 1 }))
-			.filter(({ line }) => startish.test(line))
-			.filter(({ line }) => !line.includes("startURL:"));
+			.filter(({ line }) => startish.test(line));
 		assert.deepEqual(
 			offenders.map(({ n, line }) => `${n}: ${line.trim()}`),
 			[],
-			"è stato introdotto un secondo cammino di avvio: una rotta di esecuzione viene chiamata fuori da un `startURL:` di mountExecutionPanels. L'avvio deve passare da startPanelAction, che è ciò che rende l'avvio dal thread identico a quello dalla board",
+			"è stato introdotto un secondo cammino di avvio: una rotta di esecuzione viene scritta fuori da actionStartURL",
 		);
+		for (const marker of ["startURL: actionStartURL(", "const url = actionStartURL("]) {
+			assert.ok(js.includes(marker), `nessuno usa piu' \`${marker}\``);
+		}
 	});
 
 	it("il gestore del thread delega, non riscrive l'avvio", () => {
@@ -156,9 +165,20 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		);
 		const startNextStep = blockAfter(js, "async function startNextStep(");
 		assert.ok(
-			startNextStep.includes("startPanelAction"),
-			"startNextStep non chiama più startPanelAction: l'avvio dal thread smetterebbe di essere lo stesso avvio della board",
+			startNextStep.includes("startActionOnTarget"),
+			"startNextStep non chiama più startActionOnTarget: l'avvio dal thread smetterebbe di passare dall'unico avvio diretto",
 		);
+		// L'avvio dal thread non monta nessun pannello prima: la run e' il
+		// thread, e il server dice in quale si legge.
+		assert.ok(
+			!startNextStep.includes("openPRD") && !startNextStep.includes("openEditor"),
+			"startNextStep apre di nuovo una modale prima di avviare: chi preme dal thread verrebbe portato altrove",
+		);
+		const direct = blockAfter(js, "async function startActionOnTarget(");
+		assert.ok(direct.includes("body.conversation_id = from"), "l'avvio dal thread non nomina piu' la conversazione da cui viene la pressione");
+		assert.ok(direct.includes("liveConversationEntries"), "l'avvio dal thread non guarda piu' se la conversazione nominata e' viva");
+		assert.ok(/thread_id/.test(direct), "l'avvio dal thread non legge piu' dal server in quale thread la run si legge");
+		assert.ok(direct.includes("switchToConversation("), "l'avvio dal thread non porta piu' sul thread della run");
 	});
 
 	it("l'avvio non apre più un secondo thread: la run è il thread", () => {
@@ -200,12 +220,13 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 	// chip del pannello, il passo raccomandato e la dichiarazione della
 	// funzione stessa.
 	it("nessun nuovo punto di avvio è comparso in app.js", () => {
-		const occurrences = js.split("startPanelAction(").length - 1;
-		assert.equal(
-			occurrences,
-			3,
-			`i punti che nominano startPanelAction( sono ${occurrences} invece di 3: è comparso (o sparito) un cammino di avvio, e l'identità fra l'avvio dal thread e quello dalla board va riverificata`,
-		);
+		// Due avvii, ciascuno nominato una volta oltre la propria dichiarazione:
+		// startPanelAction dalle chip di un pannello montato, startActionOnTarget
+		// dal passo raccomandato. Un terzo nome sarebbe un terzo cammino.
+		const panel = js.split("startPanelAction(").length - 1;
+		const direct = js.split("startActionOnTarget(").length - 1;
+		assert.equal(panel, 2, `i punti che nominano startPanelAction( sono ${panel} invece di 2`);
+		assert.equal(direct, 2, `i punti che nominano startActionOnTarget( sono ${direct} invece di 2`);
 	});
 
 	it("il pannello conversazione riceve il passo dallo stato del workspace", () => {

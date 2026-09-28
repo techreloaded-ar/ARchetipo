@@ -1455,17 +1455,45 @@ describe("renderConversation — passo successivo", () => {
 		);
 	});
 
-	it("senza conversazione da mostrare non c'è coda a cui accodarsi", () => {
-		const html = renderConversation({}, "", { nextStep: RUNNABLE });
+	it("senza conversazione da mostrare il passo è la guida, non una coda", () => {
+		const html = renderConversation({}, "", {
+			nextStep: RUNNABLE,
+			stage: { id: "todo", label: "Da pianificare", summary: "STADIO-DEL-WORKSPACE in parole del processo" },
+		});
 
 		assert.ok(
-			html.includes("conv-empty"),
-			"senza conversazione manca l'invito ad aprirne una",
+			html.includes("conv-empty-guided"),
+			"senza conversazione e con un passo da proporre manca lo stato vuoto guidato",
 		);
+		const text = visibleText(html);
+		assert.match(text, /STADIO-DEL-WORKSPACE/, "lo stato vuoto non dice a che stadio è il workspace");
+		assert.match(text, /Implementa/, "lo stato vuoto non nomina il passo proposto");
+		assert.match(text, /US-002/, "lo stato vuoto non nomina la spec del passo");
+		assert.match(text, /contesto pulito/, "lo stato vuoto non dice che il passo apre una conversazione nuova");
+		assert.match(html, /conv-nextstep is-prominent/, "il passo non è in evidenza nello stato vuoto");
+		assert.match(html, /data-next-action="implement"/, "il comando del passo non porta l'azione da avviare");
+		// L'alternativa resta: una conversazione libera si apre da qui.
+		assert.match(html, /data-conversation-open/, "lo stato vuoto guidato non offre più di aprire una conversazione libera");
+		// Il passo sta prima dell'alternativa: è la cosa da fare.
 		assert.ok(
-			!html.includes("conv-nextstep"),
-			"il blocco del passo compare dove non c'è alcuna conversazione a cui accodarlo",
+			html.indexOf("conv-nextstep") < html.indexOf("data-conversation-open"),
+			"l'alternativa precede il passo proposto",
 		);
+	});
+
+	it("senza conversazione e senza passo resta l'invito di sempre", () => {
+		const html = renderConversation({}, "", {});
+		assert.ok(html.includes("conv-empty"), "senza conversazione manca l'invito ad aprirne una");
+		assert.ok(!html.includes("conv-nextstep"), "un passo che non c'è viene disegnato lo stesso");
+		assert.ok(!html.includes("conv-empty-guided"), "lo stato vuoto si dichiara guidato senza avere un passo");
+	});
+
+	it("in coda a una conversazione il passo non spiega il contesto pulito", () => {
+		// Dentro un thread l'azione parte *in quel thread*: dire che si apre
+		// una conversazione nuova sarebbe falso.
+		const html = renderConversation(LIVE, "", { nextStep: RUNNABLE });
+		assert.ok(!visibleText(nextStepBlock(html)).includes("contesto pulito"));
+		assert.ok(!html.includes("is-prominent"));
 	});
 
 	// The assumption this spec registered, made explicit so a later change

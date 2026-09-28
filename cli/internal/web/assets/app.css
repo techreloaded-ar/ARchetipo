@@ -5146,6 +5146,71 @@ body.no-workspace [data-workspace-scoped] {
 	max-width: 680px;
 }
 
+/* Lo stato vuoto guidato: lo stadio in alto, come una frase e non un titolo,
+   e il passo in evidenza sotto — l'unico blocco della pagina con la cornice
+   d'accento, perche' e' l'unica cosa da fare. */
+.conv-empty-guided {
+	gap: var(--space-4);
+}
+
+.conv-empty-stage {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--text);
+}
+
+.conv-nextstep.is-prominent {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-3);
+	margin: 0;
+	padding: var(--space-4);
+	border: 1px solid var(--accent);
+	border-radius: var(--radius);
+	background: var(--surface);
+	max-width: 100%;
+}
+
+.conv-nextstep.is-prominent .conv-nextstep-label {
+	font-size: 16px;
+	color: var(--text);
+}
+
+.conv-nextstep.is-prominent .conv-nextstep-run {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-ink);
+}
+
+.conv-nextstep-fresh {
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--text-muted);
+}
+
+.empty-board-guided {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--space-3);
+	text-align: left;
+}
+
+.empty-board-title {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.empty-board-stage {
+	margin: 0;
+	color: var(--text-muted);
+}
+
 .conv-empty-text {
 	margin: 0;
 	font-size: 15px;

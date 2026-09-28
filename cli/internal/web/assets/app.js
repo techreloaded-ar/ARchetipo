@@ -72,6 +72,8 @@
 			"Definisci almeno un'epica nel backlog prima di creare una spec",
 		backlogUnreadable: "Il backlog non si è potuto leggere",
 		boardError: (reason) => `Errore: ${reason}`,
+		boardNoBacklog: "Questo workspace non ha ancora un backlog.",
+		boardGoConversation: "Vai alla conversazione",
 		stepNotStartable: "Questo passo non si può avviare adesso",
 		loadFailed: (reason) => `Lettura fallita: ${reason}`,
 		saveFailed: (reason) => `Salvataggio fallito: ${reason}`,
@@ -336,6 +338,12 @@
 	// and CSS stability. The data model exposed by the API is "spec", which
 	// is reflected in variable names, payloads and envelope keys.
 	const boardEl = document.getElementById("board");
+	// Dalla board senza backlog si va alla conversazione, che e' dove il
+	// passo che la produce si avvia.
+	boardEl.addEventListener("click", (e) => {
+		if (!e.target.closest("[data-board-go-conversation]")) return;
+		setShellView("conversation");
+	});
 	const refreshBtn = document.getElementById("refresh-btn");
 	// The shell: one primary column holding one view at a time — the
 	// conversation, the board or the spec detail — plus the permanent view
@@ -1835,6 +1843,23 @@
 			// A board that could not be read cannot vouch for its epics either.
 			newSpecBtn.disabled = true;
 			newSpecBtn.title = TEXT.backlogUnreadable;
+			boardSnapshot = null;
+			// Un backlog che non c'e' ancora non e' un errore: e' il workspace
+			// a un passo del processo che precede la board. La colonna lo dice
+			// con le parole del processo — lo stadio che /api/workspace/status
+			// ha letto — e porta alla conversazione, che e' dove quel passo si
+			// avvia. Il percorso assoluto del file resta nel messaggio del
+			// server per chi lo vuole, in un `title`.
+			if (err && err.code === "E_PRECONDITION") {
+				const stage = workspaceStatusSnapshot && workspaceStatusSnapshot.stage;
+				const summary = stage && stage.summary ? String(stage.summary) : "";
+				boardEl.innerHTML = `<div class="board-columns"><div class="empty-board empty-board-guided" title="${escapeHtml(err.message || "")}">
+					<p class="empty-board-title">${escapeHtml(TEXT.boardNoBacklog)}</p>
+					${summary ? `<p class="empty-board-stage">${escapeHtml(summary)}</p>` : ""}
+					<button type="button" class="ghost-btn" data-board-go-conversation>${escapeHtml(TEXT.boardGoConversation)}</button>
+				</div></div>`;
+				return;
+			}
 			boardEl.innerHTML = `<div class="board-columns"><div class="empty-board">${escapeHtml(TEXT.boardError(err.message || err))}</div></div>`;
 		}
 	}
@@ -1953,48 +1978,20 @@
 	// startNextStep runs the recommended step, and runs it through the single
 	// dispatch path of this application.
 	//
-	// It takes the user to the target's panel first — the spec detail, or the
-	// workspace actions of the PRD modal — and only then delegates to
-	// startPanelAction, the very function the board presses. So "the same action
-	// the board would start" is not a resemblance to be checked case by case: it
-	// is the same line of code, the same route, the same "one press, one
-	// execution" guarantee, and the same panel where the run is then watched.
-	//
-	// The gesture is therefore "go to the target and start", not "start where
-	// you stand": the run must be started somewhere it can be followed.
-	// "Una pressione, una run" qui è del bottone e non del server: il server non
-	// rifiuta più una seconda azione sulla stessa spec — un'azione è una
-	// conversazione, e una run ferma su una domanda avrebbe tenuto chiusa la
-	// spec a ogni altro passo finché qualcuno non rispondeva. startPanelAction
-	// disabilita il bottone che le viene passato, ed è lì che un debounce sta.
+	// Il passo raccomandato parte da dove e' stato letto: nel thread, o nello
+	// stato vuoto che lo propone. Non c'e' nessun pannello da raggiungere
+	// prima, perche' la run e' il thread — il server apre la conversazione
+	// dell'azione se non ce n'e' una, e dice in quale si legge.
+	// "Una pressione, una run" e' del bottone: startActionOnTarget lo
+	// disabilita, ed e' li' che un debounce sta.
 	async function startNextStep(target, button) {
-		let expected;
-		if (target.scope === "spec" && target.code) {
-			expected = specContext(target.code);
-			await openEditor(target.code);
-		} else if (target.scope === "workspace") {
-			expected = WORKSPACE_CONTEXT;
-			await openPRD();
-		} else {
+		if (!target) return;
+		if (target.scope === "spec" && !target.code) return;
+		if (target.scope !== "spec" && target.scope !== "workspace") {
 			// A scope this viewer has never seen does not get an invented path.
-			// nextStepDispatch already refuses a spec-scoped step with no spec,
-			// so this is defence in depth for any other caller.
 			return;
 		}
-		// The panel that answered must be the target's own. Checking only that
-		// *some* panel is mounted is not enough: a workspace with no action to
-		// offer unmounts nothing when a spec detail is the mounted context, and
-		// the workspace action would then be posted to the spec's own route.
-		if (panelContext !== expected || !panelStartURL) {
-			showToast(TEXT.stepNotStartable, "err");
-			return;
-		}
-		// The thread the step was pressed in travels with the start: a run asked
-		// for inside a conversation has to be readable there, and not only in
-		// the workspace strip. It is the id the panel is showing, whatever it
-		// is — a conversation that has ended ties nothing, and the server is
-		// what decides that.
-		await startPanelAction(target.action, button, conversationsCurrentId);
+		await startActionOnTarget(target, button);
 	}
 
 	function updateStats(view) {
@@ -2348,7 +2345,7 @@
 		rememberSpecInHistory(code);
 		mountExecutionPanels({
 			context: specContext(code),
-			startURL: `/api/spec/${encodeURIComponent(code)}/execution`,
+			startURL: actionStartURL("spec", code),
 			actions: storyActions,
 			execution: storyExecution,
 			run: storyRun,
@@ -4446,6 +4443,61 @@
 	// essere ricordata lì dentro, nel punto del discorso che l'ha chiesta, e a
 	// nient'altro: una pressione che non viene da nessuna conversazione non ne
 	// inventa una, perché non c'è nessun discorso a cui attaccarla.
+	// actionStartURL e' l'unico posto che sa dove si avvia un'azione: sulla
+	// rotta della spec quando ne nomina una, su quella del workspace altrimenti.
+	// Ogni avvio — dalla board, dal thread, dallo stato vuoto — passa da qui, e
+	// due cammini che costruissero la rotta per conto loro sarebbero due modi
+	// di partire che possono divergere.
+	function actionStartURL(scope, code) {
+		if (scope === "spec" && code) {
+			return `/api/spec/${encodeURIComponent(code)}/execution`;
+		}
+		return "/api/workspace/execution";
+	}
+
+	// startActionOnTarget avvia un'azione del processo dal thread: dove sta
+	// chi preme, senza montare nessun pannello prima. Il server apre la
+	// conversazione dell'azione quando non ce n'e' una viva a schermo, e dice
+	// lui in quale thread la run si legge — `thread_id` sulla proiezione della
+	// run — cosi' il pannello ci va, invece di dedurlo.
+	async function startActionOnTarget(target, button) {
+		if (!target || !target.action) return;
+		const url = actionStartURL(target.scope, target.code);
+		if (button) button.disabled = true;
+		try {
+			const body = { action: target.action };
+			const from = conversationsCurrentId;
+			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
+				body.conversation_id = from;
+			}
+			const override = conversationModelOverride();
+			if (override) {
+				body.model = override.model;
+				body.model_options = override.model_options;
+			}
+			const record = await apiPost(url, body);
+			let threadID = "";
+			try {
+				const run = await apiGet(
+					`/api/execution/${encodeURIComponent(record.id)}/run`,
+				);
+				threadID = run && run.thread_id ? String(run.thread_id) : "";
+			} catch (_) {
+				// Senza la proiezione non si sa dove leggere la run: l'elenco
+				// qui sotto la mostrera' comunque al prossimo giro.
+			}
+			await loadConversationsIndex();
+			if (threadID && threadID !== conversationsCurrentId) {
+				await switchToConversation(threadID);
+			}
+			loadWorkspaceStatus();
+			loadBoard();
+		} catch (err) {
+			showToast(err.message || String(err), "err");
+			if (button) button.disabled = false;
+		}
+	}
+
 	async function startPanelAction(actionID, button, conversationID) {
 		if (!actionID || !panelContext || !panelStartURL) return;
 		const ctx = panelContext;
@@ -7722,6 +7774,13 @@
 						? status.next_step
 						: null;
 				})(),
+				// Lo stadio del workspace, nelle parole del processo: nello
+				// stato vuoto e' la frase che dice a chi arriva perche' il
+				// passo proposto e' quello.
+				stage: (() => {
+					const status = nextStepStatusView();
+					return status && typeof status === "object" ? status.stage : null;
+				})(),
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:
@@ -7993,7 +8052,7 @@
 		}
 		mountExecutionPanels({
 			context: SPEC_DRAFT_CONTEXT,
-			startURL: "/api/workspace/execution",
+			startURL: actionStartURL("workspace", ""),
 			actions: specDraftActions,
 			execution: specDraftExecution,
 			run: specDraftRun,
@@ -8749,7 +8808,7 @@
 		prdInception.classList.remove("hidden");
 		mountExecutionPanels({
 			context: WORKSPACE_CONTEXT,
-			startURL: "/api/workspace/execution",
+			startURL: actionStartURL("workspace", ""),
 			actions: inceptionActions,
 			execution: inceptionExecution,
 			run: inceptionRun,
