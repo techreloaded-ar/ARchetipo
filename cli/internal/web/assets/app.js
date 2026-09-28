@@ -157,6 +157,13 @@
 		configSaved: "Configurazione salvata",
 		configBackup: (path) => `backup: ${path}`,
 		configRestartRequired: "serve riavviare",
+		configUnsaved: (sections) => `Modifiche non salvate: ${sections}`,
+		configSections: {
+			guided: "Guidata",
+			connector: "Connettore",
+			execution: "Esecuzione",
+			advanced: "YAML avanzato",
+		},
 
 		// Provider di esecuzione
 		providerNotConfigured: "non configurato",
@@ -166,9 +173,6 @@
 		providerRuntimeUnusable: "runtime non utilizzabile",
 		providerPickFirst: "Scegli prima un provider.",
 		providerRejected: (reason) => `Rifiutato: ${reason}`,
-		providerSaving: "Salvataggio in corso…",
-		providerSavedDefault: (id) => `${id} salvato come default del workspace.`,
-		providerSetToast: (id) => `Provider di esecuzione impostato su ${id}`,
 
 		// Pannello esecuzione
 		executionStatusUnavailable: (reason) =>
@@ -492,6 +496,7 @@
 	const configGuidedForm = document.getElementById("config-guided-form");
 	const configRaw = document.getElementById("config-raw");
 	const configStatus = document.getElementById("config-status");
+	const configDirty = document.getElementById("config-dirty");
 	const configValidateBtn = document.getElementById("config-validate-btn");
 	const configSaveBtn = document.getElementById("config-save-btn");
 	const configCancelBtn = document.getElementById("config-cancel-btn");
@@ -502,7 +507,6 @@
 	const configSummaryProvider = document.getElementById("config-summary-provider");
 	const executionProviderGrid = document.getElementById("execution-provider-grid");
 	const executionFields = document.getElementById("execution-fields");
-	const executionSaveBtn = document.getElementById("execution-save-btn");
 	const executionStatus = document.getElementById("execution-status");
 	const storyModelChoice = document.getElementById("story-model-choice");
 	const storyActions = document.getElementById("story-actions");
@@ -1057,7 +1061,11 @@
 	);
 	configConnectorGrid.addEventListener("change", updateConnectorSections);
 	executionProviderGrid.addEventListener("change", onExecutionProviderSelected);
-	executionSaveBtn.addEventListener("click", saveExecutionProvider);
+	// Ogni tocco a un campo della modale aggiorna la riga che dice quali
+	// schede hanno modifiche non salvate: la si legge dal footer, senza
+	// dover girare le schede per scoprirlo.
+	configModal.addEventListener("input", refreshConfigDirty);
+	configModal.addEventListener("change", refreshConfigDirty);
 
 	mockupsBtn.addEventListener("click", toggleMockupsMenu);
 	document.addEventListener("click", (e) => {
@@ -4014,43 +4022,6 @@
 			: TEXT.providerNotConfigured;
 	}
 
-	async function saveExecutionProvider() {
-		const id = selectedProviderID();
-		if (!id) {
-			setExecutionStatus(TEXT.providerPickFirst, "err");
-			return;
-		}
-		const provider = findProvider(id);
-		if (!provider) return;
-		// The server remains the authority on this; refusing here only spares the
-		// user a round trip that could not succeed.
-		if (provider.available === false) {
-			setExecutionStatus(
-				TEXT.providerRejected(
-					provider.unavailable_reason || TEXT.providerRuntimeUnusable,
-				),
-				"err",
-			);
-			return;
-		}
-		markProviderFieldError("");
-		setExecutionStatus(TEXT.providerSaving, null);
-		try {
-			await apiPut("/api/execution/provider/default", {
-				id,
-				config: collectProviderConfig(provider),
-			});
-			// Reload from the server instead of trusting the local form: what the
-			// panel shows is then exactly what was persisted.
-			await loadExecutionProviders();
-			setExecutionStatus(TEXT.providerSavedDefault(id), "ok");
-			showToast(TEXT.providerSetToast(id), "ok");
-		} catch (err) {
-			markProviderFieldError(err.field || "");
-			setExecutionStatus(TEXT.providerRejected(err.message || err), "err");
-		}
-	}
-
 	// ---- Panel mounting ------------------------------------------------------
 
 	function specContext(code) {
@@ -5533,13 +5504,63 @@
 		}
 	}
 
-	// La configurazione si compila da due lati — il form guidato e il YAML
-	// grezzo — e la modale può essere chiusa da qualunque dei due: lo stato è
-	// la somma, altrimenti chi lavora sul grezzo chiude senza che nessuno gli
-	// chieda niente.
-	const configGuard = createDirtyGuard(
-		() => `${formState(configGuidedForm)}\n${configRaw.value}`,
-	);
+	// La configurazione si compila da quattro schede — guidata, connettore,
+	// esecuzione e YAML grezzo — e un solo bottone la salva tutta. Lo stato
+	// e' la somma delle schede, altrimenti chi cambia il provider chiude senza
+	// che nessuno gli chieda niente; e la somma e' tenuta per scheda, cosi' il
+	// footer puo' dire *dove* stanno le modifiche non ancora salvate.
+	function configSectionStates() {
+		return {
+			guided: formState(configGuidedForm),
+			connector: controlsState(configConnectorGrid),
+			execution: `${selectedProviderID()}\n${controlsState(executionFields)}`,
+			advanced: configRaw.value,
+		};
+	}
+
+	// Lo stato dei controlli di un contenitore che non e' un form: le radio
+	// del connettore e i campi del provider sono disegnati a mano, fuori da
+	// ogni <form>, e formState non li vedrebbe.
+	function controlsState(container) {
+		if (!container) return "";
+		return Array.from(container.querySelectorAll("input, select, textarea"))
+			.map((el) => {
+				const type = el.type || "";
+				if (type === "checkbox" || type === "radio") {
+					return `${el.name}:${el.checked ? el.value || "on" : ""}`;
+				}
+				return `${el.name}:${el.value}`;
+			})
+			.join(" ");
+	}
+
+	let configBaseline = null;
+	const configGuard = createDirtyGuard(() => JSON.stringify(configSectionStates()));
+	const armConfigGuard = configGuard.arm.bind(configGuard);
+	configGuard.arm = () => {
+		configBaseline = configSectionStates();
+		armConfigGuard();
+		refreshConfigDirty();
+	};
+
+	// Le schede che differiscono dall'ultima lettura o dall'ultimo salvataggio,
+	// nell'ordine in cui stanno nella barra.
+	function configDirtySections() {
+		if (!configBaseline) return [];
+		const now = configSectionStates();
+		return ["guided", "connector", "execution", "advanced"].filter(
+			(name) => now[name] !== configBaseline[name],
+		);
+	}
+
+	function refreshConfigDirty() {
+		const dirty = configDirtySections();
+		configDirty.textContent = dirty.length
+			? TEXT.configUnsaved(
+					dirty.map((name) => TEXT.configSections[name]).join(", "),
+				)
+			: "";
+	}
 
 	function closeConfig() {
 		if (!configGuard.allowsClose()) return;
@@ -5550,11 +5571,23 @@
 		setConfigValidation(TEXT.configNotTested, null);
 	}
 
+	// Che cosa si salva: dalla scheda YAML il file intero, che dice gia'
+	// tutto; da ogni altra scheda il form guidato e, con lui, il provider di
+	// esecuzione scelto — in una scrittura sola, cosi' non esiste un
+	// salvataggio che ne lascia indietro un altro.
 	function configPayload() {
 		if (activeConfigTab === "advanced") {
 			return { raw: configRaw.value };
 		}
-		return { config: buildGuidedConfig() };
+		const payload = { config: buildGuidedConfig() };
+		const provider = findProvider(selectedProviderID());
+		if (provider) {
+			payload.provider = {
+				id: provider.id,
+				config: collectProviderConfig(provider),
+			};
+		}
+		return payload;
 	}
 
 	async function validateConfig() {
@@ -5581,6 +5614,7 @@
 
 	async function saveConfig() {
 		setConfigStatus(TEXT.configSaving, null);
+		markProviderFieldError("");
 		try {
 			const data = await apiPut("/api/config", configPayload());
 			currentConfigSnapshot = (data && data.config) || currentConfigSnapshot;
@@ -5588,6 +5622,10 @@
 			currentConfigExists = true;
 			fillConfigForm(currentConfigSnapshot);
 			configRaw.value = currentConfigRaw;
+			// Il provider e' stato scritto insieme al resto: si rilegge dal
+			// server, cosi' il pannello mostra esattamente quello che c'e' su
+			// disco e non quello che c'era nel form.
+			await loadExecutionProviders();
 			configSummaryConnector.textContent =
 				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
 			configSummaryExists.textContent = TEXT.configPresent;
@@ -5603,6 +5641,12 @@
 			// Quello che è a schermo è ora quello che c'è su disco.
 			configGuard.arm();
 		} catch (err) {
+			// Un provider rifiutato nomina il campo: la scheda che lo contiene
+			// si apre da sola, e il campo e' segnato.
+			if (err && err.field) {
+				activateConfigTab("execution");
+				markProviderFieldError(err.field);
+			}
 			setConfigStatus(TEXT.saveFailed(err.message || err), "err");
 		}
 	}

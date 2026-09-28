@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -27,6 +29,13 @@ type configView struct {
 type saveConfigReq struct {
 	Raw    string         `json:"raw,omitempty"`
 	Config *config.Config `json:"config,omitempty"`
+	// Provider is the execution provider chosen in the same modal, saved in
+	// the same write as the guided config. One button saves the whole modal:
+	// a provider that had to be saved from its own button was the one change
+	// the reader could lose by pressing the button they were told to press.
+	// It travels only with the guided config — the raw YAML already says
+	// everything, the provider included.
+	Provider *saveDefaultProviderReq `json:"provider,omitempty"`
 }
 
 type configTestResult struct {
@@ -63,6 +72,10 @@ func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if err := s.applyProviderSelection(r, &req); err != nil {
+		writeProviderSelectionError(w, err)
+		return
+	}
 	raw, next, err := decodeConfigPayload(ws.cfg.ProjectRoot, req)
 	if err != nil {
 		writeError(w, err)
@@ -88,6 +101,10 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	var req saveConfigReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
+		return
+	}
+	if err := s.applyProviderSelection(r, &req); err != nil {
+		writeProviderSelectionError(w, err)
 		return
 	}
 	_, next, err := decodeConfigPayload(ws.cfg.ProjectRoot, req)
@@ -118,6 +135,45 @@ func (s *Server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	result.Info = &info
 	writeJSON(w, http.StatusOK, result)
+}
+
+// applyProviderSelection folds the provider chosen in the modal into the guided
+// config it travels with, after the same checks the dedicated route makes:
+// the provider must be registered and must accept its configuration. Nothing
+// is written here — the config is saved once, with the provider inside it.
+func (s *Server) applyProviderSelection(r *http.Request, req *saveConfigReq) error {
+	if req.Provider == nil {
+		return nil
+	}
+	if req.Config == nil {
+		return iox.NewInvalidInput("`provider` travels only with `config`", "the raw YAML already carries execution.default_provider", nil)
+	}
+	id := strings.TrimSpace(req.Provider.ID)
+	if id == "" {
+		return iox.NewInvalidInput("execution.default_provider.id is required", "pick one of the registered providers", nil)
+	}
+	provider, err := s.registry.Resolve(id)
+	if err != nil {
+		return iox.NewInvalidInput("invalid execution.default_provider.id: "+id, "pick one of the registered providers", err)
+	}
+	providerConfig := execution.CloneConfig(req.Provider.Config)
+	if err := provider.ValidateConfig(r.Context(), execution.CloneConfig(providerConfig)); err != nil {
+		return err
+	}
+	req.Config.Execution.DefaultProvider = &config.DefaultProviderConfig{ID: id, Config: providerConfig}
+	return nil
+}
+
+// writeProviderSelectionError answers a refused provider the way the dedicated
+// route does, field included, so the modal can point at the control to fix;
+// any other refusal is written as it is.
+func writeProviderSelectionError(w http.ResponseWriter, err error) {
+	var configErr *execution.ConfigurationError
+	if errors.As(err, &configErr) {
+		writeProviderConfigError(w, err)
+		return
+	}
+	writeError(w, err)
 }
 
 func readConfigState(root string) (cfg config.Config, raw string, exists bool, path string, err error) {

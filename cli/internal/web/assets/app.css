@@ -1873,6 +1873,22 @@ html[data-theme="light"] .theme-ico-moon {
 	line-height: 1.7;
 }
 
+.config-footer-state {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.config-dirty {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.config-dirty:empty {
+	display: none;
+}
+
 .config-footer {
 	display: flex;
 	align-items: center;

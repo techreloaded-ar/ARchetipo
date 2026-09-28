@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
 )
 
 func TestGetConfigMissing(t *testing.T) {
@@ -248,5 +249,80 @@ func mustWriteConfig(t *testing.T, root, raw string) {
 	}
 	if err := os.WriteFile(filepath.Join(root, config.RelativePath), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// One button saves the whole modal: the provider chosen in the Execution tab
+// travels with the guided config and is written in the same save.
+func TestSaveConfigWritesTheProviderWithTheGuidedConfig(t *testing.T) {
+	srv, _, cfg := newExecutionServer(t)
+
+	w := doJSON(t, srv, http.MethodPut, "/api/config", map[string]any{
+		"config": func() config.Config {
+			c := config.Default()
+			c.Paths.PRD = "docs/PRD-4.md"
+			return c
+		}(),
+		"provider": map[string]any{"id": arcipelago.ProviderID, "config": validProviderConfig()},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(cfg.ProjectRoot, config.RelativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := config.ValidateRaw(cfg.ProjectRoot, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Paths.PRD != "docs/PRD-4.md" {
+		t.Fatalf("the guided change was not saved:\n%s", raw)
+	}
+	if saved.Execution.DefaultProvider == nil || saved.Execution.DefaultProvider.ID != arcipelago.ProviderID {
+		t.Fatalf("the provider was not saved with the config:\n%s", raw)
+	}
+	if saved.Execution.DefaultProvider.Config["workspace_id"] != "ws-1" {
+		t.Fatalf("the provider configuration was not saved: %#v", saved.Execution.DefaultProvider.Config)
+	}
+}
+
+// A refused provider refuses the whole save, names the field, and leaves the
+// file as it was: the reader is never told "saved" about half of the modal.
+func TestSaveConfigRefusesAnInvalidProviderAndWritesNothing(t *testing.T) {
+	srv, _, cfg := newExecutionServer(t)
+	mustWriteConfig(t, cfg.ProjectRoot, "connector: file\npaths:\n    prd: docs/PRD-before.md\n")
+
+	w := doJSON(t, srv, http.MethodPut, "/api/config", map[string]any{
+		"config": func() config.Config {
+			c := config.Default()
+			c.Paths.PRD = "docs/PRD-after.md"
+			return c
+		}(),
+		"provider": map[string]any{"id": arcipelago.ProviderID, "config": map[string]any{"base_url": "https://hub.test"}},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"field":"workspace_id"`) {
+		t.Fatalf("the refusal does not name the field: %s", w.Body.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(cfg.ProjectRoot, config.RelativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "docs/PRD-before.md") {
+		t.Fatalf("a refused save changed the file:\n%s", raw)
+	}
+}
+
+func TestSaveConfigRefusesAProviderNextToRawYAML(t *testing.T) {
+	srv, _, _ := newExecutionServer(t)
+	w := doJSON(t, srv, http.MethodPut, "/api/config", map[string]any{
+		"raw":      "connector: file\n",
+		"provider": map[string]any{"id": arcipelago.ProviderID, "config": validProviderConfig()},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
 	}
 }

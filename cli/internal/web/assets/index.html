@@ -811,11 +811,7 @@
                             <h4>Impostazioni del provider</h4>
                             <div class="form-grid config-form-grid" id="execution-fields"></div>
                         </div>
-                        <div class="config-actions-row">
-                            <button type="button" id="execution-save-btn" class="primary-btn">Salva il provider</button>
-                            <span class="status-msg" id="execution-status"></span>
-                        </div>
-                        <p class="config-copy">Il salvataggio qui scrive soltanto <code>execution.default_provider</code> in <code>.archetipo/config.yaml</code>, subito e indipendentemente da <em>Salva la configurazione</em>.</p>
+                        <p class="status-msg" id="execution-status"></p>
                     </section>
                     <section class="tab-panel config-panel" data-config-panel="advanced">
                         <div class="config-section-head">
@@ -832,7 +828,10 @@
                 </div>
             </div>
             <footer class="config-footer">
-                <span class="status-msg" id="config-status"></span>
+                <div class="config-footer-state">
+                    <span class="status-msg" id="config-status"></span>
+                    <span class="config-dirty" id="config-dirty"></span>
+                </div>
                 <div class="config-footer-actions">
                     <button type="button" id="config-cancel-btn" class="ghost-btn">Annulla</button>
                     <button type="button" id="config-validate-btn" class="ghost-btn">Verifica</button>
