@@ -6392,40 +6392,6 @@ body.no-workspace [data-workspace-scoped] {
 	flex: 0 0 auto;
 }
 
-/* Dove andrà a finire ciò che si sta per scrivere, a conversazione finita.
-   Prima era un suggerimento stretto accanto al campo, dove divideva la riga con
-   ciò che si scrive e si troncava per primo; qui è una riga propria sopra al
-   campo, con il colore dell'accento, perché è un fatto da leggere prima di
-   premere Invio e non una scorciatoia da ricordare. */
-.conv-resume-note {
-	display: flex;
-	align-items: baseline;
-	gap: var(--space-2);
-	/* Il compositore è una colonna con il suo interlinea: la nota non ne
-	   aggiunge un secondo. */
-	margin: 0;
-	padding: var(--space-2) var(--space-3);
-	border: 1px solid var(--accent);
-	border-radius: var(--radius);
-	background: var(--accent-soft);
-}
-
-.conv-resume-note-mark {
-	font-size: 11px;
-	font-weight: 800;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--accent);
-	white-space: nowrap;
-}
-
-.conv-resume-note-body {
-	font-size: 14px;
-	line-height: 1.5;
-	color: var(--text);
-	min-width: 0;
-}
-
 /* ---- Close control ------------------------------------------------------ */
 /* It lives in the head now, at the far end of the band, and not in the composer
    row: the one irreversible command of this panel no longer shares a row with

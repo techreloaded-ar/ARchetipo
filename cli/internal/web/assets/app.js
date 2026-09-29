@@ -7860,7 +7860,6 @@
 				modelChoiceHtml: conversationModelChoiceMarkup(),
 				skillChoiceHtml: conversationSkillMenuMarkup(view),
 				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
-				resumable: !!(view && view.session && view.session.recovery === "RESUMABLE"),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",
 				inputDrafts: conversationInputDrafts,
 				openingSpecCode: conversationOpeningSpecCode,

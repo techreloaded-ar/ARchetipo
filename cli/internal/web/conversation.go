@@ -741,7 +741,7 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 		return
 	}
 	if record.Native() {
-		writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, afterID))
+		writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, s.conversationOpenabilityOf(ctx, ws), afterID))
 		return
 	}
 	view := pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID)

@@ -789,7 +789,7 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	// keeps "released" readable as itself: a read that resumed would report the
 	// thread active a moment after the person had closed it.
 	if record.Connection == execution.ConnectionReleased {
-		view := pastNativeConversationView(ws, record, afterID)
+		view := pastNativeConversationView(ws, record, s.conversationOpenabilityOf(ctx, ws), afterID)
 		// Rilasciata non vuol dire conclusa. Il runtime è stato lasciato andare,
 		// la conversazione no: finché non è archiviata questo workspace la
 		// tiene, ci si scrive dentro, ed è il messaggio successivo a riprendere
@@ -873,9 +873,14 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	return view
 }
 
-func pastNativeConversationView(ws *workspaceSession, record conversationlog.Record, afterID int64) conversationView {
+// pastNativeConversationView renders a native conversation this process is not
+// holding. Available and UnavailableReason say, as for its legacy twin, whether
+// the workspace could open *another* conversation: left empty, the panel read an
+// archived thread as a workspace refusing conversations.
+func pastNativeConversationView(ws *workspaceSession, record conversationlog.Record, openability conversationOpenability, afterID int64) conversationView {
 	page, err := ws.conversationStore().ReadEvents(context.Background(), record.ID, afterID, nativeConversationPageSize)
 	view := conversationView{
+		Available: openability.available, UnavailableReason: openability.reason,
 		ProviderID: record.ProviderID, Model: record.NextTurn.Model, ModelOptions: cloneModelOptions(record.NextTurn.Options),
 		Events: page.Events, LastID: page.LastID, HasMore: page.HasMore, Approvals: []execution.PendingApproval{}, Runs: []conversationRunView{},
 		Conversation: &conversationSnapshotView{ID: record.ID, State: execution.RunClosed, WorkingDir: record.WorkingDir,
@@ -928,7 +933,7 @@ func (s *Server) handleArchiveNativeConversation(w http.ResponseWriter, r *http.
 		writeError(w, iox.NewInternal("archiving the conversation "+id, err))
 		return
 	}
-	writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, 0))
+	writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, s.conversationOpenabilityOf(r.Context(), ws), 0))
 }
 
 func (s *Server) handleReopenNativeConversation(w http.ResponseWriter, r *http.Request) {

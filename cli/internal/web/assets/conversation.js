@@ -90,9 +90,6 @@
 		markRefused: "rifiutato",
 		markNote: "nota",
 		markChannel: "canale",
-		markOver: "conclusa",
-		over:
-			"Questa conversazione è finita: l'agente che la teneva non è più impegnato, e quello che è stato detto resta leggibile.",
 		unavailable: "in questo workspace non si può aprire una conversazione",
 		dismissNotice: "Chiudi questo avviso",
 		// Stato vuoto
@@ -153,8 +150,6 @@
 		readOnly: "sola lettura",
 		awaitHint: "la run riprende quando rispondi all'attesa qui sopra",
 		send: "Invia",
-		markResume: "sessione",
-		resumeNote: "Il prossimo messaggio riprende la stessa sessione e la stessa conversation.",
 		waitForTurnHint: "questo provider non supporta steering: attendi la fine del turn o interrompilo",
 		inputPending: "Input richiesto",
 		inputPlaceholder: "Risposta JSON",
@@ -1164,13 +1159,6 @@
 			: active
 				? TEXT.writeClosePlaceholder
 				: TEXT.writeOverPlaceholder;
-		// Una sessione rilasciata non è muta: ci si scrive per riprendere la stessa
-		// conversation. Quel fatto è la cosa più importante da sapere prima di
-		// premere Invio, quindi sta su una riga
-		// propria sopra al campo — visibile per intero e in ogni larghezza —
-		// invece di stare stretto accanto al campo come un suggerimento fra gli
-		// altri, dove rubava larghezza a ciò che si sta scrivendo.
-		const ended = !active && ui.resumable === true;
 		// Il suggerimento c'è sempre: sparendo a conversazione finita lasciava la
 		// riga senza dire perché il campo non risponde, e chi tornava a scrivere
 		// su una conversazione viva se lo trovava comparire come una novità. Ora
@@ -1188,19 +1176,6 @@
 		const hintHtml = hint
 			? `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`
 			: "";
-		// Si chiude come ogni altra nota del pannello: dopo la prima lettura la
-		// riga è del compositore. Il segnaposto del campo continua comunque a
-		// dire che si sta scrivendo per riprendere, quindi chiuderla non lascia
-		// nessuno all'oscuro.
-		const dismissedNotes = objectAt(ui, "dismissed") || {};
-		const resumeHtml =
-			ended && dismissedNotes["resume-note"] !== true
-				? `<p class="conv-resume-note" role="status">
-				<span class="conv-resume-note-mark">${escapeHtml(TEXT.markResume)}</span>
-				<span class="conv-resume-note-body">${TEXT.resumeNote}</span>
-				<button type="button" class="conv-notice-dismiss" data-conversation-notice-dismiss="resume-note" title="Chiudi questo avviso" aria-label="Chiudi questo avviso">✕</button>
-			</p>`
-				: "";
 		const await_ = awaiting
 			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
@@ -1209,7 +1184,6 @@
 		// pannello un'altezza intera per un solo bottone, e la conversazione è
 		// ciò che quello spazio deve avere.
 		return `<form class="conv-composer">
-			${resumeHtml}
 			<div class="conv-composer-row">
 				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
@@ -1687,9 +1661,6 @@
 		if (local.link) {
 			pushNotice("channel", "info", TEXT.markChannel, String(local.link));
 		}
-		if (!active) {
-			pushNotice("over", "info", TEXT.markOver, TEXT.over);
-		}
 		// The proposal and its outcome sit between the notices and the timeline:
 		// both are about now, and now must be readable without scrolling a
 		// history that grows under it. Each is drawn only when the payload
@@ -1724,8 +1695,8 @@
 		const session = objectAt(value, "session");
 		const composerUI = Object.assign({}, local);
 		if (session && composerUI.writable === undefined) {
-			composerUI.resumable = textAt(session, "recovery") === "RESUMABLE";
-			composerUI.writable = composerUI.resumable && textAt(session, "archive") !== "ARCHIVED";
+			composerUI.writable =
+				textAt(session, "recovery") === "RESUMABLE" && textAt(session, "archive") !== "ARCHIVED";
 		}
 		blocks.push(
 			renderComposer(

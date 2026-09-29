@@ -389,7 +389,7 @@ describe("renderConversation", () => {
 		);
 	});
 
-	it("una conversazione non più attiva mostra la sola lettura e dichiara che l'agente non è più impegnato", () => {
+	it("una conversazione non più attiva mostra la sola lettura senza un avviso di conclusione", () => {
 		const html = renderConversation(
 			withConversation({
 				conversation: {
@@ -407,9 +407,15 @@ describe("renderConversation", () => {
 			text.includes("PRIMO-EVENTO"),
 			"la storia deve restare leggibile dopo la chiusura",
 		);
+		// Lo stato lo dicono già il badge e il campo in sola lettura: un
+		// riquadro in più ripeteva la stessa cosa sopra la storia.
 		assert.ok(
-			/non è più impegnato/i.test(text),
-			"deve dichiarare che l'agente non è più impegnato",
+			!/non è più impegnato/i.test(text),
+			"l'avviso di conclusione è tornato",
+		);
+		assert.ok(
+			!html.includes('data-conversation-notice-dismiss="over"'),
+			"l'avviso di conclusione è tornato",
 		);
 		assert.ok(
 			/<textarea[^>]*\sdisabled/.test(html),
@@ -1633,19 +1639,6 @@ describe("l'agente nominato in testata", () => {
 
 const CHIUDIBILI = [
 	{
-		chiave: "over",
-		testo: "non è più impegnato",
-		view: withConversation({
-			conversation: {
-				id: "conv-1",
-				state: "CLOSED",
-				working_dir: "/tmp/DIRECTORY-X",
-				opened_at: "2026-08-21T10:00:00.000Z",
-			},
-		}),
-		ui: {},
-	},
-	{
 		chiave: "note",
 		testo: "NOTA-DEL-SERVER",
 		view: withConversation({ notice: "NOTA-DEL-SERVER", truncated: false }),
@@ -1751,10 +1744,8 @@ describe("ogni avviso si può chiudere", () => {
 // ---------------------------------------------------------------------------
 // Dove arriva la risposta a conversazione finita
 //
-// Una conversazione finita non è muta: ci si scrive per riprenderla, e ciò che
-// ne esce è una conversazione nuova. È il fatto da sapere prima di premere
-// Invio, quindi sta su una riga propria sopra al campo — non stretto accanto,
-// dove divideva la riga con ciò che si scrive ed era il primo a essere troncato.
+// Una conversazione finita non è muta: ci si scrive per riprenderla. Il campo
+// scrivibile basta a dirlo, senza una nota sopra che lo ripeta.
 // ---------------------------------------------------------------------------
 
 describe("la ripresa di una conversazione finita", () => {
@@ -1768,50 +1759,18 @@ describe("la ripresa di una conversazione finita", () => {
 		session: { archive: "OPEN", recovery: "RESUMABLE", work: "IDLE" },
 	});
 
-	it("dice che il messaggio riprende la stessa sessione", () => {
-		const text = visibleText(renderConversation(CHIUSA, "", {}));
-		assert.match(
-			text,
-			/stessa sessione e la stessa conversation/,
-			"non dice dove andrà a finire ciò che si sta per scrivere",
-		);
-	});
-
-	it("lo dice sopra al campo e non nella riga del campo", () => {
+	it("una conversazione finita e riprendibile non porta la nota di ripresa", () => {
+		// Il campo resta scrivibile e basta: la nota sopra al campo ripeteva ciò
+		// che scrivere fa comunque.
 		const html = renderConversation(CHIUSA, "", {});
-		const idxNota = html.indexOf("conv-resume-note");
-		const idxRiga = html.indexOf("conv-composer-row");
-		assert.ok(idxNota !== -1, "la nota di ripresa non è disegnata");
-		assert.ok(idxRiga !== -1, "la riga del compositore non è disegnata");
 		assert.ok(
-			idxNota < idxRiga,
-			"la nota è finita dentro la riga del campo invece di stare sopra",
+			!html.includes("conv-resume-note"),
+			"la nota di ripresa è tornata",
 		);
-		// La riga del campo un suggerimento ce l'ha sempre, ma è il suo — dice
-		// che non si scrive — e non una seconda copia della nota qui sopra.
-		const riga = html.slice(idxRiga);
+		assert.doesNotMatch(visibleText(html), /stessa sessione e la stessa conversation/);
 		assert.ok(
-			!/conv-composer-hint[^]*stessa sessione/.test(riga),
-			"la nota di ripresa è ripetuta anche nella riga del campo",
-		);
-	});
-
-	it("la nota porta il comando per chiuderla, e chiusa non viene disegnata", () => {
-		const aperta = renderConversation(CHIUSA, "", {});
-		assert.ok(
-			aperta.includes('data-conversation-notice-dismiss="resume-note"'),
-			"la nota di ripresa non offre la X per chiuderla",
-		);
-		const chiusa = renderConversation(CHIUSA, "", {
-			dismissed: { "resume-note": true },
-		});
-		assert.ok(
-			!chiusa.includes("conv-resume-note"),
-			"la nota di ripresa torna sullo schermo dopo essere stata chiusa",
-		);
-		assert.ok(
-			chiusa.includes("conv-composer-row"),
-			"chiudere la nota si è portata via anche il compositore",
+			html.includes("conv-composer-row"),
+			"il compositore deve restare",
 		);
 	});
 
