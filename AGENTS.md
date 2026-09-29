@@ -1,43 +1,82 @@
 # AGENTS.md
 
-This file provides guidance to AI agents when working with code in this repository.
+This file provides guidance to AI agents (Claude Code, Codex, and any other coding agent) when working with code in this repository. It is the single source of repository instructions: there is no separate `CLAUDE.md`.
 
 ## Project
 
-ARchetipo is a set of skills for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and GitHub Copilot) that supports the software project ideation, analysis, and planning process.
+Starting with v30, ARchetipo is a **product that sets up and runs a software delivery workflow**, not a collection of skills. It takes a project from a rough idea to reviewed code through a defined process — inception, backlog, spec, plan, implement, review — and keeps every artifact of that process durable and inspectable.
+
+The product has three parts, and a change must respect the role of each:
+
+| Part | Role | Where it lives |
+| --- | --- | --- |
+| **`archetipo view`** | The **focal point** of the product. A local web application where a person opens a workspace, sees where the process stands (stage, board, next recommended step), starts process actions, and talks to the coding agent in durable native sessions. | `cli/internal/web/` (server and routes), `cli/internal/web/assets/` (frontend), `cli/internal/execution/` (providers and sessions) |
+| **The `archetipo` CLI** | The **deterministic** layer. Every read and write of workflow artifacts (PRD, backlog, specs, plans, Wiki, statuses, worktrees) goes through it, through a stable JSON envelope. It never interprets natural language and never guesses. | `cli/` (Go module) |
+| **The skills** | The **agentic** layer. Each skill carries the method of one process step (`archetipo-inception`, `-spec`, `-plan`, `-implement`, `-review`, `-autopilot`, `-wiki`, `-design`) and calls the CLI to persist its results. | `skills/` |
+
+The skills are used in two ways, and both are first-class:
+
+1. **By the view.** A process action pressed in `archetipo view` starts a turn in the harness's native session that invokes the matching skill; the viewer then verifies the persisted effect through the CLI.
+2. **Standalone.** Inside any supported coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, GitHub Copilot, Pi) a person can invoke `/archetipo-*` directly, without the viewer running.
+
+Consequences for any change:
+
+- A skill must never depend on the viewer being present, and the viewer must never reimplement what a skill or the CLI does.
+- Process rules live in the process Template and in the CLI, never in the frontend: the view renders the actions, stages and reasons it receives.
+- Persistence is deterministic and belongs to the CLI; judgement and content belong to the skill.
+
+## Process Templates
+
+The workflow a workspace follows is defined by a **process Template** (`cli/internal/processdef/builtin/`): it decides which skills `archetipo init` installs, which statuses the process uses, and which actions each status admits. `fabbrica-del-software` is the default software-delivery process; `dossier` is an alternative one. The Template chosen at init is recorded in the `template:` block of `.archetipo/config.yaml`. `examples/archetypes/` holds examples of custom archetypes.
 
 ## Repository structure
 
 ```text
-skills/                  # Main skills (one directory per skill)
+skills/                  # ARchetipo skills (one directory per skill)
   <skill-name>/
     SKILL.md             # Skill definition
     references/          # Supporting files loaded by the skill
-skills-extra/            # Extra skills (same structure)
 .archetipo/              # Files installed in the target project (mirrors target structure)
   config.template.yaml   # Configuration template for the target project (shipped as runtime/config.yaml)
   config.yaml            # Live configuration of THIS repository's own workspace — not shipped
   shared-runtime.md      # Shared rules (Language Policy, Persona, etc.)
-cli/                     # Go module implementing the `archetipo` CLI
+cli/                     # Go module implementing the `archetipo` CLI and the viewer
   cmd/archetipo/         # Binary entry point
   internal/
-    cli/                 # Cobra subcommands (public CLI surface)
+    cli/                 # Cobra subcommands (public CLI surface, including `view`)
+    web/                 # `archetipo view`: HTTP server, routes, conversations, native runtime
+      assets/            # Viewer frontend (index.html, app.js, app.css, pure UMD renderers)
+    execution/           # Execution providers (claude, codex, arcipelago), sessions, receipts, effect verification
+    conversationlog/     # Durable conversation journal (.archetipo/conversations/)
+    viewreg/             # Registry of known workspaces and running viewers
+    processdef/          # Built-in process Templates and their prompts
+    template/            # Template loading
     domain/              # Shared data types
-    connector/           # Interface and implementations (filefs, github)
+    connector/           # Interface and implementations (filefs, github, jira, inmemory) + conformance suite
     config/              # `.archetipo/config.yaml` loader
     iox/                 # JSON envelope for stdin/stdout/stderr
     workspace/           # Workspace initialization: tool/connector registry, config rendering, atomic init
+    wiki/                # Codebase-first DDD Wiki
+    gitwt/               # Git worktree support
+    validation/          # Structural validation of artifacts
+    metrics/             # Workflow metrics
+integrations/hermes/     # ARchetipo integration for Hermes
+examples/archetypes/     # Example custom archetypes
+docs/                    # ADRs, plans, releases, mockups and this repository's own Wiki
 npm/                     # npm package (@techreloaded/archetipo + 6 platform packages)
-scripts/                 # npm package build and publishing scripts
+scripts/                 # Build, dev install, runner bundle and publishing scripts
+test/                    # E2E harness, viewer smokes, frontend unit tests, benchmarks
 ```
 
 ## Connector architecture
 
-Skills do not manage persistence directly and do not perform connector operations by interpreting instructions. The flow is always:
+Skills do not manage persistence directly and do not perform connector operations by interpreting instructions. The same holds for the viewer. The flow is always:
 
 1. The skill reads `.archetipo/shared-runtime.md` for the JSON envelope, error rules, and invocation discipline.
 2. The skill invokes `archetipo <subcmd>` (the Go binary installed globally through `npm i -g @techreloaded/archetipo`).
-3. The CLI reads `.archetipo/config.yaml`, selects the connector (`file` or `github`), and performs the operation deterministically.
+3. The CLI reads `.archetipo/config.yaml`, selects the connector (`file`, `github` or `jira`), and performs the operation deterministically.
+
+The viewer uses the same connector layer in-process, so a board read in the view and a `spec show` in a terminal always agree.
 
 Skills must explicitly include only the CLI subcommands they actually use, together with their payloads, expected envelopes, and relevant `error.code` values. There is no separate file describing the entire protocol.
 
@@ -75,6 +114,13 @@ The contract lives in `cli/internal/execution/session.go`; the adapters are `cla
 - No-op subcommands are explicit. For example, `comment post` returns `ok: true` with the `file` connector as well. A skill must never branch on connector type.
 - Branch on the JSON envelope's `error.code`, not on `message`.
 - Load `.archetipo/shared-runtime.md` **exactly once** when the skill starts.
+- A skill must work both when the viewer starts it inside a native session and when a person invokes it directly in a coding agent. It must not assume the viewer is running, nor depend on anything only the viewer provides. When started by the viewer, it closes with the receipt line the viewer's effect verification expects (see `cli/internal/execution/*receipt.go`).
+
+## Rules for viewer changes (`archetipo view`)
+
+- The frontend contains no process rules: stages, actions, reasons and labels come from the server, which derives them from the process Template and the workspace state. Keep `cli/internal/web/assets/` renderers pure (no DOM, no network) where they already are, so `npm run test:web` can exercise them.
+- Every action pressed in the view must be startable, with the same effect, by the matching skill used standalone; the viewer adds orchestration, verification and presentation, never a second implementation of the step.
+- Any change to `app.js` must keep `npm run test:view-page-load-smoke` green, together with `npm run test:web` and the Go checks below; add or update the relevant `test:view-*` smoke when a route or a user flow changes.
 
 ## Rules for CLI changes
 
@@ -219,13 +265,16 @@ Primary path for any system with Node.js:
 
 ```bash
 npm i -g @techreloaded/archetipo     # Global CLI in PATH
-archetipo init [--tool …] [--connector …]
+archetipo init [--tool …] [--connector …] [--template …]
+archetipo view                        # Open the workflow in the browser
 ```
+
+`archetipo view` is the main entry point for a person using ARchetipo; the `/archetipo-*` skills remain available directly inside the coding agent.
 
 The Node shim in `npm/archetipo/bin/archetipo.js` resolves the binary package for the current platform, sets `ARCHETIPO_DATA_DIR`, and spawns the Go binary. Bundled skills live in `npm/archetipo/skills/` and are copied by `archetipo init` into `.{tool}/skills/` in the project.
 
 ## Operational notes
 
 - `.archetipo/config.template.yaml` is the **template** rendered into the target project as `.archetipo/config.yaml`, and shipped in the npm package as `runtime/config.yaml`. `.archetipo/config.yaml` in this repository is the **live configuration of this repository's own workspace**: the CLI rewrites it whenever somebody picks a provider here, and it is never installed anywhere.
-- The `file` connector is the default and uses local Markdown files. The `github` connector requires an authenticated `gh` CLI.
+- The `file` connector is the default and uses local Markdown files. The `github` connector requires an authenticated `gh` CLI; the `jira` connector requires `jira.base_url` in the config and `JIRA_EMAIL`/`JIRA_API_TOKEN` in the environment (never stored in the config).
 - See the E2E tests section above for local E2E instructions.
