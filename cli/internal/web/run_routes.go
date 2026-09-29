@@ -486,6 +486,16 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target.follower == nil {
+		// No run behind a RUNNING record may mean its carrier is gone, and then
+		// nothing will ever close it: this cancel is the one gesture left, and it
+		// closes the record under the same rule a restart applies.
+		if closed, ok := ws.closeOrphanedExecution(r.Context(), s.registry, id); ok {
+			if s.broker != nil {
+				s.broker.Publish()
+			}
+			writeJSON(w, http.StatusAccepted, emptyRunView(closed.Error.Message))
+			return
+		}
 		writeError(w, iox.NewConflict("the execution has no run to cancel", notice, nil))
 		return
 	}

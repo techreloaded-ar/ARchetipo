@@ -159,6 +159,12 @@ type Execution struct {
 	// keeps saying where it really ran. omitempty keeps records written before
 	// this field existed deserializable unchanged.
 	WorkingDir string `json:"working_dir,omitempty"`
+	// OwnerPID is the process that created the record and is carrying the run:
+	// the View (or CLI) process whose memory holds the dispatch. It is what lets
+	// a later process tell a run that is still being carried — by itself or by
+	// another live viewer — from one whose carrier is gone and that nothing will
+	// ever close. Zero means a record written before this field existed.
+	OwnerPID int `json:"owner_pid,omitempty"`
 }
 
 type ActionError struct{ Action ActionID }

@@ -563,6 +563,11 @@ func (s *FileStore) lock(ctx context.Context, id string, wait bool) (*Conversati
 	}
 }
 
+// ProcessAlive reports whether a process with this pid exists. It is the same
+// probe that recovers a lock from a dead owner, exported so the owner of any
+// other durable record is judged alive or dead by one rule.
+func ProcessAlive(pid int) bool { return processAlive(pid) }
+
 func first(values []string) string {
 	if len(values) == 0 {
 		return ""

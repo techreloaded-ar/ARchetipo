@@ -133,6 +133,7 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 		if err := ws.restoreNativeConversations(providers); err != nil {
 			return nil, fmt.Errorf("restoring native conversations: %w", err)
 		}
+		ws.reconcileOrphanedExecutions(context.Background(), providers)
 	}
 	return ws, nil
 }

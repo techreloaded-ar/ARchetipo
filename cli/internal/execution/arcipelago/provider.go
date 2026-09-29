@@ -78,6 +78,11 @@ type Provider struct {
 
 var _ execution.Provider = (*Provider)(nil)
 
+// WorkOutlivesDispatcher declares the task on the hub as detached from the
+// viewer that dispatched it: a restarted viewer must not close as orphaned a
+// record whose work may still be running remotely.
+func (p *Provider) WorkOutlivesDispatcher() bool { return true }
+
 // New builds a provider, defaulting every unset seam to its real
 // implementation. It never returns nil and never reads the environment: the
 // secret is only looked up during Execute.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -27,6 +28,10 @@ type Service struct {
 	// a service that does not know where it executes is the defect this field
 	// exists to make unrepresentable.
 	workingRoot string
+	// ownerPID is stamped on every record this service creates. It is a field
+	// and not a call to os.Getpid at the point of use so a test can play the
+	// part of a process that is gone.
+	ownerPID int
 }
 
 type CapabilityError struct {
@@ -56,7 +61,7 @@ func NewService(registry *Registry, store Store, newID IDGenerator, now Clock, w
 	if err != nil {
 		return nil, fmt.Errorf("resolve execution working root: %w", err)
 	}
-	return &Service{registry: registry, store: store, newID: newID, now: now, workingRoot: root}, nil
+	return &Service{registry: registry, store: store, newID: newID, now: now, workingRoot: root, ownerPID: os.Getpid()}, nil
 }
 
 // Continuation dispatches an already persisted execution to its provider and
@@ -277,7 +282,7 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 		return Execution{}, nil, fmt.Errorf("generated invalid execution id %q", id)
 	}
 	created := s.now().UTC()
-	started := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created, WorkingDir: s.workingRoot}
+	started := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, RequestID: requestID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: created, WorkingDir: s.workingRoot, OwnerPID: s.ownerPID}
 	// The options are applied *before* the create, never after: the model a run
 	// uses has to be readable while that run is RUNNING, and decorating the
 	// record only on the terminal write would hide it until the run is over —
@@ -385,7 +390,7 @@ func (s *Service) Open(ctx context.Context, spec domain.Spec, action ActionID, p
 	if !recordfile.ValidID(id) {
 		return Execution{}, fmt.Errorf("generated invalid execution id %q", id)
 	}
-	opened := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: s.now().UTC(), WorkingDir: s.workingRoot}
+	opened := Execution{ID: id, SpecCode: spec.Code, Action: action, Capability: capability, ProviderID: providerID, SpecStatusBefore: spec.Status, Status: StatusRunning, CreatedAt: s.now().UTC(), WorkingDir: s.workingRoot, OwnerPID: s.ownerPID}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&opened)
