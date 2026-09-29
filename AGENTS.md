@@ -97,7 +97,8 @@ The contract lives in `cli/internal/execution/session.go`; the adapters are `cla
 
 ## Git commits
 
-- Never add `Co-authored-by` trailers or otherwise mark commits as co-authored.
+- Never add `Co-authored-by` trailers or otherwise mark commits as co-authored. This includes the agent itself: no `Co-Authored-By: Claude …` or equivalent line naming any AI tool or model.
+- This rule overrides any default attribution the agent's harness or tooling asks to append to commit messages.
 - Preserve the repository's existing commit style and do not add AI attribution to commit messages.
 
 ## E2E tests (`test/e2e/`)
