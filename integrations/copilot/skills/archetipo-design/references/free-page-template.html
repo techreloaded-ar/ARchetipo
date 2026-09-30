@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I miei portafogli</title>
+<link rel="stylesheet" href="free-base.css"> <!-- reference copy: in a delivered mockup inline the whole stylesheet -->
+<!-- In a delivered mockup, inline the content of free-base.css inside a <style> tag instead of linking it. -->
+</head>
+<body>
+<div class="free-shell free-shell--with-tabs">
+
+  <!-- HEADER: full width, teal, logo left, user area right -->
+  <header class="free-header">
+    <div class="free-header__logo" aria-label="Crédit Agricole">CA</div>
+    <div class="free-header__title">Scrivania Digitale</div>
+    <div class="free-header__spacer"></div>
+    <button class="free-header__action" type="button">
+      <span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg></span>
+      <span class="free-visually-hidden">Notifiche</span>
+    </button>
+    <button class="free-header__action" type="button"><span class="free-avatar" aria-hidden="true">MR</span><span>Maria Rossi</span></button>
+  </header>
+
+  <!-- CONTEXT TABS (tab di contesto): browser-like tabs on the header band; Home icon-only + open contexts, each with close X -->
+  <div class="free-header__tabs">
+    <nav class="free-context-tabs" aria-label="Contesti aperti">
+      <a class="free-context-tabs__tab free-context-tabs__home" href="#" aria-label="Home"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg></span></a>
+      <a class="free-context-tabs__tab is-active" href="#" aria-current="page">
+        <span class="free-icon free-context-tabs__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>
+        <span class="free-context-tabs__text"><span class="free-context-tabs__title">Rossi Marco</span><span class="free-context-tabs__subtitle">Scheda cliente</span></span>
+        <button class="free-context-tabs__close" type="button" aria-label="Chiudi contesto Rossi Marco">✕</button>
+      </a>
+      <a class="free-context-tabs__tab" href="#">
+        <span class="free-icon free-context-tabs__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>
+        <span class="free-context-tabs__text"><span class="free-context-tabs__title">Bianchi Luca</span><span class="free-context-tabs__subtitle">Mutuo</span></span>
+        <button class="free-context-tabs__close" type="button" aria-label="Chiudi contesto Bianchi Luca">✕</button>
+      </a>
+    </nav>
+  </div>
+
+  <!-- MAIN MENU: 72px teal rail, icon + label, active item as white pill -->
+  <nav class="free-menu" aria-label="Menu principale">
+    <a class="free-menu__item" href="#"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg></span>Home</a>
+    <a class="free-menu__item is-active" href="#" aria-current="page"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>Portafogli</a>
+    <a class="free-menu__item" href="#"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span>Clienti</a>
+    <a class="free-menu__item" href="#"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg></span>Pratiche</a>
+    <div class="free-menu__secondary">
+      <a class="free-menu__item" href="#" aria-label="Link esterno"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></span></a>
+      <div class="free-menu__version">1.0</div>
+    </div>
+  </nav>
+
+  <!-- PAGE CONTENT -->
+  <main class="free-content">
+    <ol class="free-breadcrumb" aria-label="Percorso">
+      <li><a href="#">Home</a></li>
+      <li aria-current="page">I miei portafogli</li>
+    </ol>
+    <div class="free-page-header">
+      <div class="free-page-header__titles">
+        <h1>I miei portafogli</h1>
+        <div class="free-page-header__subtitle">Aggiornato al 30/09/2026 alle 09:15</div>
+      </div>
+      <div class="free-page-header__actions">
+        <button class="free-btn free-btn--secondary" type="button">Esporta</button>
+        <button class="free-btn free-btn--primary" type="button">Nuova pratica</button>
+      </div>
+    </div>
+
+    <div class="free-grid">
+      <!-- Widget 6 columns: KPI + chart -->
+      <section class="free-widget free-col-6" aria-labelledby="w1">
+        <div class="free-widget__header">
+          <h2 class="free-widget__title" id="w1">Masse gestite</h2>
+          <button class="free-icon-btn" type="button" aria-label="Opzioni widget"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></span></button>
+        </div>
+        <div class="free-kpi"><div class="free-kpi__value">€ 12.480.500</div><div class="free-kpi__label">Totale portafogli gestiti</div></div>
+        <svg class="free-chart" viewBox="0 0 320 120" role="img" aria-label="Andamento masse ultimi 6 mesi" style="margin-top:16px">
+          <g fill="var(--free-chart-1)">
+            <rect x="10" y="60" width="36" height="60" rx="4"/><rect x="62" y="48" width="36" height="72" rx="4"/><rect x="114" y="52" width="36" height="68" rx="4"/>
+            <rect x="166" y="30" width="36" height="90" rx="4"/><rect x="218" y="36" width="36" height="84" rx="4"/><rect x="270" y="18" width="36" height="102" rx="4"/>
+          </g>
+        </svg>
+        <div class="free-chart__legend"><span class="free-chart__legend-item"><span class="free-chart__swatch" style="background:var(--free-chart-1)"></span>Masse (mln €)</span></div>
+      </section>
+
+      <!-- Widget 6 columns: form section -->
+      <section class="free-widget free-col-6" aria-labelledby="w2">
+        <div class="free-widget__header"><h2 class="free-widget__title" id="w2">Ricerca cliente</h2></div>
+        <form class="free-form">
+          <div class="free-field free-field--half">
+            <div class="free-field__control">
+              <span class="free-field__label">Cliente o NDG</span>
+              <input type="text" placeholder="Cliente o NDG" aria-label="Cliente o NDG">
+              <span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
+            </div>
+            <div class="free-field__helper">Inserisci almeno 3 caratteri</div>
+          </div>
+          <div class="free-field free-field--half has-error">
+            <div class="free-field__control">
+              <span class="free-field__label">Codice fiscale (Opzionale)</span>
+              <input type="text" value="RSSMRA80A01" aria-label="Codice fiscale">
+              <span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/></svg></span>
+            </div>
+            <div class="free-field__helper">Il codice fiscale deve avere 16 caratteri</div>
+          </div>
+          <div class="free-field free-field--full" style="margin-top:8px">
+            <div class="free-actions" style="margin-top:0">
+              <button class="free-btn free-btn--secondary" type="reset">Annulla</button>
+              <button class="free-btn free-btn--primary" type="submit">Cerca</button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <!-- Widget 12 columns: table -->
+      <section class="free-col-12 free-table-wrap" aria-labelledby="w3">
+        <div class="free-table-toolbar">
+          <h2 class="free-widget__title" id="w3">Portafogli</h2>
+          <div class="free-search"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span><input type="search" placeholder="Cerca portafoglio" aria-label="Cerca portafoglio"></div>
+        </div>
+        <table class="free-table">
+          <thead><tr>
+            <th scope="col">Portafoglio <span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m7 15 5 5 5-5M7 9l5-5 5 5"/></svg></span></th>
+            <th scope="col">Cliente</th><th scope="col">Stato</th>
+            <th scope="col" class="free-num">Controvalore</th><th scope="col"><span class="free-visually-hidden">Azioni</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td>PF-2024-0112</td><td>Bianchi Luca</td><td><span class="free-status free-status--success">Attivo</span></td><td class="free-num">€ 1.250.000,00</td><td class="free-actions-cell"><button class="free-icon-btn" type="button" aria-label="Dettaglio"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></span></button></td></tr>
+            <tr class="is-selected"><td>PF-2024-0098</td><td>Verdi Anna</td><td><span class="free-status free-status--warning">In revisione</span></td><td class="free-num">€ 480.300,50</td><td class="free-actions-cell"><button class="free-icon-btn" type="button" aria-label="Dettaglio"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></span></button></td></tr>
+            <tr><td>PF-2023-0871</td><td>Neri Paolo</td><td><span class="free-status free-status--error">Bloccato</span></td><td class="free-num">€ 92.110,00</td><td class="free-actions-cell"><button class="free-icon-btn" type="button" aria-label="Dettaglio"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></span></button></td></tr>
+          </tbody>
+        </table>
+        <div class="free-paginator">
+          <span>1-3 di 42</span>
+          <div class="free-paginator__pages">
+            <button class="free-paginator__page" type="button" aria-label="Pagina precedente">‹</button>
+            <button class="free-paginator__page is-active" type="button" aria-current="page">1</button>
+            <button class="free-paginator__page" type="button">2</button>
+            <button class="free-paginator__page" type="button">3</button>
+            <button class="free-paginator__page" type="button" aria-label="Pagina successiva">›</button>
+          </div>
+          <label class="free-paginator__size">Righe <select aria-label="Righe per pagina"><option>10</option><option>25</option></select></label>
+        </div>
+      </section>
+    </div>
+
+    <!-- Banner stack (bottom overlay) -->
+    <div class="free-banner-stack">
+      <div class="free-banner free-banner--success" role="status">
+        <span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>
+        <span class="free-banner__text">Pratica PR-1043 salvata correttamente.</span>
+        <button class="free-banner__close" type="button" aria-label="Chiudi">✕</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- QUICK ACTIONS: optional mint tab on the right edge -->
+  <aside class="free-quick-actions" aria-label="Azioni rapide">
+    <button class="free-quick-actions__item" type="button" aria-label="Calcolatrice"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8M8 12h2m2 0h2m2 0h0M8 16h2m2 0h2m2 0h0"/></svg></span></button>
+    <button class="free-quick-actions__item" type="button" aria-label="Note"><span class="free-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 4h16v12l-4 4H4z"/><path d="M16 20v-4h4"/></svg></span></button>
+  </aside>
+</div>
+</body>
+</html>
