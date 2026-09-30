@@ -20,7 +20,9 @@ Possiamo aiutarti a:
 
 • chiarire le idee e scrivere insieme il documento di prodotto (PRD);
 
-• visualizzare un requisito con mockup delle schermate principali.
+• visualizzare un requisito con mockup delle schermate principali;
+
+• esplodere il PRD in un'analisi funzionale dettagliata, videata per videata e campo per campo.
 
 Su quale prodotto lavoriamo? Se ne hai già definito uno, allega il suo PRD.md e ripartiamo da lì.
 
@@ -31,3 +33,4 @@ Su quale prodotto lavoriamo? Se ne hai già definito uno, allega il suo PRD.md e
 |---|---|
 | 💡 Ho una nuova idea | Ho un'idea per un nuovo prodotto e voglio definirla. Aiutami a fare discovery e a scrivere il PRD. |
 | 🎨 Crea i mockup | Crea i mockup delle schermate principali partendo dal PRD che ti allego. |
+| 📋 Esplodi i requisiti | Partendo dal PRD che ti allego, produci l'analisi funzionale dettagliata videata per videata. |
