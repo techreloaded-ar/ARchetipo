@@ -1,11 +1,11 @@
 # Functional analysis — self-check checklist (run before delivering the document)
 
-Applies to: every `Analisi-Funzionale.md` produced by this skill, at first generation and at every revision.
+Applies to: every `Analisi-Funzionale.docx` produced by this skill, at first generation and at every revision.
 Keywords: checklist, quality gate, copertura, densità, anti-invenzione, controllo, verifica, consegna.
 
 ## How to use this checklist
 
-Run it in the same turn that generates the document, after writing the draft and before **Write an artifact**. Go through every group. Each item is pass, fail or n/a. Fix every fail by regenerating the sections involved, then re-run the group. Report the result as one compact line in the final response, e.g. "A. Copertura 3/3 · B. Campi 3/3 · C. Controlli 2/2 · D. Integrazioni 2/2 · E. Pulsanti 1/1 · F. Anti-invenzione 3/3 · G. Densità 3/3 · H. Lingua 2/2". A document with any fail is not delivered.
+Run it in the same turn that generates the document, after writing the draft and before producing the Word file and applying **Deliver an artifact**. Go through every group. Each item is pass, fail or n/a. Fix every fail by regenerating the sections involved, then re-run the group. Report the result as one compact line in the final response, e.g. "A. Copertura 3/3 · B. Campi 3/3 · C. Controlli 2/2 · D. Integrazioni 2/2 · E. Pulsanti 1/1 · F. Anti-invenzione 3/3 · G. Densità 3/3 · H. Lingua 2/2 · I. Word 3/3". A document with any fail is not delivered.
 
 ## A. Coverage of the PRD
 
@@ -49,3 +49,9 @@ Run it in the same turn that generates the document, after writing the draft and
 
 1. Headings, table headers and labels are in the language of the PRD; `XX crt` and `[DA CONFERMARE]` are left untranslated.
 2. Names of steps, fields, states and actors are the ones the PRD uses. A term the PRD does not use is introduced once, in chapter 1, with its meaning.
+
+## I. Word rendering
+
+1. Every heading of the templates is a Word heading (title, chapter, section, block), so the index and the navigation pane follow the structure; nothing is a bold paragraph pretending to be a heading.
+2. Every table of the templates is a real Word table with the same columns, in the same order, and one row per field, button, control, outcome or open point — no table was flattened into a bulleted list or a paragraph.
+3. `«…»`, `XX crt` and `[DA CONFERMARE]` are present verbatim in the Word file, so the reviewer can search for them.

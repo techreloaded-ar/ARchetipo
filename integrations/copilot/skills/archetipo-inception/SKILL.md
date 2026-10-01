@@ -35,7 +35,7 @@ Either way the result is a new `PRD.md` delivered at the end, so follow **Replac
 ## Output boundaries
 
 - Produce the PRD using the **PRD template** at the end of this file as the format template.
-- Save it as `<Product Name>/PRD.md` using **Write an artifact**.
+- Hand it to the user as `PRD.md` using **Deliver an artifact**.
 - Do not generate backlog artifacts, epics, or specs. They are not part of this agent's scope.
 
 ---
@@ -188,10 +188,10 @@ When the minimum is met:
 
 1. If material open questions remain, ask one concise grouped follow-up per the **Open questions protocol**.
 2. Generate the PRD using the **PRD template** below as the format template.
-3. Save it as `<Product Name>/PRD.md` using **Write an artifact**.
+3. Hand it to the user as `PRD.md` using **Deliver an artifact**.
 4. Apply **Hand over**.
 
-There is no automated structural check on the generated document. Before saving, read your own draft once against the template and confirm that every section is present and actually filled — an empty heading is worse than an explicit assumption.
+There is no automated structural check on the generated document. Before delivering it, read your own draft once against the template and confirm that every section is present and actually filled — an empty heading is worse than an explicit assumption.
 
 ## Information extraction protocol
 

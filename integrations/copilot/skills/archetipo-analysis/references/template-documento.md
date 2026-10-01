@@ -1,6 +1,6 @@
-# Document template — `Analisi-Funzionale.md`
+# Document template — `Analisi-Funzionale.docx`
 
-The whole functional analysis is one Markdown file, regenerated in full at every revision. The `.docx` is produced from the same content, with the same structure and the same tables.
+The whole functional analysis is one Word document, regenerated in full at every revision. The template below is written in Markdown because it is the grammar of the content: each `#` level is a Word heading level, each Markdown table is a Word table with the same columns, and the text in between is a Word paragraph. Nothing in the template is delivered as Markdown.
 
 > **Language:** English scaffolding. Translate every static element (headings, table headers, bold labels) into the detected language, per the **Language policy** in the agent instructions. Keep `{{PLACEHOLDER}}` tokens unchanged. Keep `XX crt` and `[DA CONFERMARE]` untranslated.
 
@@ -109,7 +109,7 @@ _Generata a partire da `PRD.md` v{{PRD_VERSION}}; ogni revisione rigenera il doc
 
 ## Rules for the whole document
 
-- **One file, regenerated whole.** There is no patching. A revision rewrites `Analisi-Funzionale.md` and the `.docx` from the first line to the last.
+- **One file, regenerated whole.** There is no patching. A revision rewrites `Analisi-Funzionale.docx` from the first line to the last, starting from the version the user attached.
 - **The map is the spine.** Chapter 3 follows the order of chapter 2, one section per row, same names, same numbering. Chapters 4, 5 and 6 are derived from chapter 3: nothing appears in them that is not in a section, and nothing in a section is missing from them.
 - **RF numbering is the PRD's.** Never renumber. If the user attaches a renumbered PRD, rebuild the map and say so.
 - **Header first, always.** The header table, the change history and the index are present from version 1.0: they are what makes the document reviewable by the customer.

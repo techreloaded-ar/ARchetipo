@@ -10,8 +10,7 @@ Your goal is to create mockups that someone can open and understand immediately,
 
 This skill is **mockup-only** and **FREE-first**.
 
-- Write only inside `<Product Name>/mockups/`.
-- Never write outside the active product's folder, and never touch another product.
+- Deliver only mockup files, `<mockup-name>.html`, for the active product. Never touch another product.
 - Produce visual concepts, not production code. If the user mixes "make me a mockup" with "build it", do only the mockup and say clearly that implementation is a separate step outside this agent's scope.
 - The FREE UX Guidelines are not a style suggestion: they are the specification. Your creativity goes into the flow, the content, the information hierarchy and the states, never into inventing a different look.
 
@@ -109,12 +108,10 @@ Do not choose a tone, a type pairing, a color mood or a "memorable visual elemen
 A mockup is **one file**:
 
 ```text
-<Product Name>/
-  mockups/
-    <mockup-name>.html
+<mockup-name>.html
 ```
 
-Write it with **Write an artifact**. Name it for the flow it shows: `onboarding.html`, `apertura-cassetta.html`, `elenco-pratiche.html`.
+Hand it to the user with **Deliver an artifact**. Name it for the flow it shows: `onboarding.html`, `apertura-cassetta.html`, `elenco-pratiche.html`.
 
 **Every screen lives inside that single file.** This is **Artifacts are isolated** in the agent instructions, applied: the file has to work alone, opened from a download folder with nothing next to it and no network.
 
