@@ -28,9 +28,12 @@ Use this template for **every** step of the process map, in the order of the map
 - **Controlli già superati:** {{PASSED_CONTROLS}}
 - **Chi può eseguirlo:** {{ACTOR_AND_PROFILE}}
 
-#### {{SECTION_NUMBER}}.2 Riferimento mockup
+#### {{SECTION_NUMBER}}.2 Mockup
 
-{{MOCKUP_REF}} — id della sezione nel file HTML (`#{{SCREEN_ID}}`), oppure "da produrre".
+![{{PAGE_TITLE}} — stato base (dati esemplificativi)](screens/{{SECTION_DASHED}}-base.png)
+![{{PAGE_TITLE}} — stato {{STATE}} (dati esemplificativi)](screens/{{SECTION_DASHED}}-{{STATE}}.png)
+
+{{MOCKUP_HTML_REF — only when a mockup HTML produced by the design work exists for this product: "Mockup HTML: `#{{SCREEN_ID}}`"; omit the line otherwise}}
 
 #### {{SECTION_NUMBER}}.3 Campi
 
@@ -96,7 +99,10 @@ _Only when Tipo = SCREEN. Omit the block otherwise._
 - **Banner e feedback:** {{BANNERS}} (info, warning, errore, successo, con testo)
 - **Stati asincroni:** caricamento durante {{LOADING_MOMENTS}}; errore servizio {{SERVICE_ERROR_STATE}}
 - **Navigazione:** avanti verso {{NEXT_SCREEN}}, indietro verso {{PREVIOUS_SCREEN}}
+- **Stati da renderizzare:** base{{, errore}}{{, caricamento}}{{, vuoto}}{{, modale-<nome>}} — only the states this screen actually has
 ```
+
+For a screen (Tipo = SCREEN) block 2 is a list of image lines, one per state listed in block 10, in that order: base first. `{{SECTION_DASHED}}` is the section number with dashes (`3.4` → `3-4`). The images are produced by `scripts/render_screens.py` from `screens/{{SECTION_DASHED}}.json`, written from block 10 as described in `screen-spec.md`. For a sub-process or a control (no screen) block 2 is one line: "Nessuna videata: {{WHAT_THE_STEP_IS}}".
 
 ## How to fill it
 
