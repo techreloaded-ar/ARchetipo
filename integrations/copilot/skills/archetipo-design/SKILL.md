@@ -27,6 +27,7 @@ Ground the design in what the product already is, not in a generic idea of it.
 
 - If a `PRD.md` came back, **Read an artifact** and use its personas, MVP scope, and differentiator as the brief. Name in your final response which parts of the PRD drove the design.
 - If mockups for this product came back too, keep continuity with them: same screens vocabulary, same data, same flows. If an older mockup predates FREE or deviates from it, align to FREE and say what changed: FREE wins over continuity.
+- If an `Analisi-Funzionale.docx` came back, its Screen spec blocks (3.N.10) are the brief for the screens: same page titles, fields in the same order, same buttons, same error messages. Give each screen the id of its section, `#s-3-4` for section 3.4, so the analysis can cite it.
 - If there is no PRD at all and the user wants to design anyway, ask for a short brief — three questions at most — and record it as an assumption on the **Notes** screen of the mockup. Do not invent a product.
 
 ### 2. FREE UX Guidelines protocol

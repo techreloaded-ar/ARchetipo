@@ -48,8 +48,8 @@ This section is the delivery layer, and the only place it is described. Replacin
 
 ```text
 PRD.md                   the product definition
-Analisi-Funzionale.docx  the functional analysis
-<mockup-name>.html       one mockup, every screen inside it
+Analisi-Funzionale.docx  the functional analysis, with the mockup of every screen as images inside it
+<mockup-name>.html       one navigable mockup, every screen inside it
 ```
 
 These are the file names, always, with no folder in front of them. The product name is inside each document, in its title or header — it is not part of the path. When a conversation covers more than one product, say in the reply which product each file belongs to.

@@ -25,7 +25,13 @@ skills/archetipo-design/archetipo-design.zip     -> Build > Skills > Upload a sk
 skills/archetipo-analysis/archetipo-analysis.zip -> Build > Skills > Upload a skill (packaged skill bundle)
 ```
 
-No tools, no MCP server. Check **Build > Tools** is empty: a SharePoint or OneDrive tool left on the agent is what makes it "save" files instead of handing them over, and the instructions forbid using one even if present. A skill that is a single `SKILL.md` is uploaded as is. A skill with a `references/` folder is uploaded as a `.zip` with `SKILL.md` at the root and `references/` next to it (a "packaged skill bundle"); build it from inside the skill folder, so the archive has no extra top-level directory.
+No tools, no MCP server. Check **Build > Tools** is empty: a SharePoint or OneDrive tool left on the agent is what makes it "save" files instead of handing them over, and the instructions forbid using one even if present. A skill that is a single `SKILL.md` is uploaded as is. A skill with `references/`, `scripts/` or `assets/` is uploaded as a `.zip` with `SKILL.md` at the root and those folders next to it (a "packaged skill bundle"). Build both archives with:
+
+```powershell
+.\integrations\copilot\build-skills.ps1 -List
+```
+
+The analysis bundle carries two Python scripts and the Montserrat and Open Sans fonts (SIL Open Font License, `assets/fonts/OFL.txt`): `scripts/render_screens.py` draws the FREE mockup of every screen as PNG with Pillow, and `scripts/build_docx.py` turns the Markdown of the templates into the Word document with python-docx. Both libraries are in the sandbox; nothing is installed at run time and nothing needs the network.
 
 The Knowledge holds two corpora: the FREE UX Guidelines kit (19 files) for design, and the as-is documentation of the existing products for analysis. Upload both under **Knowledge**; the agent instructions say how each one is searched.
 
@@ -45,7 +51,7 @@ Nothing else knows how artifacts reach the user. The skills call those procedure
 
 4. **Load the Knowledge.** The FREE kit for design; the as-is functional documentation of the products for analysis. Then probe the second corpus with three searches at field level ("as-is conto di addebito campi", "as-is KYC validità questionario", "as-is cassette disponibilità"): if the answers do not reach fields and messages, the analysis will get its detail from questions to the user instead, and the team should know it before the first run.
 
-5. **Check the round trips once.** Ask for a minimal mockup and confirm the single `.html` comes back as a created-file card under the reply; ask for a minimal Word document and confirm the `.docx` comes back the same way, and that the reply does not claim the file was saved anywhere; ask a design question that only `references/free-checklist.md` answers, to confirm the zipped skill reads its references. If a file is only echoed as text, the harness is not surfacing created files and this integration will not work as designed.
+5. **Check the round trips once.** Ask for a minimal mockup and confirm the single `.html` comes back as a created-file card under the reply; ask for a minimal Word document and confirm the `.docx` comes back the same way, and that the reply does not claim the file was saved anywhere; ask a design question that only `references/free-checklist.md` answers, to confirm the zipped skill reads its references. Then ask the agent to run `python <skill>/scripts/render_screens.py --check --out check` and to attach the five PNG files it produces: it proves the analysis bundle is unpacked with its scripts and fonts, and shows what the mockup images look like. If a file is only echoed as text, the harness is not surfacing created files and this integration will not work as designed.
 
 ## How work is delivered today
 
@@ -59,7 +65,7 @@ Fixed file names, no folders: a created-file card shows a file name, nothing els
 
 A mockup is a single file: every screen lives inside it and the file switches between them, because a link from one download to another does not resolve. How many screens it holds is the user's call at the start — **Minimal**, **Standard** or **Complete**.
 
-A functional analysis is one Word file, `Analisi-Funzionale.docx`: the deliverable the customer reviews in Word and the file the user attaches back for a revision. It is regenerated whole at every revision; there is no patching. The analysis is produced after a question phase — at most three questions per turn, until the open points are exhausted or the user says to proceed — and then generated in a single turn, with its own quality gate, which now also checks that headings and tables survived the trip into Word.
+A functional analysis is one Word file, `Analisi-Funzionale.docx`: the deliverable the customer reviews in Word and the file the user attaches back for a revision. Every screen of the process map has its FREE mockup inside the document, in the «Mockup» block of its section: one image for the base state and one for each state the Screen spec lists (error, loading, empty, modal), with a numbered caption and example data. The agent writes the content in Markdown and one compact JSON spec per screen; the two scripts of the bundle draw the images and build the Word file, so headings, tables, bold and figures come out the same every time. It is regenerated whole at every revision; there is no patching. The analysis is produced after a question phase — at most three questions per turn, until the open points are exhausted or the user says to proceed — and then generated in a single turn, with its own quality gate built on the reports of the two scripts. If a turn cannot hold the document and the images together, the agent delivers the document first and the images in the next turn, without asking the user to attach anything.
 
 ## How resuming works
 
@@ -78,6 +84,7 @@ Stated plainly, because they shape what this integration can and cannot do:
 - **One model per agent.** The model is chosen once, in Build > Model, for every skill of the agent. If the analysis needs a stronger model than inception and design, it is a trade-off for the whole agent — or a reason to move the analysis to a separate agent connected to this one.
 - **No cross-conversation continuity.** No manifest, no index, no lookup of past products. Continuity is the attached PRD (and, for a revision, the attached analysis), and nothing else.
 - **Mockups are downloads, not pages.** Nothing renders HTML here, and links between downloaded files do not resolve, which is why a mockup is one self-contained file with its screens and its own switcher inside, and never a folder with an `index.html` hub.
+- **No browser in the sandbox.** Verified on 2 October 2026: no Playwright, Chromium, wkhtmltoimage, WeasyPrint or `npx`, and no built-in screenshot tool. The images inside the analysis are therefore drawn with Pillow from a spec, not rendered from the HTML mockup: same tokens, same shell, same components, but a drawing, not a browser rendering. The navigable HTML mockup stays a separate deliverable of the design work.
 - **Attachment support is the hard dependency.** Reading an attached `PRD.md` back is what makes Design-after-Inception possible; a channel that strips attachments limits the agent to single-conversation work.
 - **There is no PRD validation.** The `archetipo validate prd` gate lives in the CLI and has no equivalent here. The PRD structure is a template the agent follows, not a contract anything enforces.
 
@@ -91,4 +98,20 @@ The distinction that matters: a missing file is either never created — look fo
 
 Inception, Design and Analysis only. No backlog, no planning, no implementation, no review, no Wiki. Those phases need a repository and a working tree that outlives a conversation, which this environment does not have.
 
-The inception and design skills keep the same names as their counterparts in `skills/`, and the method inside them is unchanged — only the persistence layer was replaced. The analysis skill is specific to this integration: it targets the customer's own "Descrizione intervento" document format, and its detail depends on the as-is documentation loaded in the Knowledge.
+The inception and design skills keep the same names as their counterparts in `skills/`, and the method inside them is unchanged — only the persistence layer was replaced. The analysis skill is specific to this integration: it targets the customer's own "Descrizione intervento" document format, its detail depends on the as-is documentation loaded in the Knowledge, and its scripts depend on the sandbox of the GitHub Copilot harness.
+
+## Working on the analysis scripts
+
+Both scripts run locally with Python 3.12, Pillow and python-docx, so changes are tested here before touching the tenant:
+
+```powershell
+python integrations\copilot\skills\archetipo-analysis\scripts\render_screens.py --check --out $env:TEMP\check
+```
+
+renders the built-in example (base, error, loading, empty, modal) and prints which fonts were used, and
+
+```powershell
+python integrations\copilot\skills\archetipo-analysis\scripts\build_docx.py analisi.md --images screens --out Analisi-Funzionale.docx
+```
+
+builds a Word file from any Markdown written with the templates. Exit code 2 means the report found residual Markdown markers or missing images. `--example` prints the example spec as JSON, the starting point for a new screen.
