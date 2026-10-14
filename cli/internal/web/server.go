@@ -256,6 +256,7 @@ func (s *Server) registerRoutes() {
 	s.handleAlways("GET /api/workspace/options", s.handleGetWorkspaceOptions)
 	s.handleAlways("POST /api/workspace", s.handleCreateWorkspace)
 	s.handleWorkspace("GET /api/workspace/actions", s.handleGetWorkspaceActions)
+	s.handleWorkspace("GET /api/workspace/activities", s.handleGetConversationActivities)
 	s.handleWorkspace("GET /api/workspace/status", s.handleGetWorkspaceStatus)
 	s.handleWorkspace("POST /api/workspace/execution", s.handleRunWorkspaceAction)
 	s.handleWorkspace("GET /api/workspace/runs", s.handleGetWorkspaceRuns)

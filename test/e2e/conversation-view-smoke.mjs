@@ -163,17 +163,6 @@ async function scenarioNativeCodexConversation(dirC, env) {
       throw new Error(`AC-4: the Codex conversation must be offered; got ${JSON.stringify(offered)}`);
     }
 
-    const opened = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
-    const conversationID = opened.conversation?.id;
-    const nativeID = opened.session?.session?.native?.id;
-    if (!conversationID || nativeID !== "thread-1") {
-      throw new Error(`AC-4: Codex did not expose its persistent native thread: ${JSON.stringify(opened)}`);
-    }
-    const threadStart = await control.waitFor("thread/start", 1);
-    if (threadStart.params?.ephemeral !== false || threadStart.params?.approvalPolicy !== "untrusted") {
-      throw new Error(`AC-4: thread/start was not persistent and interactive: ${JSON.stringify(threadStart.params)}`);
-    }
-
     const chromePath = await findChrome(process.env.ARCHETIPO_CHROME || process.env.CHROME_PATH);
     if (!chromePath) throw new Error("task 06 richiede Chrome; imposta ARCHETIPO_CHROME se non è nel percorso standard");
     browser = await launchChrome(chromePath, path.join(path.dirname(dirC), "chrome-profile"));
@@ -184,6 +173,23 @@ async function scenarioNativeCodexConversation(dirC, env) {
     await page.send("Page.enable");
     await page.send("Page.navigate", { url: view.url });
     await page.once("Page.loadEventFired", 30000, "il caricamento della View");
+    await page.waitFor(`!!document.querySelector('[data-conversation-activity="design"]:not([disabled])')`, 20000, "l'attività Nuovo mockup");
+    await page.evaluate(`document.querySelector('[data-conversation-activity="design"]').click()`);
+    await page.waitFor(`!!document.querySelector('[data-conversation-activity-clear]')`, 20000, "il mockup selezionato dopo la scoperta nativa");
+    const current = await apiJSON(`${view.url}/api/workspace/conversations`);
+    const opened = await readConversation(view.url, current.conversations?.[0]?.id, 0);
+    if ((opened.events || []).length !== 0) throw new Error("la scelta dell'attività ha avviato un turno prima del messaggio");
+    await page.evaluate(`document.querySelector('[data-conversation-activity-clear]').click()`);
+    const conversationID = opened.conversation?.id;
+    const nativeID = opened.session?.session?.native?.id;
+    if (!conversationID || nativeID !== "thread-1") {
+      throw new Error(`AC-4: Codex did not expose its persistent native thread: ${JSON.stringify(opened)}`);
+    }
+    const threadStart = await control.waitFor("thread/start", 1);
+    if (threadStart.params?.ephemeral !== false || threadStart.params?.approvalPolicy !== "untrusted") {
+      throw new Error(`AC-4: thread/start was not persistent and interactive: ${JSON.stringify(threadStart.params)}`);
+    }
+
     await page.waitFor(`!!document.querySelector('[data-conversation-id="${conversationID}"]')`, 20000, "la rail entry della sessione Codex");
     await page.evaluate(`document.querySelector('[data-conversation-id="${conversationID}"]').click()`);
     await page.waitFor(`!!document.querySelector('[data-conversation-pill="model"]')`, 20000, "il selettore modello della sessione");
@@ -193,17 +199,19 @@ async function scenarioNativeCodexConversation(dirC, env) {
     await page.evaluate(`document.querySelector('[data-conversation-pill="option:effort"]').click()`);
     await page.evaluate(`document.querySelector('[data-conversation-option-choice="high"]').click()`);
     await waitForConversation(view.url, conversationID, 0, (data) => data.next_turn?.model === "gpt-fake" && data.next_turn?.options?.effort === "high", "la scelta model/effort fatta con click");
-    // Il menu delle skill non è più una combobox: si apre scrivendo «/» nel
-    // campo, come in ogni harness, e mostra i nomi che il catalogo dichiara.
+    // Il catalogo viene dal runtime; la selezione resta separata dal messaggio
+    // e i nomi tecnici non vengono inseriti nel campo né mostrati nel menu.
     await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = '/'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
     await page.waitFor(`!!document.querySelector('[data-conversation-skill-option="plugin:fixture"]')`, 20000, "il menu delle skill native");
     const skillOptions = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-skill-option]')).map((option) => option.getAttribute('data-conversation-skill-option'))`);
     if (!skillOptions.includes("codex-only") || !skillOptions.includes("shared") || skillOptions.includes("claude-only") || skillOptions.includes("disabled")) {
       throw new Error(`AC-4: il catalogo Codex non rispetta runtime e disabilitazioni: ${JSON.stringify(skillOptions)}`);
     }
+    const visibleActivities = await page.evaluate(`document.querySelector('.conv-skill-menu').innerText`);
+    if (visibleActivities.includes('plugin:fixture') || visibleActivities.includes('codex-only')) throw new Error('il menu espone i nomi tecnici delle skill');
     await page.evaluate(`document.querySelector('[data-conversation-skill-option="plugin:fixture"]').click()`);
-    await page.waitFor(`document.querySelector('.conv-composer-input').value === '/plugin:fixture '`, 20000, "la skill scelta scritta nel campo");
-    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = '/plugin:fixture turno codex uno'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await page.waitFor(`document.querySelector('.conv-composer-input').value === '' && !!document.querySelector('[data-conversation-activity-clear]')`, 20000, "l’attività scelta separata dal messaggio");
+    await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.focus(); input.value = 'turno codex uno'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
     await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
     const firstTurn = await control.waitFor("turn/start", 1);
@@ -509,7 +517,6 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
       id: "claude",
       config: { command: fakeClaudePath, timeout_seconds: 600 },
     }));
-    control.push(emit({ type: "system", subtype: "init", session_id: "conversation-b" }));
     const openedInB = await apiJSON(`${view.url}/api/workspace/conversations`, postJSON({}), 201);
     const conversationB = openedInB.conversation?.id;
     if (!conversationB || conversationB === conversationA) {
@@ -517,6 +524,9 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     await assertSamePath(openedInB.conversation.working_dir, dirB, "AC-5: the directory the conversation of B reports");
     const invocationB = await control.waitFor("argv", 4);
+    const nativeSessionB = invocationB.argv?.[invocationB.argv.indexOf("--session-id") + 1];
+    if (nativeSessionB !== openedInB.session?.session?.native?.id) throw new Error('AC-5: il fake deve annunciare la stessa sessione nativa aperta dal viewer');
+    control.push(emit({ type: "system", subtype: "init", session_id: nativeSessionB }));
     const startedInB = await fs.realpath(invocationB.cwd);
     if (startedInB !== realB) {
       throw new Error(`AC-5: the second agent process was started in ${invocationB.cwd}, want ${dirB}`);
@@ -542,6 +552,14 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     await waitForProcessGone(invocationB.pid, `the agent process of B (pid ${invocationB.pid}) to be released by the close`);
 
+    // Releasing the runtime leaves a native conversation writable: the next
+    // message would resume it. Only an explicit archive refuses new messages.
+    const released = await readConversation(view.url, conversationB, 0);
+    assertEqual(released.session?.connection, "RELEASED", "the released Claude runtime");
+    assertEqual(released.session?.session?.native?.id, nativeSessionB, "the preserved native Claude session");
+    const archived = await apiJSON(`${view.url}/api/workspace/conversations/${conversationB}/archive`, postJSON({}), 200);
+    assertEqual(archived.session?.archive, "ARCHIVED", "the explicit archive");
+
     const beforeClosedRefusals = await rawGet(`${view.url}/api/workspace/conversations/${conversationB}?after_id=0`);
     const afterClose = await expectStatus(
       `${view.url}/api/workspace/conversations/${conversationB}/messages`,
@@ -564,7 +582,7 @@ async function scenarioConversationOfTheOpenWorkspace(dirA, dirB, env) {
     }
     ok(
       "AC-6",
-      `DELETE answered 200 with the conversation still readable and its state CLOSED, the operating system reports the agent process gone, a later message and a second close both answered 409 with a reason, and the projection stayed byte-identical across both refusals`,
+      `DELETE released the runtime while preserving the native session and readable history; after an explicit archive a message and a second release both answered 409 with a reason, and the projection stayed byte-identical across both refusals`,
     );
 
     // The whole story happened on one viewer process.
@@ -935,8 +953,9 @@ async function rawGet(url) {
 async function apiJSON(url, init = {}, expected = null) {
   const response = await fetch(url, {
     ...init,
+    signal: init.signal || AbortSignal.timeout(30000),
     headers: { Accept: "application/json", ...(init.headers || {}) },
-  });
+  }).catch(error => { throw new Error(`${init.method || 'GET'} ${url}: ${error.message}${error.cause?.code ? ' (' + error.cause.code + ')' : ''}`, { cause: error }); });
   const text = await response.text();
   viewerBodies.push(text);
   let data = null;
@@ -957,8 +976,9 @@ async function apiJSON(url, init = {}, expected = null) {
 async function expectStatus(url, status, init = {}) {
   const response = await fetch(url, {
     ...init,
+    signal: init.signal || AbortSignal.timeout(30000),
     headers: { Accept: "application/json", ...(init.headers || {}) },
-  });
+  }).catch(error => { throw new Error(`${init.method || 'GET'} ${url}: ${error.message}${error.cause?.code ? ' (' + error.cause.code + ')' : ''}`, { cause: error }); });
   const text = await response.text();
   viewerBodies.push(text);
   if (response.status !== status) {

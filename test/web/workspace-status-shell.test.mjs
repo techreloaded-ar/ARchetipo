@@ -219,15 +219,15 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 	// cammini di avvio sono due modi di partire che possono divergere. Sono la
 	// chip del pannello, il passo raccomandato e la dichiarazione della
 	// funzione stessa.
-	it("nessun nuovo punto di avvio è comparso in app.js", () => {
+	it("board e attività riusano lo stesso cammino di avvio", () => {
 		// Due avvii. startPanelAction dalle chip di un pannello montato;
 		// startActionOnTarget dal passo raccomandato e dal menu delle azioni
-		// del compositore, che sono le due facce dello stesso gesto nel
-		// thread. Un terzo nome sarebbe un terzo cammino.
+		// del compositore, dalle attività e dalle card della board.
+		// Ogni ingresso riusa la stessa funzione e la stessa rotta.
 		const panel = js.split("startPanelAction(").length - 1;
 		const direct = js.split("startActionOnTarget(").length - 1;
 		assert.equal(panel, 2, `i punti che nominano startPanelAction( sono ${panel} invece di 2`);
-		assert.equal(direct, 3, `i punti che nominano startActionOnTarget( sono ${direct} invece di 3`);
+		assert.equal(direct, 5, `i punti che nominano startActionOnTarget( sono ${direct} invece di 5`);
 	});
 
 	it("la modale del PRD non offre più le azioni: segue solo un'esecuzione in corso", () => {

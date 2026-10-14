@@ -74,6 +74,10 @@
 		boardError: (reason) => `Errore: ${reason}`,
 		boardMissingBacklog: "Questo workspace non ha ancora un backlog.",
 		boardGoConversation: "Vai alla conversazione",
+		cardActions: "Azioni",
+		cardDiscuss: "Conversa",
+		cardActionsFor: (code) => `Azioni per ${code}`,
+		cardDiscussFor: (code) => `Conversa su ${code}`,
 		stepNotStartable: "Questo passo non si può avviare adesso",
 		loadFailed: (reason) => `Lettura fallita: ${reason}`,
 		saveFailed: (reason) => `Salvataggio fallito: ${reason}`,
@@ -230,9 +234,9 @@
 		// sembra che la ricerca sia rotta, e le due ragioni per cui l'elenco è
 		// vuoto sono diverse — non c'è niente che corrisponda, oppure non c'è
 		// ancora nessun catalogo da cercare.
-		skillNoMatch: (query) => `Nessuna skill contiene «${query}».`,
+		skillNoMatch: (query) => `Nessuna attività corrisponde a «${query}».`,
 		skillCatalogUnknown:
-			"Il runtime dichiara le sue skill al primo turn: mandane uno e l'elenco compare.",
+			"Le attività dell’agente non sono ancora disponibili. Avvia una conversazione e riprova.",
 
 		// Nuova spec
 		chooseEpic: "Scegli un'epica…",
@@ -1917,6 +1921,7 @@
 			return;
 		}
 		workspaceStatusSnapshot = view;
+		loadConversationActivities();
 		// Il passo scopato segue la stessa cadenza: ogni board_changed che
 		// aggiorna il workspace aggiorna anche la lettura della spec aperta.
 		loadConversationNextStep();
@@ -2156,6 +2161,55 @@
             </div>
             ${spec.branch ? `<div class="card-branch" title="${escapeHtml(TEXT.branchTitle)}">⎇ ${escapeHtml(spec.branch)}</div>` : ""}
         `;
+		const controls = document.createElement("div");
+		controls.className = "card-actions";
+		["pointerdown", "mousedown", "touchstart", "click"].forEach((type) => controls.addEventListener(type, (event) => event.stopPropagation()));
+		const actionsButton = document.createElement("button");
+		actionsButton.type = "button";
+		actionsButton.className = "ghost-btn";
+		actionsButton.textContent = TEXT.cardActions;
+		actionsButton.setAttribute("aria-label", TEXT.cardActionsFor(spec.code));
+		actionsButton.dataset.cardActions = spec.code;
+		actionsButton.addEventListener("click", async () => {
+			actionsButton.disabled = true;
+			try {
+				const view = await apiGet(`/api/spec/${encodeURIComponent(spec.code)}`);
+				if (!controls.isConnected) return;
+				const choices = controls.querySelector(".card-action-choices");
+				if (choices) { choices.remove(); return; }
+				const group = document.createElement("div");
+				group.className = "card-action-choices";
+				const actions = Array.isArray(view.actions) ? view.actions : [];
+				if (!actions.length) group.textContent = TEXT.noActionAvailable;
+				actions.forEach((action) => {
+					const button = document.createElement("button");
+					button.type = "button";
+					button.className = "primary-btn";
+					button.textContent = action.label;
+					button.disabled = action.runnable !== true;
+					button.dataset.cardAction = action.id;
+					button.addEventListener("click", () => startActionOnTarget({scope:"spec",code:spec.code,action:action.id}, button));
+					group.appendChild(button);
+					const reason = action.unlocked_by || action.unavailable_reason;
+					if (!action.runnable && reason) {
+						const note = document.createElement("span");
+						note.className = "card-action-reason";
+						note.textContent = reason;
+						group.appendChild(note);
+					}
+				});
+				controls.appendChild(group);
+			} catch (err) { showToast(err.message || String(err), "err"); }
+			finally { actionsButton.disabled = false; }
+		});
+		const discussButton = document.createElement("button");
+		discussButton.type = "button";
+		discussButton.className = "ghost-btn";
+		discussButton.textContent = TEXT.cardDiscuss;
+		discussButton.setAttribute("aria-label", TEXT.cardDiscussFor(spec.code));
+		discussButton.addEventListener("click", () => prepareConversationOpen(spec.code));
+		controls.append(actionsButton, discussButton);
+		el.appendChild(controls);
 		const deleteBtn = el.querySelector(".card-delete-btn");
 		const stopDeleteEvent = (event) => event.stopPropagation();
 		["pointerdown", "mousedown", "touchstart"].forEach((type) =>
@@ -5805,6 +5859,10 @@
 	// qui: sta nel testo, come barra iniziale, ed è da lì che viene letta al
 	// momento dell'invio — così ciò che si è scelto è ciò che si legge.
 	let conversationSkillHighlight = 0;
+	let conversationActivitiesView = null;
+	let conversationActivitiesLoadToken = 0;
+	let conversationActivitiesOpen = false;
+	let conversationActivitySelection = null;
 	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
 
@@ -6060,6 +6118,22 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			if (e.target.closest("[data-conversation-activities-toggle]")) {
+				conversationActivitiesOpen = !conversationActivitiesOpen;
+				renderConversationPanel();
+				if (conversationActivitiesOpen) loadConversationActivities();
+				return;
+			}
+			if (e.target.closest("[data-conversation-activity-clear]")) {
+				conversationActivitySelection = null;
+				renderConversationPanel();
+				return;
+			}
+			const activity = e.target.closest("[data-conversation-activity]");
+			if (activity) {
+				chooseConversationActivity(activity.getAttribute("data-conversation-activity"));
+				return;
+			}
 			if (e.target.closest("[data-conversation-history-more]")) {
 				loadMoreConversationHistory();
 				return;
@@ -6312,6 +6386,13 @@
 			// pastiglia; dentro di esso le frecce percorrono le voci e i
 			// segmenti come un controllo solo, e Invio è il clic che il
 			// `<button>` fa da sé.
+			if (e.key === "Escape" && conversationActivitiesOpen) {
+				e.preventDefault();
+				conversationActivitiesOpen = false;
+				renderConversationPanel();
+				conversationEl.querySelector("[data-conversation-activities-toggle]")?.focus();
+				return;
+			}
 			if (e.key === "Escape" && conversationModelChoiceOpen) {
 				e.preventDefault();
 				closeConversationChoicePopover();
@@ -6676,6 +6757,7 @@
 	}
 
 	async function loadConversationModelChoice(id) {
+		loadConversationActivities();
 		const token = ++conversationModelChoiceLoadToken;
 		try {
 			const view = await apiGet(id
@@ -6797,15 +6879,73 @@
 	// dichiarate l'elenco è vuoto e nessun menu si apre: il catalogo lo pubblica
 	// l'harness dopo il primo turn, e inventarne uno qui sarebbe un elenco di
 	// nomi che nessuno può invocare.
+	function resetConversationActivities() {
+		conversationActivitiesLoadToken += 1;
+		conversationActivitiesView = null;
+		conversationActivitiesOpen = false;
+		conversationActivitySelection = null;
+	}
+
+	async function loadConversationActivities() {
+		if (noWorkspaceMode()) return;
+		const token = ++conversationActivitiesLoadToken;
+		const id = conversationsCurrentId;
+		try {
+			const query = id ? `?conversation_id=${encodeURIComponent(id)}` : "";
+			const view = await apiGet(`/api/workspace/activities${query}`);
+			if (token !== conversationActivitiesLoadToken || id !== conversationsCurrentId) return;
+			conversationActivitiesView = view;
+			renderConversationPanel();
+		} catch (_) {
+			if (token !== conversationActivitiesLoadToken || id !== conversationsCurrentId) return;
+			conversationActivitiesView = null;
+			renderConversationPanel();
+		}
+	}
+
+	function conversationActivityItems() {
+		return conversationActivitiesView && Array.isArray(conversationActivitiesView.items)
+			? conversationActivitiesView.items : [];
+	}
+
+	async function chooseConversationActivity(id) {
+		const item = conversationActivityItems().find((entry) => entry.id === id);
+		if (!item || !item.runnable || conversationBusy) return;
+		conversationActivitiesOpen = false;
+		conversationActivitySelection = null;
+		if (item.kind === "action") {
+			conversationBusy = true;
+			renderConversationPanel();
+			try { await startActionOnTarget({ scope: item.scope, action: item.action }, null); }
+			finally { conversationBusy = false; }
+		} else if (item.kind === "conversation") {
+			if (!conversationIsActive()) await openConversation();
+		} else if (item.kind === "skill") {
+			conversationActivitySelection = Object.assign({}, item);
+		} else if (item.kind === "connect") {
+			await openConversation();
+			if (!conversationsCurrentId) return;
+			await loadConversationActivities();
+			const discovered = conversationActivityItems().find((entry) => entry.id === item.id);
+			if (discovered && discovered.kind === "skill" && discovered.runnable) {
+				conversationActivitySelection = Object.assign({}, discovered);
+			} else {
+				conversationRefusal = discovered && discovered.unavailable_reason
+					? discovered.unavailable_reason : "Questa attività non è disponibile nella conversazione.";
+			}
+		}
+		renderConversationPanel();
+		const input = conversationEl.querySelector(".conv-composer-input");
+		if (input && !input.disabled) {
+			input.focus();
+			input.setSelectionRange(input.value.length, input.value.length);
+		}
+	}
+
 	function conversationSkills() {
-		const catalog = conversationModelChoiceView || {};
-		if (catalog.skills_known !== true) return [];
-		return (Array.isArray(catalog.skills) ? catalog.skills : [])
-			.map((skill) => ({
-				name: String((skill && skill.name) || ""),
-				origin: String((skill && (skill.namespace || skill.origin)) || ""),
-			}))
-			.filter((skill) => skill.name);
+		return conversationActivityItems()
+			.filter((item) => item.kind === "skill" && item.runnable)
+			.map((item) => ({ name: item.skill, label: item.label, id: item.id }));
 	}
 
 	// Il menu si apre mentre si scrive la barra iniziale e si chiude appena
@@ -6833,7 +6973,8 @@
 	function splitConversationSkill(text) {
 		const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
 		if (!match) return { message: text, skill: undefined };
-		const known = conversationSkills().some((skill) => skill.name === match[1]);
+		const catalog = conversationModelChoiceView || {};
+		const known = catalog.skills_known === true && Array.isArray(catalog.skills) && catalog.skills.some((skill) => skill.name === match[1]);
 		return known
 			? { message: match[2].trim(), skill: match[1] }
 			: { message: text, skill: undefined };
@@ -6913,26 +7054,20 @@
 		const highlight = Math.min(conversationSkillHighlight, matches.length - 1);
 		const rows = matches.map((skill, index) => {
 			const current = index === highlight ? " is-current" : "";
-			const origin = skill.origin
-				? `<span class="conv-skill-origin">${escapeHtml(skill.origin)}</span>`
-				: "";
-			return `<li><button type="button" class="conv-skill-option${current}" data-conversation-skill-option="${escapeHtml(skill.name)}"><span class="conv-skill-name">/${escapeHtml(skill.name)}</span>${origin}</button></li>`;
+			const origin = "";
+			return `<li><button type="button" class="conv-skill-option${current}" data-conversation-skill-option="${escapeHtml(skill.name)}"><span class="conv-skill-name">${escapeHtml(skill.label)}</span>${origin}</button></li>`;
 		});
-		return `<ul class="conv-skill-menu" role="listbox" aria-label="Skill native">${rows.join("")}</ul>`;
+		return `<ul class="conv-skill-menu" role="listbox" aria-label="Attività dell’agente">${rows.join("")}</ul>`;
 	}
 
-	// Scegliere una skill vuol dire scriverla: il campo resta il posto in cui si
-	// legge che cosa parte, e il cursore torna in fondo per continuare la frase.
+	// La scelta resta separata dal messaggio: il nome tecnico viene inviato
+	// nel campo dedicato e non viene scritto nel testo della persona.
 	function pickConversationSkill(name) {
-		if (!name) return;
-		conversationDraft = `/${name} `;
+		const item = conversationActivityItems().find((entry) => entry.kind === "skill" && entry.skill === name);
+		if (!item || !item.runnable) return;
+		if (conversationSkillQuery() !== null) conversationDraft = "";
 		conversationSkillHighlight = 0;
-		renderConversationPanel();
-		const input = conversationEl && conversationEl.querySelector(".conv-composer-input");
-		if (input && !input.disabled) {
-			input.focus();
-			input.setSelectionRange(input.value.length, input.value.length);
-		}
+		chooseConversationActivity(item.id);
 	}
 
 	// Le frecce percorrono il menu, invio e tab scelgono. Ritorna true quando il
@@ -7038,6 +7173,7 @@
 		conversationModelChoiceSelection = null;
 		conversationModelChoiceView = null;
 		conversationCapabilities = [];
+		resetConversationActivities();
 		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
 		conversationModelChoiceOpen = "";
@@ -7088,6 +7224,7 @@
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
 		conversationCapabilities = [];
+		resetConversationActivities();
 		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
@@ -7133,7 +7270,10 @@
 		if (conversationBusy || !id) return;
 		const typed = conversationDraft.trim();
 		if (!typed) return;
-		const { message, skill } = splitConversationSkill(typed);
+		const selectedActivity = conversationActivitySelection;
+		const { message, skill } = selectedActivity
+			? { message: typed, skill: selectedActivity.skill }
+			: splitConversationSkill(typed);
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
@@ -7150,7 +7290,7 @@
 				{ message, skill },
 			);
 			conversationDraft = "";
-			conversationPendingMessage = typed;
+			conversationPendingMessage = message || typed;
 			conversationsRefusal = "";
 			applyConversationView(view);
 			startConversationPolling();
@@ -7286,6 +7426,7 @@
 		conversationModelChoiceView = null;
 		conversationModelChoiceSelection = null;
 		conversationCapabilities = [];
+		resetConversationActivities();
 		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
 		conversationOpeningSpecCode = "";
@@ -7573,7 +7714,10 @@
 		if (!typed) return;
 		// La barra iniziale è la skill, e da qui in poi le due cose viaggiano
 		// separate: il nome nel campo `skill`, il resto come messaggio.
-		const { message, skill } = splitConversationSkill(typed);
+		const selectedActivity = conversationActivitySelection;
+		const { message, skill } = selectedActivity
+			? { message: typed, skill: selectedActivity.skill }
+			: splitConversationSkill(typed);
 		conversationBusy = true;
 		// Il campo si svuota e il messaggio compare in coda alla conversazione
 		// *adesso*, prima ancora di partire: chi ha premuto invio deve vedere
@@ -7595,7 +7739,9 @@
 			// è in consegna — non si spaccia per storia.
 			conversationRefusal = "";
 			conversationSkillHighlight = 0;
+			conversationActivitySelection = null;
 			applyConversationView(view);
+			loadConversationActivities();
 			startConversationPolling();
 		} catch (err) {
 			// Rifiutato: niente è stato consegnato, quindi niente resta in coda
@@ -7859,6 +8005,9 @@
 				// modello si legge da una vista che ancora non c'è.
 				modelChoiceHtml: conversationModelChoiceMarkup(),
 				skillChoiceHtml: conversationSkillMenuMarkup(view),
+				activities: conversationActivitiesView,
+				activitiesOpen: conversationActivitiesOpen,
+				activitySelection: conversationActivitySelection,
 				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",
 				inputDrafts: conversationInputDrafts,

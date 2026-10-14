@@ -63,6 +63,19 @@ type WorkspaceAction struct {
 	Skill string `json:"skill"`
 }
 
+// ConversationActivity describes a user-facing entry into an existing action
+// or native skill. Presentation belongs to the process, not to the browser.
+// Skill is a binding, never evidence that a runtime has discovered it.
+type ConversationActivity struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Result      string `json:"result,omitempty"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Skill       string `json:"skill,omitempty"`
+}
+
 const (
 	// ScopeWorkspace marks a Stage advanced by a WorkspaceAction, that is by a
 	// step the process offers on the workspace as a whole.
@@ -102,14 +115,15 @@ type Stage struct {
 // the condition being evaluated by the caller, never here; Statuses are the
 // workflow labels that process works with.
 type Template struct {
-	ID               string              `json:"id"`
-	Version          string              `json:"version"`
-	Label            string              `json:"label"`
-	Skills           []string            `json:"skills"`
-	Actions          []Action            `json:"actions"`
-	WorkspaceActions []WorkspaceAction   `json:"workspace_actions"`
-	Stages           []Stage             `json:"stages"`
-	Statuses         domain.StatusLabels `json:"statuses"`
+	ID                     string                 `json:"id"`
+	Version                string                 `json:"version"`
+	Label                  string                 `json:"label"`
+	Skills                 []string               `json:"skills"`
+	Actions                []Action               `json:"actions"`
+	WorkspaceActions       []WorkspaceAction      `json:"workspace_actions"`
+	Stages                 []Stage                `json:"stages"`
+	Statuses               domain.StatusLabels    `json:"statuses"`
+	ConversationActivities []ConversationActivity `json:"conversation_activities,omitempty"`
 }
 
 // ActionsFor returns the actions the process admits in status, in declaration
@@ -145,6 +159,7 @@ func (e *RegistryError) Error() string {
 // cannot reach back into the registry.
 func (t Template) clone() Template {
 	t.Skills = slices.Clone(t.Skills)
+	t.ConversationActivities = slices.Clone(t.ConversationActivities)
 	actions := make([]Action, len(t.Actions))
 	for i, action := range t.Actions {
 		actions[i] = action.clone()
@@ -160,6 +175,12 @@ func builtin() Template {
 		ID:      FabbricaDelSoftware,
 		Version: fabbricaVersion,
 		Label:   "Fabbrica del software",
+		ConversationActivities: []ConversationActivity{
+			{ID: "product", Label: "Definisci un prodotto", Description: "Chiarisci obiettivi, utenti e perimetro.", Result: "Documento di prodotto", Action: "inception"},
+			{ID: "story", Label: "Nuova storia", Description: "Descrivi il bisogno, rispondi alle domande e rivedi la proposta.", Result: "Storia per il backlog", Action: "spec-draft"},
+			{ID: "design", Label: "Nuovo mockup", Description: "Indica la schermata o il flusso che vuoi rappresentare.", Result: "Prototipo consultabile", Placeholder: "Descrivi la schermata o il flusso che vuoi rappresentare…", Skill: "archetipo-design"},
+			{ID: "conversation", Label: "Conversazione libera", Description: "Fai domande sul progetto o su una storia.", Placeholder: "Scrivi all’agente…"},
+		},
 		Skills: []string{
 			"archetipo-autopilot",
 			"archetipo-design",

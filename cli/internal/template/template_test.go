@@ -259,6 +259,15 @@ func TestDefaultActionsAreNotAliased(t *testing.T) {
 	}
 }
 
+func TestConversationActivityPresentationIsNotAliased(t *testing.T) {
+	first := Default()
+	first.ConversationActivities[0].Label = "changed"
+	second := Default()
+	if second.ConversationActivities[0].Label == "changed" {
+		t.Fatal("activity presentation was changed through a returned template")
+	}
+}
+
 func TestDefaultTemplateDeclaresItsWorkspaceActions(t *testing.T) {
 	got := Default().WorkspaceActions
 	if !reflect.DeepEqual(got, processWorkspaceActions) {

@@ -88,6 +88,8 @@ const CLAIMS = [
   "il click su un thread del rail apre quella conversazione (bind sotto il primo disegno)",
   "il click su «Nuova spec» apre la modale (const dichiarata sotto il primo disegno)",
   "nessuna eccezione non catturata è emessa da nessuna delle due interazioni",
+  "le card della board mostrano le azioni e i motivi restituiti dal server",
+  "Conversa sulla card prepara una conversazione collegata alla stessa spec",
 ];
 
 // One entry per proved statement, for the report.
@@ -310,6 +312,27 @@ async function exercisePage(browser, url) {
   assertNoExceptions("Il click su «Nuova spec» ha emesso eccezioni non catturate:");
   ok(CLAIMS[3], "il click su «Nuova spec» apre la modale: la sentinella dichiarata più in basso è inizializzata");
   ok(CLAIMS[4], "nessuna delle due interazioni ha emesso eccezioni non catturate");
+
+  phase = "azioni dalla board";
+  await page.evaluate(`document.getElementById('new-spec-modal-close').click(); document.querySelector('[data-shell-view="board"]').click();`);
+  await page.waitFor(`!!document.querySelector('[data-card-actions="US-701"]')`, 20000, "il comando Azioni della card");
+  await page.evaluate(`document.querySelector('[data-card-actions="US-701"]').click()`);
+  await page.waitFor(`!!document.querySelector('.card[data-code="US-701"] .card-action-choices')`, 20000, "le azioni lette dal server sulla card");
+  const serverActions = await (await fetch(`${url}/api/spec/US-701`)).json();
+  const drawnActions = await page.evaluate(`Array.from(document.querySelectorAll('.card[data-code="US-701"] [data-card-action]')).map(button=>({id:button.dataset.cardAction,label:button.textContent,disabled:button.disabled}))`);
+  const expectedActions = (serverActions.actions || []).map(action=>({id:action.id,label:action.label,disabled:action.runnable !== true}));
+  if (JSON.stringify(drawnActions) !== JSON.stringify(expectedActions)) throw new Error('La card inventa le azioni o la loro disponibilità');
+  const cardText = await page.evaluate(`document.querySelector('.card[data-code="US-701"] .card-action-choices').textContent`);
+  for (const action of serverActions.actions || []) {
+    const reason = action.unlocked_by || action.unavailable_reason;
+    if (!action.runnable && reason && !cardText.includes(reason)) throw new Error('La card nasconde il motivo di indisponibilità');
+  }
+  ok(CLAIMS[5], "le azioni della card e le loro ragioni coincidono con il dettaglio del server");
+  await page.evaluate(`document.querySelector('.card[data-code="US-701"] .card-actions button[aria-label="Conversa su US-701"]').click()`);
+  await page.waitFor(`document.getElementById('workspace-conversation').textContent.includes('US-701')`, 20000, "il contesto della spec nella nuova conversazione");
+  assertNoExceptions("I comandi della board hanno emesso eccezioni non catturate:");
+  ok(CLAIMS[6], "Conversa sulla card prepara il contesto US-701 senza avviare un agente");
+
 
   await page.close();
 }

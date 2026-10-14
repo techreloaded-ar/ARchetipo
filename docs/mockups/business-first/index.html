@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARchetipo · Conversazione e Board</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="shared.css?v=10">
+  <script src="data.js" defer></script><script src="app.js?v=10" defer></script>
+</head>
+<body>
+  <div class="prototype">Mockup · dati del repository · nessun messaggio inviato e nessuna modifica salvata</div>
+  <header class="topbar">
+    <a href="index.html" class="brand"><img src="logo.svg" alt=""><span>ARchetipo</span></a>
+    <button class="workspace-button" id="workspace-button" title="Workspace aperto">ARchetipo <span aria-hidden="true">⌄</span></button>
+    <nav aria-label="Viste del workspace"><button id="conversation-tab" class="view-tab active" data-view="conversation" aria-current="page">Conversazione</button><button id="board-tab" class="view-tab" data-view="board">Board</button></nav>
+    <div class="topbar-actions"><button class="primary" id="new-spec">Nuova spec</button><details class="more-menu"><summary aria-label="Altre azioni">···</summary><div><button data-notice="PRD">PRD</button><button data-notice="Metriche">Metriche</button><button data-notice="Mockup">Mockup</button><button data-notice="Workspace">Workspace</button><button data-notice="Configurazione">Configurazione</button></div></details></div>
+  </header>
+  <main>
+    <section class="conversation-view" id="conversation-view" aria-label="Conversazione">
+      <aside class="conversation-index"><h2>Conversazioni</h2><p id="index-empty">Nessuna conversazione selezionata.</p><button class="thread" id="current-thread" hidden></button></aside>
+      <div class="chat">
+        <header class="chat-header"><h1 id="chat-title">Conversazione</h1><div class="chat-header-tools"><button id="chat-spec-link" class="text-button" hidden></button><button class="secondary" id="new-conversation">Nuova conversazione</button></div></header>
+        <div class="chat-content" id="chat-content"><div class="empty-chat"><p>Nessuna conversazione selezionata.</p></div></div>
+        <form class="composer" id="message-form"><div class="selection" id="action-selection" hidden><span id="selection-text"></span><button type="button" id="clear-selection" aria-label="Rimuovi selezione">×</button></div><div class="composer-heading"><label for="message" id="message-label">Messaggio</label><details class="activity-menu" id="activity-menu"><summary>Scegli attività</summary><div><button type="button" data-activity="product">Definisci un prodotto</button><button type="button" data-activity="design">Nuovo mockup</button><button type="button" data-activity="story">Nuova storia</button></div></details></div><textarea id="message" placeholder="Scrivi all’agente…" rows="3"></textarea><div class="composer-footer"><span id="message-context">Workspace: ARchetipo</span><button class="primary" type="submit">Invia</button></div></form>
+      </div>
+    </section>
+    <section class="board-view" id="board-view" aria-label="Board" hidden>
+      <header class="page-heading"><div><h1>Board</h1><p id="board-count"></p></div><span class="source" id="source"></span></header>
+      <div class="board-columns" id="board-columns"></div>
+    </section>
+    <section class="spec-view" id="spec-view" aria-label="Dettaglio della storia" hidden>
+      <header class="spec-heading"><button class="text-button" id="back-board">← Board</button><div><div class="spec-meta" id="spec-meta"></div><h1 id="spec-title"></h1></div><button class="secondary" id="discuss-spec">Conversa su questa spec</button></header>
+      <div class="spec-actions" id="spec-actions"></div>
+      <nav class="document-tabs" aria-label="Contenuti della storia"><button data-document="story" class="active">Storia</button><button data-document="plan">Piano</button></nav>
+      <article class="document" id="spec-document"></article>
+    </section>
+  </main>
+  <dialog id="new-spec-dialog"><form id="spec-form"><header class="dialog-header"><h2>Nuova spec</h2><button type="button" class="text-button" id="close-spec-dialog" aria-label="Chiudi">×</button></header><label for="spec-name">Titolo</label><input id="spec-name" required><label for="spec-epic">Epic</label><select id="spec-epic"></select><label for="spec-priority">Priorità</label><select id="spec-priority"><option>HIGH</option><option selected>MEDIUM</option><option>LOW</option></select><label for="spec-body">Corpo</label><textarea id="spec-body" rows="6"></textarea><footer><button class="secondary" type="button" id="cancel-spec">Annulla</button><button class="primary" type="submit">Crea spec</button></footer></form></dialog>
+  <div class="notice" id="notice" role="status" hidden></div>
+</body>
+</html>

@@ -1155,7 +1155,7 @@
 		const writable = typeof ui.writable === "boolean" ? ui.writable : active && offered !== false;
 		const disabled = ui.busy || !writable ? " disabled" : "";
 		const placeholder = writable
-			? TEXT.writePlaceholder
+			? (textAt(objectAt(ui, "activitySelection"), "placeholder") || TEXT.writePlaceholder)
 			: active
 				? TEXT.writeClosePlaceholder
 				: TEXT.writeOverPlaceholder;
@@ -1184,16 +1184,47 @@
 		// pannello un'altezza intera per un solo bottone, e la conversazione è
 		// ciò che quello spazio deve avere.
 		return `<form class="conv-composer">
+			${renderActivitySelection(objectAt(ui, "activitySelection"))}
 			<div class="conv-composer-row">
 				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
 				${typeof agentRow === "string" ? agentRow : ""}
 				${hintHtml}
+				${renderActivityMenu(ui)}
 				${renderActionsMenu(objectAt(ui, "actionsMenu"), ui)}
 				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 			</div>
 			${await_}
 		</form>`;
+	}
+
+	// Presentazione pura del catalogo di attività fornito dal server. Il modulo
+	// non interpreta identificatori, stati, skill o regole del processo.
+	function renderActivities(view, ui, menu) {
+		const items = arrayAt(view, "items").filter((item) => item && textAt(item, "id") && (menu || item.primary === true));
+		if (!items.length) return "";
+		const rows = items.map((item) => {
+			const disabled = item.runnable !== true || ui.busy ? " disabled" : "";
+			const reason = item.runnable === true ? "" : textAt(item, "unavailable_reason");
+			return `<button type="button" class="conv-activity-card" data-conversation-activity="${escapeHtml(textAt(item, "id"))}"${disabled}>
+				<span class="conv-activity-label">${escapeHtml(textAt(item, "label"))}</span>
+				${textAt(item, "description") ? `<span class="conv-activity-description">${escapeHtml(textAt(item, "description"))}</span>` : ""}
+				${textAt(item, "result") ? `<span class="conv-activity-result">${escapeHtml(textAt(item, "result"))}</span>` : ""}
+				${reason ? `<span class="conv-activity-reason">${escapeHtml(reason)}</span>` : ""}
+			</button>`;
+		});
+		return `<div class="conv-activities${menu ? " is-menu" : ""}">${menu ? "" : '<p class="conv-activities-intro">Scegli un’attività oppure apri una conversazione.</p>'}<div class="conv-activity-grid">${rows.join("")}</div></div>`;
+	}
+
+	function renderActivitySelection(selection) {
+		if (!selection || !textAt(selection, "label")) return "";
+		return `<div class="conv-activity-selection"><span>${escapeHtml(textAt(selection, "label"))}</span><button type="button" class="ghost-btn" data-conversation-activity-clear aria-label="Rimuovi attività">×</button></div>`;
+	}
+
+	function renderActivityMenu(ui) {
+		const view = objectAt(ui, "activities");
+		if (!view || !arrayAt(view, "items").length) return "";
+		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""}>Scegli attività</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
 	}
 
 	// Il menu delle azioni del processo, accanto a Invia. Chiuso e' un
@@ -1588,16 +1619,22 @@
 		}
 
 		// Refused here and now, with nothing open: the reason is the server's
-		// sentence, shown verbatim, and nothing is offered next to it — neither a
-		// composer nor a way to open one.
+		// sentence, shown verbatim. Activity availability is independently
+		// declared by the server; no composer is opened by this read.
 		if (!offered && !conversation) {
 			return `<section class="conv-panel conv-unavailable" aria-label="${escapeHtml(TEXT.panel)}">
 				${renderHead(value, TEXT.badgeNotOffered, "conv-off")}
 				${dismissed["not-offered"] === true ? "" : renderNotice("refused", TEXT.markNotOffered, refusal, "not-offered")}
+				${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
+				${!local.openingSpecCode ? renderActivities(objectAt(local, "activities"), local, false) : ""}
 			</section>`;
 		}
 
 		if (!conversation) {
+			const activities = renderActivities(objectAt(local, "activities"), local, false);
+			if (activities && !local.openingSpecCode) {
+				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}<div class="conv-empty conv-empty-activities">${activities}${renderNextStep(objectAt(local, "nextStep"), local, true)}<div class="conv-empty-command">${renderConversationModelChoice(value, local, false)}</div></div></section>`;
+			}
 			// Nothing open. Quando il processo ha un passo da proporre, il passo
 			// e' la risposta: lo stadio del workspace nelle parole del processo,
 			// il passo con il suo comando, e sotto l'alternativa di una
@@ -1676,7 +1713,9 @@
 		// questo modulo non ha.
 		const delivered = objectAt(local, "deliveredDraft");
 		if (delivered) blocks.push(renderDeliveredDraft(delivered, local));
-		blocks.push(renderTimeline(value, active, local));
+		const starter = active && !arrayAt(value, "events").length && !local.pendingMessage && !local.activitySelection
+			? renderActivities(objectAt(local, "activities"), local, false) : "";
+		blocks.push(starter || renderTimeline(value, active, local));
 		// A decision the agent is waiting on sits right after the history and
 		// before what to do next: it is the reason nothing more is happening,
 		// and it must be readable without scrolling past a step nobody can take

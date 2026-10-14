@@ -260,7 +260,7 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 			"conversationDraft = input.value;", // input del compositore
 			"conversationDraft = input.value;", // menu delle skill: legge prima di decidere
 			"conversationDraft = input.value;", // scorciatoia cmd/ctrl+invio
-			"conversationDraft = `/${name} `;", // skill scelta dal menu, scritta nel campo
+			'if (conversationSkillQuery() !== null) conversationDraft = "";', // ricerca consumata; la selezione resta fuori dal campo
 			'conversationDraft = "";', // ripresa riuscita di una conversazione passata
 			'conversationDraft = "";', // reset di workspace
 			'conversationDraft = "";', // invio: il campo si svuota appena parte
@@ -269,7 +269,7 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 		assert.deepEqual(
 			assignments.map(({ line }) => line),
 			expected,
-			`le assegnazioni a conversationDraft non sono più quelle attese. Ammesse: l'evento input del compositore, la lettura del menu delle skill, la scorciatoia da tastiera, la skill scelta dal menu, l'azzeramento all'invio, il ripristino dopo una consegna rifiutata e il reset di workspace. Trovate: ${assignments
+			`le assegnazioni a conversationDraft non sono più quelle attese. Ammesse: l'evento input del compositore, la lettura del menu delle skill, la scorciatoia da tastiera, la rimozione della ricerca iniziale dopo la scelta dell’attività, l'azzeramento all'invio, il ripristino dopo una consegna rifiutata e il reset di workspace. Trovate: ${assignments
 				.map(({ n, line }) => `${n}: ${line}`)
 				.join(" | ")}`,
 		);
