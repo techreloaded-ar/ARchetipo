@@ -38,7 +38,7 @@ import (
 // native session. It differs from the batch opening in the one way the two
 // situations differ: the session is already open, it stays open after the
 // action, and the person is reading it while the agent works.
-const sessionActionOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed. You are in a conversation a person is reading: ask them when you need something only they can decide, and keep the session open after you are done — the receipt closes the action, not this conversation."
+const sessionActionOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed. You are in a conversation a person is reading: ask them when you need something only they can decide, and keep the session open after you are done — the receipt closes the action, not this conversation. This client bridges blocking structured input requests. Do not use request_user_input_async, whose host UI is separate from this conversation; ask in ordinary conversation if blocking input is unavailable. When waiting for the person's answer, end the turn after the question. Never sleep or poll for their reply: their next message resumes this same session."
 
 // actionInSession is everything starting one ARchetipo action inside a native
 // session needs to know, once the caller has already established that the
@@ -508,10 +508,39 @@ func (s *Server) nativeConversationRuns(ctx context.Context, ws *workspaceSessio
 		view.Scope = runScopeOf(stored)
 		view.SpecCode = stored.SpecCode
 		view.Status = stored.Status
+		view.ProgressLabel, view.Working, view.AwaitingResponse = nativeActionProgress(stored, record)
 		view.CreatedAt = stored.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z")
 		views = append(views, view)
 	}
 	return views
+}
+
+func nativeActionProgress(stored execution.Execution, record conversationlog.Record) (label string, working, awaiting bool) {
+	switch stored.Status {
+	case execution.StatusSucceeded:
+		if stored.Action == execution.ActionSpecDraft {
+			return "Proposta pronta da rivedere", false, false
+		}
+		return "Attività completata", false, false
+	case execution.StatusFailed:
+		return "Attività interrotta o non riuscita", false, false
+	}
+	if record.Connection == execution.ConnectionReleased || record.Connection == execution.ConnectionDisconnected {
+		return "Attività aperta · riprendi la conversazione", false, false
+	}
+	switch record.Work {
+	case execution.SessionWaitingInput:
+		return "In attesa della tua risposta", false, true
+	case execution.SessionWaitingApproval:
+		return "In attesa della tua autorizzazione", false, true
+	case execution.SessionTurnActive:
+		return "L’agente sta lavorando", true, false
+	}
+	turn, found := lastTurnOfExecution(record, stored.ID)
+	if found && turn.State == execution.TurnCompleted {
+		return "In attesa della tua risposta", false, true
+	}
+	return "Avvio dell’attività", true, false
 }
 
 // actionAnchorOf is the point of the thread an action was asked for at: the

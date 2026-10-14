@@ -155,7 +155,7 @@ func SpecDraftPrompt(opening string, _ Request) string {
 		"/archetipo-spec",
 		"",
 		"Do NOT persist anything. You must not run `archetipo spec add`, must not write into the backlog and must not create any spec file: the spec will be reviewed, edited and created by a person, and writing it yourself would both take that decision for them and consume a spec code.",
-		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message, and ask only what you really need to write acceptance criteria a reviewer can verify.",
+		"Follow the skill's discovery before drafting. You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message.",
 		"Use proposal-only mode: propose just the requested story, even if this workspace has no PRD, backlog or epics. Use the repository and the person’s request as context; do not require inception or generate a full backlog.",
 		"Read the existing epics when available. Use epic_code for a declared epic; if there are none or the story needs a new one, propose its name in epic_title and leave epic_code empty. Do not assign a new epic code: the creation route does that at confirmation.",
 		"Close the action with a single JSON receipt line, as the last line of that message and with nothing after it:",

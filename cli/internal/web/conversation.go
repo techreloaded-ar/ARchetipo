@@ -178,6 +178,10 @@ type conversationRunView struct {
 	// approvals exist only while a follower is attached, and attaching it is
 	// this side's job.
 	AwaitingResponse bool `json:"awaiting_response"`
+	// ProgressLabel describes the activity separately from the execution's
+	// durable status: RUNNING can span several turns, including a human reply.
+	ProgressLabel string `json:"progress_label,omitempty"`
+	Working       bool   `json:"working,omitempty"`
 	// InThisThread says the action is being carried out in the very
 	// conversation this view describes. The block then carries no log and
 	// offers no way to reach a thread: the thread is the one being read, and
@@ -741,7 +745,7 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 		return
 	}
 	if record.Native() {
-		writeJSON(w, http.StatusOK, pastNativeConversationView(ws, record, s.conversationOpenabilityOf(ctx, ws), afterID))
+		writeJSON(w, http.StatusOK, s.pastNativeConversationView(ws, record, s.conversationOpenabilityOf(ctx, ws), afterID))
 		return
 	}
 	view := pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID)

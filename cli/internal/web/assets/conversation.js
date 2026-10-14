@@ -112,7 +112,7 @@
 		pendingMessageMark: "in consegna",
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
 		// Blocco run
-		markRun: "run",
+		markRun: "Attività",
 		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
 		runLogLines: (howMany) =>
 			howMany === 1 ? "1 riga di log" : `${howMany} righe di log`,
@@ -142,7 +142,7 @@
 		// rileggere a ogni messaggio, e la larghezza che occupa la toglie al campo.
 		writeHint: "invio: invia · maiusc+invio: a capo",
 		readOnly: "sola lettura",
-		awaitHint: "la run riprende quando rispondi all'attesa qui sopra",
+		awaitHint: "In attesa della tua risposta. Rispondi alla domanda o alla richiesta di autorizzazione per continuare.",
 		send: "Invia",
 		waitForTurnHint: "questo provider non supporta steering: attendi la fine del turn o interrompilo",
 		inputPending: "Input richiesto",
@@ -793,7 +793,7 @@
 		const waiting = !!run.awaiting_response;
 		const modifier = waiting
 			? "is-waiting"
-			: state === "ACTIVE"
+			: run.working === true || state === "ACTIVE"
 				? "is-live"
 				: "is-ended";
 		const anchor =
@@ -814,11 +814,14 @@
 			head.push(`<code class="conv-run-code">${escapeHtml(code)}</code>`);
 		}
 		head.push('<span class="conv-run-head-spacer"></span>');
-		if (state) {
+		const progress = textAt(run, "progress_label");
+		if (progress) {
+			head.push(`<span class="conv-run-state">${escapeHtml(progress)}</span>`);
+		} else if (state) {
 			head.push(`<span class="conv-run-state">${escapeHtml(state)}</span>`);
 		}
 		const status = textAt(run, "status");
-		if (status) {
+		if (status && !progress) {
 			head.push(`<span class="conv-run-status">${escapeHtml(status)}</span>`);
 		}
 
@@ -912,7 +915,7 @@
 	// sentence, and it must say it for both — an agent stopped on a permission
 	// is exactly as blocked as a run stopped on one.
 	function anyAwaiting(view) {
-		return anyRunAwaiting(view) || arrayAt(view, "approvals").length > 0;
+		return anyRunAwaiting(view) || arrayAt(view, "approvals").length > 0 || arrayAt(objectAt(view, "session"), "pending_inputs").length > 0;
 	}
 
 	// The timeline, with the partial-history declaration at its head when the
@@ -1004,6 +1007,8 @@
 					folding.push(event);
 				} else if (event && event.kind === "text" && !event.tool) {
 					flushTechnical();
+					const previous = agentRun[agentRun.length - 1];
+					if (previous && event.message_id && previous.message_id && event.message_id !== previous.message_id) flushAgent();
 					agentRun.push(event);
 				} else {
 					flushTechnical();

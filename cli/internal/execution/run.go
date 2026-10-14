@@ -45,6 +45,8 @@ type RunEvent struct {
 	At   time.Time `json:"at"`
 	Kind string    `json:"kind"`
 	Text string    `json:"text,omitempty"`
+	// MessageID groups streamed fragments without joining distinct messages.
+	MessageID string `json:"message_id,omitempty"`
 	// FinalMessage is the harness's complete closing message on a turn_end.
 	// Receipt verification uses this instead of guessing from streamed fragments.
 	FinalMessage string          `json:"final_message,omitempty"`

@@ -28,7 +28,7 @@ Keep the working context lean:
 
 Use this mode when the user asks for a draft to review before creating a story, or explicitly asks you to propose one spec without persisting it. This intent takes precedence over backlog discovery and the bootstrap/extension routing below.
 
-Read `./references/spec-proposal-flow.md`. A PRD, populated backlog or existing epic is not a prerequisite. Propose only the requested story and persist nothing until the person requests creation.
+Read `./references/spec-proposal-flow.md`. It shares the discovery method with backlog extension: explore an open idea and agree on its outcome and scope before drafting. A PRD, populated backlog or existing epic is not a prerequisite. Propose only the requested story and persist nothing until the person requests creation.
 
 ### `mode: bootstrap-backlog`
 
@@ -131,7 +131,7 @@ Do not expose mode names, routing decisions, or workflow labels in user-facing m
 ## Runtime Rules
 
 - Ask clarifying questions only when critical information is missing and cannot be inferred responsibly
-- Group clarifying questions in a single message when possible
+- Ask the next essential question, one per message, and wait for its answer before asking the next one
 - Optimize specs for downstream low-cost implementation models: keep each spec small, independently demonstrable, and free of hidden architectural decisions.
 - Every acceptance criterion has a stable id (`AC-1`, `AC-2`, ...), describes one observable outcome, and can be verified independently. Do not join unrelated behavior with "and" inside one criterion.
 - Every spec body must include a concrete `Demonstrates` section written as a short review script: starting state or fixture, reviewer action, and expected visible result. If the increment is foundational, describe the exact command or artifact a developer inspects and the expected evidence.

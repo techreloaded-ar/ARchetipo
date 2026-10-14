@@ -5959,8 +5959,8 @@
 		const sessionWork = typeof conversationView !== "undefined" && conversationView && conversationView.session
 			? conversationView.session.work
 			: "";
-		if (sessionWork === "IDLE") return { active: false };
-		if (sessionWork && sessionWork !== "IDLE") {
+		if (sessionWork && sessionWork !== "TURN_ACTIVE") return { active: false };
+		if (sessionWork === "TURN_ACTIVE") {
 			return {
 				active: true,
 				kind: "",

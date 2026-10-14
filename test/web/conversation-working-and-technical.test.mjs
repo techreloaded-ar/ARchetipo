@@ -78,6 +78,7 @@ function working(state) {
 		conversationEvents: state.events || [],
 		conversationPendingMessage: state.pending || "",
 		conversationWorkingSince: state.since || 0,
+		conversationView: state.view || null,
 		Date,
 		Math,
 		out: null,
@@ -139,6 +140,12 @@ describe("la firma in fondo alla pagina porta da qualche parte", () => {
 });
 
 describe("la regola del turno", () => {
+	it("il runtime distingue il lavoro dall’attesa di input o autorizzazione", () => {
+		for (const work of ["IDLE", "WAITING_INPUT", "WAITING_APPROVAL"]) {
+			assert.equal(working({ view: { session: { work } }, events: [{ kind: "user_message" }] }).active, false, work);
+		}
+		assert.equal(working({ view: { session: { work: "TURN_ACTIVE" } } }).active, true);
+	});
 	it("una conversazione appena aperta non sta aspettando l'agente", () => {
 		// Il caso che si vedeva davvero: appena aperta la conversazione non è
 		// vuota — porta già i due ganci di apertura — e leggere solo l'ultima

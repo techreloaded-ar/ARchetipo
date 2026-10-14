@@ -346,8 +346,9 @@ async function scenarioCancelledRunLeavesNoSpecAndNoConsumedCode(runDir) {
     await w.control.waitFor(userFrame, 1);
     w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: QUESTION }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "In attesa della risposta." }));
-    await waitForRun(w.view.url, executionID, (data) =>
+    const waiting = await waitForRun(w.view.url, executionID, (data) =>
       data.events.some((event) => event.kind === "text" && event.text === QUESTION));
+    await waitForConversation(w.view.url, waiting.thread_id, data => data.session?.work === "IDLE");
 
     // The spec this run wrote although it was told not to, persisted exactly as
     // an agent would have persisted it. It is written by a command of this
@@ -445,9 +446,10 @@ async function scenarioCodexFirstProposalAndCancellation(runDir) {
   const finishTurn = (id, text) => {
     // A real Codex receipt arrives as fragments followed by the full message.
     const split = Math.floor(text.length / 2);
-    notify("item/agentMessage/delta", { turnId: id, delta: text.slice(0, split) });
-    notify("item/agentMessage/delta", { turnId: id, delta: text.slice(split) });
-    notify("item/completed", { turnId: id, item: { type: "agentMessage", text } });
+    const itemId = `${id}-answer`;
+    notify("item/agentMessage/delta", { turnId: id, itemId, delta: text.slice(0, split) });
+    notify("item/agentMessage/delta", { turnId: id, itemId, delta: text.slice(split) });
+    notify("item/completed", { turnId: id, item: { id: itemId, type: "agentMessage", text } });
     notify("turn/completed", { turn: { id, status: "completed" } });
   };
   try {
@@ -455,14 +457,25 @@ async function scenarioCodexFirstProposalAndCancellation(runDir) {
     const actions = await apiJSON(`${w.view.url}/api/workspace/actions`);
     const draft = actions.actions.find(action => action.id === "spec-draft");
     if (!draft?.offered || !draft.runnable) throw new Error(`Codex cannot draft the first story: ${JSON.stringify(draft)}`);
-    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
+    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft", user_input: "Vorrei valutare la possibilità di indicare itinerari adatti alle biciclette" }), 201);
     const firstTurn = await w.control.waitFor("turn/start", 1);
     const prompt = firstTurn.params?.input?.[0]?.text || "";
     if (!prompt.includes("/archetipo-spec") || !prompt.includes("Do NOT persist anything")) throw new Error("Codex received a different drafting contract");
     const thread = await w.control.waitFor("thread/start", 1);
     if (thread.params?.ephemeral !== false) throw new Error("Codex used an ephemeral batch thread for a native conversation");
-    finishTurn("turn-1", QUESTION);
-    await waitForRun(w.view.url, started.id, data => data.events.some(event => event.final_message === QUESTION));
+    // RideAtlas regression: an async question is a complete-only message,
+    // followed by a different closing message. It must survive in the journal
+    // even though it has neither deltas nor the final-message position.
+    const bicycleQuestion = "Quali ciclisti vuoi aiutare con questa informazione?";
+    notify("item/completed", { turnId: "turn-1", item: { id: "async-question", type: "agentMessage", text: bicycleQuestion } });
+    finishTurn("turn-1", "Attendo la tua risposta per definire la proposta.");
+    const questionRun = await waitForRun(w.view.url, started.id, data => data.events.some(event => event.kind === "text" && event.text === bicycleQuestion) && data.events.some(event => event.kind === "turn_end"));
+    const actionConversation = await waitForConversation(w.view.url, questionRun.thread_id, data => data.session?.work === "IDLE");
+    const waitingRun = actionConversation.runs.find(run => run.execution_id === started.id);
+    if (!waitingRun?.awaiting_response || waitingRun.working || waitingRun.progress_label !== "In attesa della tua risposta") throw new Error("An open action waiting for the person still looks busy");
+    const reloaded = await apiJSON(`${w.view.url}/api/workspace/conversations/${actionConversation.conversation.id}`);
+    if (reloaded.events.filter(event => event.kind === "text" && event.text === bicycleQuestion).length !== 1) throw new Error("Reload lost or repeated the complete-only question");
+    ok("Codex", "a RideAtlas discovery question without deltas survives reload exactly once, and the activity is waiting for a reply with an idle native turn");
     await apiJSON(`${w.view.url}/api/execution/${started.id}/run/messages`, postJSON({ message: ANSWER }), 202);
     const answerTurn = await w.control.waitFor("turn/start", 2);
     if (answerTurn.params?.threadId !== firstTurn.params?.threadId || answerTurn.params?.input?.[0]?.text !== ANSWER) throw new Error("Codex did not resume the same native thread for the answer");
@@ -477,11 +490,13 @@ async function scenarioCodexFirstProposalAndCancellation(runDir) {
     const conversationID = payload.conversation_id;
     const conversation = await apiJSON(`${w.view.url}/api/workspace/conversations/${conversationID}`);
     if (conversation.session?.work !== "IDLE" || conversation.session?.recovery !== "RESUMABLE") throw new Error("The drafting receipt closed the Codex native session");
+    if (conversation.runs.find(run => run.execution_id === started.id)?.progress_label !== "Proposta pronta da rivedere") throw new Error("A delivered proposal is still presented as ongoing work");
     ok("Codex", "the first story is proposed and confirmed through Codex's native thread, and the receipt leaves that thread resumable");
     const second = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft", conversation_id: conversationID }), 201);
     await w.control.waitFor("turn/start", 3);
     finishTurn("turn-3", "Quale altra storia vuoi definire?");
     await waitForRun(w.view.url, second.id, data => data.events.some(event => event.final_message === "Quale altra storia vuoi definire?"));
+    await waitForConversation(w.view.url, conversationID, data => data.session?.work === "IDLE");
     await apiJSON(`${w.view.url}/api/execution/${second.id}/run/cancel`, postJSON({}));
     const cancelled = await waitForWorkspaceExecution(w.view.url, record => record?.id === second.id && record?.status !== "RUNNING");
     if (cancelled.status !== "FAILED") throw new Error("The cancelled Codex action did not fail");
@@ -798,6 +813,17 @@ async function waitForWorkspaceExecution(viewURL, predicate, timeoutMs = 60000) 
     await delay(100);
   }
   throw new Error(`The workspace execution never satisfied the expectation in time; last: ${JSON.stringify(last)}`);
+}
+
+async function waitForConversation(viewURL, conversationID, predicate, timeoutMs = 10000) {
+  const started = Date.now();
+  let last;
+  while (Date.now() - started < timeoutMs) {
+    last = await apiJSON(`${viewURL}/api/workspace/conversations/${conversationID}`);
+    if (predicate(last)) return last;
+    await delay(50);
+  }
+  throw new Error(`The conversation did not reach the expected native state: ${JSON.stringify(last)}`);
 }
 
 function truncate(text, max = 120) {

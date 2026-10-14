@@ -387,6 +387,15 @@ func TestNativeSpecDraftCarriesTheFirstEpicThroughConfirmation(t *testing.T) {
 	}
 	id, _ := started["id"].(string)
 	conversationID := conversationOfExecution(t, srv, id)
+	assertNativeActionProgress(t, srv, conversationID, "L’agente sta lavorando", true, false)
+	provider.completeCurrentTurn(t, "Quali utenti vuoi aiutare?", execution.TurnCompleted)
+	awaitRecordSettled(t, srv, conversationID)
+	assertNativeActionProgress(t, srv, conversationID, "In attesa della tua risposta", false, true)
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+conversationID+"/messages", map[string]any{"message": "I ciclisti che consultano gli itinerari"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("answer: %d %s", w.Code, w.Body.String())
+	}
+	assertNativeActionProgress(t, srv, conversationID, "L’agente sta lavorando", true, false)
 	receipt := execution.SpecDraftReceipt{Artifact: "spec_draft", Status: execution.ProposedStatus, Title: "Prima storia", EpicTitle: "Primo obiettivo", Priority: "MEDIUM", Points: 3, Body: validCreateBody}
 	line, err := json.Marshal(receipt)
 	if err != nil {
@@ -395,6 +404,7 @@ func TestNativeSpecDraftCarriesTheFirstEpicThroughConfirmation(t *testing.T) {
 	provider.completeCurrentTurn(t, string(line), execution.TurnCompleted)
 	awaitRecordSettled(t, srv, conversationID)
 	completed := awaitExecutionStatus(t, srv, id, execution.StatusSucceeded)
+	assertNativeActionProgress(t, srv, conversationID, "Proposta pronta da rivedere", false, false)
 	var payload struct {
 		SpecDraft execution.SpecDraftReceipt `json:"spec_draft"`
 	}
@@ -409,8 +419,26 @@ func TestNativeSpecDraftCarriesTheFirstEpicThroughConfirmation(t *testing.T) {
 	}
 	req := validCreateReq()
 	req["title"], req["epic_code"], req["epic_title"] = receipt.Title, "", payload.SpecDraft.EpicTitle
-	w := postSpec(t, srv, req)
+	w = postSpec(t, srv, req)
 	if w.Code != http.StatusCreated || decodeCreateView(t, w).Spec.Code != "US-001" {
 		t.Fatalf("confirmation: %d %s", w.Code, w.Body.String())
+	}
+	w = doJSON(t, srv, http.MethodDelete, conversationsRoute+"/"+conversationID, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("release: %d %s", w.Code, w.Body.String())
+	}
+	assertNativeActionProgress(t, srv, conversationID, "Proposta pronta da rivedere", false, false)
+}
+
+func assertNativeActionProgress(t *testing.T, srv *Server, conversationID, label string, working, awaiting bool) {
+	t.Helper()
+	w := doJSON(t, srv, http.MethodGet, conversationsRoute+"/"+conversationID, nil)
+	var view conversationView
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &view) != nil || len(view.Runs) != 1 {
+		t.Fatalf("conversation progress: %d %s", w.Code, w.Body.String())
+	}
+	run := view.Runs[0]
+	if run.ProgressLabel != label || run.Working != working || run.AwaitingResponse != awaiting {
+		t.Fatalf("activity progress: %+v; want %q, working=%t, awaiting=%t", run, label, working, awaiting)
 	}
 }

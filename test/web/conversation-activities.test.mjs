@@ -16,6 +16,39 @@ const view = {
 const visible = html => html.replace(/<[^>]*>/g, "");
 
 describe("attività della conversazione", () => {
+	it("ricompone i frammenti e tiene distinta la domanda dal messaggio successivo", () => {
+		const html = renderConversation({ ...view, events: [
+			{ id: 1, kind: "text", message_id: "question", text: "Quali ciclisti " },
+			{ id: 2, kind: "text", message_id: "question", text: "vuoi aiutare?" },
+			{ id: 3, kind: "text", message_id: "closing", text: "Attendo la tua risposta." },
+		] }, "", {});
+		assert.equal((html.match(/class="conv-event cev-agent"/g) || []).length, 2);
+		assert.ok(visible(html).includes("Quali ciclisti vuoi aiutare?"));
+		assert.ok(visible(html).includes("Attendo la tua risposta."));
+	});
+	it("mostra il progresso fornito dal server senza confonderlo con RUNNING", () => {
+		const html = renderConversation({ ...view, runs: [{
+			execution_id: "exec-draft", in_this_thread: true, label: "Proponi una spec",
+			status: "RUNNING", progress_label: "In attesa della tua risposta", awaiting_response: true,
+		}] }, "La risposta", {});
+		assert.ok(visible(html).includes("In attesa della tua risposta"));
+		assert.ok(visible(html).includes("Proponi una spec"));
+		assert.ok(!visible(html).includes("RUNNING"));
+		assert.match(html, /class="conv-run is-waiting"/);
+		assert.doesNotMatch(html, /<span class="conv-run-mark">run<\/span>/);
+		assert.doesNotMatch(html, /<textarea[^>]* disabled/);
+	});
+	it("una domanda strutturata resta rispondibile senza indicare lavoro in corso", () => {
+		const html = renderConversation({ ...view, session: { ...view.session, work: "WAITING_INPUT", pending_inputs: [{
+			id: "question", title: "Rispondi all’agente", questions: [{
+				id: "who", prompt: "Quali ciclisti vuoi aiutare?", allow_text: true, options: [],
+			}],
+		}] } }, "", {});
+		assert.ok(visible(html).includes("Quali ciclisti vuoi aiutare?"));
+		assert.ok(visible(html).includes("In attesa della tua risposta"));
+		assert.match(html, /data-conversation-input-form="question"/);
+		assert.doesNotMatch(html, /class="conv-working"/);
+	});
 	it("prepara la proposta senza aver ancora aperto una conversazione", () => {
 		const selected = { ...activity, kind: "action", action: "azione-dal-server" };
 		const html = renderConversation({ available: true, events: [] }, "La mia proposta", { activitySelection: selected });

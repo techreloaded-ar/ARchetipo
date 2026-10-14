@@ -92,22 +92,9 @@ Context loaded: [N epics, US-XXX as next available code]
 
 ## Phase 1 - Challenge Questions
 
-Andrea formulates 2-3 questions in one message, based on what was already learned from the backlog, PRD, and codebase.
-
-Principles:
-- do not ask obvious things the user already said
-- do not ask what can already be inferred from the codebase
-- ask questions that force a decision, a boundary, or a value judgment
-- maximum 3 questions; often 1-2 are enough
-
-Good challenge angles:
-- Persona: "Who performs this action in the current flow? Are they already authenticated or a guest?"
-- Real value: "What does this spec concretely unblock for the team or the end user? Is it MVP or Growth?"
-- Done looks like: "How will you know this spec is finished? What must the user be able to do that they cannot do now?"
-- Boundary with existing: "Does the [X] model already in the codebase cover this case, or are you introducing something new?"
-- Priority: "If you could release only this spec this week, would it change anything for users?"
-
-If the user says "vai", "procedi", "skip", or equivalent, proceed with reasonable assumptions and record them in the generated specs when needed.
+Read `./spec-discovery.md`. Andrea leads that discovery using what was already
+learned from the backlog, PRD and codebase. Agree on the outcome and scope before
+Emanuele generates the specs.
 
 ## Phase 2 - Spec Generation
 

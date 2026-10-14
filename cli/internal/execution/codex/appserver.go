@@ -85,6 +85,7 @@ type appServer struct {
 	completed     bool
 	turnEnded     bool
 	agent         strings.Builder
+	messageText   map[string]string
 	lastFull      string
 	turnStatus    string
 	turnError     string
@@ -368,6 +369,7 @@ func (a *appServer) startTurn(ctx context.Context, prompt, model, effort string,
 	a.turnEnded = false
 	a.turnStatus, a.turnError = "", ""
 	a.agent.Reset()
+	a.messageText = make(map[string]string)
 	a.lastFull = ""
 	a.mu.Unlock()
 	result, err := a.call(ctx, methodTurnStart, params)

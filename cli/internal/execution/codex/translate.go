@@ -12,6 +12,7 @@ import (
 // Everything else survives untouched in RunEvent.Raw: translation narrows what
 // is rendered, never what is carried.
 type threadItem struct {
+	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Text    string `json:"text"`
 	Status  string `json:"status"`
@@ -35,8 +36,9 @@ type itemNotification struct {
 
 // deltaNotification is the shape of every streaming fragment.
 type deltaNotification struct {
-	Delta string `json:"delta"`
-	Text  string `json:"text"`
+	ItemID string `json:"itemId"`
+	Delta  string `json:"delta"`
+	Text   string `json:"text"`
 }
 
 // project translates one notification and, when it carries history, appends it
@@ -56,6 +58,7 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.mu.Lock()
 		a.seq++
 		a.agent.Reset()
+		a.messageText = make(map[string]string)
 		a.mu.Unlock()
 		return
 	case "turn/completed":
@@ -98,8 +101,14 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		return
 	case "item/agentMessage/delta":
 		delta := decodeDelta(params)
+		var fragment deltaNotification
+		_ = json.Unmarshal(params, &fragment)
 		a.mu.Lock()
 		a.agent.WriteString(delta)
+		if a.messageText == nil {
+			a.messageText = make(map[string]string)
+		}
+		a.messageText[fragment.ItemID] += delta
 		a.mu.Unlock()
 		a.append(localrun.KindText, delta, "", params)
 		return
@@ -141,11 +150,24 @@ func (a *appServer) append(kind, text, tool string, params json.RawMessage, fina
 	if len(final) > 0 {
 		finalMessage = final[0]
 	}
+	messageID := ""
+	if kind == localrun.KindText {
+		var identity struct {
+			ItemID string     `json:"itemId"`
+			Item   threadItem `json:"item"`
+		}
+		_ = json.Unmarshal(params, &identity)
+		messageID = identity.ItemID
+		if messageID == "" {
+			messageID = identity.Item.ID
+		}
+	}
 	appendEvent(execution.RunEvent{
 		FinalMessage: finalMessage,
 		Seq:          seq,
 		Kind:         kind,
 		Text:         text,
+		MessageID:    messageID,
 		Tool:         tool,
 		Raw:          localrun.RawOf(params),
 		TurnID:       turnID,
@@ -221,8 +243,21 @@ func completedItem(a *appServer, params json.RawMessage) (kind, text, tool strin
 	case "agentMessage":
 		a.mu.Lock()
 		a.lastFull = item.Text
+		seen := a.messageText[item.ID]
+		if a.messageText == nil {
+			a.messageText = make(map[string]string)
+		}
+		a.messageText[item.ID] = item.Text
 		a.mu.Unlock()
-		return "", "", "", false
+		// Some messages (including async input questions) arrive complete,
+		// without any deltas. Preserve them in the journal too. For streamed
+		// messages, publish only the suffix not already rendered for this item.
+		if strings.HasPrefix(item.Text, seen) {
+			text = strings.TrimPrefix(item.Text, seen)
+		} else {
+			text = item.Text
+		}
+		return localrun.KindText, text, "", text != ""
 	case "userMessage", "reasoning", "plan":
 		return "", "", "", false
 	default:

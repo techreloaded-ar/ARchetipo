@@ -663,6 +663,37 @@ func TestAppServerPrefersTheCompletedAgentMessage(t *testing.T) {
 	waitFor(t, func() bool { return client.FinalMessage() == "parziale e poi completo" })
 }
 
+func TestAppServerPreservesCompleteOnlyQuestionsWithoutRepeatingStreamedText(t *testing.T) {
+	client := newAppServer(newFakeCodex(), localrun.NewSession("questions", nil))
+	question := "Quali ciclisti vuoi aiutare?"
+	client.project("item/agentMessage/delta", json.RawMessage(`{"itemId":"intro","delta":"Leggo il contesto."}`))
+	client.project("item/completed", json.RawMessage(`{"item":{"id":"intro","type":"agentMessage","text":"Leggo il contesto."}}`))
+	full, err := json.Marshal(map[string]any{"item": map[string]string{"id": "async-question", "type": "agentMessage", "text": question}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.project("item/completed", full)
+	client.project("item/completed", full)
+	client.project("item/agentMessage/delta", json.RawMessage(`{"itemId":"closing","delta":"Attendo "}`))
+	client.project("item/completed", json.RawMessage(`{"item":{"id":"closing","type":"agentMessage","text":"Attendo la tua risposta."}}`))
+	client.project("turn/completed", json.RawMessage(`{"turn":{"status":"completed"}}`))
+	var texts []string
+	for _, event := range client.session.Events(0) {
+		if event.Kind == localrun.KindText {
+			if event.MessageID == "" {
+				t.Fatal("a text event lost its message identity")
+			}
+			texts = append(texts, event.Text)
+		}
+	}
+	if got := strings.Join(texts, ""); got != "Leggo il contesto."+question+"Attendo la tua risposta." {
+		t.Fatalf("history lost or repeated a message: %q", got)
+	}
+	if got := client.FinalMessage(); got != "Attendo la tua risposta." {
+		t.Fatalf("final message = %q", got)
+	}
+}
+
 // waitFor polls a condition instead of sleeping for an arbitrary time.
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
