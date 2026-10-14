@@ -223,3 +223,16 @@ func TestAcceptSpecDraftReceiptKeepsItsTwoFailureModesApart(t *testing.T) {
 		}
 	})
 }
+
+func TestAcceptSpecDraftReceiptAllowsANewEpicTitle(t *testing.T) {
+	receipt := fixtureDraft()
+	receipt.EpicCode, receipt.EpicTitle = "", "Primo obiettivo"
+	got, err := AcceptSpecDraftReceipt(nominalDraftLine(t, receipt))
+	if err != nil || got.EpicCode != "" || got.EpicTitle != receipt.EpicTitle {
+		t.Fatalf("new epic proposal: %+v %v", got, err)
+	}
+	receipt.EpicTitle = "  "
+	if _, err := AcceptSpecDraftReceipt(nominalDraftLine(t, receipt)); err == nil {
+		t.Fatal("a proposal must have an existing epic code or a new epic title")
+	}
+}

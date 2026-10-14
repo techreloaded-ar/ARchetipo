@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
@@ -138,6 +139,18 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 
 	if err := installRuntimeAssets(s, dataDir, conn, tpl, assumeYes, withWiki); err != nil {
 		return err
+	}
+
+	if conn == "file" {
+		cfg, err := config.LoadExact(".")
+		if err != nil {
+			return err
+		}
+		if cfg.Connector == config.ConnectorFile {
+			if err := filefs.New(cfg).EnsureEmptyBacklog(); err != nil {
+				return err
+			}
+		}
 	}
 
 	fmt.Fprintln(s.out, "Done.")

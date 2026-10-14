@@ -148,6 +148,9 @@ func (p *codexSessionProcess) work() {
 		return
 	}
 	p.push([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-1"}}}`))
+	// This fixture scripts a process that exits after its final turn.
+	// A live process ending a turn without a receipt may be asking a question.
+	p.end()
 }
 
 func (p *codexSessionProcess) reply(id json.RawMessage, result string) {

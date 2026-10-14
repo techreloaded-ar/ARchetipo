@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 const (
@@ -165,4 +166,29 @@ func (b *boundedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.body)
+}
+
+// Shutdown releases stdin, waits for exit, then kills a lingering process. Both
+// waits are bounded, including a process whose pipes never report their end.
+func Shutdown(process Process, providerID string, grace time.Duration) (int, string, error) {
+	_ = process.Close()
+	type outcome struct {
+		code   int
+		stderr string
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() { code, stderr, err := process.Wait(); done <- outcome{code, stderr, err} }()
+	select {
+	case result := <-done:
+		return result.code, result.stderr, result.err
+	case <-time.After(grace):
+		_ = process.Signal()
+	}
+	select {
+	case result := <-done:
+		return result.code, result.stderr, result.err
+	case <-time.After(grace):
+		return -1, "", fmt.Errorf("the %s session process did not report its exit after being killed", providerID)
+	}
 }

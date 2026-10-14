@@ -178,13 +178,30 @@ type SessionDelivery struct {
 	NativeDeliveryID string        `json:"native_delivery_id,omitempty"`
 }
 
-// PendingInput is a provider request that needs structured user input. Payload
-// stays provider-neutral and preserves the native questions without inventing
-// a common question language a harness may not support.
+// InputQuestion is a presentation of a question actually requested by a runtime.
+// Providers translate native fields; the viewer never interprets their protocol.
+type InputQuestion struct {
+	ID        string        `json:"id"`
+	Header    string        `json:"header,omitempty"`
+	Prompt    string        `json:"prompt"`
+	Options   []InputOption `json:"options,omitempty"`
+	AllowText bool          `json:"allow_text"`
+	Secret    bool          `json:"secret,omitempty"`
+}
+
+type InputOption struct {
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// PendingInput preserves the native payload for compatibility and diagnostics.
+// Questions, when provided by the adapter, let any viewer present a normal form.
 type PendingInput struct {
 	ID        string          `json:"id"`
 	Title     string          `json:"title,omitempty"`
 	Payload   json.RawMessage `json:"payload"`
+	Questions []InputQuestion `json:"questions,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 }
 
@@ -259,6 +276,9 @@ type SessionCommandRequest struct {
 	InteractionID string          `json:"interaction_id,omitempty"`
 	OptionID      string          `json:"option_id,omitempty"`
 	Payload       json.RawMessage `json:"payload,omitempty"`
+	// Answers use the question and option identities exposed by PendingInput.
+	// The adapter encodes them in its native protocol; Payload is the legacy path.
+	Answers map[string][]string `json:"answers,omitempty"`
 }
 
 type SessionTurnStarted struct {

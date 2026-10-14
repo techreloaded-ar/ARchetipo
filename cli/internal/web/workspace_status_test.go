@@ -285,8 +285,8 @@ func TestWorkspaceStatusNamesWhatUnlocksEveryUnavailableAction(t *testing.T) {
 	if got := statusActionOf(t, view, "backlog").UnlockedBy; !strings.Contains(strings.ToLower(got), "inception") {
 		t.Fatalf("backlog unlocked_by = %q, want it to name the inception", got)
 	}
-	if got := statusActionOf(t, view, "spec-draft").UnlockedBy; !strings.Contains(strings.ToLower(got), "backlog") {
-		t.Fatalf("spec-draft unlocked_by = %q, want it to name the backlog generation", got)
+	if got := statusActionOf(t, view, "spec-draft").UnlockedBy; !strings.Contains(strings.ToLower(got), "provider") {
+		t.Fatalf("spec-draft unlocked_by = %q, want it to name the provider configuration", got)
 	}
 	if view.NextStep == nil {
 		t.Fatal("a workspace without a PRD has a next step, but next_step is null")

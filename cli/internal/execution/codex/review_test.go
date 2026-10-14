@@ -68,8 +68,8 @@ func reviewedSession(fake *fakeCodex, specCode string, criteria, blockers int) {
 
 func TestBuildReviewPromptIsDeterministicAndAsksForTheSharedReceipt(t *testing.T) {
 	req := reviewRequest("codex")
-	first := buildReviewPrompt(req)
-	if second := buildReviewPrompt(req); first != second {
+	first := execution.ReviewPrompt(localOpening, req)
+	if second := execution.ReviewPrompt(localOpening, req); first != second {
 		t.Fatalf("prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, testSpec, "prompt")
@@ -88,7 +88,7 @@ func TestBuildReviewPromptIsDeterministicAndAsksForTheSharedReceipt(t *testing.T
 // forbidding is what turns a helpful agent into a harmless one, so removing any
 // of the three names must fail here.
 func TestBuildReviewPromptForbidsEveryTransitionByName(t *testing.T) {
-	prompt := buildReviewPrompt(reviewRequest("codex"))
+	prompt := execution.ReviewPrompt(localOpening, reviewRequest("codex"))
 	for _, forbidden := range []string{
 		"archetipo spec move",
 		"archetipo spec integrate",
@@ -192,7 +192,7 @@ func TestExecuteReviewReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 	}
 
 	// The instruction the process really received is the review one.
-	if got := promptOfTurn(t, fake); got != buildReviewPrompt(req) {
+	if got := promptOfTurn(t, fake); got != execution.ReviewPrompt(localOpening, req) {
 		t.Fatalf("the process received %q; want exactly the review prompt", got)
 	}
 }
@@ -243,6 +243,7 @@ func TestExecuteReviewFailureModes(t *testing.T) {
 					<-fake.turnStarted
 					fake.emit("item/completed", `{"item":{"type":"agentMessage","text":"dossier ready, looks good to me"}}`)
 					fake.completeTurn()
+					fake.end()
 				}()
 			},
 			wantErr: []string{"ended without having prepared the review of " + testSpec, "did not emit the expected JSON receipt line"},

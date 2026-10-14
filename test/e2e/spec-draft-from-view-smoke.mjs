@@ -45,6 +45,7 @@ const binDir = path.join(repoRoot, "test", "e2e", ".bin");
 const binName = process.platform === "win32" ? "archetipo.exe" : "archetipo";
 const cliPath = path.join(binDir, binName);
 const fakeClaudePath = path.join(__dirname, "support", "fake-claude.mjs");
+const fakeCodexPath = path.join(__dirname, "support", "fake-codex.mjs");
 const defaultWorkspaceRoot = path.join(repoRoot, "test", "workspaces", "spec-draft-from-view-smoke");
 
 // The sentinel stands for whatever session material the agent owns. It lives in
@@ -151,7 +152,8 @@ async function main() {
   try {
     await scenarioProposalIsReviewedAndConfirmed(runDir);
     await scenarioCancelledRunLeavesNoSpecAndNoConsumedCode(runDir);
-    await scenarioWorkspaceWithoutABacklogIsNotOffered(runDir);
+    await scenarioFirstProposalWithoutABacklog(runDir);
+    await scenarioCodexFirstProposalAndCancellation(runDir);
     assertNoSessionMaterialLeaked();
   } catch (error) {
     failure = error;
@@ -395,40 +397,97 @@ async function scenarioCancelledRunLeavesNoSpecAndNoConsumedCode(runDir) {
   }
 }
 
-// AC-1 — a workspace with no backlog has no epic to file a spec under, so the
-// assisted creation is not offered, and pressing it anyway changes nothing.
-async function scenarioWorkspaceWithoutABacklogIsNotOffered(runDir) {
-  console.log("\n=== AC-1: no backlog, no assisted creation ===");
+// The first proposal is available before a PRD, story or epic exists.
+async function scenarioFirstProposalWithoutABacklog(runDir) {
+  console.log("\n=== First assisted story without a backlog ===");
   const w = await openWorkspace(runDir, "sandbox-no-backlog");
   try {
-    const before = await listRecursively(w.sandboxDir);
-
+    const before = await readBacklogFiles(w.sandboxDir);
     const actions = await apiJSON(`${w.view.url}/api/workspace/actions`);
-    if (actions.has_backlog !== false) {
-      throw new Error(`AC-1: an empty workspace must report has_backlog:false; got ${JSON.stringify(actions)}`);
-    }
     const draft = (actions.actions || []).find((action) => action.id === "spec-draft");
-    if (!draft || draft.offered !== false || draft.runnable !== false) {
-      throw new Error(`AC-1: a workspace with no backlog must not offer the assisted creation; got ${JSON.stringify(draft)}`);
+    if (!draft?.offered || !draft.runnable || actions.has_backlog !== false) {
+      throw new Error(`The first proposal must be available: ${JSON.stringify(draft)}`);
     }
-    const reason = String(draft.unavailable_reason || "").trim();
-    if (!reason) {
-      throw new Error(`AC-1: an action that is not offered must say why; got ${JSON.stringify(draft)}`);
+    const started = await pressAction(w, { action: "spec-draft" });
+    const executionId = started.id;
+    const prompt = userFrameText(await w.control.waitFor(userFrame, 1));
+    if (!prompt.includes("no PRD, backlog or epics") || !prompt.includes("epic_title")) {
+      throw new Error("The prompt still requires a backlog or cannot propose the first epic");
     }
+    const proposal = { ...PROPOSAL, epic_code: "", epic_title: "Primo obiettivo", blocked_by: [] };
+    const receipt = JSON.stringify(proposal);
+    w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: receipt }] } }));
+    w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: receipt }));
+    const completed = await waitForWorkspaceExecution(w.view.url, (record) => record && record.status !== "RUNNING");
+    if (completed.status !== "SUCCEEDED" || completed.result?.payload?.spec_draft?.epic_title !== proposal.epic_title) {
+      throw new Error(`First proposal failed or lost the epic: ${JSON.stringify(completed)}`);
+    }
+    assertSameFiles("first proposal before confirmation", before, await readBacklogFiles(w.sandboxDir));
+    const created = await apiJSON(`${w.view.url}/api/spec`, postJSON({
+      title: proposal.title, epic_code: "", epic_title: proposal.epic_title,
+      priority: proposal.priority, points: proposal.points, body: proposal.body,
+    }));
+    if (created.spec?.code !== "US-001" || created.spec?.epic?.code !== "EP-001") {
+      throw new Error(`First story confirmation failed: ${JSON.stringify(created)}`);
+    }
+    ok("AC-1", "the first assisted proposal needs no PRD or backlog, preserves the empty workspace, and confirmation creates US-001 with EP-001");
+  } finally {
+    await w.close();
+  }
+}
 
-    const refused = await expectStatus(`${w.view.url}/api/workspace/execution`, 409, postJSON({ action: "spec-draft" }));
-    if (String(refused.error || "").trim() !== reason) {
-      throw new Error(`AC-1: the refusal must state the very reason the payload published; got ${JSON.stringify(refused)} against ${JSON.stringify(reason)}`);
-    }
-    const records = await fs.readdir(path.join(w.sandboxDir, ".archetipo", "executions")).catch(() => []);
-    if (records.length !== 0) {
-      throw new Error(`AC-1: a refused press must create no execution record; found ${JSON.stringify(records)}`);
-    }
-    const after = await listRecursively(w.sandboxDir);
-    if (JSON.stringify(before) !== JSON.stringify(after)) {
-      throw new Error("AC-1: the refused press changed the workspace");
-    }
-    ok("AC-1", `the assisted creation is not offered stating ${JSON.stringify(truncate(reason))}, pressing it answers 409 with that same sentence, no record is written and the workspace listing is identical`);
+// Codex uses the same workflow result and confirmation contract through its
+// own app-server protocol, keeping the durable thread open after each action.
+async function scenarioCodexFirstProposalAndCancellation(runDir) {
+  console.log("\n=== Codex: first story, native session, cancellation ===");
+  const w = await openWorkspace(runDir, "sandbox-codex-first", undefined, "codex");
+  const notify = (method, params) => w.control.push({ kind: "emit", method, params });
+  const finishTurn = (id, text) => {
+    // A real Codex receipt arrives as fragments followed by the full message.
+    const split = Math.floor(text.length / 2);
+    notify("item/agentMessage/delta", { turnId: id, delta: text.slice(0, split) });
+    notify("item/agentMessage/delta", { turnId: id, delta: text.slice(split) });
+    notify("item/completed", { turnId: id, item: { type: "agentMessage", text } });
+    notify("turn/completed", { turn: { id, status: "completed" } });
+  };
+  try {
+    const before = await readBacklogFiles(w.sandboxDir);
+    const actions = await apiJSON(`${w.view.url}/api/workspace/actions`);
+    const draft = actions.actions.find(action => action.id === "spec-draft");
+    if (!draft?.offered || !draft.runnable) throw new Error(`Codex cannot draft the first story: ${JSON.stringify(draft)}`);
+    const started = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft" }), 201);
+    const firstTurn = await w.control.waitFor("turn/start", 1);
+    const prompt = firstTurn.params?.input?.[0]?.text || "";
+    if (!prompt.includes("/archetipo-spec") || !prompt.includes("Do NOT persist anything")) throw new Error("Codex received a different drafting contract");
+    const thread = await w.control.waitFor("thread/start", 1);
+    if (thread.params?.ephemeral !== false) throw new Error("Codex used an ephemeral batch thread for a native conversation");
+    finishTurn("turn-1", QUESTION);
+    await waitForRun(w.view.url, started.id, data => data.events.some(event => event.final_message === QUESTION));
+    await apiJSON(`${w.view.url}/api/execution/${started.id}/run/messages`, postJSON({ message: ANSWER }), 202);
+    const answerTurn = await w.control.waitFor("turn/start", 2);
+    if (answerTurn.params?.threadId !== firstTurn.params?.threadId || answerTurn.params?.input?.[0]?.text !== ANSWER) throw new Error("Codex did not resume the same native thread for the answer");
+    const proposal = { ...PROPOSAL, epic_code: "", epic_title: "Primo obiettivo", blocked_by: [] };
+    finishTurn("turn-2", JSON.stringify(proposal));
+    const completed = await waitForWorkspaceExecution(w.view.url, record => record?.status !== "RUNNING");
+    const payload = completed?.result?.payload;
+    if (completed?.status !== "SUCCEEDED" || payload?.spec_draft?.epic_title !== proposal.epic_title) throw new Error(`Codex proposal is not reviewable: ${JSON.stringify(completed)}`);
+    assertSameFiles("Codex before confirmation", before, await readBacklogFiles(w.sandboxDir));
+    const created = await apiJSON(`${w.view.url}/api/spec`, postJSON({ ...confirmationPayload(proposal), epic_title: proposal.epic_title }));
+    if (created.spec?.code !== "US-001" || created.spec?.epic?.code !== "EP-001") throw new Error("Codex first proposal did not confirm into the first story and epic");
+    const conversationID = payload.conversation_id;
+    const conversation = await apiJSON(`${w.view.url}/api/workspace/conversations/${conversationID}`);
+    if (conversation.session?.work !== "IDLE" || conversation.session?.recovery !== "RESUMABLE") throw new Error("The drafting receipt closed the Codex native session");
+    ok("Codex", "the first story is proposed and confirmed through Codex's native thread, and the receipt leaves that thread resumable");
+    const second = await apiJSON(`${w.view.url}/api/workspace/execution`, postJSON({ action: "spec-draft", conversation_id: conversationID }), 201);
+    await w.control.waitFor("turn/start", 3);
+    finishTurn("turn-3", "Quale altra storia vuoi definire?");
+    await waitForRun(w.view.url, second.id, data => data.events.some(event => event.final_message === "Quale altra storia vuoi definire?"));
+    await apiJSON(`${w.view.url}/api/execution/${second.id}/run/cancel`, postJSON({}));
+    const cancelled = await waitForWorkspaceExecution(w.view.url, record => record?.id === second.id && record?.status !== "RUNNING");
+    if (cancelled.status !== "FAILED") throw new Error("The cancelled Codex action did not fail");
+    const retained = await apiJSON(`${w.view.url}/api/workspace/conversations/${conversationID}`);
+    if (retained.session?.recovery !== "RESUMABLE" || retained.session?.archive === "ARCHIVED") throw new Error("Cancelling the action deleted or archived the Codex session");
+    ok("Codex", "cancelling a second action between turns preserves the same native session");
   } finally {
     await w.close();
   }
@@ -497,27 +556,28 @@ async function listRecursively(dir) {
 // a backlog, starts the control server and the viewer, and saves the real
 // claude provider pointed at the fake binary as the workspace default — which
 // is what a person does in the Execution panel.
-async function openWorkspace(runDir, name, seed) {
+async function openWorkspace(runDir, name, seed, providerID = "claude") {
   const sandboxDir = path.join(runDir, name);
   const env = { ...process.env, ARCHETIPO_DATA_DIR: repoRoot, [AUTH_ENV]: AUTH_SENTINEL };
   await fs.mkdir(sandboxDir, { recursive: true });
-  await runCommand(`init/${name}`, cliPath, ["init", "--tool", "claude", "--connector", "file", "--yes"], { cwd: sandboxDir, env });
+  await runCommand(`init/${name}`, cliPath, ["init", "--tool", providerID, "--connector", "file", "--yes"], { cwd: sandboxDir, env });
   // The skill the prompt names is a precondition of the whole conversation: the
   // provider refuses to open a session without it.
-  if (!(await exists(path.join(sandboxDir, SPEC_SKILL_PATH)))) {
-    throw new Error(`archetipo init did not install ${SPEC_SKILL_PATH}, which is what /archetipo-spec resolves to`);
+  const skillPath = providerID === "codex" ? ".agents/skills/archetipo-spec/SKILL.md" : SPEC_SKILL_PATH;
+  if (!(await exists(path.join(sandboxDir, skillPath)))) {
+    throw new Error(`archetipo init did not install ${skillPath}, which is what /archetipo-spec resolves to`);
   }
   if (seed) await seed(sandboxDir);
 
   const control = await startControlServer();
   console.log(`-> control server for the fake claude: ${control.url}`);
-  const view = await startViewServer(sandboxDir, { ...env, FAKE_CLAUDE_CONTROL: control.url });
+  const view = await startViewServer(sandboxDir, { ...env, FAKE_CLAUDE_CONTROL: control.url, FAKE_CODEX_CONTROL: control.url });
   console.log(`-> view ready: ${view.url}`);
 
   await apiJSON(`${view.url}/api/execution/provider/default`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: "claude", config: { command: fakeClaudePath, timeout_seconds: 600 } }),
+    body: JSON.stringify({ id: providerID, config: { command: providerID === "codex" ? fakeCodexPath : fakeClaudePath, timeout_seconds: 600 } }),
   });
 
   return {

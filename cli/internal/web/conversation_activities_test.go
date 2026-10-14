@@ -158,3 +158,54 @@ func TestConversationActivitiesDoNotBorrowAnotherConversationsCatalog(t *testing
 	}
 	closeConversation(t, srv, id)
 }
+
+func TestConversationActivitiesIdentifySkillsWithoutDescriptionsAndDoNotDuplicateActions(t *testing.T) {
+	record := conversationlog.Record{Version: conversationlog.CurrentVersion,
+		Session: &execution.SessionMetadata{Native: execution.NativeSessionReference{ID: "native"}},
+		Archive: execution.ArchiveOpen, Recovery: execution.RecoveryResumable, Work: execution.SessionIdle}
+	items := resolveConversationActivities(template.Default(), nil, record, execution.SessionDiscovery{
+		SkillsKnown: true, Capabilities: []execution.SessionCapability{execution.SessionCapabilitySkillInvocation},
+		Skills: []execution.SessionSkill{
+			{Name: "plugin:build-report"}, {Name: "plugin:check-report"},
+			{Name: "archetipo-inception"}, {Name: "archetipo-spec"},
+		},
+	}, "")
+	first, found := activityByID(items, "native:plugin:build-report")
+	second, foundSecond := activityByID(items, "native:plugin:check-report")
+	if !found || !foundSecond || first.Label == second.Label || first.Label == "Attività dell’agente" || !first.Runnable {
+		t.Fatalf("skills without descriptions are indistinguishable: %+v", items)
+	}
+	for _, id := range []string{"native:archetipo-inception", "native:archetipo-spec"} {
+		if _, found := activityByID(items, id); found {
+			t.Fatalf("%s bypasses the process action availability", id)
+		}
+	}
+}
+
+func TestConversationActivitiesExplainTheBlockAndItsRemedy(t *testing.T) {
+	items := resolveConversationActivities(template.Default(), []workspaceActionView{{
+		WorkspaceAction: template.WorkspaceAction{ID: "spec-draft"}, Offered: true,
+		UnavailableReason: "L’attività exec-story è in corso", UnlockedBy: "Completala o annullala",
+	}}, conversationlog.Record{}, execution.SessionDiscovery{}, "")
+	story, found := activityByID(items, "story")
+	if !found || !strings.Contains(story.UnavailableReason, "exec-story") || !strings.Contains(story.UnavailableReason, "annullala") {
+		t.Fatalf("the activity hides why it is blocked: %+v", story)
+	}
+}
+
+func TestConversationActivitiesRespectTheCurrentThreadWork(t *testing.T) {
+	for _, state := range []execution.SessionWorkState{execution.SessionTurnActive, execution.SessionIdle} {
+		t.Run(string(state), func(t *testing.T) {
+			record := conversationlog.Record{Version: conversationlog.CurrentVersion,
+				Session: &execution.SessionMetadata{Native: execution.NativeSessionReference{ID: "native"}},
+				Archive: execution.ArchiveOpen, Recovery: execution.RecoveryResumable, Work: state}
+			items := resolveConversationActivities(template.Default(), []workspaceActionView{{
+				WorkspaceAction: template.WorkspaceAction{ID: "spec-draft"}, Offered: true, Runnable: true,
+			}}, record, execution.SessionDiscovery{}, "")
+			story, found := activityByID(items, "story")
+			if !found || story.Runnable != (state == execution.SessionIdle) {
+				t.Fatalf("action availability ignores the thread work: %+v", story)
+			}
+		})
+	}
+}

@@ -275,6 +275,24 @@ func (p *Provider) RespondSessionApproval(_ context.Context, request execution.S
 }
 
 func (p *Provider) RespondSessionInput(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
+	if request.Answers != nil {
+		delivery := execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}
+		session := p.nativeSession(request.Session.Native.ID)
+		if session == nil {
+			return delivery, fmt.Errorf("codex session %q is not connected", request.Session.Native.ID)
+		}
+		session.mu.Lock()
+		input, pending := session.inputs[request.InteractionID]
+		session.mu.Unlock()
+		if !pending {
+			return delivery, fmt.Errorf("codex input %q is not pending", request.InteractionID)
+		}
+		payload, err := encodeInputAnswers(input.Questions, request.Answers)
+		if err != nil {
+			return delivery, err
+		}
+		request.Payload = payload
+	}
 	if len(request.Payload) == 0 {
 		return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}, fmt.Errorf("codex input response is empty")
 	}
@@ -481,7 +499,7 @@ func (s *nativeSession) handleRequest(request rpcMessage) {
 		}
 		s.approvals[id] = execution.PendingApproval{ID: id, ToolName: request.Method, Title: title, Args: request.Params, Options: localrun.ApprovalOptions(), CreatedAt: now}
 	case "item/tool/requestUserInput":
-		s.inputs[id] = execution.PendingInput{ID: id, Title: "Codex richiede input", Payload: request.Params, CreatedAt: now}
+		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: request.Params, Questions: inputQuestions(request.Params), CreatedAt: now}
 	default:
 		delete(s.requests, id)
 		payload, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "error": map[string]any{"code": -32601, "message": "unsupported Codex server request"}})

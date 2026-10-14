@@ -118,7 +118,8 @@ async function scenarioTwoActionsInOneSession(runDir) {
     w.control.push(emit({ type: "assistant", message: { content: [{ type: "text", text: QUESTION }] } }));
     w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: QUESTION }));
     await waitForConversation(w.view.url, conversationID, (view) =>
-      (view.events || []).some((event) => event.kind === "text" && event.text === QUESTION));
+      (view.events || []).some((event) => event.kind === "text" && event.text === QUESTION)
+      && view.session?.work === "IDLE");
     const stillRunning = await apiJSON(`${w.view.url}/api/execution/${plan.id}`);
     if (stillRunning.status !== "RUNNING") {
       throw new Error(`a question closed the plan as ${stillRunning.status}: ${JSON.stringify(stillRunning.error)}`);

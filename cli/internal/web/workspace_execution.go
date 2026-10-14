@@ -323,9 +323,10 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 // a workspace execution is running, and whether a PRD is already there.
 type workspaceAvailability struct {
 	providerAvailability
-	runningID           string
-	workspaceHasRunning bool
-	hasPRD              bool
+	// Each action owns its own execution. An inception waiting for an answer
+	// must not prevent drafting a story in another conversation.
+	runningByAction map[string]string
+	hasPRD          bool
 	// prdUnreadable is why the workspace cannot say whether it has a PRD: a
 	// connector that does not expose one, or one that failed to read it. It
 	// makes the action unavailable with a reason rather than failing the whole
@@ -348,15 +349,15 @@ type workspaceAvailability struct {
 
 func (s *Server) workspaceAvailability(ctx context.Context, ws *workspaceSession) workspaceAvailability {
 	availability := workspaceAvailability{}
-	if id, busy := ws.dispatch.current(workspaceExecutionKey); busy {
-		availability.workspaceHasRunning = true
-		availability.runningID = id
-	}
-	if !availability.workspaceHasRunning {
-		if records, err := ws.store.ListBySpec(ctx, workspaceExecutionKey); err == nil && len(records) > 0 && records[0].Status == execution.StatusRunning {
-			availability.workspaceHasRunning = true
-			availability.runningID = records[0].ID
+	availability.runningByAction = map[string]string{}
+	if records, err := ws.store.ListBySpec(ctx, workspaceExecutionKey); err == nil {
+		for _, record := range records {
+			if record.Status == execution.StatusRunning && availability.runningByAction[string(record.Action)] == "" {
+				availability.runningByAction[string(record.Action)] = record.ID
+			}
 		}
+	} else if id, busy := ws.dispatch.current(workspaceExecutionKey); busy {
+		availability.runningByAction[""] = id
 	}
 	reader, ok := ws.conn.(connector.PRDReader)
 	if !ok {
@@ -398,16 +399,30 @@ func (a workspaceAvailability) reasonFor(actionID string) string {
 	if err != nil {
 		return "questa azione non si può ancora avviare dal visore"
 	}
-	if a.workspaceHasRunning {
-		if a.runningID != "" {
-			return "l'esecuzione " + a.runningID + " è già in corso su questo workspace"
-		}
-		return "un'esecuzione è già in corso su questo workspace"
+	if id := a.runningExecutionFor(actionID); id != "" {
+		return "l'esecuzione " + id + " è già in corso su questo workspace"
 	}
 	if reason := a.offers(actionID); reason != "" {
 		return reason
 	}
 	return a.providerAvailability.reasonFor(capability)
+}
+
+func (a workspaceAvailability) runningExecutionFor(actionID string) string {
+	if id := a.runningByAction[actionID]; id != "" {
+		return id
+	}
+	for runningAction, id := range a.runningByAction {
+		// Drafting produces a proposal, and inception owns only the PRD.
+		// Initial backlog generation still needs exclusive access: its
+		// rollback may remove a partially generated backlog.
+		if (actionID == string(execution.ActionSpecDraft) && runningAction == string(execution.ActionInception)) ||
+			(actionID == string(execution.ActionInception) && runningAction == string(execution.ActionSpecDraft)) {
+			continue
+		}
+		return id
+	}
+	return ""
 }
 
 // offers isolates the half of the decision that depends on the *state of the
@@ -444,20 +459,9 @@ func (a workspaceAvailability) offers(actionID string) string {
 		}
 		return ""
 	case execution.ActionSpecDraft:
-		// The mirror image of the backlog generation: that action is offered
-		// only to a workspace without a backlog, this one only to a workspace
-		// with one, because a spec is filed under an epic the backlog declares.
-		//
-		// The PRD is deliberately not consulted. A backlog exists only after a
-		// PRD, so the condition below already implies it, and a second check
-		// would produce two different sentences about one and the same fact.
-		if a.backlogUnreadable != "" {
-			return a.backlogUnreadable
-		}
-		if !a.hasBacklog {
-			return "questo workspace non ha ancora un backlog: generalo prima di aggiungere una spec"
-		}
-		return ""
+		// A proposal may be the first story and may carry a new epic title.
+		// Only an unreadable backlog blocks discovery; absence is an empty state.
+		return a.backlogUnreadable
 	default:
 		return "questa azione non si può ancora avviare dal visore"
 	}
@@ -469,8 +473,8 @@ func (a workspaceAvailability) offers(actionID string) string {
 // PRD is what stops an inception, while a *missing* PRD is what stops a backlog
 // generation, and each deserves its own next step.
 func workspaceRemedy(a workspaceAvailability, actionID string) string {
-	if a.workspaceHasRunning {
-		return "aspetta che finisca prima di avviarne un'altra"
+	if a.runningExecutionFor(actionID) != "" {
+		return "attendi la fine dell’attività in corso oppure annullala prima di avviarne un’altra"
 	}
 	if a.prdUnreadable != "" {
 		return "usa un connettore che espone il PRD"
@@ -484,8 +488,6 @@ func workspaceRemedy(a workspaceAvailability, actionID string) string {
 		switch {
 		case a.backlogUnreadable != "":
 			return "usa un connettore che espone il backlog"
-		case !a.hasBacklog:
-			return "genera prima il backlog iniziale, poi torna qui per aggiungere una spec"
 		}
 	case execution.ActionBacklog:
 		switch {

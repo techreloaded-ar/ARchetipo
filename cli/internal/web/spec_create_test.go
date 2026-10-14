@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -492,8 +494,7 @@ func TestCreateSpecOnDeclaredEpicWithoutSpecs(t *testing.T) {
 		t.Fatalf("epic title must not be taken from the payload: got %q", view.Spec.Epic.Title)
 	}
 
-	// The payload has no channel for an epic title at all: a request trying to
-	// send one is refused, so the workspace declaration is the only source.
+	// A new title cannot rename the existing epic selected by code.
 	spoof := validCreateReq()
 	spoof["epic_code"] = "EP-901"
 	spoof["title"] = "Creare un'altra spec"
@@ -581,5 +582,67 @@ func TestCreateSpecOnBacklogWithEpicsAndNoSpecs(t *testing.T) {
 	}
 	if !kept {
 		t.Fatalf("EP-901 must stay declared on disk: got %+v", stored.Epics)
+	}
+}
+
+func TestCreateFirstSpecWithExplicitEpicTitle(t *testing.T) {
+	for _, initialized := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initialized=%v", initialized), func(t *testing.T) {
+			srv, conn, _ := newFileTestServer(t)
+			if initialized {
+				if err := conn.EnsureEmptyBacklog(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			req := validCreateReq()
+			req["epic_code"] = ""
+			req["epic_title"] = "  Primo obiettivo  "
+			invalid := maps.Clone(req)
+			invalid["body"] = ""
+			if w := postSpec(t, srv, invalid); w.Code != http.StatusBadRequest {
+				t.Fatalf("invalid creation: %d %s", w.Code, w.Body.String())
+			}
+			if initialized {
+				if epics := readBoardEpics(t, srv); len(epics) != 0 {
+					t.Fatalf("invalid request created epic: %+v", epics)
+				}
+			}
+			w := postSpec(t, srv, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("first creation: %d %s", w.Code, w.Body.String())
+			}
+			created := decodeCreateView(t, w)
+			if created.Spec.Code != "US-001" || created.Spec.Epic != (domain.Epic{Code: "EP-001", Title: "Primo obiettivo"}) {
+				t.Fatalf("first story: %+v", created)
+			}
+			req["epic_title"] = "primo   obiettivo"
+			w = postSpec(t, srv, req)
+			if w.Code != http.StatusOK || decodeCreateView(t, w).Created {
+				t.Fatalf("retry created duplicate: %d %s", w.Code, w.Body.String())
+			}
+			req["epic_title"] = "Secondo obiettivo"
+			req["title"] = "Seconda storia"
+			w = postSpec(t, srv, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("second epic: %d %s", w.Code, w.Body.String())
+			}
+			second := decodeCreateView(t, w)
+			if second.Spec.Code != "US-002" || second.Spec.Epic.Code != "EP-002" {
+				t.Fatalf("codes: %+v", second)
+			}
+			if epics := readBoardEpics(t, srv); len(epics) != 2 {
+				t.Fatalf("epics on board: %+v", epics)
+			}
+		})
+	}
+}
+
+func TestNewSpecEpicPreservesTitlesAndUsesHighestCode(t *testing.T) {
+	epics := []domain.Epic{{Code: "EP-004", Title: "Foundations"}, {Code: "EP-019", Title: "Delivery"}}
+	if got := newSpecEpic(epics, "  foundations "); got != epics[0] {
+		t.Fatalf("reused epic: %+v", got)
+	}
+	if got := newSpecEpic(epics, "Reports"); got != (domain.Epic{Code: "EP-020", Title: "Reports"}) {
+		t.Fatalf("new epic: %+v", got)
 	}
 }

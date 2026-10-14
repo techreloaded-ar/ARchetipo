@@ -90,7 +90,7 @@ func (s *streamSession) project(f frame, raw json.RawMessage) {
 		// FinalMessage, not the raw result, because a turn that ends with an empty
 		// result still ended on the agent's last words.
 		s.publishTurn(TurnOutcome{Completed: !f.IsError, Final: s.FinalMessage()})
-		s.append(localrun.KindTurnEnd, "", "", raw)
+		s.append(localrun.KindTurnEnd, "", "", raw, s.FinalMessage())
 		s.mu.Lock()
 		// The next turn starts on a fresh seq, and the tools of the turn that
 		// just ended can no longer be referenced by anything.
@@ -209,14 +209,19 @@ func (s *streamSession) toolNameOf(toolUseID string) string {
 	return s.tools[toolUseID]
 }
 
-func (s *streamSession) append(kind, text, tool string, raw json.RawMessage) {
+func (s *streamSession) append(kind, text, tool string, raw json.RawMessage, final ...string) {
 	s.mu.Lock()
 	seq := s.seq
 	turnID := s.turnID
 	submissionID := s.submissionID
 	appendEvent := s.appendEvent
 	s.mu.Unlock()
+	finalMessage := ""
+	if len(final) > 0 {
+		finalMessage = final[0]
+	}
 	appendEvent(execution.RunEvent{
+		FinalMessage: finalMessage,
 		Seq:          seq,
 		Kind:         kind,
 		Text:         text,

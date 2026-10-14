@@ -345,3 +345,32 @@ func TestUpdateSpec_EpicChangeUpdatesLabels(t *testing.T) {
 		t.Error("expected PATCH call with labels")
 	}
 }
+
+func TestFirstStoryCreatesItsEpicOnAnEmptyBacklog(t *testing.T) {
+	m := newMock(t).
+		on("api repos/acme/web/issues?", "[]").
+		on("label create", "ok").
+		on("api -X POST repos/acme/web/issues", `{"number":1,"node_id":"I_first","html_url":"https://github.com/acme/web/issues/1"}`).
+		on("api graphql", `{"data":{"addProjectV2ItemById":{"item":{"id":"item-first"}}}}`)
+	c := NewWithRunner(config.Default(), m)
+	c.state.repo = &domain.RepoInfo{Slug: "acme/web"}
+	c.state.project = &domain.ProjectInfo{NodeID: "project-first"}
+	ctx := context.Background()
+	summary, err := c.ReadExistingBacklog(ctx)
+	if err != nil || len(summary.Codes) != 0 || len(summary.Epics) != 0 {
+		t.Fatalf("empty backlog: %+v %v", summary, err)
+	}
+	first := domain.Spec{Code: "US-001", Title: "First story", Epic: domain.Epic{Code: "EP-001", Title: "First goal"}, Status: domain.StatusTodo}
+	result, err := c.SaveInitialBacklog(ctx, []domain.Spec{first})
+	if err != nil || !result.OK || len(result.Refs) != 1 {
+		t.Fatalf("first creation: %+v %v", result, err)
+	}
+	if !m.calledWithPrefix("label create EP-001: [First goal]") {
+		t.Fatal("first epic label was not created")
+	}
+	m.matchers[0].stdout = `[{"number":1,"title":"US-001: First story","labels":[{"name":"archetipo-backlog"},{"name":"EP-001: [First goal]"}]}]`
+	summary, err = c.ReadExistingBacklog(ctx)
+	if err != nil || len(summary.Epics) != 1 || summary.Epics[0] != first.Epic {
+		t.Fatalf("first epic not discoverable: %+v %v", summary, err)
+	}
+}

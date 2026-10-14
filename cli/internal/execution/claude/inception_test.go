@@ -563,7 +563,7 @@ func TestInceptionAndPlanningAreDispatchedByTheActionAlone(t *testing.T) {
 		t.Fatalf("the planning run ended on the agent's question instead of waiting: %v", err)
 	default:
 	}
-	if got := planFake.messagesReceived(); len(got) != 1 || got[0] != buildPrompt(planReq) {
+	if got := planFake.messagesReceived(); len(got) != 1 || got[0] != execution.PlanPrompt(localOpening, planReq) {
 		t.Fatalf("the planning process received %v; want exactly the planning prompt", got)
 	}
 	// Only the end of the process closes it, and then it is a run without a
@@ -582,7 +582,7 @@ func TestInceptionAndPlanningAreDispatchedByTheActionAlone(t *testing.T) {
 	provider := newSessionProvider(dir, &fakeRunner{outcomes: []runOutcome{probeOK}}, inceptionFake, nil)
 	_, failures := startInception(provider, req)
 	<-inceptionFake.started
-	if got := inceptionFake.messagesReceived(); len(got) != 1 || got[0] != buildInceptionPrompt(req) {
+	if got := inceptionFake.messagesReceived(); len(got) != 1 || got[0] != execution.InceptionPrompt(localOpening, req) {
 		t.Fatalf("the inception process received %v; want exactly the inception prompt", got)
 	}
 	inceptionFake.emit(resultFrame(prdReceiptLine(prdPath), false))
@@ -610,7 +610,7 @@ func TestConverseKeepsAReceiptPublishedAsTheDeadlineFires(t *testing.T) {
 		runCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		final, turns, err := converse(runCtx, client, acceptsPRD)
+		final, turns, err := localrun.Converse(runCtx, client, acceptsPRD)
 		if err != nil {
 			t.Fatalf("attempt %d: the receipt was lost to the deadline: %v", attempt, err)
 		}
@@ -630,8 +630,8 @@ func TestConverseStopsOnTheDeadlineWhenNoTurnWasPublished(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, turns, err := converse(runCtx, client, acceptsPRD)
-	if !errors.Is(err, errRunTerminated) {
+	_, turns, err := localrun.Converse(runCtx, client, acceptsPRD)
+	if !errors.Is(err, localrun.ErrRunTerminated) {
 		t.Fatalf("converse returned %v; want the run to be reported as stopped", err)
 	}
 	if turns != 0 {
@@ -650,7 +650,7 @@ func TestConverseCountsATurnWithoutAReceiptFoundOnTheDeadline(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, turns, err := converse(runCtx, client, acceptsPRD)
+	_, turns, err := localrun.Converse(runCtx, client, acceptsPRD)
 	if err == nil {
 		t.Fatal("a conversation stopped without a receipt reported a success")
 	}

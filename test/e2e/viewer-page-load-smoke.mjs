@@ -90,6 +90,8 @@ const CLAIMS = [
   "nessuna eccezione non catturata è emessa da nessuna delle due interazioni",
   "le card della board mostrano le azioni e i motivi restituiti dal server",
   "Conversa sulla card prepara una conversazione collegata alla stessa spec",
+  "la conferma del form crea una storia leggibile dal server",
+  "un workspace appena inizializzato permette di creare la prima epica e storia",
 ];
 
 // One entry per proved statement, for the report.
@@ -153,6 +155,16 @@ async function main() {
     console.log(`-> devtools: ${browser.wsEndpoint}`);
 
     await exercisePage(browser, view.url);
+    const emptyDir = path.join(runDir, "empty-workspace");
+    await fs.mkdir(emptyDir, { recursive: true });
+    await runCommand("init-empty", cliPath, ["init", "--tool", "pi", "--connector", "file", "--yes"], {
+      cwd: emptyDir, env: cliEnv,
+    });
+    await stopProcess(view.child);
+    view = await startViewServerShared(cliPath, emptyDir, cliEnv, "/api/workspace/status");
+    const emptyIndex = await fs.readFile(path.join(emptyDir, ".archetipo", "backlog.yaml"), "utf8");
+    if (!emptyIndex.includes("order: []")) throw new Error("init non ha creato un backlog vuoto");
+    await exerciseEmptyWorkspace(browser, view.url);
   } finally {
     if (browser) await browser.close();
     if (view) await stopProcess(view.child);
@@ -313,6 +325,9 @@ async function exercisePage(browser, url) {
   ok(CLAIMS[3], "il click su «Nuova spec» apre la modale: la sentinella dichiarata più in basso è inizializzata");
   ok(CLAIMS[4], "nessuna delle due interazioni ha emesso eccezioni non catturate");
 
+  const duplicateControls = await page.evaluate(`!!document.querySelector('#workspace-conversation .conv-nextstep, #workspace-conversation [data-conversation-actions-toggle]')`);
+  if (duplicateControls) throw new Error('La conversazione mostra ancora il suggerimento o il menu Azioni');
+
   phase = "azioni dalla board";
   await page.evaluate(`document.getElementById('new-spec-modal-close').click(); document.querySelector('[data-shell-view="board"]').click();`);
   await page.waitFor(`!!document.querySelector('[data-card-actions="US-701"]')`, 20000, "il comando Azioni della card");
@@ -334,6 +349,56 @@ async function exercisePage(browser, url) {
   ok(CLAIMS[6], "Conversa sulla card prepara il contesto US-701 senza avviare un agente");
 
 
+  phase = "creazione manuale di una storia";
+  await page.evaluate(`document.getElementById('new-spec-btn').click()`);
+  await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden')`, 10000, "il form della nuova storia");
+  const storyTitle = "Storia creata dal form nel browser";
+  const body = "**User Story**\nCome revisore voglio creare una storia.\n\n**Dimostrazione**\nCompilo il form e osservo la storia nella board.\n\n**Criteri di accettazione**\n- [ ] AC-1 — La storia compare in TODO.\n";
+  await page.evaluate(`(() => {
+    const form = document.getElementById('new-spec-form');
+    form.elements.title.value = ${JSON.stringify(storyTitle)};
+    form.elements.epic_code.value = 'EP-700';
+    document.querySelector('#new-spec-modal .CodeMirror').CodeMirror.setValue(${JSON.stringify(body)});
+    document.getElementById('new-spec-submit').click();
+  })()`);
+  await page.waitFor(`document.getElementById('new-spec-modal').classList.contains('hidden')`, 10000,
+    "la creazione della storia", () => page.evaluate(`document.getElementById('new-spec-status').textContent`));
+  const created = await (await fetch(`${url}/api/spec/US-702`)).json();
+  if (created.spec?.title !== storyTitle) throw new Error('Il form non ha persistito la storia attesa');
+  assertNoExceptions("La creazione manuale ha emesso eccezioni:");
+  ok(CLAIMS[7], "la conferma del form crea US-702 e il dettaglio del server ne restituisce il titolo");
+  await page.close();
+}
+
+async function exerciseEmptyWorkspace(browser, url) {
+  const page = await browser.newPage();
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.navigate", { url });
+  await page.once("Page.loadEventFired", 30000, "il caricamento del workspace vuoto");
+  await page.waitFor(`document.getElementById('new-spec-btn').title.includes('epica') && !document.getElementById('new-spec-btn').disabled`,
+    20000, "Nuova spec raggiungibile senza epiche");
+  await page.evaluate(`document.getElementById('new-spec-btn').click()`);
+  await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden')
+    && !document.getElementById('new-spec-no-epics').classList.contains('hidden')
+    && !document.getElementById('new-spec-submit').disabled
+    && !document.getElementById('spec-draft-mode-assisted').disabled`, 10000,
+    "il form permette di definire la prima epica senza backlog generato");
+  const body = "**User Story**\nCome autore voglio creare la prima storia.\n\n**Dimostrazione**\nLa storia compare in TODO.\n\n**Criteri di accettazione**\n- [ ] AC-1 — La prima storia è persistita.\n";
+  await page.evaluate(`(() => {
+    const form = document.getElementById('new-spec-form');
+    form.elements.title.value = 'Prima storia senza backlog';
+    form.elements.epic_title.value = 'Primo obiettivo';
+    document.querySelector('#new-spec-modal .CodeMirror').CodeMirror.setValue(${JSON.stringify(body)});
+    document.getElementById('new-spec-submit').click();
+  })()`);
+  await page.waitFor(`document.getElementById('new-spec-modal').classList.contains('hidden')`, 10000,
+    "la prima storia creata senza epiche", () => page.evaluate(`document.getElementById('new-spec-status').textContent`));
+  const created = await (await fetch(`${url}/api/spec/US-001`)).json();
+  if (created.spec?.epic?.code !== 'EP-001' || created.spec?.epic?.title !== 'Primo obiettivo') {
+    throw new Error('La prima storia non ha persistito la nuova epica');
+  }
+  ok(CLAIMS[8], "la conferma crea US-001 e la prima epica EP-001 in un workspace appena inizializzato");
   await page.close();
 }
 

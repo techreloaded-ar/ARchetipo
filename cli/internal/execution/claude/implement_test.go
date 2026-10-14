@@ -74,8 +74,8 @@ func implementedSession(fake *fakeClaude, specCode string, tasksDone int, tests 
 
 func TestBuildImplementPromptIsDeterministicAndAsksForTheSharedReceipt(t *testing.T) {
 	req := implementRequest("claude")
-	first := buildImplementPrompt(req)
-	if second := buildImplementPrompt(req); first != second {
+	first := execution.ImplementPrompt(localOpening, req)
+	if second := execution.ImplementPrompt(localOpening, req); first != second {
 		t.Fatalf("prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, testSpec, "prompt")
@@ -191,7 +191,7 @@ func TestExecuteImplementReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 	}
 
 	// The instruction the process really received is the implementation one.
-	if got := fake.messagesReceived(); len(got) != 1 || got[0] != buildImplementPrompt(req) {
+	if got := fake.messagesReceived(); len(got) != 1 || got[0] != execution.ImplementPrompt(localOpening, req) {
 		t.Fatalf("the process received %v; want exactly the implementation prompt", got)
 	}
 }

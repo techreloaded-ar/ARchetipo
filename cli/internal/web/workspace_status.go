@@ -241,8 +241,8 @@ func (s *Server) nextStepFor(
 		// As for a spec-scoped step: the run that refuses the step travels
 		// with the refusal, so a client can lead to it — or keep quiet about
 		// the step inside the very thread that is running it.
-		if !step.Runnable && availability.workspaceHasRunning {
-			step.RunningExecutionID = availability.runningID
+		if !step.Runnable {
+			step.RunningExecutionID = availability.runningExecutionFor(stage.Action)
 		}
 		if reason != "" {
 			step.UnlockedBy = workspaceRemedy(availability, stage.Action)

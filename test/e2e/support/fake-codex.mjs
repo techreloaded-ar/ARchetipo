@@ -31,6 +31,13 @@ if (!control) {
 }
 
 let turnActive = false;
+let pumping = false;
+
+function startPump() {
+  if (pumping) return;
+  pumping = true;
+  pump();
+}
 
 function write(payload) {
   process.stdout.write(JSON.stringify(payload) + "\n");
@@ -93,10 +100,12 @@ rl.on("line", async (line) => {
     case "thread/start":
       await report("thread/start", { params: message.params });
       write({ id: message.id, result: { thread: { id: "thread-1" } } });
+      startPump();
       break;
     case "thread/resume":
       await report("thread/resume", { params: message.params });
       write({ id: message.id, result: { thread: { id: message.params?.threadId || "thread-1", ephemeral: false }, model: "gpt-fake", reasoningEffort: "medium" } });
+      startPump();
       break;
     case "turn/start":
       turnActive = true;
@@ -163,4 +172,5 @@ async function pump() {
   }
 }
 
-pump();
+// Discovery-only processes ask for models/skills without opening a thread.
+// They must not consume control frames intended for the conversation runtime.

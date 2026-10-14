@@ -100,9 +100,12 @@ type appServer struct {
 	// the claude provider: the reason is the same, and so is the rule.
 	instructions map[string]string
 
-	turnOnce sync.Once
-	turnDone chan struct{}
-	gone     chan struct{}
+	sendMu         sync.Mutex
+	conversational bool
+	turns          chan localrun.TurnOutcome
+	turnOnce       sync.Once
+	turnDone       chan struct{}
+	gone           chan struct{}
 }
 
 // expectInstruction remembers that prompt is an instruction the caller
@@ -139,6 +142,7 @@ func newAppServer(process localrun.Process, session *localrun.Session) *appServe
 		session:  session,
 		pending:  make(map[int64]chan rpcMessage),
 		turnDone: make(chan struct{}),
+		turns:    make(chan localrun.TurnOutcome, 64),
 		gone:     make(chan struct{}),
 	}
 	server.appendEvent = func(event execution.RunEvent) { session.Append(event) }
@@ -412,6 +416,12 @@ func (a *appServer) ids() (string, string) {
 // into the history: the message becomes history when the process re-emits it as
 // a user message item, which is exactly what was observed on the real binary.
 func (a *appServer) Send(ctx context.Context, text string) error {
+	a.sendMu.Lock()
+	defer a.sendMu.Unlock()
+	if a.conversational && a.declaredTurnEnd() {
+		_, err := a.startTurn(ctx, text, "", "", nil)
+		return a.classify(err)
+	}
 	threadID, turnID := a.ids()
 	if threadID == "" || turnID == "" {
 		return &execution.RunCommandError{
@@ -431,6 +441,11 @@ func (a *appServer) Send(ctx context.Context, text string) error {
 // Interrupt asks the process to stop the turn. It reports only whether the
 // command was delivered: the run is over when the process says so.
 func (a *appServer) Interrupt(ctx context.Context) error {
+	a.sendMu.Lock()
+	defer a.sendMu.Unlock()
+	if a.conversational && a.declaredTurnEnd() {
+		return a.process.Close()
+	}
 	threadID, turnID := a.ids()
 	if threadID == "" || turnID == "" {
 		return &execution.RunCommandError{
@@ -482,6 +497,8 @@ func asRPCError(err error, target **rpcError) bool {
 
 // endTurn closes the wait for the turn exactly once.
 func (a *appServer) endTurn() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.turnOnce.Do(func() { close(a.turnDone) })
 }
 
@@ -495,7 +512,13 @@ func (a *appServer) Completed() bool {
 }
 
 // TurnDone is closed when the turn has ended, whichever way it ended.
-func (a *appServer) TurnDone() <-chan struct{} { return a.turnDone }
+func (a *appServer) TurnDone() <-chan struct{} {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnDone
+}
+
+func (a *appServer) Turns() <-chan localrun.TurnOutcome { return a.turns }
 
 // Gone is closed when the process's output has ended.
 func (a *appServer) Gone() <-chan struct{} { return a.gone }

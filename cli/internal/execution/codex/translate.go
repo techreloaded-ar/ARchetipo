@@ -75,9 +75,26 @@ func (a *appServer) project(method string, params json.RawMessage) {
 			a.turnError = completed.Turn.Error.Message
 		}
 		a.completed = completed.Turn.Status == "" || completed.Turn.Status == "completed"
+		final := a.lastFull
+		if strings.TrimSpace(final) == "" {
+			final = a.agent.String()
+		}
+		outcome := localrun.TurnOutcome{Completed: a.completed, Final: final}
+		// Claim the old wait before publishing. An answer may start the next
+		// turn immediately, so its reset must never receive this turn's close.
+		var done chan struct{}
+		a.turnOnce.Do(func() { done = a.turnDone })
+		event := execution.RunEvent{Seq: a.seq, Kind: localrun.KindTurnEnd, FinalMessage: outcome.Final, Raw: params, TurnID: a.turnCoreID, SubmissionID: a.submissionID}
+		appendEvent := a.appendEvent
 		a.mu.Unlock()
-		a.append(localrun.KindTurnEnd, "", "", params)
-		a.endTurn()
+		appendEvent(event)
+		select {
+		case a.turns <- outcome:
+		default:
+		}
+		if done != nil {
+			close(done)
+		}
 		return
 	case "item/agentMessage/delta":
 		delta := decodeDelta(params)
@@ -114,13 +131,18 @@ func (a *appServer) project(method string, params json.RawMessage) {
 	}
 }
 
-func (a *appServer) append(kind, text, tool string, params json.RawMessage) {
+func (a *appServer) append(kind, text, tool string, params json.RawMessage, final ...string) {
 	a.mu.Lock()
 	seq := a.seq
 	turnID, submissionID := a.turnCoreID, a.submissionID
 	appendEvent := a.appendEvent
 	a.mu.Unlock()
+	finalMessage := ""
+	if len(final) > 0 {
+		finalMessage = final[0]
+	}
 	appendEvent(execution.RunEvent{
+		FinalMessage: finalMessage,
 		Seq:          seq,
 		Kind:         kind,
 		Text:         text,

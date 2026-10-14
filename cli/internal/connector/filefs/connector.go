@@ -286,6 +286,20 @@ func (c *Connector) ListMockups(ctx context.Context) ([]domain.MockupEntry, erro
 	return out, nil
 }
 
+// EnsureEmptyBacklog initializes the local index without inventing epics or
+// stories. Existing YAML and legacy Markdown backlogs remain untouched.
+func (c *Connector) EnsureEmptyBacklog() error {
+	if _, err := c.loadStore(); err == nil {
+		return nil
+	} else {
+		var coded *iox.CodedError
+		if !errors.As(err, &coded) || coded.Code != iox.CodePreconditionMissing {
+			return err
+		}
+	}
+	return writeYAML(c.backlogPath(), backlogDoc{Schema: backlogSchema, Version: 2, Order: []string{}})
+}
+
 func (c *Connector) SaveInitialBacklog(ctx context.Context, specs []domain.Spec) (domain.WriteResult, error) {
 	if len(specs) == 0 {
 		return domain.WriteResult{}, iox.NewInvalidInput("no specs to write", "stdin must contain a non-empty specs array", nil)

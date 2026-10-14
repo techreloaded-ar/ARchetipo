@@ -102,7 +102,7 @@ async function main() {
     const dirB = await createWorkspace(runDir, targetsDir, "beta", "claude", CODE_B, env);
     const dirC = await createWorkspace(runDir, targetsDir, "gamma", "codex", CODE_C, env);
 
-    await scenarioNativeCodexConversation(dirC, env);
+    await scenarioNativeCodexConversation(dirC, env, runDir);
     await scenarioConversationOfTheOpenWorkspace(dirA, dirB, env);
     await assertNoSessionMaterialLeaked([dirA, dirB, dirC]);
   } catch (error) {
@@ -130,7 +130,7 @@ async function main() {
 //
 // The Codex workspace exercises the same native conversation contract as
 // Claude through the real View routes and a controlled app-server fake.
-async function scenarioNativeCodexConversation(dirC, env) {
+async function scenarioNativeCodexConversation(dirC, env, runDir) {
   let view;
   let control;
   let browser;
@@ -256,13 +256,50 @@ async function scenarioNativeCodexConversation(dirC, env) {
       throw new Error(`AC-4: approval response = ${JSON.stringify(approvalResponse)}`);
     }
 
-    control.push({ kind: "request", id: 72, method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-2", questions: [{ id: "choice", question: "A o B?" }] } });
+    control.push({ kind: "request", id: 72, method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-2", itemId: "question-item", isBlocking: true, questions: [
+      { id: "choice", header: "Scelta", question: "A o B?", isOther: true, options: [{ label: "A", description: "Prima opzione" }, { label: "B", description: "Seconda opzione" }] },
+      { id: "context", header: "Contesto", question: "Per chi?", options: null },
+      { id: "private", header: "Riservato", question: "Valore di prova?", isSecret: true, options: null },
+    ] } });
     await waitForConversation(view.url, conversationID, 0, (data) => data.session?.work === "WAITING_INPUT", "the Codex input request to reach View");
-    await apiJSON(`${view.url}/api/workspace/conversations/${conversationID}/inputs/72`, postJSON({ payload: { answers: { choice: { answers: ["B"] } } } }), 202);
+    await page.waitFor(`document.querySelectorAll('[data-conversation-input-form="72"] [data-conversation-input-question]').length === 3`, 20000, "le tre domande come campi del modulo");
+    const inputText = await page.evaluate(`document.querySelector('[data-conversation-input-form="72"]').innerText`);
+    if (!inputText.includes("Seconda opzione") || inputText.includes("Risposta JSON") || inputText.includes("threadId")) throw new Error(`il modulo espone il protocollo: ${inputText}`);
+    await page.evaluate(`(() => {
+      const form = document.querySelector('[data-conversation-input-form="72"]');
+      const choice = form.querySelector('[data-conversation-input-question="choice"] [data-conversation-input-text]');
+      choice.value = 'Altra scelta'; choice.dispatchEvent(new Event('input', {bubbles:true}));
+      form.querySelector('[data-conversation-input-option][value="B"]').click();
+      const context = form.querySelector('[data-conversation-input-question="context"] [data-conversation-input-text]');
+      context.value = 'Utenti del progetto'; context.dispatchEvent(new Event('input', {bubbles:true}));
+      const secret = form.querySelector('[data-conversation-input-question="private"] [data-conversation-input-text]');
+      if (secret.type !== 'password' || choice.value !== '') throw new Error('mascheratura o scelta non applicata');
+      secret.value = 'fixture-only'; secret.dispatchEvent(new Event('input', {bubbles:true}));
+      context.focus(); context.setSelectionRange(4, 4);
+    })()`);
+    // A real stream update redraws the panel while the person is answering.
+    control.push({ kind: "emit", method: "item/agentMessage/delta", params: { delta: "FORM-UPDATE-SENTINEL" } });
+    try {
+      await page.waitFor(`document.querySelector('.conv-timeline').innerText.includes('FORM-UPDATE-SENTINEL')`, 20000, "il ridisegno durante la risposta");
+    } catch (error) {
+      const state = await page.evaluate(`({timeline: document.querySelector('.conv-timeline')?.innerText.slice(-400), notices: document.querySelector('.conv-panel')?.innerText.slice(-400)})`);
+      throw new Error(`${error.message}; page exceptions=${JSON.stringify(exceptions)}; state=${JSON.stringify(state)}`);
+    }
+    const restored = await page.evaluate(`(() => {
+      const form = document.querySelector('[data-conversation-input-form="72"]');
+      const context = form.querySelector('[data-conversation-input-question="context"] [data-conversation-input-text]');
+      return { choice: form.querySelector('[data-conversation-input-option]:checked')?.value, context: context.value, focused: document.activeElement === context, caret: context.selectionStart };
+    })()`);
+    if (restored.choice !== "B" || restored.context !== "Utenti del progetto" || !restored.focused || restored.caret !== 4) throw new Error(`il ridisegno perde la risposta o il focus: ${JSON.stringify(restored)}`);
+    await page.evaluate(`document.querySelector('[data-conversation-input-form="72"]').scrollIntoView({block:'center'})`);
+    const inputScreenshot = await page.send("Page.captureScreenshot", { format: "png" });
+    await fs.writeFile(path.join(runDir, "structured-input.png"), Buffer.from(inputScreenshot.data, "base64"));
+    await page.evaluate(`document.querySelector('[data-conversation-input-form="72"]').requestSubmit()`);
     const inputResponse = await control.waitFor((entry) => entry.kind === "response" && entry.id === 72);
-    if (inputResponse.result?.answers?.choice?.answers?.[0] !== "B") {
+    if (inputResponse.result?.answers?.choice?.answers?.[0] !== "B" || inputResponse.result?.answers?.context?.answers?.[0] !== "Utenti del progetto" || inputResponse.result?.answers?.private?.answers?.[0] !== "fixture-only") {
       throw new Error(`AC-4: input response = ${JSON.stringify(inputResponse)}`);
     }
+    await page.waitFor(`!document.querySelector('[data-conversation-input-form="72"]')`, 20000, "la richiesta rimossa dopo l’invio delle risposte");
 
     await page.waitFor(`!!document.querySelector('[data-conversation-interrupt]')`, 20000, "il comando interrupt");
     await page.evaluate(`document.querySelector('[data-conversation-interrupt]').click()`);
@@ -286,7 +323,7 @@ async function scenarioNativeCodexConversation(dirC, env) {
     }
     ok(
       "AC-4",
-      "Codex exposes workspace.converse and keeps one persistent native thread across two turn/start calls, per-turn model/effort, approval, structured input, interrupt, release and thread/resume without adding a rail entry",
+      "Codex exposes workspace.converse and keeps one persistent native thread across two turn/start calls, per-turn model/effort, approval, structured input answered through real form controls with drafts and focus preserved across SSE, interrupt, release and thread/resume without adding a rail entry",
     );
   } finally {
     if (browser) await browser.close();

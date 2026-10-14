@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
@@ -1127,7 +1126,7 @@ func (s *Server) respondNativeConversationApproval(ctx context.Context, ws *work
 	return nil
 }
 
-func (s *Server) respondNativeConversationInput(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, inputID string, payload json.RawMessage) error {
+func (s *Server) respondNativeConversationInput(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, inputID string, body respondConversationInputRequest) error {
 	lock, err := ws.conversationStore().Lock(ctx, snapshot.id)
 	if err != nil {
 		return iox.NewInternal("locking the conversation "+snapshot.id, err)
@@ -1148,7 +1147,7 @@ func (s *Server) respondNativeConversationInput(ctx context.Context, ws *workspa
 	}
 	delivery, commandErr := snapshot.sessionProvider.RespondSessionInput(ctx, execution.SessionCommandRequest{
 		Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID,
-		InteractionID: inputID, Payload: payload,
+		InteractionID: inputID, Payload: body.Payload, Answers: body.Answers,
 	})
 	if delivery.State != "" {
 		record.Deliveries = upsertDelivery(record.Deliveries, delivery)

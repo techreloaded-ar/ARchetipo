@@ -55,6 +55,16 @@ func (s *Server) handleGetConversationActivities(w http.ResponseWriter, r *http.
 	actions := workspaceActionViews(tpl.WorkspaceActions, availability)
 	conversationTarget := s.conversationAvailabilityFor(ctx, ws)
 	items := resolveConversationActivities(tpl, actions, record, discovery, conversationTarget.reason)
+	if id != "" {
+		if running, found, readErr := s.actionAlreadyRunningIn(ctx, ws, id); readErr == nil && found {
+			for index := range items {
+				if items[index].Kind == "action" {
+					items[index].Runnable = false
+					items[index].UnavailableReason = "Questa conversazione sta già seguendo l’attività " + running + ". Completala o annullala, oppure apri un’altra conversazione."
+				}
+			}
+		}
+	}
 	// A starter can connect the native session to discover this activity. It
 	// cannot invoke it until that session has actually announced its catalog.
 	if id == "" {
@@ -90,9 +100,17 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 			}
 			item.Kind, item.Scope = "action", template.ScopeWorkspace
 			item.Runnable = actions[index].Runnable
-			item.UnavailableReason = actions[index].UnlockedBy
-			if item.UnavailableReason == "" {
-				item.UnavailableReason = actions[index].UnavailableReason
+			item.UnavailableReason = actions[index].UnavailableReason
+			if remedy := actions[index].UnlockedBy; remedy != "" {
+				if item.UnavailableReason != "" {
+					item.UnavailableReason += ". "
+				}
+				item.UnavailableReason += remedy
+			}
+			if record.Native() {
+				if reason := nativeActivityUnavailableReason(record); reason != "" {
+					item.Runnable, item.UnavailableReason = false, reason
+				}
 			}
 		case definition.Skill != "":
 			item.Kind = "skill"
@@ -110,12 +128,8 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 						item.UnavailableReason = ""
 					}
 				}
-				if record.Archive == execution.ArchiveArchived || record.Recovery != execution.RecoveryResumable {
-					item.Runnable = false
-					item.UnavailableReason = "Riapri la conversazione prima di scegliere un’attività."
-				} else if record.Work != execution.SessionIdle {
-					item.Runnable = false
-					item.UnavailableReason = "Attendi la fine del turno prima di scegliere un’attività."
+				if reason := nativeActivityUnavailableReason(record); reason != "" {
+					item.Runnable, item.UnavailableReason = false, reason
 				}
 			}
 		default:
@@ -127,7 +141,8 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 	}
 	if discovery.SkillsKnown {
 		for _, skill := range discovery.Skills {
-			if slices.ContainsFunc(tpl.ConversationActivities, func(activity template.ConversationActivity) bool { return activity.Skill == skill.Name }) {
+			if strings.TrimSpace(skill.Name) == "" || slices.ContainsFunc(tpl.ConversationActivities, func(activity template.ConversationActivity) bool { return activity.Skill == skill.Name }) ||
+				slices.ContainsFunc(tpl.WorkspaceActions, func(action template.WorkspaceAction) bool { return action.Skill == skill.Name }) {
 				continue
 			}
 			label := skill.Description
@@ -138,7 +153,7 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 			}
 			label = strings.TrimSpace(label)
 			if label == "" {
-				label = "Attività dell’agente"
+				label = nativeActivityLabel(skill.Name)
 			}
 			if first, _, found := strings.Cut(label, "\n"); found {
 				label = first
@@ -149,15 +164,28 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 			}
 			if !item.Runnable {
 				item.UnavailableReason = "L’agente non supporta questa attività."
-			} else if record.Archive == execution.ArchiveArchived || record.Recovery != execution.RecoveryResumable {
-				item.Runnable = false
-				item.UnavailableReason = "Riapri la conversazione prima di scegliere un’attività."
-			} else if record.Work != execution.SessionIdle {
-				item.Runnable = false
-				item.UnavailableReason = "Attendi la fine del turno prima di scegliere un’attività."
+			} else if reason := nativeActivityUnavailableReason(record); reason != "" {
+				item.Runnable, item.UnavailableReason = false, reason
 			}
 			items = append(items, item)
 		}
 	}
 	return items
+}
+
+// Claude announces skill names without descriptions. Preserve their identity
+// in a readable label rather than producing dozens of identical menu entries.
+func nativeActivityLabel(name string) string {
+	label := strings.NewReplacer("-", " ", "_", " ", ":", " · ", "/", " · ").Replace(name)
+	return strings.Join(strings.Fields(label), " ")
+}
+
+func nativeActivityUnavailableReason(record conversationlog.Record) string {
+	if record.Archive == execution.ArchiveArchived || record.Recovery != execution.RecoveryResumable {
+		return "Riapri la conversazione prima di scegliere un’attività."
+	}
+	if record.Work != execution.SessionIdle {
+		return "Attendi la fine del turno prima di scegliere un’attività."
+	}
+	return ""
 }

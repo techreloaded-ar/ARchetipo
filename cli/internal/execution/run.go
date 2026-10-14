@@ -40,11 +40,14 @@ type RunSnapshot struct {
 // it does not) — both are visible defects in a timeline. ID is monotonic per
 // event stream, so "everything after ID" is a total, gap-free statement.
 type RunEvent struct {
-	ID           int64           `json:"id"`
-	Seq          int             `json:"seq"`
-	At           time.Time       `json:"at"`
-	Kind         string          `json:"kind"`
-	Text         string          `json:"text,omitempty"`
+	ID   int64     `json:"id"`
+	Seq  int       `json:"seq"`
+	At   time.Time `json:"at"`
+	Kind string    `json:"kind"`
+	Text string    `json:"text,omitempty"`
+	// FinalMessage is the harness's complete closing message on a turn_end.
+	// Receipt verification uses this instead of guessing from streamed fragments.
+	FinalMessage string          `json:"final_message,omitempty"`
 	Tool         string          `json:"tool,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
 	TurnID       string          `json:"turn_id,omitempty"`

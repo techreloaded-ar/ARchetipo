@@ -938,34 +938,38 @@ func TestWorkspaceActionsOfferTheSpecDraftWithABacklog(t *testing.T) {
 // AC-1: without a backlog there is no epic to file a spec under, so the action
 // is not offered, and pressing it anyway is refused with the very same sentence
 // without creating any record.
-func TestWorkspaceSpecDraftIsNotOfferedWithoutABacklog(t *testing.T) {
-	srv, cfg, _ := newEmptyRunServer(t, releasedSpecDraftProvider("fake", nil), true)
+func TestWorkspaceSpecDraftIsOfferedWithoutABacklogOrPRD(t *testing.T) {
+	provider := releasedSpecDraftProvider("fake", func(context.Context, execution.Request) (execution.Result, error) {
+		return execution.Result{Payload: json.RawMessage(`{"spec_draft":{"title":"Prima storia","epic_code":"","epic_title":"Primo obiettivo","priority":"MEDIUM","points":3,"body":"proposta"}}`)}, nil
+	})
+	srv, cfg, _ := newEmptyRunServer(t, provider, true)
 	before := backlogFiles(t, cfg.ProjectRoot)
-
 	view, _ := readWorkspaceActions(t, srv)
 	action := specDraftActionOf(t, view)
-	if action.Offered || action.Runnable {
-		t.Fatalf("a spec draft is offered on a workspace with no backlog: %#v", action)
+	if !action.Offered || !action.Runnable || action.UnavailableReason != "" {
+		t.Fatalf("first spec draft must be offered: %#v", action)
 	}
-	if !strings.Contains(strings.ToLower(action.UnavailableReason), "non ha ancora un backlog") {
-		t.Fatalf("the reason does not name the missing backlog: %q", action.UnavailableReason)
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("POST: %d %v", status, started)
 	}
-
-	status, body := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
-	if status != http.StatusConflict {
-		t.Fatalf("POST: %d %v", status, body)
-	}
-	if message, _ := body["error"].(string); message != action.UnavailableReason {
-		t.Fatalf("the refusal and the payload disagree:\n%q\n%q", message, action.UnavailableReason)
-	}
-	if hint, _ := body["hint"].(string); !strings.Contains(hint, "genera prima il backlog") {
-		t.Fatalf("the refusal does not say what to do instead: %q", hint)
-	}
-	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {
-		t.Fatalf("a refused proposal created %d records", got)
+	id, _ := started["id"].(string)
+	record := awaitTerminal(t, srv, id)
+	if record.Status != execution.StatusSucceeded || record.Result == nil {
+		t.Fatalf("draft: %#v", record)
 	}
 	if got := backlogFiles(t, cfg.ProjectRoot); !reflect.DeepEqual(got, before) {
-		t.Fatal("a refused proposal touched the workspace")
+		t.Fatal("unconfirmed proposal touched the backlog")
+	}
+	req := validCreateReq()
+	req["epic_code"], req["epic_title"] = "", "Primo obiettivo"
+	w := postSpec(t, srv, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("confirmation: %d %s", w.Code, w.Body.String())
+	}
+	created := decodeCreateView(t, w)
+	if created.Spec.Code != "US-001" || created.Spec.Epic.Code != "EP-001" {
+		t.Fatalf("first confirmed story: %#v", created)
 	}
 }
 
@@ -1211,5 +1215,58 @@ func TestWorkspaceSpecDraftRefusedWhenTheProviderLacksTheCapability(t *testing.T
 	}
 	if got := recordFileCount(t, cfg.ProjectRoot, workspaceExecutionKey); got != 0 {
 		t.Fatalf("a refused proposal created %d records", got)
+	}
+}
+
+// Drafting a story in another thread remains possible while an inception is
+// waiting, but a newer unrelated record must not hide an older active draft.
+func TestWorkspaceStoryDraftIsNotBlockedByAnUnrelatedInception(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-workspace", nil)
+	provider.capabilities = []execution.Capability{execution.CapabilityWorkspaceSpecDraft, execution.CapabilityWorkspaceInception}
+	srv, _, _ := newRunServer(t, provider, true)
+	t.Cleanup(func() { srv.session().nativeFollowers.closeAll() })
+	seedConversationRun(t, srv, "", execution.ActionInception, execution.StatusRunning)
+	view, raw := readWorkspaceActions(t, srv)
+	if !specDraftActionOf(t, view).Runnable {
+		t.Fatalf("an inception blocks drafting a story: %s", raw)
+	}
+	if inceptionActionOf(t, view).Runnable {
+		t.Fatal("a second inception is allowed")
+	}
+	createSpecThroughTheForm(t, srv, "Una storia manuale durante l’inception")
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("starting a draft beside an inception: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+	thread := conversationOfExecution(t, srv, id)
+	provider.completeCurrentTurn(t, "Quale bisogno vuoi soddisfare?", execution.TurnCompleted)
+	awaitRecordSettled(t, srv, thread)
+	activities := readActivityCatalog(t, srv, thread)
+	story, found := activityByID(activities.Items, "story")
+	if !found || story.Runnable || !strings.Contains(story.UnavailableReason, "altra conversazione") {
+		t.Fatalf("the occupied thread still offers a new action: %+v", story)
+	}
+	seedConversationRun(t, srv, "", execution.ActionInception, execution.StatusRunning)
+	view, raw = readWorkspaceActions(t, srv)
+	if specDraftActionOf(t, view).Runnable {
+		t.Fatalf("the newest inception hides the older draft: %s", raw)
+	}
+	if status, _ := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft)); status != http.StatusConflict {
+		t.Fatalf("a duplicate draft was not refused: %d", status)
+	}
+	closeConversation(t, srv, thread)
+}
+
+func TestInitialBacklogGenerationStillBlocksStoryDrafting(t *testing.T) {
+	srv, _, _ := newRunServer(t, releasedSpecDraftProvider("fake", nil), true)
+	id := seedConversationRun(t, srv, "", execution.ActionBacklog, execution.StatusRunning)
+	view, raw := readWorkspaceActions(t, srv)
+	story := specDraftActionOf(t, view)
+	if story.Runnable || !strings.Contains(story.UnavailableReason, id) {
+		t.Fatalf("a draft can race the generation and rollback of its backlog: %s", raw)
+	}
+	if status, _ := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft)); status != http.StatusConflict {
+		t.Fatalf("a draft was started during backlog generation: %d", status)
 	}
 }

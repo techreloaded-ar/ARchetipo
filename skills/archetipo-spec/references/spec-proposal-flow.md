@@ -1,0 +1,26 @@
+# Spec proposal flow
+
+Use this flow for one story proposed for review, before persistence. It works standalone and when another caller requests a structured receipt.
+
+The shared runtime has already been read by the entry skill; do not read it again.
+
+## Read the workspace
+
+Run `archetipo config show`. Expect the standard `archetipo/v1` JSON envelope with `kind: setup` and a `data` setup object carrying the project root, paths and workflow configuration.
+
+Run `archetipo spec list`. Expect the same envelope with `kind: backlog`, `data.items` containing full specs and `data.summary.epics` containing declared epics. Null or empty lists are empty lists. If the command fails with `error.code: E_PRECONDITION` because the backlog is missing, proceed with an empty backlog. For other error codes, follow the shared runtime's error rules; do not treat an unreadable backlog as empty.
+
+## Propose one story
+
+- Use the repository and the person's request as context. No PRD, populated backlog or existing epic is required. Do not redirect to inception or generate a whole backlog.
+- Ask one question per message when needed. Include a user story, a concrete demonstration and verifiable acceptance criteria.
+- Reuse a declared epic with `epic_code`, or propose a new epic name with `epic_title` and an empty `epic_code`. Leave new epic and story codes unassigned until confirmation.
+- Do not run `archetipo spec add` or write backlog/spec files. Present the proposal for review.
+
+When a structured receipt is requested, close with one JSON line using this shape, with markdown newlines escaped as `\n`:
+
+```json
+{"artifact":"spec_draft","status":"PROPOSED","title":"Story title","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"}
+```
+
+For an existing epic, supply its `epic_code` and omit `epic_title` or leave it empty. Persist only when the person subsequently requests creation, using the existing CLI extension flow.

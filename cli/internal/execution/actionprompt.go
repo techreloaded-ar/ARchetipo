@@ -5,10 +5,15 @@ import (
 	"strings"
 )
 
+// questionGuidance prefers native input when offered without making a runtime
+// feature a prerequisite for any action or ordinary conversation.
+const questionGuidance = "When clarification is needed, prefer the runtime's structured user-input tool if available. Otherwise ask in ordinary conversation and wait for the answer. Both forms allow the same work to proceed."
+
 // PlanPrompt renders the common planning request after a provider-specific opening.
 func PlanPrompt(opening string, req Request) string {
 	return strings.Join([]string{
 		opening,
+		questionGuidance,
 		"Plan the spec " + req.SpecCode + " by invoking the ARchetipo planning skill:",
 		"",
 		"/archetipo-plan " + req.SpecCode,
@@ -26,6 +31,7 @@ func PlanPrompt(opening string, req Request) string {
 func ImplementPrompt(opening string, req Request) string {
 	return strings.Join([]string{
 		opening,
+		questionGuidance,
 		"Implement the spec " + req.SpecCode + " by invoking the ARchetipo implementation skill:",
 		"",
 		"/archetipo-implement " + req.SpecCode,
@@ -43,6 +49,7 @@ func ImplementPrompt(opening string, req Request) string {
 func ReviewPrompt(opening string, req Request) string {
 	return strings.Join([]string{
 		opening,
+		questionGuidance,
 		"Prepare the review evidence of the spec " + req.SpecCode + " by invoking the ARchetipo review skill in its prepared dossier mode:",
 		"",
 		"/archetipo-review " + req.SpecCode,
@@ -77,6 +84,7 @@ func ReviewPrompt(opening string, req Request) string {
 func InceptionPrompt(opening string, _ Request) string {
 	return strings.Join([]string{
 		opening,
+		questionGuidance,
 		"Run the product inception for this workspace by invoking the ARchetipo inception skill:",
 		"",
 		"/archetipo-inception",
@@ -108,6 +116,7 @@ func InceptionPrompt(opening string, _ Request) string {
 func BacklogPrompt(opening string, _ Request) string {
 	return strings.Join([]string{
 		opening,
+		questionGuidance,
 		"Generate the initial product backlog for this workspace from its PRD by invoking the ARchetipo spec skill:",
 		"",
 		"/archetipo-spec",
@@ -140,16 +149,18 @@ func BacklogPrompt(opening string, _ Request) string {
 func SpecDraftPrompt(opening string, _ Request) string {
 	return strings.Join([]string{
 		opening,
+		questionGuidance,
 		"Propose ONE new spec for the backlog of this workspace by invoking the ARchetipo spec skill:",
 		"",
 		"/archetipo-spec",
 		"",
 		"Do NOT persist anything. You must not run `archetipo spec add`, must not write into the backlog and must not create any spec file: the spec will be reviewed, edited and created by a person, and writing it yourself would both take that decision for them and consume a spec code.",
 		"You are talking to a person through a chat, one message at a time: ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message, and ask only what you really need to write acceptance criteria a reviewer can verify.",
-		"File the spec under one of the epics the backlog already declares: read them yourself and never invent one.",
+		"Use proposal-only mode: propose just the requested story, even if this workspace has no PRD, backlog or epics. Use the repository and the person’s request as context; do not require inception or generate a full backlog.",
+		"Read the existing epics when available. Use epic_code for a declared epic; if there are none or the story needs a new one, propose its name in epic_title and leave epic_code empty. Do not assign a new epic code: the creation route does that at confirmation.",
 		"Close the action with a single JSON receipt line, as the last line of that message and with nothing after it:",
 		"",
-		`{"artifact":"spec_draft","status":"` + ProposedStatus + `","title":"<title>","epic_code":"<EP-XXX>","priority":"HIGH|MEDIUM|LOW","points":<N>,"scope":"<scope>","blocked_by":[],"body":"<markdown>"}`,
+		`{"artifact":"spec_draft","status":"` + ProposedStatus + `","title":"<title>","epic_code":"<existing EP-XXX or empty>","epic_title":"<new epic title or empty>","priority":"HIGH|MEDIUM|LOW","points":<N>,"scope":"<scope>","blocked_by":[],"body":"<markdown>"}`,
 		"",
 		"<markdown> is the complete markdown body of the spec on a single line, with every line break written as \\n. Emit the receipt only when the proposal is complete, and never before.",
 	}, "\n")

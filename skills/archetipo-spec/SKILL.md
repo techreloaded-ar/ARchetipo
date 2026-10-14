@@ -24,6 +24,12 @@ Keep the working context lean:
 
 ## Supported Modes
 
+### Proposal-only mode
+
+Use this mode when the user asks for a draft to review before creating a story, or explicitly asks you to propose one spec without persisting it. This intent takes precedence over backlog discovery and the bootstrap/extension routing below.
+
+Read `./references/spec-proposal-flow.md`. A PRD, populated backlog or existing epic is not a prerequisite. Propose only the requested story and persist nothing until the person requests creation.
+
 ### `mode: bootstrap-backlog`
 
 Use this mode when:

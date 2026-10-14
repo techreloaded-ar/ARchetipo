@@ -80,10 +80,7 @@ type controlOutcome struct {
 // process finished the turn without error, and the text it finished on — which
 // is where a receipt is expected, and otherwise the question the agent is
 // waiting on an answer for.
-type TurnOutcome struct {
-	Completed bool
-	Final     string
-}
+type TurnOutcome = localrun.TurnOutcome
 
 // turnBuffer bounds the outcomes kept for a caller that is not reading them.
 // A conversation has far fewer turns than this before it ends one way or

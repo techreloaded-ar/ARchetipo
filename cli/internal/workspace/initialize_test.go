@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
@@ -82,6 +84,9 @@ func TestInitializeCreatesACompleteWorkspace(t *testing.T) {
 	cfg, err := config.ValidateRaw(dest, raw)
 	if err != nil {
 		t.Fatalf("the created config does not parse: %v", err)
+	}
+	if items, err := filefs.New(cfg).FetchBacklogItems(context.Background(), ""); err != nil || len(items) != 0 {
+		t.Fatalf("initial backlog must be readable and empty: %v %+v", err, items)
 	}
 	if cfg.Paths != paths {
 		t.Fatalf("persisted paths = %+v, want %+v", cfg.Paths, paths)
@@ -186,5 +191,38 @@ func assertNoStagingLeft(t *testing.T, tmpRoot string) {
 		if strings.HasPrefix(e.Name(), "archetipo-init-") {
 			t.Fatalf("staging directory left behind: %s", e.Name())
 		}
+	}
+}
+
+func TestInitializePreservesARepositoryBacklog(t *testing.T) {
+	repoDataDir(t)
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%v", legacy), func(t *testing.T) {
+			dest := t.TempDir()
+			relative := ".archetipo/backlog.yaml"
+			body := "schema: archetipo/backlog/v2\nversion: 2\nepics:\n  - code: EP-009\n    title: Existing goal\norder: []\n"
+			if legacy {
+				relative, body = "docs/BACKLOG.md", "# Existing backlog\n"
+			}
+			path := filepath.Join(dest, relative)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Initialize(context.Background(), Options{Dir: dest, Connector: "file", Tools: []string{"pi"}}); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != body {
+				t.Fatalf("backlog changed: %v", err)
+			}
+			if legacy {
+				if _, err := os.Stat(filepath.Join(dest, ".archetipo/backlog.yaml")); !os.IsNotExist(err) {
+					t.Fatalf("legacy backlog shadowed: %v", err)
+				}
+			}
+		})
 	}
 }

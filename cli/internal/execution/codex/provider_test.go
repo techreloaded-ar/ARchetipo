@@ -177,7 +177,7 @@ func TestProviderDeclaresIdentityAndItsCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview}
+	want := execution.WorkflowCapabilities()
 	if !reflect.DeepEqual(capabilities, want) {
 		t.Fatalf("capabilities = %#v, want %#v", capabilities, want)
 	}
@@ -204,7 +204,7 @@ func TestProviderDeclaresTheConversationThroughTheInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityRunDialog, execution.CapabilityWorkspaceConverse})
+	want := execution.NormalizeCapabilities(append(execution.WorkflowCapabilities(), execution.CapabilityRunDialog, execution.CapabilityWorkspaceConverse))
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
 	}
@@ -241,8 +241,8 @@ func TestBuildArgsStartsTheStdioAppServer(t *testing.T) {
 
 func TestBuildPromptIsDeterministicAndAsksForTheSharedReceipt(t *testing.T) {
 	req := testRequest("codex")
-	first := buildPrompt(req)
-	if second := buildPrompt(req); first != second {
+	first := execution.PlanPrompt(localOpening, req)
+	if second := execution.PlanPrompt(localOpening, req); first != second {
 		t.Fatalf("prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, testSpec, "prompt")
@@ -541,6 +541,7 @@ func TestExecuteFailureModes(t *testing.T) {
 					<-fake.turnStarted
 					fake.emit("item/completed", `{"item":{"type":"agentMessage","text":"done, I planned everything"}}`)
 					fake.completeTurn()
+					fake.end()
 				}()
 			},
 			wantErr: []string{"ended without having produced a plan for " + testSpec, "did not emit the expected JSON receipt line"},
@@ -662,6 +663,7 @@ func TestFailedExecutionDoesNotEchoWhatTheAgentSaid(t *testing.T) {
 		<-fake.turnStarted
 		fake.emit("item/completed", `{"item":{"type":"agentMessage","text":"token=`+sentinel+`"}}`)
 		fake.completeTurn()
+		fake.end()
 	}()
 
 	_, err := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil).Execute(context.Background(), testRequest(command))
@@ -683,6 +685,7 @@ func TestDiagnosticTruncatesAVeryLongStderr(t *testing.T) {
 	go func() {
 		<-fake.turnStarted
 		fake.completeTurn()
+		fake.end()
 	}()
 
 	_, err := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil).Execute(context.Background(), testRequest(command))

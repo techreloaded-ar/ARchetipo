@@ -95,7 +95,11 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	firstFake.request(42, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-2","questions":[{"id":"choice","question":"A o B?"}]}`)
 	waitForCodexSession(t, provider, created.Session, func(snapshot execution.SessionSnapshot) bool { return snapshot.Work == execution.SessionWaitingInput })
 	inputPayload := json.RawMessage(`{"answers":{"choice":{"answers":["B"]}}}`)
-	input, err := provider.RespondSessionInput(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-core-2", SubmissionID: "input-1", InteractionID: "42", Payload: inputPayload})
+	invalidInput, err := provider.RespondSessionInput(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-core-2", SubmissionID: "input-invalid", InteractionID: "42", Answers: map[string][]string{"unknown": {"B"}}})
+	if err == nil || invalidInput.State != execution.DeliveryUnsent {
+		t.Fatalf("invalid input = %#v, %v", invalidInput, err)
+	}
+	input, err := provider.RespondSessionInput(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-core-2", SubmissionID: "input-1", InteractionID: "42", Answers: map[string][]string{"choice": {"B"}}})
 	if err != nil || input.State != execution.DeliveryConfirmed {
 		t.Fatalf("input = %#v, %v", input, err)
 	}

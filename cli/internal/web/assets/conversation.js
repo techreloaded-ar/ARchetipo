@@ -11,9 +11,8 @@
 // cannot be taken and the remedy that would unlock it all arrive in the
 // payload, already resolved by the server against the workspace. This module
 // still does not know what a step of anybody's method is — it draws a label, a
-// code and a sentence — and it never decides whether one can be taken. The step
-// the workspace recommends next is drawn the same way, at the tail of the
-// thread, from what the caller hands over in ui.nextStep.
+// code and a sentence — and it never decides whether one can be taken. Process
+// actions remain available through the activity catalog.
 //
 // It also draws the runs the payload carries: a run started from this
 // conversation is drawn where it was asked for — right after the event whose id
@@ -94,11 +93,6 @@
 		dismissNotice: "Chiudi questo avviso",
 		// Stato vuoto
 		empty: "Su questo workspace non c'è nessuna conversazione aperta.",
-		// Lo stato vuoto con un passo da proporre: prima il passo, poi
-		// l'alternativa. Chi arriva sa cosa fare senza cercarlo in un menu.
-		emptyGuidedOr: "Oppure apri una conversazione libera per parlare del progetto con l'agente.",
-		nextStepFresh:
-			"Si apre una conversazione nuova, con contesto pulito: l'agente legge i documenti del workspace, non le altre conversazioni.",
 		open: "Apri una conversazione",
 		openingSpec: (code) => `Questa conversazione sarà collegata a ${code}.`,
 		// A conversazione aperta la scelta non si cambia più. Prima la riga
@@ -169,15 +163,6 @@
 		deliveredPromise:
 			"Non è ancora stato creato niente: questa è la bozza che l'agente propone, e diventa una spec solo quando la confermi nel modulo.",
 		deliveredOpen: "Rivedi e crea",
-		// Passo successivo
-		nextStepRun: "Avvia",
-		// Le azioni del processo, dal compositore. Il menu e' l'unico posto in
-		// cui si scelgono: quelle di workspace e, se il thread e' di una spec,
-		// quelle della spec, ciascuna con il motivo per cui non si puo' premere.
-		actions: "Azioni",
-		actionsMenuLabel: "Azioni del processo",
-		actionsLoading: "Lettura delle azioni…",
-		actionsNone: "Nessuna azione del processo si può avviare adesso.",
 		// Il dettaglio tecnico, ripiegato.
 		//
 		// Una conversazione la si legge per le risposte dell'agente: gli
@@ -1191,7 +1176,6 @@
 				${typeof agentRow === "string" ? agentRow : ""}
 				${hintHtml}
 				${renderActivityMenu(ui)}
-				${renderActionsMenu(objectAt(ui, "actionsMenu"), ui)}
 				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 			</div>
 			${await_}
@@ -1206,11 +1190,14 @@
 		const rows = items.map((item) => {
 			const disabled = item.runnable !== true || ui.busy ? " disabled" : "";
 			const reason = item.runnable === true ? "" : textAt(item, "unavailable_reason");
+			const gesture = item.kind === "action" ? "Avvia attività"
+				: item.kind === "conversation" ? "Apri conversazione" : "Seleziona e descrivi la richiesta";
 			return `<button type="button" class="conv-activity-card" data-conversation-activity="${escapeHtml(textAt(item, "id"))}"${disabled}>
 				<span class="conv-activity-label">${escapeHtml(textAt(item, "label"))}</span>
 				${textAt(item, "description") ? `<span class="conv-activity-description">${escapeHtml(textAt(item, "description"))}</span>` : ""}
 				${textAt(item, "result") ? `<span class="conv-activity-result">${escapeHtml(textAt(item, "result"))}</span>` : ""}
 				${reason ? `<span class="conv-activity-reason">${escapeHtml(reason)}</span>` : ""}
+				${item.runnable === true ? `<span class="conv-activity-gesture">${gesture}</span>` : ""}
 			</button>`;
 		});
 		return `<div class="conv-activities${menu ? " is-menu" : ""}">${menu ? "" : '<p class="conv-activities-intro">Scegli un’attività oppure apri una conversazione.</p>'}<div class="conv-activity-grid">${rows.join("")}</div></div>`;
@@ -1224,48 +1211,22 @@
 	function renderActivityMenu(ui) {
 		const view = objectAt(ui, "activities");
 		if (!view || !arrayAt(view, "items").length) return "";
-		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""}>Scegli attività</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
+		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""}>Attività</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
 	}
 
-	// Il menu delle azioni del processo, accanto a Invia. Chiuso e' un
-	// bottone; aperto elenca le voci che il chiamante ha letto dal server —
-	// {scope, action, code, label, runnable, reason} — e una voce che non si
-	// puo' avviare resta, inerte, col suo motivo: e' il motivo che dice a chi
-	// legge che cosa manca. Nessuna regola del processo vive qui: il modulo non
-	// sa quali azioni esistano ne' quando siano ammesse.
-	function renderActionsMenu(menu, ui) {
-		if (!menu) return "";
-		const open = menu.open === true;
-		const busy = !!(ui && ui.busy);
-		const button = `<button type="button" class="ghost-btn conv-actions-btn" data-conversation-actions-toggle aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}"${busy ? " disabled" : ""}>${escapeHtml(TEXT.actions)}</button>`;
-		if (!open) return `<div class="conv-actions">${button}</div>`;
-		let body;
-		if (menu.loading === true) {
-			body = `<p class="conv-actions-note" role="status">${escapeHtml(TEXT.actionsLoading)}</p>`;
-		} else {
-			const items = arrayAt(menu, "items").filter((item) => item && typeof item === "object" && textAt(item, "action"));
-			if (!items.length) {
-				body = `<p class="conv-actions-note" role="status">${escapeHtml(TEXT.actionsNone)}</p>`;
-			} else {
-				const rows = items.map((item) => {
-					const label = textAt(item, "label") || textAt(item, "action");
-					const code = textAt(item, "code");
-					const reason = item.runnable === true ? "" : textAt(item, "reason");
-					const attrs =
-						` data-conversation-action="${escapeHtml(textAt(item, "action"))}"` +
-						` data-conversation-action-scope="${escapeHtml(textAt(item, "scope"))}"` +
-						` data-conversation-action-spec="${escapeHtml(code)}"`;
-					const disabled = item.runnable === true ? "" : " disabled";
-					return `<li role="none"><button type="button" role="menuitem" class="conv-actions-option"${attrs}${disabled}>
-						<span class="conv-actions-label">${escapeHtml(label)}</span>
-						${code ? `<code class="conv-actions-code">${escapeHtml(code)}</code>` : ""}
-						${reason ? `<span class="conv-actions-reason">${escapeHtml(reason)}</span>` : ""}
-					</button></li>`;
-				});
-				body = `<ul class="conv-actions-menu" role="menu" aria-label="${escapeHtml(TEXT.actionsMenuLabel)}">${rows.join("")}</ul>`;
-			}
-		}
-		return `<div class="conv-actions is-open">${button}${body}</div>`;
+	function renderInputQuestion(question, index, draft, busy) {
+		const id = escapeHtml(textAt(question, "id"));
+		const saved = draft && draft[question.id] || {};
+		const disabled = busy ? " disabled" : "";
+		const options = arrayAt(question, "options").map((option) => `<label class="conv-input-option">
+			<input type="radio" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${saved.option === option.value ? " checked" : ""}${disabled}${question.allow_text ? "" : " required"}>
+			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}</span>
+		</label>`).join("");
+		const answer = question.allow_text ? `<label class="conv-input-text">${options ? "Oppure scrivi una risposta" : "La tua risposta"}
+			${question.secret ? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(saved.text || "")}"${disabled}${options ? "" : " required"}>`
+			: `<textarea data-conversation-input-text rows="2"${disabled}${options ? "" : " required"}>${escapeHtml(saved.text || "")}</textarea>`}
+		</label>` : "";
+		return `<fieldset data-conversation-input-question="${id}">${textAt(question, "header") ? `<legend>${escapeHtml(question.header)}</legend>` : ""}<p>${escapeHtml(textAt(question, "prompt"))}</p>${options}${answer}</fieldset>`;
 	}
 
 	function renderConversationInputs(view, ui) {
@@ -1273,11 +1234,16 @@
 		return arrayAt(session, "pending_inputs").map((input) => {
 			if (!input || !input.id) return "";
 			const id = escapeHtml(input.id);
-			const draft = ui.inputDrafts && typeof ui.inputDrafts[input.id] === "string" ? ui.inputDrafts[input.id] : "";
+			const draft = ui.inputDrafts && ui.inputDrafts[input.id];
+			const questions = arrayAt(input, "questions");
+			// The adapter supplies presentation fields. Unknown native requests keep
+			// their existing response path, behind an explicit technical detail.
+			const fields = questions.length ? questions.map((question, index) => renderInputQuestion(question, index, draft, ui.busy)).join("")
+				: `<details><summary>Dettaglio della richiesta</summary><pre>${escapeHtml(JSON.stringify(input.payload || {}, null, 2))}</pre></details>
+				<textarea data-conversation-input-draft="${id}" placeholder="${escapeHtml(TEXT.inputPlaceholder)}" required${ui.busy ? " disabled" : ""}>${escapeHtml(typeof draft === "string" ? draft : "")}</textarea>`;
 			return `<form class="conv-input" data-conversation-input-form="${id}">
 				<strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>
-				<pre>${escapeHtml(JSON.stringify(input.payload || {}, null, 2))}</pre>
-				<textarea data-conversation-input-draft="${id}" placeholder="${escapeHtml(TEXT.inputPlaceholder)}">${escapeHtml(draft)}</textarea>
+				<div class="conv-input-fields">${fields}</div>
 				<button type="submit" class="primary-btn"${ui.busy ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>
 			</form>`;
 		}).join("");
@@ -1483,78 +1449,6 @@
 		</div>`;
 	}
 
-	// The step the workspace recommends next, drawn at the tail of the thread —
-	// after everything that has been said and before the place where the next
-	// thing is said. It is not a fact of this conversation: the caller reads it
-	// from the workspace status and hands it over, exactly as it hands over the
-	// answers already given and the anchor to highlight.
-	//
-	// Nothing here is decided: whether the step can be taken, what it acts on
-	// and why it is refused all arrive resolved in the payload and are drawn as
-	// they are. The disabled attribute on a refused step is a hint to the
-	// pointer; the refusal itself belongs to the caller's dispatcher, which
-	// answers anyone reaching the handler by any route.
-	function renderNextStep(step, ui, prominent) {
-		if (!step || typeof step !== "object") return "";
-		const label = textAt(step, "label") || textAt(step, "action");
-		// A step with no name is not proposable: there would be nothing to press.
-		if (!label) return "";
-		const spec = objectAt(step, "spec");
-		const code = spec ? textAt(spec, "code") : "";
-		const codeHtml = code
-			? `<code class="conv-nextstep-code">${escapeHtml(code)}</code>`
-			: "";
-		// No eyebrow announcing what this is: the accent frame and the place —
-		// the tail of the thread, right above the composer — already say it, and
-		// a label repeating them would only cost the thread a line.
-		const head = `<div class="conv-nextstep-head">
-			<span class="conv-nextstep-label">${escapeHtml(label)}</span>
-			${codeHtml}
-		</div>`;
-		const attrs =
-			` data-next-scope="${escapeHtml(textAt(step, "scope"))}"` +
-			` data-next-action="${escapeHtml(textAt(step, "action"))}"` +
-			` data-next-spec="${escapeHtml(code)}"`;
-
-		if (step.runnable !== true) {
-			const unlock =
-				textAt(step, "unlocked_by") || textAt(step, "unavailable_reason");
-			const unlockHtml = unlock
-				? `<p class="conv-nextstep-unlock">${escapeHtml(unlock)}</p>`
-				: "";
-			// A step already in progress needs no duplicate navigation inside its
-			// own conversation. Other blocked steps retain the inert action that
-			// explains what will become available.
-			const running = textAt(step, "running_execution_id");
-			const control = running
-				? ""
-				: `<button type="button" class="conv-nextstep-run"${attrs} disabled>${escapeHtml(TEXT.nextStepRun)}</button>`;
-			const controls = control
-				? `<div class="conv-nextstep-controls">${control}</div>`
-				: "";
-			return `<div class="conv-nextstep is-refused">
-				${head}
-				${controls}
-				${unlockHtml}
-			</div>`;
-		}
-
-		const disabled = ui && ui.busy ? " disabled" : "";
-		// In evidenza — nello stato vuoto — il passo dice anche che cosa
-		// succede premendolo: si apre una conversazione nuova, e il perche'
-		// sta scritto li' e non in un menu.
-		const fresh = prominent
-			? `<p class="conv-nextstep-fresh">${escapeHtml(TEXT.nextStepFresh)}</p>`
-			: "";
-		return `<div class="conv-nextstep${prominent ? " is-prominent" : ""}">
-			${head}
-			<div class="conv-nextstep-controls">
-				<button type="button" class="conv-nextstep-run${prominent ? " primary-btn" : ""}"${attrs}${disabled}>${escapeHtml(TEXT.nextStepRun)}</button>
-			</div>
-			${fresh}
-		</div>`;
-	}
-
 	// ---- public API ----
 
 	/**
@@ -1585,10 +1479,6 @@
 	 *                            questo turno — {active, kind, tool, seconds} —
 	 *                            e sono fatti, non parole: la frase la scrive
 	 *                            questo modulo.
-	 *                            nextStep is the step the workspace recommends,
-	 *                            read by the caller from /api/workspace/status:
-	 *                            the thread hosts it at its tail, draws it, and
-	 *                            never decides whether it can be taken.
 	 * @returns {string} HTML string.
 	 */
 	function renderConversation(view, draft, ui) {
@@ -1633,30 +1523,7 @@
 		if (!conversation) {
 			const activities = renderActivities(objectAt(local, "activities"), local, false);
 			if (activities && !local.openingSpecCode) {
-				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}<div class="conv-empty conv-empty-activities">${activities}${renderNextStep(objectAt(local, "nextStep"), local, true)}<div class="conv-empty-command">${renderConversationModelChoice(value, local, false)}</div></div></section>`;
-			}
-			// Nothing open. Quando il processo ha un passo da proporre, il passo
-			// e' la risposta: lo stadio del workspace nelle parole del processo,
-			// il passo con il suo comando, e sotto l'alternativa di una
-			// conversazione libera. Senza un passo resta l'invito di sempre.
-			const step = objectAt(local, "nextStep");
-			const stage = objectAt(local, "stage");
-			const guided = step && (textAt(step, "label") || textAt(step, "action"));
-			if (guided) {
-				const summary = stage ? textAt(stage, "summary") : "";
-				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">
-					${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}
-					<div class="conv-empty conv-empty-guided">
-						${summary ? `<p class="conv-empty-stage">${escapeHtml(summary)}</p>` : ""}
-						${renderNextStep(step, local, true)}
-						<p class="conv-empty-text">${escapeHtml(TEXT.emptyGuidedOr)}</p>
-						${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
-						<div class="conv-empty-command">
-							${renderConversationModelChoice(value, local, false)}
-							${renderOpenButton(local, TEXT.open)}
-						</div>
-					</div>
-				</section>`;
+				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}<div class="conv-empty conv-empty-activities">${activities}<div class="conv-empty-command">${renderConversationModelChoice(value, local, false)}</div></div></section>`;
 			}
 			return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">
 				${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}
@@ -1722,10 +1589,6 @@
 		// while the agent is stopped.
 		blocks.push(renderConversationApprovals(value, local));
 		blocks.push(renderConversationInputs(value, local));
-		// The recommended step closes the thread: it is what to do next, and it
-		// belongs after everything that has been said and before the place where
-		// the next thing is said.
-		blocks.push(renderNextStep(objectAt(local, "nextStep"), local));
 		// Il compositore chiude il pannello e nient'altro lo segue. Aprire una
 		// conversazione nuova si comanda dall'elenco delle conversazioni e
 		// chiudere quella aperta dalla testata: ripetere qui uno dei due

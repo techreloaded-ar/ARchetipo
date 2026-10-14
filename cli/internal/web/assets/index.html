@@ -469,7 +469,7 @@
             <section class="tab-panel active">
                 <div id="new-spec-no-epics" class="form-notice hidden">
                     <span class="form-notice-mark">nessuna epica</span>
-                    <span><strong>Questo workspace non ha ancora nessuna epica.</strong> Una nuova spec deve appartenere a un'epica che esiste già: genera prima il backlog, poi torna qui e crea la storia.</span>
+                    <span><strong>Questo workspace non ha ancora nessuna epica.</strong> Dai un nome alla prima epica qui sotto: verrà creata insieme alla storia alla conferma.</span>
                 </div>
                 <div class="mode-switch" id="new-spec-modes" role="group" aria-label="Come scrivere la spec">
                     <button type="button" id="spec-draft-mode-manual" class="mode-chip is-active" aria-pressed="true">Scrivila tu</button>
@@ -494,6 +494,11 @@
                         <span>Epica</span>
                         <select name="epic_code"></select>
                         <span class="field-error" data-error-for="epic_code"></span>
+                    </label>
+                    <label class="field full hidden" id="new-spec-epic-title-field">
+                        <span>Nome della nuova epica</span>
+                        <input type="text" name="epic_title" placeholder="Quale obiettivo raccoglie queste storie?" />
+                        <span class="field-error" data-error-for="epic_title"></span>
                     </label>
                     <label class="field">
                         <span>Priorità</span>

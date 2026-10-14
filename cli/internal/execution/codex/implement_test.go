@@ -89,8 +89,8 @@ func promptOfTurn(t *testing.T, fake *fakeCodex) string {
 
 func TestBuildImplementPromptIsDeterministicAndAsksForTheSharedReceipt(t *testing.T) {
 	req := implementRequest("codex")
-	first := buildImplementPrompt(req)
-	if second := buildImplementPrompt(req); first != second {
+	first := execution.ImplementPrompt(localOpening, req)
+	if second := execution.ImplementPrompt(localOpening, req); first != second {
 		t.Fatalf("prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, testSpec, "prompt")
@@ -205,7 +205,7 @@ func TestExecuteImplementReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 	}
 
 	// The instruction the process really received is the implementation one.
-	if got := promptOfTurn(t, fake); got != buildImplementPrompt(req) {
+	if got := promptOfTurn(t, fake); got != execution.ImplementPrompt(localOpening, req) {
 		t.Fatalf("the process received %q; want exactly the implementation prompt", got)
 	}
 }
@@ -253,6 +253,7 @@ func TestExecuteImplementFailureModes(t *testing.T) {
 					<-fake.turnStarted
 					fake.emit("item/completed", `{"item":{"type":"agentMessage","text":"done, I implemented everything"}}`)
 					fake.completeTurn()
+					fake.end()
 				}()
 			},
 			wantErr: []string{"ended without having implemented " + testSpec, "did not emit the expected JSON receipt line"},

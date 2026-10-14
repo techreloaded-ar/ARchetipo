@@ -92,8 +92,8 @@ func startSpecDraft(provider *Provider, req execution.Request) (<-chan execution
 // first of the three guards that keep an unconfirmed spec out of the backlog.
 func TestBuildSpecDraftPromptForbidsWritingAndAsksForTheSharedReceipt(t *testing.T) {
 	req := specDraftRequest("claude")
-	first := buildSpecDraftPrompt(req)
-	if second := buildSpecDraftPrompt(req); first != second {
+	first := execution.SpecDraftPrompt(localOpening, req)
+	if second := execution.SpecDraftPrompt(localOpening, req); first != second {
 		t.Fatalf("the spec draft prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, "/archetipo-spec", "spec draft prompt")
@@ -165,7 +165,7 @@ func TestSpecDraftKeepsTheConversationOpenUntilTheProposal(t *testing.T) {
 
 	// --- the instruction really delivered to the process --------------------
 	<-fake.started
-	if got := fake.messagesReceived(); len(got) != 1 || got[0] != buildSpecDraftPrompt(req) {
+	if got := fake.messagesReceived(); len(got) != 1 || got[0] != execution.SpecDraftPrompt(localOpening, req) {
 		t.Fatalf("the process received %v; want exactly the spec draft prompt", got)
 	}
 
@@ -237,12 +237,12 @@ func TestSpecDraftKeepsTheConversationOpenUntilTheProposal(t *testing.T) {
 	}
 
 	var payload struct {
-		Command       string           `json:"command"`
-		ExitCode      int              `json:"exit_code"`
-		ResultSummary string           `json:"result_summary"`
-		SpecDraft     specDraftPayload `json:"spec_draft"`
-		Turns         int              `json:"turns"`
-		DurationMS    int64            `json:"duration_ms"`
+		Command       string                      `json:"command"`
+		ExitCode      int                         `json:"exit_code"`
+		ResultSummary string                      `json:"result_summary"`
+		SpecDraft     execution.SpecDraftProposal `json:"spec_draft"`
+		Turns         int                         `json:"turns"`
+		DurationMS    int64                       `json:"duration_ms"`
 	}
 	if err := json.Unmarshal(got.Payload, &payload); err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestSpecDraftKeepsTheConversationOpenUntilTheProposal(t *testing.T) {
 	// It is the only outcome of this action: nothing was written anywhere, so a
 	// field dropped here is a field the person reviewing the proposal will
 	// never see.
-	wantDraft := specDraftPayload{
+	wantDraft := execution.SpecDraftProposal{
 		Title:     want.Title,
 		EpicCode:  want.EpicCode,
 		Priority:  want.Priority,
@@ -335,7 +335,7 @@ func TestSpecDraftSucceedsWhenTheReceiptAndTheEndOfTheProcessCoincide(t *testing
 		t.Fatalf("a receipt published as the process left was thrown away: %v", err)
 	}
 	var payload struct {
-		SpecDraft specDraftPayload `json:"spec_draft"`
+		SpecDraft execution.SpecDraftProposal `json:"spec_draft"`
 	}
 	if err := json.Unmarshal((<-results).Payload, &payload); err != nil {
 		t.Fatal(err)
@@ -515,4 +515,31 @@ func TestSpecDraftStoppedBetweenTwoTurnsEndsOnlyWithTheProcess(t *testing.T) {
 		t.Fatalf("a stopped proposal returned a payload: %s", payload)
 	}
 	assertContains(t, err.Error(), "without having proposed a spec", "execution error")
+}
+
+func TestSpecDraftCarriesANewEpicTitleToTheForm(t *testing.T) {
+	receipt := proposedSpec()
+	receipt.EpicCode, receipt.EpicTitle = "", "Primo obiettivo"
+	line, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := execution.ActionResultFields(execution.ActionSpecDraft, line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(fields)
+	result := execution.Result{Payload: encoded}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		SpecDraft execution.SpecDraftProposal `json:"spec_draft"`
+	}
+	if err := json.Unmarshal(result.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SpecDraft.EpicCode != "" || payload.SpecDraft.EpicTitle != receipt.EpicTitle {
+		t.Fatalf("new epic title lost: %s", result.Payload)
+	}
 }

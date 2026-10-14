@@ -69,7 +69,7 @@
 			"C'è una run in corso su questa spec: aspetta che finisca, oppure annullala, prima di spostarla.",
 		transitionDone: (code, column) => `${code} spostata in ${column}`,
 		noEpicsYet:
-			"Definisci almeno un'epica nel backlog prima di creare una spec",
+			"Crea la prima epica insieme alla storia",
 		backlogUnreadable: "Il backlog non si è potuto leggere",
 		boardError: (reason) => `Errore: ${reason}`,
 		boardMissingBacklog: "Questo workspace non ha ancora un backlog.",
@@ -987,17 +987,15 @@
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && isTopModal(prdModal)) closePRD();
 	});
-	// Il menu delle azioni del compositore si chiude come ogni altro menu:
-	// con Esc, o con un click ovunque fuori da esso — anche fuori dal pannello.
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && conversationActionsOpen) {
-			conversationActionsOpen = false;
+		if (e.key === "Escape" && conversationActivitiesOpen) {
+			conversationActivitiesOpen = false;
 			renderConversationPanel();
 		}
 	});
 	document.addEventListener("click", (e) => {
-		if (!conversationActionsOpen || e.target.closest(".conv-actions")) return;
-		conversationActionsOpen = false;
+		if (!conversationActivitiesOpen || e.target.closest(".conv-activity-picker")) return;
+		conversationActivitiesOpen = false;
 		renderConversationPanel();
 	});
 
@@ -1849,18 +1847,18 @@
 			renderBoard(view);
 			updateStats(view);
 			boardSnapshot = view;
-			// A workspace without epics has no admissible value for a new spec:
-			// the action is switched off at the source instead of opening a
-			// modal that can only explain why it cannot be used.
+			// The form can create an epic together with the first story.
 			const hasEpics = (view.epics || []).length > 0;
-			newSpecBtn.disabled = !hasEpics;
+			newSpecBtn.disabled = false;
 			newSpecBtn.title = hasEpics
 				? ""
 				: TEXT.noEpicsYet;
 		} catch (err) {
-			// A board that could not be read cannot vouch for its epics either.
-			newSpecBtn.disabled = true;
-			newSpecBtn.title = TEXT.backlogUnreadable;
+			// A missing backlog is a known empty state. Let the form explain
+			// what is required; an unreadable backlog still cannot supply epics.
+			const missing = err && err.code === "E_PRECONDITION";
+			newSpecBtn.disabled = !missing;
+			newSpecBtn.title = missing ? TEXT.noEpicsYet : TEXT.backlogUnreadable;
 			boardSnapshot = null;
 			// Un backlog che non c'e' ancora non e' un errore: e' il workspace
 			// a un passo del processo che precede la board. La colonna lo dice
@@ -1889,25 +1887,8 @@
 		}
 	}
 
-	// ---- Recommended step ---------------------------------------------------
-	//
-	// Which step comes next is a server verdict: /api/workspace/status derives
-	// it from the installed Archetipo and from the real state of the workspace.
-	// Nothing here decides which step follows which, or what unlocks a refused
-	// one — every word drawn comes from the payload, and it is drawn at the tail
-	// of the thread, by conversation.js. This section reads the payload, keeps
-	// it, and performs the start it names; whether the step can be started at
-	// all is decided by the pure module in workspace-status.js.
-
-	// The last payload, kept because the navigation must read the step from the
-	// payload and not from the DOM it produced.
+	// Workspace state supplies the board's empty state and activity offers.
 	let workspaceStatusSnapshot = null;
-	// Lo stesso payload, ma scopato sulla spec della conversazione aperta: in
-	// una conversazione su una spec la card in coda al thread raccomanda il
-	// prossimo passo di *quella* spec, non quello del workspace, che punta alla
-	// prima carta della board. Tiene anche il codice per cui è stato letto, così
-	// una risposta arrivata tardi non veste i panni di un'altra conversazione.
-	let conversationStatusSnapshot = null; // { specCode, view }
 
 	async function loadWorkspaceStatus() {
 		let view;
@@ -1922,12 +1903,7 @@
 		}
 		workspaceStatusSnapshot = view;
 		loadConversationActivities();
-		// Il passo scopato segue la stessa cadenza: ogni board_changed che
-		// aggiorna il workspace aggiorna anche la lettura della spec aperta.
-		loadConversationNextStep();
-		// The step lives in the thread, so the read that updates it must redraw
-		// the thread: otherwise the block would stay on the step of a moment ago
-		// until the next poll of the conversation.
+		// Refresh the available activities when workspace state changes.
 		renderConversationPanel();
 	}
 
@@ -1941,52 +1917,6 @@
 			: "";
 	}
 
-	// loadConversationNextStep legge il prossimo passo della spec della
-	// conversazione aperta, con la stessa disciplina di loadWorkspaceStatus: una
-	// lettura che non riesce toglie la card, non ferma nessuno.
-	async function loadConversationNextStep() {
-		const specCode = currentConversationSpecCode();
-		if (!specCode) {
-			if (conversationStatusSnapshot) {
-				conversationStatusSnapshot = null;
-				renderConversationPanel();
-			}
-			return;
-		}
-		let view;
-		try {
-			view = await apiGet(
-				`/api/workspace/status?spec=${encodeURIComponent(specCode)}`,
-			);
-		} catch (_) {
-			conversationStatusSnapshot = null;
-			renderConversationPanel();
-			return;
-		}
-		// Un cambio di conversazione ha vinto mentre la lettura era in volo:
-		// il passo appartiene alla conversazione di adesso, non a quella di un
-		// momento fa.
-		if (specCode !== currentConversationSpecCode()) return;
-		conversationStatusSnapshot = { specCode, view };
-		renderConversationPanel();
-	}
-
-	// nextStepStatusView è la sorgente unica del passo in coda al thread: la
-	// lettura scopata sulla spec della conversazione quando c'è, quella del
-	// workspace altrimenti. Il render e l'avvio leggono entrambi da qui, così
-	// non possono divergere: quel che si vede è quel che parte.
-	function nextStepStatusView() {
-		const specCode = currentConversationSpecCode();
-		if (
-			specCode &&
-			conversationStatusSnapshot &&
-			conversationStatusSnapshot.specCode === specCode
-		) {
-			return conversationStatusSnapshot.view;
-		}
-		return workspaceStatusSnapshot;
-	}
-
 	// The recommended step belongs to the workspace that produced it: leaving
 	// the last snapshot in memory would mean being able to offer, and to start,
 	// the step of a workspace that is no longer open. Forgetting it is one
@@ -1994,30 +1924,8 @@
 	// workspace, so the two can never drift apart.
 	function resetWorkspaceStatusState() {
 		workspaceStatusSnapshot = null;
-		conversationStatusSnapshot = null;
-		// Forgetting the step of a workspace that is no longer open must take it
-		// off the screen too: the block lives in the thread, so the thread is
-		// what has to be redrawn.
+		// Forget activity offers belonging to the previous workspace.
 		renderConversationPanel();
-	}
-
-	// startNextStep runs the recommended step, and runs it through the single
-	// dispatch path of this application.
-	//
-	// Il passo raccomandato parte da dove e' stato letto: nel thread, o nello
-	// stato vuoto che lo propone. Non c'e' nessun pannello da raggiungere
-	// prima, perche' la run e' il thread — il server apre la conversazione
-	// dell'azione se non ce n'e' una, e dice in quale si legge.
-	// "Una pressione, una run" e' del bottone: startActionOnTarget lo
-	// disabilita, ed e' li' che un debounce sta.
-	async function startNextStep(target, button) {
-		if (!target) return;
-		if (target.scope === "spec" && !target.code) return;
-		if (target.scope !== "spec" && target.scope !== "workspace") {
-			// A scope this viewer has never seen does not get an invented path.
-			return;
-		}
-		await startActionOnTarget(target, button);
 	}
 
 	function updateStats(view) {
@@ -5850,9 +5758,6 @@
 	// Il menu delle azioni del compositore: aperto o no, e le voci lette dal
 	// server l'ultima volta che e' stato aperto. Si rilegge a ogni apertura,
 	// perche' che cosa si puo' avviare cambia con lo stato del workspace.
-	let conversationActionsOpen = false;
-	let conversationActionsLoading = false;
-	let conversationActionsItems = [];
 	let conversationModelChoiceLoadToken = 0;
 	let conversationCapabilities = [];
 	// Quale voce del menu delle skill è evidenziata. La skill scelta non sta
@@ -6158,29 +6063,6 @@
 				);
 				return;
 			}
-			// Il menu delle azioni: il bottone lo apre e lo chiude, una voce
-			// avvia l'azione che nomina — dallo stesso avvio del passo
-			// raccomandato — e un click fuori dal menu lo chiude.
-			if (e.target.closest("[data-conversation-actions-toggle]")) {
-				toggleConversationActions();
-				return;
-			}
-			const actionOption = e.target.closest("[data-conversation-action]");
-			if (actionOption) {
-				conversationActionsOpen = false;
-				renderConversationPanel();
-				startActionOnTarget(
-					{
-						scope: actionOption.getAttribute("data-conversation-action-scope") || "",
-						action: actionOption.getAttribute("data-conversation-action") || "",
-						code: actionOption.getAttribute("data-conversation-action-spec") || "",
-					},
-					null,
-				).catch((err) => {
-					showToast(err.message || String(err), "err");
-				});
-				return;
-			}
 			const skillOption = e.target.closest("[data-conversation-skill-option]");
 			if (skillOption) {
 				pickConversationSkill(
@@ -6281,26 +6163,6 @@
 				);
 				return;
 			}
-			// The recommended step, pressed from the tail of the thread. This
-			// branch comes *before* the reach one on purpose: a block inside the
-			// thread must not be mistaken for a navigation.
-			//
-			// The refusal of a blocked step is a decision of the pure module, not
-			// the disabled attribute of the markup, and it holds for anyone
-			// reaching this handler by any route. What runs afterwards is
-			// startNextStep, hence startPanelAction: the very line the board
-			// presses, on the very same target.
-			const next = e.target.closest(".conv-nextstep-run");
-			if (next) {
-				const target = window.WorkspaceStatus.nextStepDispatch(
-					nextStepStatusView(),
-				);
-				if (!target) return;
-				startNextStep(target, next).catch((err) => {
-					showToast(err.message || String(err), "err");
-				});
-				return;
-			}
 			// Un passo che si legge in una conversazione sua si raggiunge
 			// andandoci: non c'è nessun pannello da montare, perché quella
 			// conversazione è il passo.
@@ -6347,7 +6209,7 @@
 			const requestedInput = e.target.closest("[data-conversation-input-form]");
 			if (requestedInput) {
 				e.preventDefault();
-				respondConversationInput(requestedInput.getAttribute("data-conversation-input-form") || "");
+				respondConversationInput(requestedInput);
 				return;
 			}
 			const form = e.target.closest(".conv-composer");
@@ -6356,6 +6218,18 @@
 			sendConversationMessage();
 		});
 		container.addEventListener("input", (e) => {
+			const question = e.target.closest("[data-conversation-input-question]");
+			if (question) {
+				const form = question.closest("[data-conversation-input-form]");
+				if (e.target.matches("[data-conversation-input-option]")) {
+					const text = question.querySelector("[data-conversation-input-text]");
+					if (text) text.value = "";
+				} else if (e.target.matches("[data-conversation-input-text]")) {
+					question.querySelectorAll("[data-conversation-input-option]").forEach((option) => { option.checked = false; });
+				}
+				conversationInputDrafts[form.getAttribute("data-conversation-input-form")] = conversationInputValues(form);
+				return;
+			}
 			const requestedInput = e.target.closest("[data-conversation-input-draft]");
 			if (requestedInput) {
 				conversationInputDrafts[requestedInput.getAttribute("data-conversation-input-draft") || ""] = requestedInput.value;
@@ -6980,60 +6854,6 @@
 			: { message: text, skill: undefined };
 	}
 
-	// Apre il menu delle azioni e ne rilegge le voci: quelle di workspace da
-	// /api/workspace/actions — solo le offerte, come ovunque — e, se il thread
-	// e' di una spec, quelle della spec dal suo dettaglio. Ogni voce porta il
-	// motivo del server quando non si puo' avviare.
-	function toggleConversationActions() {
-		if (conversationActionsOpen) {
-			conversationActionsOpen = false;
-			renderConversationPanel();
-			return;
-		}
-		conversationActionsOpen = true;
-		conversationActionsLoading = true;
-		conversationActionsItems = [];
-		renderConversationPanel();
-		loadConversationActions().catch(() => {});
-	}
-
-	async function loadConversationActions() {
-		const specCode = currentConversationSpecCode();
-		const [workspace, spec] = await Promise.all([
-			apiGet("/api/workspace/actions").catch(() => null),
-			specCode
-				? apiGet(`/api/spec/${encodeURIComponent(specCode)}`).catch(() => null)
-				: Promise.resolve(null),
-		]);
-		if (!conversationActionsOpen) return;
-		const items = [];
-		((spec && spec.actions) || []).forEach((action) => {
-			if (!action || !action.id) return;
-			items.push({
-				scope: "spec",
-				action: action.id,
-				code: specCode,
-				label: action.label || action.id,
-				runnable: action.runnable === true,
-				reason: action.unlocked_by || action.unavailable_reason || "",
-			});
-		});
-		((workspace && workspace.actions) || []).forEach((action) => {
-			if (!action || !action.id || action.offered !== true) return;
-			items.push({
-				scope: "workspace",
-				action: action.id,
-				code: "",
-				label: action.label || action.id,
-				runnable: action.runnable === true,
-				reason: action.unlocked_by || action.unavailable_reason || "",
-			});
-		});
-		conversationActionsItems = items;
-		conversationActionsLoading = false;
-		renderConversationPanel();
-	}
-
 	function conversationSkillMenuMarkup(view) {
 		if (!view || !view.session || view.session.work !== "IDLE") return "";
 		const query = conversationSkillQuery();
@@ -7200,7 +7020,6 @@
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
-		conversationActionsOpen = false;
 		// L'eco locale appartiene alla conversazione che si sta lasciando: sotto
 		// un'altra sarebbe una frase detta a qualcun altro.
 		conversationPendingMessage = "";
@@ -7355,24 +7174,42 @@
 		}
 	}
 
-	async function respondConversationInput(inputID) {
+	function conversationInputValues(form) {
+		return Object.fromEntries(Array.from(form.querySelectorAll("[data-conversation-input-question]")).map((question) => [
+			question.getAttribute("data-conversation-input-question"),
+			{ option: question.querySelector("[data-conversation-input-option]:checked")?.value || "", text: question.querySelector("[data-conversation-input-text]")?.value || "" },
+		]));
+	}
+
+	async function respondConversationInput(form) {
 		const id = conversationsCurrentId;
-		const draft = conversationInputDrafts[inputID] || "";
-		if (conversationBusy || !id || !inputID || !draft.trim()) return;
-		let payload;
-		try {
-			payload = JSON.parse(draft);
-		} catch (_) {
-			conversationRefusal = "L'input richiesto deve essere JSON valido";
-			renderConversationPanel();
-			return;
+		const inputID = form.getAttribute("data-conversation-input-form") || "";
+		if (conversationBusy || !id || !inputID) return;
+		let body;
+		if (form.querySelector("[data-conversation-input-question]")) {
+			const values = conversationInputValues(form);
+			conversationInputDrafts[inputID] = values;
+			if (Object.values(values).some((value) => !(value.option || value.text).trim())) {
+				conversationRefusal = "Rispondi a tutte le domande prima di inviare";
+				renderConversationPanel();
+				return;
+			}
+			body = { answers: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, [value.option || value.text]])) };
+		} else {
+			try {
+				body = { payload: JSON.parse(form.querySelector("[data-conversation-input-draft]").value) };
+			} catch (_) {
+				conversationRefusal = "L'input richiesto deve essere JSON valido";
+				renderConversationPanel();
+				return;
+			}
 		}
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
 			const view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/inputs/${encodeURIComponent(inputID)}?after_id=${conversationAfterID}`,
-				{ payload },
+				body,
 			);
 			delete conversationInputDrafts[inputID];
 			applyConversationView(view);
@@ -7504,15 +7341,6 @@
 		}
 		if (previousWork && previousWork !== "IDLE" && work === "IDLE") {
 			loadBoard();
-		}
-		// La spec della conversazione appena applicata potrebbe non essere
-		// quella per cui il passo scopato era stato letto: ogni strada che porta
-		// qui — switch, boot, poll — riallinea la lettura senza aspettarla.
-		if (
-			currentConversationSpecCode() !==
-			(conversationStatusSnapshot ? conversationStatusSnapshot.specCode : "")
-		) {
-			loadConversationNextStep();
 		}
 		return appended;
 	}
@@ -7944,6 +7772,8 @@
 		);
 		const caret = composerHadFocus ? focused.selectionStart : 0;
 		const agentRowFocus = conversationChoiceFocus(focused);
+		const answerForm = focused && focused.closest("[data-conversation-input-form]");
+		const answerFocus = answerForm ? { id: answerForm.getAttribute("data-conversation-input-form"), index: Array.from(answerForm.elements).indexOf(focused), start: focused.selectionStart, end: focused.selectionEnd } : null;
 
 		// The renderer reads the accumulated timeline, not the last page of it:
 		// the cursor means the server only ever sends what is new. Before the
@@ -8016,37 +7846,6 @@
 				// consegnata una. Riconoscerla vuol dire sapere quale azione la
 				// produce, ed è un sapere di questa pagina e non del renderer.
 				deliveredDraft: conversationDeliveredSpecDraft(),
-				// The recommended step comes from /api/workspace/status and from
-				// no other source — scoped to the spec of this conversation when
-				// it has one, workspace-wide otherwise. The thread hosts it at
-				// its tail — it does not own it, and it does not decide whether
-				// it can be taken.
-				actionsMenu: {
-					open: conversationActionsOpen,
-					loading: conversationActionsLoading,
-					items: conversationActionsItems,
-				},
-				nextStep: (() => {
-					const status = nextStepStatusView();
-					const step = status && typeof status === "object" ? status.next_step : null;
-					// Il passo che questo stesso thread sta gia' eseguendo non e'
-					// un passo da proporre: la run e' qui sopra, e ripeterlo in
-					// coda con «aspetta che finisca» direbbe a chi legge di
-					// aspettare cio' che sta guardando.
-					const running = step && step.running_execution_id ? String(step.running_execution_id) : "";
-					const mine = view && view.conversation && Array.isArray(view.conversation.execution_ids)
-						? view.conversation.execution_ids.map(String)
-						: [];
-					if (running && mine.indexOf(running) >= 0) return null;
-					return step;
-				})(),
-				// Lo stadio del workspace, nelle parole del processo: nello
-				// stato vuoto e' la frase che dice a chi arriva perche' il
-				// passo proposto e' quello.
-				stage: (() => {
-					const status = nextStepStatusView();
-					return status && typeof status === "object" ? status.stage : null;
-				})(),
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:
@@ -8078,6 +7877,14 @@
 				input.focus();
 				const at = Math.min(caret, input.value.length);
 				input.setSelectionRange(at, at);
+			}
+		}
+		if (answerFocus) {
+			const form = Array.from(conversationEl.querySelectorAll("[data-conversation-input-form]")).find((candidate) => candidate.getAttribute("data-conversation-input-form") === answerFocus.id);
+			const field = form && form.elements[answerFocus.index];
+			if (field && !field.disabled) {
+				field.focus();
+				if (typeof answerFocus.start === "number" && typeof field.setSelectionRange === "function") field.setSelectionRange(answerFocus.start, answerFocus.end);
 			}
 		}
 		restoreConversationChoiceFocus(agentRowFocus);
@@ -8175,16 +7982,14 @@
 		newSpecStatus.className = "status-msg";
 		newSpecForm.priority.value = "MEDIUM";
 		newSpecForm.story_points.value = "3";
+		newSpecEditor.value(specBodyTemplate());
 
-		// The epic list is the workspace's own: the form never offers a value
-		// the backlog does not already know.
 		const epics = (boardSnapshot && boardSnapshot.epics) || [];
+		specDraftModeAssisted.disabled = false;
 		const select = newSpecForm.epic_code;
 		select.textContent = "";
-		// No epic is preselected: the choice must be explicit, so a story is
-		// never filed under an epic the author never looked at.
 		const placeholder = document.createElement("option");
-		placeholder.value = "";
+		placeholder.value = "__choose__";
 		placeholder.disabled = true;
 		placeholder.selected = true;
 		placeholder.textContent = TEXT.chooseEpic;
@@ -8195,21 +8000,15 @@
 			opt.textContent = `${epic.code} — ${epic.title}`;
 			select.appendChild(opt);
 		});
-
-		if (epics.length === 0) {
-			// Without an epic there is no admissible value to submit: the modal
-			// opens, explains itself, and refuses the confirmation.
-			newSpecNoEpics.classList.remove("hidden");
-			newSpecSubmit.disabled = true;
-			newSpecModal.classList.remove("hidden");
-			newSpecGuard.arm();
-			enterModal(newSpecModal);
-			return;
-		}
-
-		newSpecNoEpics.classList.add("hidden");
+		const createEpic = document.createElement("option");
+		createEpic.value = "";
+		createEpic.textContent = "Nuova epica…";
+		select.appendChild(createEpic);
+		if (!epics.length) createEpic.selected = true;
+		select.onchange = syncNewSpecEpic;
+		syncNewSpecEpic();
+		newSpecNoEpics.classList.toggle("hidden", epics.length > 0);
 		newSpecSubmit.disabled = false;
-		newSpecEditor.value(specBodyTemplate());
 		newSpecModal.classList.remove("hidden");
 		// Il fuoco parte dal titolo: è il primo campo che si compila davvero.
 		enterModal(newSpecModal, newSpecForm.title);
@@ -8218,6 +8017,12 @@
 		// averlo toccato non deve chiedere niente.
 		newSpecGuard.arm();
 		setTimeout(() => newSpecEditor.codemirror.refresh(), 0);
+	}
+
+	function syncNewSpecEpic() {
+		const creating = newSpecForm.epic_code.value === "";
+		document.getElementById("new-spec-epic-title-field").classList.toggle("hidden", !creating);
+		newSpecForm.epic_title.disabled = !creating;
 	}
 
 	function closeNewSpec() {
@@ -8396,7 +8201,13 @@
 			? draft.blocked_by.join(", ")
 			: "";
 		if (typeof draft.body === "string") newSpecEditor.value(draft.body);
-		selectProposedEpic(draft.epic_code);
+		if (!String(draft.epic_code || "").trim() && typeof draft.epic_title === "string" && draft.epic_title.trim()) {
+			newSpecForm.epic_code.value = "";
+			newSpecForm.epic_title.value = draft.epic_title;
+			syncNewSpecEpic();
+		} else {
+			selectProposedEpic(draft.epic_code);
+		}
 	}
 
 	// The epic is the one field the agent can get wrong in a way the form must
@@ -8412,9 +8223,11 @@
 		);
 		if (match) {
 			select.value = match.value;
+			syncNewSpecEpic();
 			return;
 		}
-		select.value = "";
+		select.value = "__choose__";
+		syncNewSpecEpic();
 		if (!wanted) return;
 		showNewSpecErrors([
 			{
@@ -8488,6 +8301,7 @@
 		const payload = {
 			title: newSpecForm.title.value,
 			epic_code: newSpecForm.epic_code.value,
+			epic_title: newSpecForm.epic_code.value ? "" : newSpecForm.epic_title.value,
 			priority: newSpecForm.priority.value,
 			points: parseInt(newSpecForm.story_points.value, 10) || 0,
 			scope: newSpecForm.scope.value,

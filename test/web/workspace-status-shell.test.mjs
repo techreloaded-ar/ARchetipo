@@ -149,36 +149,14 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		}
 	});
 
-	it("il gestore del thread delega, non riscrive l'avvio", () => {
+	it("la conversazione usa il catalogo attività e non duplica le azioni della spec", () => {
 		const listener = blockAfter(js, "function bindConversationPanel(");
-		assert.ok(
-			listener.includes("conv-nextstep-run"),
-			"il pannello conversazione non riconosce più il controllo .conv-nextstep-run: il passo raccomandato non sarebbe più avviabile da dove è mostrato",
-		);
-		assert.ok(
-			listener.includes("nextStepDispatch"),
-			"il gestore del thread non chiede più al modulo puro se il passo è avviabile: il rifiuto di un passo bloccato tornerebbe a essere il solo attributo disabled del markup",
-		);
-		assert.ok(
-			listener.includes("startNextStep"),
-			"il gestore del thread non delega più a startNextStep",
-		);
-		const startNextStep = blockAfter(js, "async function startNextStep(");
-		assert.ok(
-			startNextStep.includes("startActionOnTarget"),
-			"startNextStep non chiama più startActionOnTarget: l'avvio dal thread smetterebbe di passare dall'unico avvio diretto",
-		);
-		// L'avvio dal thread non monta nessun pannello prima: la run e' il
-		// thread, e il server dice in quale si legge.
-		assert.ok(
-			!startNextStep.includes("openPRD") && !startNextStep.includes("openEditor"),
-			"startNextStep apre di nuovo una modale prima di avviare: chi preme dal thread verrebbe portato altrove",
-		);
+		assert.ok(listener.includes("chooseConversationActivity"));
+		assert.ok(!listener.includes("conv-nextstep-run"));
+		assert.ok(!listener.includes("data-conversation-actions-toggle"));
 		const direct = blockAfter(js, "async function startActionOnTarget(");
-		assert.ok(direct.includes("body.conversation_id = from"), "l'avvio dal thread non nomina piu' la conversazione da cui viene la pressione");
-		assert.ok(direct.includes("liveConversationEntries"), "l'avvio dal thread non guarda piu' se la conversazione nominata e' viva");
-		assert.ok(/thread_id/.test(direct), "l'avvio dal thread non legge piu' dal server in quale thread la run si legge");
-		assert.ok(direct.includes("switchToConversation("), "l'avvio dal thread non porta piu' sul thread della run");
+		assert.ok(direct.includes("body.conversation_id = from"));
+		assert.ok(direct.includes("switchToConversation("));
 	});
 
 	it("l'avvio non apre più un secondo thread: la run è il thread", () => {
@@ -221,13 +199,12 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 	// funzione stessa.
 	it("board e attività riusano lo stesso cammino di avvio", () => {
 		// Due avvii. startPanelAction dalle chip di un pannello montato;
-		// startActionOnTarget dal passo raccomandato e dal menu delle azioni
-		// del compositore, dalle attività e dalle card della board.
+		// startActionOnTarget dalle attività e dalle card della board.
 		// Ogni ingresso riusa la stessa funzione e la stessa rotta.
 		const panel = js.split("startPanelAction(").length - 1;
 		const direct = js.split("startActionOnTarget(").length - 1;
 		assert.equal(panel, 2, `i punti che nominano startPanelAction( sono ${panel} invece di 2`);
-		assert.equal(direct, 5, `i punti che nominano startActionOnTarget( sono ${direct} invece di 5`);
+		assert.equal(direct, 3, `i punti che nominano startActionOnTarget( sono ${direct} invece di 3`);
 	});
 
 	it("la modale del PRD non offre più le azioni: segue solo un'esecuzione in corso", () => {
@@ -235,36 +212,15 @@ describe("AC-2 — il cammino di avvio è uno solo", () => {
 		assert.ok(!load.includes("renderSpecActions("), "la modale del PRD disegna ancora le chip delle azioni: l'inception tornerebbe a nascondersi lì");
 		assert.ok(load.includes("isExecutionTerminal("), "la modale del PRD non guarda più se c'è un'esecuzione in corso da seguire");
 		assert.ok(!html.includes("Azioni sul workspace"), "la modale del PRD intitola ancora una sezione «Azioni sul workspace»");
-		// Le azioni si scelgono dal compositore, con lo stesso avvio del passo.
-		const load2 = blockAfter(js, "async function loadConversationActions(");
-		assert.ok(load2.includes("/api/workspace/actions"), "il menu del compositore non legge le azioni di workspace");
-		assert.ok(load2.includes("action.offered !== true"), "il menu del compositore mostra azioni che il workspace non offre");
+		const activities = blockAfter(js, "async function loadConversationActivities(");
+		assert.ok(activities.includes("/api/workspace/activities"));
 	});
 
-	it("il pannello conversazione riceve il passo dallo stato del workspace", () => {
+	it("il pannello conversazione non riceve più il passo suggerito", () => {
 		const body = blockAfter(js, "function renderConversationPanel(");
-		assert.ok(
-			body.includes("nextStep:"),
-			"il pannello conversazione non passa più il passo raccomandato al renderer: in coda al thread non comparirebbe alcun blocco",
-		);
-		assert.ok(
-			body.includes("nextStepStatusView("),
-			"il passo raccomandato non passa più dalla sorgente unica nextStepStatusView: render e avvio potrebbero divergere",
-		);
-		// La sorgente unica legge sempre e solo i payload di
-		// /api/workspace/status: quello scopato sulla spec della conversazione
-		// quando c'è, quello del workspace altrimenti.
-		const source = blockAfter(js, "function nextStepStatusView(");
-		assert.ok(
-			source.includes("conversationStatusSnapshot") &&
-				source.includes("workspaceStatusSnapshot"),
-			"il passo raccomandato non arriva più dal payload di /api/workspace/status: il thread lo starebbe inventando da un'altra fonte",
-		);
-		const load = blockAfter(js, "async function loadWorkspaceStatus(");
-		assert.ok(
-			load.includes("renderConversationPanel("),
-			"leggere lo stato del workspace non ridisegna più il thread: il blocco resterebbe fermo sul passo di un momento fa",
-		);
+		assert.ok(!body.includes("nextStep:"));
+		assert.ok(!body.includes("actionsMenu:"));
+		assert.ok(body.includes("activities: conversationActivitiesView"));
 	});
 });
 

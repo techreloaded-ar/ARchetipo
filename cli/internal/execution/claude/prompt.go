@@ -16,66 +16,6 @@ const reviewStatus = execution.ReviewStatus
 
 const localOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed."
 
-// buildPrompt renders the single instruction given to the local Claude process.
-//
-// It is a pure, deterministic function of the fields of req: no timestamp, no
-// random value, no environment or filesystem lookup. That is what makes the
-// invocation reproducible and testable without a machine that has Claude Code
-// on it, and it is also what keeps the prompt free of anything that could carry
-// local or authentication material into the agent's context.
-//
-// The wording mirrors the arcipelago and codex prompts on purpose. The three
-// providers ask for the same work and accept the same receipt, so a divergence
-// in the request would mean one provider asking for something the shared
-// acceptance gate does not recognize.
-func buildPrompt(req execution.Request) string {
-	return execution.PlanPrompt(localOpening, req)
-}
-
-// buildImplementPrompt renders the single instruction that carries out a
-// persisted plan.
-//
-// It is pure and deterministic for the same reasons buildPrompt is, and it is a
-// single turn for the same reason: the work ends on a receipt, so a turn that
-// ends without one has failed rather than asked a question.
-//
-// What it does not say is as deliberate as what it says. It names no status
-// transition and no connector command, because the archetipo-implement skill
-// already owns both ends of that — it starts by taking the spec to IN PROGRESS
-// and it closes with `archetipo spec review`. Restating them here would be a
-// second copy of the workflow, free to drift from the skill that actually runs
-// it. The one thing this prompt does insist on is *when* the receipt may be
-// emitted: only once the spec has really reached the review status, because a
-// receipt emitted before that would declare an implementation that the
-// confirmation of the effect will then refuse.
-func buildImplementPrompt(req execution.Request) string {
-	return execution.ImplementPrompt(localOpening, req)
-}
-
-// buildReviewPrompt renders the single instruction that prepares the review
-// evidence of a spec already waiting under review.
-//
-// It is pure and deterministic for the same reasons buildPrompt is, and it is a
-// single turn for the same reason: the work ends on a receipt.
-//
-// Unlike every other prompt, this one states what must *not* happen, and names
-// the three commands by hand. That repetition is deliberate. Elsewhere the
-// prompt stays silent about transitions because the skill owns them; here the
-// whole point of the action is that no transition may occur, and the failure
-// mode being guarded against is an agent that helpfully finishes the job. The
-// skill's prepared-dossier mode says the same thing, the shared receipt refuses
-// any status but REVIEW, and the confirmation of the effect refuses a spec that
-// moved: three independent guards, because a single one that the model talks
-// itself past leaves a spec closed without anybody deciding.
-//
-// The execution id travels in the prompt because this is the only point where
-// the provider knows the identity of the run. Carried into the dossier, it is
-// what later lets a human verdict name the execution that prepared the evidence
-// it was decided on.
-func buildReviewPrompt(req execution.Request) string {
-	return execution.ReviewPrompt(localOpening, req)
-}
-
 // buildArgs renders the full argument list of the Claude invocation. It is the
 // single place where the flags live, so changing how Claude is called never
 // means touching Execute.
@@ -146,71 +86,6 @@ func buildNativeSessionArgs(cfg settings, sessionID string, resume bool) []strin
 		args = append(args, "--effort", cfg.Effort)
 	}
 	return args
-}
-
-// buildInceptionPrompt renders the single instruction that opens an inception
-// conversation.
-//
-// It is pure and deterministic for the same reasons buildPrompt is, and it
-// differs from it in exactly the two ways the work differs. It asks for one
-// question at a time, because the person answering reads them in a chat and can
-// only answer the last one; and it asks for the receipt only once the PRD has
-// been persisted through `archetipo prd write`, because the receipt is the only
-// thing that ends the conversation and a receipt emitted early would end it on
-// a document that does not exist.
-//
-// The path is asked for, not dictated: where the PRD lives is a fact of the
-// workspace configuration, which this package deliberately cannot read. The
-// value is informative anyway — the confirmation of the effect happens one
-// layer up, against the connector.
-func buildInceptionPrompt(req execution.Request) string {
-	return execution.InceptionPrompt(localOpening, req)
-}
-
-// buildBacklogPrompt renders the single instruction that opens a backlog
-// generation conversation.
-//
-// It is pure and deterministic for the same reasons buildPrompt and
-// buildInceptionPrompt are, and it is a conversation for the same reason the
-// inception is: generating a backlog from a PRD raises questions only the
-// person who owns the product can answer, so a turn that ends on a question is
-// not a failure. It asks for one question per message because the person
-// answering reads them in a chat, and it asks for them only when they are
-// really needed, because a backlog the skill can derive from the PRD on its own
-// is not worth interrupting anyone for.
-//
-// Nothing here dictates where the backlog is persisted: that is a fact of the
-// workspace configuration, which this package deliberately cannot read, and the
-// skill already knows to go through `archetipo spec add`. The counts asked for
-// in the receipt are informative — confirming that the epics and the specs
-// really exist happens one layer up, against the connector.
-func buildBacklogPrompt(req execution.Request) string {
-	return execution.BacklogPrompt(localOpening, req)
-}
-
-// buildSpecDraftPrompt renders the single instruction that opens an assisted
-// spec authoring conversation.
-//
-// It is pure and deterministic for the same reasons every other prompt here is,
-// and it is a conversation for the same reason the inception and the backlog
-// generation are: what makes acceptance criteria verifiable is knowing what the
-// person actually wants, and that is asked, not guessed.
-//
-// It is the only prompt of this package that forbids a persistence, and the
-// repetition is deliberate — the same reasoning as buildReviewPrompt. The
-// failure mode being guarded against is an agent that helpfully finishes the
-// job: writing the spec would take a decision that belongs to the person who
-// asked for the proposal, and would consume a progressive code that is derived
-// from the persisted backlog. The prohibition is stated here, the shared
-// receipt refuses any status but PROPOSED, and the confirmation of the effect
-// refuses a backlog that grew: three independent guards, because a single one
-// the model talks itself past leaves a spec in the backlog nobody confirmed.
-//
-// Nothing here dictates which epics exist: that is a fact of the workspace the
-// agent reads for itself, and a value invented at this layer would be a value
-// the backlog does not know.
-func buildSpecDraftPrompt(req execution.Request) string {
-	return execution.SpecDraftPrompt(localOpening, req)
 }
 
 // buildConversationPrompt renders the single instruction that opens a free

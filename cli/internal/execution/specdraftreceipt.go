@@ -46,6 +46,7 @@ type SpecDraftReceipt struct {
 	Status    string   `json:"status"`
 	Title     string   `json:"title"`
 	EpicCode  string   `json:"epic_code"`
+	EpicTitle string   `json:"epic_title,omitempty"`
 	Priority  string   `json:"priority"`
 	Points    int      `json:"points"`
 	Scope     string   `json:"scope"`
@@ -70,7 +71,7 @@ func ParseSpecDraftReceipt(output string) (SpecDraftReceipt, error) {
 // AcceptSpecDraftReceipt parses the output and applies the acceptance rule: the
 // receipt must declare the spec draft artifact, the proposed status, and the
 // three fields without which there is no proposal to review — a title, an epic
-// to file it under, and a body.
+// code or a title for a new epic, and a body.
 //
 // The remaining fields are deliberately not required. A proposal without points
 // or without blockers is a proposal a person can still read, edit and confirm;
@@ -94,7 +95,7 @@ func AcceptSpecDraftReceipt(output string) (SpecDraftReceipt, error) {
 	if got.Artifact != specDraftArtifact || got.Status != ProposedStatus {
 		return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
 	}
-	if strings.TrimSpace(got.Title) == "" || strings.TrimSpace(got.EpicCode) == "" || strings.TrimSpace(got.Body) == "" {
+	if strings.TrimSpace(got.Title) == "" || (strings.TrimSpace(got.EpicCode) == "" && strings.TrimSpace(got.EpicTitle) == "") || strings.TrimSpace(got.Body) == "" {
 		return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
 	}
 	return got, nil

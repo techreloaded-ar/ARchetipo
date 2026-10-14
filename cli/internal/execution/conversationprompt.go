@@ -34,6 +34,7 @@ const ConversationContextFence = "--- past conversation ---"
 func ConversationPrompt(opening string, actions []ConversationAction, resumed string) string {
 	lines := []string{
 		opening,
+		questionGuidance,
 		"Work with the person on this ARchetipo workspace. You may inspect and modify it, use the installed tools, and invoke the skills available in your runtime when useful.",
 		"Follow the workspace instructions and the native permission policy of your harness.",
 	}

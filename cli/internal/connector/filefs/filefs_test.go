@@ -842,3 +842,46 @@ func TestReadReviewOfMissingFileHasNoDossierOrVerdict(t *testing.T) {
 		t.Fatalf("review of a spec with no file = %+v, want empty comments and nil dossier/verdict", got)
 	}
 }
+
+func TestEnsureEmptyBacklogPreservesExistingArtifacts(t *testing.T) {
+	c := newTestConnector(t)
+	if err := c.EnsureEmptyBacklog(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	items, err := c.FetchBacklogItems(ctx, "")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("empty index: %v %+v", err, items)
+	}
+	first := domain.Spec{Code: "US-001", Title: "First", Epic: domain.Epic{Code: "EP-001", Title: "Goal"}, Status: domain.StatusTodo}
+	if _, err := c.SaveInitialBacklog(ctx, []domain.Spec{first}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(c.backlogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureEmptyBacklog(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(c.backlogPath())
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("existing backlog overwritten: %v", err)
+	}
+}
+
+func TestEnsureEmptyBacklogPreservesLegacyBacklog(t *testing.T) {
+	c := newTestConnector(t)
+	if err := os.MkdirAll(filepath.Dir(c.legacyBacklogPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.legacyBacklogPath(), []byte("# Existing backlog\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnsureEmptyBacklog(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(c.backlogPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy backlog shadowed by YAML: %v", err)
+	}
+}

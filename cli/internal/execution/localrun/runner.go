@@ -10,6 +10,11 @@ import (
 	"unicode/utf8"
 )
 
+// Runner is the shared seam for runtime availability probes.
+type Runner interface {
+	Run(context.Context, string, string, []string) (string, string, int, error)
+}
+
 // ExecRunner runs a command to completion and keeps stdout and stderr separate.
 type ExecRunner struct{}
 

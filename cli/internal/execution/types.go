@@ -190,6 +190,18 @@ func RequiredCapability(action ActionID) (Capability, error) {
 	}
 }
 
+// WorkflowCapabilities is the common action contract of the two local harnesses.
+// Protocol-specific controls are still discovered from each native session.
+func WorkflowCapabilities() []Capability {
+	actions := []ActionID{ActionPlan, ActionImplement, ActionReview, ActionInception, ActionBacklog, ActionSpecDraft}
+	result := make([]Capability, 0, len(actions))
+	for _, action := range actions {
+		capability, _ := RequiredCapability(action)
+		result = append(result, capability)
+	}
+	return result
+}
+
 // Scope says what an action acts upon. It is derived from the action and never
 // stored on the execution record: the action determines the scope totally, and
 // a stored field that can be derived is a field that can contradict what it is

@@ -311,7 +311,7 @@ func TestBuildArgsStartsTheStreamingSession(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("args = %#v, want %#v", got, tc.want)
 			}
-			for _, forbidden := range []string{buildPrompt(testRequest("claude")), testSpec} {
+			for _, forbidden := range []string{execution.PlanPrompt(localOpening, testRequest("claude")), testSpec} {
 				for _, arg := range got {
 					if strings.Contains(arg, forbidden) {
 						t.Fatalf("the prompt travelled on the command line: %#v", got)
@@ -326,8 +326,8 @@ func TestBuildArgsStartsTheStreamingSession(t *testing.T) {
 
 func TestBuildPromptIsDeterministicAndAsksForTheSharedReceipt(t *testing.T) {
 	req := testRequest("claude")
-	first := buildPrompt(req)
-	if second := buildPrompt(req); first != second {
+	first := execution.PlanPrompt(localOpening, req)
+	if second := execution.PlanPrompt(localOpening, req); first != second {
 		t.Fatalf("prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, testSpec, "prompt")
@@ -534,7 +534,7 @@ func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 	}
 	// The instruction reached the agent inside the protocol, as the first user
 	// frame of the session.
-	if got := fake.messagesReceived(); len(got) != 1 || got[0] != buildPrompt(req) {
+	if got := fake.messagesReceived(); len(got) != 1 || got[0] != execution.PlanPrompt(localOpening, req) {
 		t.Fatalf("the process received %v; want exactly the prompt", got)
 	}
 }

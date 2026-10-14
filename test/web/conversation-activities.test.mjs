@@ -16,6 +16,13 @@ const view = {
 const visible = html => html.replace(/<[^>]*>/g, "");
 
 describe("attività della conversazione", () => {
+	it("distingue le attività che partono alla scelta da quelle da descrivere", () => {
+		const html = renderConversation(view, "", { activitiesOpen: true, activities: { items: [
+			activity, { ...activity, id: "start", kind: "action" },
+		] } });
+		assert.match(html, /Avvia attività/);
+		assert.match(html, /Seleziona e descrivi la richiesta/);
+	});
 	it("mostra le attività dichiarate dal server senza esporre i nomi tecnici", () => {
 		const html = renderConversation({ available: true }, "", { activities: { items: [activity] } });
 		assert.match(html, /data-conversation-activity="catalog-entry"/);

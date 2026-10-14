@@ -1,35 +1,14 @@
-// Package codex implements the ARchetipo execution provider backed by a Codex
-// CLI process running on the workspace machine. It is the local counterpart of
-// the arcipelago provider: the same execution.Provider contract, the same
-// spec.plan capability, but the agent runs here instead of on a remote hub, so
-// no ARcipelago installation is needed to plan a spec through managed
-// execution.
-//
-// The provider never touches the ARchetipo connector. The local agent owns the
-// persistence of the plan; this package only starts the process, waits for it
-// and reports the outcome. That separation is what guarantees that a failed run
-// cannot move the spec.
-//
-// It also bounds what this package can prove. The receipt it demands is a
-// declaration of the agent, not an inspection of the connector, so it rules out
-// an agent that simply terminated but not one that lied. Confirming that the
-// spec really is PLANNED with a readable plan stays one layer up, in
-// execution.VerifyActionEffect, which already holds the connector.
-//
-// Everything that touches the operating system goes through the injectable
-// Runner, so tests exercise the real command building and outcome
-// classification without spawning a process. Codex owns its own
-// authentication: no credential, and no path to its session material, is ever
-// read, stored or logged by this package.
+// Package codex adapts its local harness to the shared Provider and
+// SessionProvider contracts. The batch workflow runner lives in localrun;
+// this package owns process startup, protocol messages and native sessions.
+// Persistence and effect verification belong to the connector and service.
 package codex
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -81,9 +60,7 @@ const (
 // A non-nil err means the process could not be run to completion at all; in
 // that case exitCode carries -1. A command that ran and failed reports a
 // non-zero exitCode with a nil err.
-type Runner interface {
-	Run(ctx context.Context, dir string, name string, args []string) (stdout string, stderr string, exitCode int, err error)
-}
+type Runner = localrun.Runner
 
 // Options carries the injectable seams of the provider. Every field is
 // optional: New fills the zero values with the real implementations.
@@ -159,11 +136,7 @@ func (p *Provider) ID() string { return ProviderID }
 // interfaces the provider implements, so declaring it by hand here would be
 // exactly the mismatch that derivation exists to make impossible.
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{
-		execution.CapabilitySpecPlan,
-		execution.CapabilitySpecImplement,
-		execution.CapabilitySpecReview,
-	}, nil
+	return execution.WorkflowCapabilities(), nil
 }
 
 // ValidateConfig checks the shape of the non-secret configuration only. It must
@@ -176,69 +149,20 @@ func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error {
 	return err
 }
 
-// Execute dispatches one action to a local Codex process and reports its
-// outcome.
-//
-// The order is deliberate: everything that can be known before spawning is
-// checked before spawning. A missing runtime and a missing skill both produce a
-// process that would either fail obscurely or burn a full timeout doing
-// nothing, and both are fixed by a single command the diagnostic can name. Only
-// then is the process started, and only a receipt for the dispatched spec turns
-// its exit code 0 into a success.
-//
-// It never returns an execution.RemoteError. There is no remote unit of work
-// that outlives this call: when Execute returns, the local process has either
-// exited or been killed by the timeout, so there is nothing left for a caller
-// to follow.
+// Execute dispatches any supported workflow action through the common batch
+// runner. Native conversations use SessionProvider and keep their own lifecycle.
 func (p *Provider) Execute(ctx context.Context, req execution.Request) (execution.Result, error) {
 	cfg, dir, err := p.prepare(ctx, req)
 	if err != nil {
 		return execution.Result{}, err
 	}
-	// The fork is on the action and nothing else. Both actions this provider
-	// dispatches are single-turn work that ends on a receipt, so they differ
-	// only in the skill they invoke, the instruction they carry and the receipt
-	// they accept — and each of them lives in its own function rather than as a
-	// set of conditions inside this one.
-	if req.Action == execution.ActionImplement {
-		return p.executeImplement(ctx, req, cfg, dir)
-	}
-	if req.Action == execution.ActionReview {
-		return p.executeReview(ctx, req, cfg, dir)
-	}
-	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
-		return execution.Result{}, err
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	turn, err := p.runSingleTurn(runCtx, req, cfg, dir, buildPrompt(req), "planning")
-	if err != nil {
-		return execution.Result{}, err
-	}
-
-	// The acceptance rule is the shared one: a receipt this provider accepted
-	// and another rejected would be a contract that exists twice. The receipt is
-	// looked for in the agent's last message, which is where the prompt asks for
-	// it — never in the stream as a whole.
-	receipt, err := execution.AcceptPlanReceipt(turn.final, req.SpecCode)
-	if err != nil {
-		turn.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
-		return execution.Result{}, fmt.Errorf(
-			"the codex command %q ended without having produced a plan for %s%s: %w",
-			cfg.Command, req.SpecCode, localrun.DiagnosticSuffix(turn.stderr), err,
-		)
-	}
-	turn.session.Close(execution.RunClosed, "")
-	return p.resultFor(cfg, turn.exitCode, turn.elapsed, receipt)
+	req.WorkingDir = dir
+	return localrun.ExecuteAction(ctx, req, localrun.ActionOptions{
+		ProviderID: p.ID(), Command: cfg.Command, Model: cfg.Model, SkillsDir: ".agents/skills", Opening: localOpening,
+		Timeout: cfg.Timeout, ShutdownGrace: shutdownGrace, Now: p.now,
+	}, actionOpener{provider: p, cfg: cfg, dir: dir})
 }
 
-// prepare answers everything that can be known before a process exists: the
-// configuration, the directory the session will run in, and whether the runtime
-// can be used at all. It is shared by every action because none of the three
-// answers depends on which action was dispatched, and a second copy of them
-// would be free to diverge on the order in which they fail.
 func (p *Provider) prepare(ctx context.Context, req execution.Request) (settings, string, error) {
 	cfg, err := parseConfig(req.ProviderConfig)
 	if err != nil {
@@ -264,80 +188,6 @@ func (p *Provider) prepare(ctx context.Context, req execution.Request) (settings
 		return settings{}, "", err
 	}
 	return cfg, dir, nil
-}
-
-// singleTurn is what a completed one-turn run leaves behind: the message the
-// agent ended on, the facts a payload or a diagnostic is built from, and the
-// still-open session, which only the caller can close — because only the caller
-// knows whether the message it was given is the receipt it asked for.
-type singleTurn struct {
-	session  *localrun.Session
-	final    string
-	exitCode int
-	stderr   string
-	elapsed  time.Duration
-}
-
-// runSingleTurn runs one prompt as one turn and reports the message it ended
-// on, or the reason there is none.
-//
-// It is the shape of every action this provider dispatches: planning and
-// implementation both ask for work that ends on a receipt, so a turn that ends
-// without one has failed here and now rather than asked a question. Keeping it
-// in one function is what keeps the four failures — the deadline, a process
-// that could not be run to completion, a turn that died with the process, and a
-// session that could not be opened at all — identical for both, instead of two
-// copies free to classify them differently.
-//
-// gerund is the only thing that varies between the callers, and it varies on
-// purpose: "did not finish planning US-1" and "did not finish implementing
-// US-1" are two different diagnoses of two different runs, and a shared phrase
-// would make them indistinguishable in a record.
-//
-// Every failure closes the session before returning; a success deliberately
-// leaves it open.
-func (p *Provider) runSingleTurn(runCtx context.Context, req execution.Request, cfg settings, dir, prompt, gerund string) (*singleTurn, error) {
-	live, err := p.openSession(runCtx, req, cfg, dir, prompt)
-	if err != nil {
-		return nil, err
-	}
-	session, client := live.session, live.client
-
-	select {
-	case <-client.TurnDone():
-	case <-runCtx.Done():
-	}
-
-	exitCode, stderr, waitErr := p.shutdown(live.process)
-	elapsed := p.now().Sub(live.startedAt)
-
-	if runErr := runCtx.Err(); runErr != nil {
-		reason := fmt.Sprintf("the codex session was stopped after %s: %v", elapsed.Round(time.Millisecond), runErr)
-		session.Close(execution.RunCrashed, reason)
-		return nil, fmt.Errorf("the codex command %q did not finish %s %s within %s", cfg.Command, gerund, req.SpecCode, cfg.Timeout)
-	}
-	if waitErr != nil {
-		session.Close(execution.RunCrashed, waitErr.Error())
-		return nil, fmt.Errorf("the codex command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
-	}
-	// A turn that ended because the process died is a different outcome from a
-	// turn the process declared over, and only the second one can carry a
-	// result. The exit code is reported when there is one, because that is the
-	// number the operator will look for.
-	if !client.Completed() && exitCode != 0 {
-		session.Close(execution.RunCrashed, fmt.Sprintf("the codex process exited %d", exitCode))
-		return nil, fmt.Errorf(
-			"the codex command %q exited %d after %s without %s %s%s",
-			cfg.Command, exitCode, elapsed.Round(time.Millisecond), gerund, req.SpecCode, localrun.DiagnosticSuffix(stderr),
-		)
-	}
-	return &singleTurn{
-		session:  session,
-		final:    client.FinalMessage(),
-		exitCode: exitCode,
-		stderr:   stderr,
-		elapsed:  elapsed,
-	}, nil
 }
 
 // liveSession is a started process that has already announced itself and can
@@ -371,6 +221,7 @@ func (p *Provider) openSession(runCtx context.Context, req execution.Request, cf
 	}
 
 	client := newAppServer(process, session)
+	client.conversational = true
 	go client.consume()
 
 	if err := client.start(runCtx, cfg, dir, prompt); err != nil {
@@ -394,73 +245,7 @@ func (p *Provider) openSession(runCtx context.Context, req execution.Request, cf
 // bound would otherwise keep this call inside a process that has decided to
 // stay.
 func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
-	_ = process.Close()
-	type outcome struct {
-		exitCode int
-		stderr   string
-		err      error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		exitCode, stderr, err := process.Wait()
-		done <- outcome{exitCode: exitCode, stderr: stderr, err: err}
-	}()
-	select {
-	case result := <-done:
-		return result.exitCode, result.stderr, result.err
-	case <-time.After(shutdownGrace):
-		_ = process.Signal()
-		result := <-done
-		return result.exitCode, result.stderr, result.err
-	}
-}
-
-// ensureSkill refuses to spawn Codex when the skill it is asked to invoke is
-// not installed in the workspace. Without this check the run would still start,
-// spend a full timeout, and fail with whatever Codex says about an unknown
-// command — a diagnostic that points nowhere. The message names the command
-// that fixes it instead.
-//
-// It is one function over a name and a path rather than one function per skill:
-// the check and the diagnostic are the same fact for every skill this provider
-// invokes, and two copies of them would be free to say it differently.
-func ensureSkill(dir, relPath, skill string) error {
-	path := filepath.Join(dir, relPath)
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("the ARchetipo %s skill is not installed for codex in %s (expected %s): run `archetipo init --tool codex` in that directory", skill, dir, relPath)
-	}
-	return nil
-}
-
-// resultFor builds the execution payload. It carries exactly six fields, and
-// none of them is a stream: the agent's stdout and stderr never enter the
-// record. result_summary is the receipt line alone, re-rendered from the parsed
-// receipt rather than sliced out of the output, so nothing the agent printed
-// around it can travel with it.
-func (p *Provider) resultFor(cfg settings, exitCode int, elapsed time.Duration, receipt execution.PlanReceipt) (execution.Result, error) {
-	summary, err := json.Marshal(receipt)
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("encoding the codex plan receipt: %w", err)
-	}
-	payload, err := json.Marshal(struct {
-		Command       string `json:"command"`
-		Model         string `json:"model"`
-		ExitCode      int    `json:"exit_code"`
-		ResultSummary string `json:"result_summary"`
-		PlanTasks     int    `json:"plan_tasks"`
-		DurationMS    int64  `json:"duration_ms"`
-	}{
-		Command:       cfg.Command,
-		Model:         cfg.Model,
-		ExitCode:      exitCode,
-		ResultSummary: string(summary),
-		PlanTasks:     receipt.Tasks,
-		DurationMS:    elapsed.Milliseconds(),
-	})
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("encoding the codex execution payload: %w", err)
-	}
-	return execution.Result{Payload: payload}, nil
+	return localrun.Shutdown(process, p.ID(), shutdownGrace)
 }
 
 // Available reports whether the configured Codex runtime can actually be used,

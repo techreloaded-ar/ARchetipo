@@ -87,8 +87,8 @@ func startBacklog(provider *Provider, req execution.Request) (<-chan execution.R
 // else would produce a run this provider could never accept.
 func TestBuildBacklogPromptAsksForTheSkillAndTheSharedReceipt(t *testing.T) {
 	req := backlogRequest("claude")
-	first := buildBacklogPrompt(req)
-	if second := buildBacklogPrompt(req); first != second {
+	first := execution.BacklogPrompt(localOpening, req)
+	if second := execution.BacklogPrompt(localOpening, req); first != second {
 		t.Fatalf("the backlog prompt is not deterministic:\n%s\n---\n%s", first, second)
 	}
 	assertContains(t, first, "/archetipo-spec", "backlog prompt")
@@ -155,7 +155,7 @@ func TestBacklogKeepsTheConversationOpenUntilTheReceipt(t *testing.T) {
 
 	// --- the instruction really delivered to the process --------------------
 	<-fake.started
-	if got := fake.messagesReceived(); len(got) != 1 || got[0] != buildBacklogPrompt(req) {
+	if got := fake.messagesReceived(); len(got) != 1 || got[0] != execution.BacklogPrompt(localOpening, req) {
 		t.Fatalf("the process received %v; want exactly the backlog prompt", got)
 	}
 

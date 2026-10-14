@@ -353,11 +353,13 @@ func (ws *workspaceSession) settleSessionActions(ctx context.Context, conversati
 			ws.settleSessionAction(ctx, executionID, nil, acceptErr)
 			continue
 		}
-		payload, marshalErr := json.Marshal(struct {
-			ConversationID string          `json:"conversation_id"`
-			TurnID         string          `json:"turn_id"`
-			Receipt        json.RawMessage `json:"receipt"`
-		}{ConversationID: conversationID, TurnID: turn.ID, Receipt: receipt})
+		fields, fieldErr := execution.ActionResultFields(stored.Action, receipt)
+		if fieldErr != nil {
+			ws.settleSessionAction(ctx, executionID, nil, fieldErr)
+			continue
+		}
+		fields["conversation_id"], fields["turn_id"], fields["receipt"] = conversationID, turn.ID, receipt
+		payload, marshalErr := json.Marshal(fields)
 		if marshalErr != nil {
 			ws.settleSessionAction(ctx, executionID, nil, marshalErr)
 			continue
@@ -460,6 +462,9 @@ func (ws *workspaceSession) finalMessageOfTurn(ctx context.Context, conversation
 		}
 		if event.Kind == localrun.KindText {
 			message = event.Text
+		}
+		if event.Kind == localrun.KindTurnEnd && event.FinalMessage != "" {
+			message = event.FinalMessage
 		}
 	}
 	return message

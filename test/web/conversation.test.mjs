@@ -1198,371 +1198,26 @@ describe("renderConversation — la run dentro il flusso", () => {
 	});
 });
 
-// The recommended step of the workspace, hosted at the tail of the thread.
-// Same discipline as the proposal block above: the oracles are on the visible
-// text and on the `data-*` attributes that are the contract with app.js — the
-// handles the wiring binds to, so their presence and their absence are
-// behaviour. The step arrives as local, non-payload state of the panel
-// (`ui.nextStep`), because it is a fact of the workspace and not of this
-// conversation.
-describe("renderConversation — il menu delle azioni nel compositore", () => {
-	const MENU = {
-		open: true,
-		items: [
-			{ scope: "spec", action: "plan", code: "US-002", label: "Pianifica", runnable: true },
-			{ scope: "workspace", action: "backlog", code: "", label: "Genera backlog", runnable: false, reason: "MOTIVO-DEL-SERVER" },
-		],
-	};
-
-	it("chiuso è un bottone accanto a Invia, aperto elenca le azioni con il loro motivo", () => {
-		const closed = renderConversation(LIVE, "", { actionsMenu: { open: false, items: [] } });
-		assert.match(closed, /data-conversation-actions-toggle/, "manca il bottone delle azioni");
-		assert.match(closed, /aria-expanded="false"/);
-		assert.ok(!closed.includes("conv-actions-menu"), "il menu è disegnato da chiuso");
-		assert.ok(
-			closed.indexOf("data-conversation-actions-toggle") < closed.lastIndexOf("Invia"),
-			"il bottone delle azioni non sta prima di Invia",
-		);
-
-		const open = renderConversation(LIVE, "", { actionsMenu: MENU });
-		assert.match(open, /aria-expanded="true"/);
-		const text = visibleText(open);
-		assert.match(text, /Pianifica/, "l'azione della spec non è elencata");
-		assert.match(text, /US-002/, "l'azione della spec non nomina la spec");
-		assert.match(text, /Genera backlog/, "l'azione di workspace non è elencata");
-		assert.match(text, /MOTIVO-DEL-SERVER/, "il motivo per cui un'azione non si avvia non si legge");
-		assert.match(open, /data-conversation-action="plan"[^>]*data-conversation-action-scope="spec"[^>]*data-conversation-action-spec="US-002"/);
-		assert.match(open, /data-conversation-action="backlog"[^>]*disabled/, "un'azione non avviabile è premibile");
-	});
-
-	it("senza azioni lo dice, e mentre legge lo dice", () => {
-		const none = renderConversation(LIVE, "", { actionsMenu: { open: true, items: [] } });
-		assert.match(visibleText(none), /Nessuna azione del processo/);
-		const loading = renderConversation(LIVE, "", { actionsMenu: { open: true, loading: true, items: [] } });
-		assert.match(visibleText(loading), /Lettura delle azioni/);
-	});
-
-	it("senza menu passato non disegna niente: il modulo non inventa azioni", () => {
-		const html = renderConversation(LIVE, "", {});
-		assert.ok(!html.includes("conv-actions"), "un menu compare senza che il chiamante l'abbia passato");
-	});
-});
-
-describe("renderConversation — passo successivo", () => {
-	const RUNNABLE = {
-		scope: "spec",
-		action: "implement",
-		label: "Implementa",
-		runnable: true,
-		spec: { code: "US-002" },
-	};
-
-	// The markup of the block alone, opening tag to matching close, div depth
-	// counted: what is asserted "inside the block" must be inside the block and
-	// not merely somewhere in the panel. Slicing to the end of the string would
-	// swallow the composer, and a reason drawn *under* the composer would pass.
-	function nextStepBlock(html) {
-		const start = html.indexOf('<div class="conv-nextstep');
-		assert.notEqual(start, -1, "il blocco del passo successivo non è disegnato");
-		const re = /<div\b|<\/div>/g;
-		re.lastIndex = start;
-		let depth = 0;
-		let m;
-		while ((m = re.exec(html)) !== null) {
-			depth += m[0] === "</div>" ? -1 : 1;
-			if (depth === 0) return html.slice(start, m.index + m[0].length);
-		}
-		assert.fail("il blocco del passo successivo non si chiude");
-	}
-
-	it("nomina il passo e la spec su cui agisce", () => {
-		const html = renderConversation(LIVE, "", { nextStep: RUNNABLE });
-		const text = visibleText(html);
-
-		assert.ok(
-			text.includes("Implementa"),
-			"l'etichetta del passo successivo non è testo visibile",
-		);
-		assert.ok(
-			text.includes("US-002"),
-			"il codice della spec su cui agisce il passo non è testo visibile",
-		);
-		assert.ok(
-			html.includes('class="conv-nextstep-run"'),
-			"il passo successivo non offre alcun comando da premere",
-		);
-		assert.ok(
-			html.includes('data-next-action="implement"'),
-			"il comando del passo non porta l'azione da avviare",
-		);
-		assert.ok(
-			html.includes('data-next-scope="spec"'),
-			"il comando del passo non porta l'ambito su cui avviare",
-		);
-		assert.ok(
-			html.includes('data-next-spec="US-002"'),
-			"il comando del passo non porta la spec bersaglio",
-		);
-	});
-
-	it("un passo di workspace non nomina nessuna spec", () => {
-		const html = renderConversation(LIVE, "", {
-			nextStep: {
-				scope: "workspace",
-				action: "prd",
-				label: "Scrivi il PRD",
-				runnable: true,
-			},
-		});
-
-		assert.ok(
-			html.includes('data-next-spec=""'),
-			"un passo di workspace dichiara comunque una spec bersaglio",
-		);
-		assert.ok(
-			!html.includes("conv-nextstep-code"),
-			"un passo di workspace disegna il posto di un codice spec che non esiste",
-		);
-	});
-
-	it("sta in coda alla conversazione, prima del compositore", () => {
-		const html = renderConversation(LIVE, "", { nextStep: RUNNABLE });
-		const idxTimeline = html.indexOf("conv-timeline");
-		const idxNextStep = html.indexOf("conv-nextstep");
-		const idxComposer = html.indexOf("conv-composer");
-
-		assert.ok(
-			idxTimeline !== -1 && idxNextStep !== -1 && idxComposer !== -1,
-			"timeline, passo successivo o compositore non sono disegnati",
-		);
-		assert.ok(
-			idxTimeline < idxNextStep,
-			"il blocco non è più in coda alla conversazione: precede la storia invece di seguirla",
-		);
-		assert.ok(
-			idxNextStep < idxComposer,
-			"il blocco non è più in coda alla conversazione: segue il compositore invece di precederlo",
-		);
-	});
-
-	it("un passo bloccato non è premibile e dice perché", () => {
-		const html = renderConversation(LIVE, "", {
-			nextStep: {
-				scope: "spec",
-				action: "review",
-				label: "Rivedi",
-				runnable: false,
-				spec: { code: "US-002" },
-				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
-				unlocked_by: "SBLOCCATO-DA un passo precedente",
-			},
-		});
-		const block = nextStepBlock(html);
-
-		assert.ok(
-			/<button[^>]*conv-nextstep-run[^>]*disabled/.test(block),
-			"il comando di un passo bloccato è premibile",
-		);
-		assert.ok(
-			visibleText(block).includes("SBLOCCATO-DA un passo precedente"),
-			"il motivo del blocco non si legge dentro il blocco del passo",
-		);
-	});
-
-	it("senza unlocked_by mostra la ragione del rifiuto", () => {
-		const html = renderConversation(LIVE, "", {
-			nextStep: {
-				scope: "spec",
-				action: "review",
-				label: "Rivedi",
-				runnable: false,
-				spec: { code: "US-002" },
-				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
-			},
-		});
-
-		assert.ok(
-			visibleText(nextStepBlock(html)).includes("RAGIONE-DEL-RIFIUTO dal processo"),
-			"senza rimedio dichiarato il blocco tace sul motivo del rifiuto",
-		);
-	});
-
-	it("un passo già in corso non offre una navigazione alla vecchia run", () => {
-		const html = renderConversation(LIVE, "", {
-			nextStep: {
-				scope: "spec",
-				action: "plan",
-				label: "Pianifica",
-				runnable: false,
-				spec: { code: "US-002" },
-				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
-				running_execution_id: "exec-abc",
-			},
-		});
-		const block = nextStepBlock(html);
-
-		assert.ok(
-			!block.includes("data-conversation-reach-run"),
-			"il passo già in corso offre ancora Vai alla run",
-		);
-		assert.ok(
-			!/<button[^>]*conv-nextstep-run/.test(block),
-			"il passo già in corso offre ancora l'avvio di ciò che sta già avvenendo",
-		);
-		assert.ok(
-			visibleText(block).includes("RAGIONE-DEL-RIFIUTO dal processo"),
-			"il motivo del blocco non si legge più dentro il blocco del passo",
-		);
-	});
-
-	it("un passo bloccato da altro resta un avvio non premibile", () => {
-		const html = renderConversation(LIVE, "", {
-			nextStep: {
-				scope: "spec",
-				action: "review",
-				label: "Rivedi",
-				runnable: false,
-				spec: { code: "US-002" },
-				unavailable_reason: "RAGIONE-DEL-RIFIUTO dal processo",
-			},
-		});
-		const block = nextStepBlock(html);
-
-		assert.ok(
-			/<button[^>]*conv-nextstep-run[^>]*disabled/.test(block),
-			"un passo bloccato da una condizione da soddisfare non è più un avvio inerte",
-		);
-		assert.ok(
-			!block.includes("data-conversation-reach-run"),
-			"un passo bloccato da altro promette una run da raggiungere che nessuno ha nominato",
-		);
-	});
-
-	it("neutralizza l'HTML che arriva dal payload del passo", () => {
-		const injected = '<img src=x onerror=1>';
-		const html = renderConversation(LIVE, "", {
-			nextStep: {
-				scope: "spec",
-				action: "review",
-				label: injected,
-				runnable: false,
-				unavailable_reason: injected,
-			},
-		});
-
-		assert.ok(
-			html.includes("&lt;img"),
-			"il testo del passo non è neutralizzato",
-		);
-		assert.ok(
-			!html.includes("<img"),
-			"il payload del passo ha prodotto un tag reale",
-		);
-	});
-
-	it("non lancia su un passo parziale", () => {
-		const partials = [{}, { action: "plan" }, { runnable: true }];
-		for (const nextStep of partials) {
-			const html = renderConversation(LIVE, "", { nextStep });
-			assert.equal(typeof html, "string");
-			assert.ok(html.includes("conv-timeline"));
+describe("conversazione senza comandi duplicati del backlog", () => {
+	it("non mostra suggerimenti o menu Azioni in conversazioni aperte, chiuse o vuote", () => {
+		const nextStep = { scope: "spec", action: "plan", label: "Passo suggerito", runnable: true, spec: { code: "US-002" } };
+		const actionsMenu = { open: true, items: [{ scope: "workspace", action: "backlog", label: "Genera backlog", runnable: true }] };
+		for (const view of [LIVE, { ...LIVE, conversation: { ...LIVE.conversation, state: "CLOSED" } }, {}]) {
+			const html = renderConversation(view, "", { nextStep, actionsMenu });
+			assert.ok(!html.includes("conv-nextstep"));
+			assert.ok(!html.includes("data-conversation-actions-toggle"));
+			assert.ok(!visibleText(html).includes("Passo suggerito"));
 		}
 	});
-
-	it("senza passo raccomandato non c'è alcun blocco", () => {
-		const html = renderConversation(LIVE, "", {});
-
-		assert.ok(
-			!html.includes("conv-nextstep"),
-			"in coda alla conversazione compare un blocco anche senza passo in sospeso",
-		);
-	});
-
-	it("ogni forma di assenza produce la stessa assenza di blocco", () => {
-		const absences = [
-			{ nextStep: null },
-			{ nextStep: undefined },
-			{ nextStep: "plan" },
-		];
-		for (const ui of absences) {
-			const html = renderConversation(LIVE, "", ui);
-			assert.ok(
-				!html.includes("conv-nextstep"),
-				`in coda alla conversazione compare un blocco con nextStep = ${JSON.stringify(ui.nextStep)}`,
-			);
-		}
-	});
-
-	it("un passo senza nome non viene proposto", () => {
-		const html = renderConversation(LIVE, "", {
-			nextStep: { scope: "spec", runnable: true, spec: { code: "US-002" } },
+	it("mantiene il compositore e un unico menu Attività", () => {
+		const html = renderConversation(LIVE, "Bozza da preservare", {
+			activities: { items: [{ id: "test", label: "Attività del server", primary: true, runnable: true }] },
+			activitiesOpen: true,
 		});
-
-		assert.ok(
-			!html.includes("conv-nextstep"),
-			"un passo che non ha un nome da mostrare viene comunque proposto",
-		);
-	});
-
-	it("senza conversazione da mostrare il passo è la guida, non una coda", () => {
-		const html = renderConversation({}, "", {
-			nextStep: RUNNABLE,
-			stage: { id: "todo", label: "Da pianificare", summary: "STADIO-DEL-WORKSPACE in parole del processo" },
-		});
-
-		assert.ok(
-			html.includes("conv-empty-guided"),
-			"senza conversazione e con un passo da proporre manca lo stato vuoto guidato",
-		);
-		const text = visibleText(html);
-		assert.match(text, /STADIO-DEL-WORKSPACE/, "lo stato vuoto non dice a che stadio è il workspace");
-		assert.match(text, /Implementa/, "lo stato vuoto non nomina il passo proposto");
-		assert.match(text, /US-002/, "lo stato vuoto non nomina la spec del passo");
-		assert.match(text, /contesto pulito/, "lo stato vuoto non dice che il passo apre una conversazione nuova");
-		assert.match(html, /conv-nextstep is-prominent/, "il passo non è in evidenza nello stato vuoto");
-		assert.match(html, /data-next-action="implement"/, "il comando del passo non porta l'azione da avviare");
-		// L'alternativa resta: una conversazione libera si apre da qui.
-		assert.match(html, /data-conversation-open/, "lo stato vuoto guidato non offre più di aprire una conversazione libera");
-		// Il passo sta prima dell'alternativa: è la cosa da fare.
-		assert.ok(
-			html.indexOf("conv-nextstep") < html.indexOf("data-conversation-open"),
-			"l'alternativa precede il passo proposto",
-		);
-	});
-
-	it("senza conversazione e senza passo resta l'invito di sempre", () => {
-		const html = renderConversation({}, "", {});
-		assert.ok(html.includes("conv-empty"), "senza conversazione manca l'invito ad aprirne una");
-		assert.ok(!html.includes("conv-nextstep"), "un passo che non c'è viene disegnato lo stesso");
-		assert.ok(!html.includes("conv-empty-guided"), "lo stato vuoto si dichiara guidato senza avere un passo");
-	});
-
-	it("in coda a una conversazione il passo non spiega il contesto pulito", () => {
-		// Dentro un thread l'azione parte *in quel thread*: dire che si apre
-		// una conversazione nuova sarebbe falso.
-		const html = renderConversation(LIVE, "", { nextStep: RUNNABLE });
-		assert.ok(!visibleText(nextStepBlock(html)).includes("contesto pulito"));
-		assert.ok(!html.includes("is-prominent"));
-	});
-
-	// The assumption this spec registered, made explicit so a later change
-	// cannot break it in silence: the block follows *a* conversation being
-	// shown, not a live one. Tied to ACTIVE alone, the recommended step would
-	// be unreachable from the workspace home every time the last conversation
-	// has ended.
-	it("una conversazione conclusa mostra comunque il passo", () => {
-		const html = renderConversation(
-			withConversation({
-				conversation: Object.assign({}, LIVE.conversation, { state: "CLOSED" }),
-			}),
-			"",
-			{ nextStep: RUNNABLE },
-		);
-
-		assert.ok(
-			html.includes("conv-nextstep"),
-			"una conversazione conclusa nasconde il passo raccomandato",
-		);
+		assert.match(html, /data-conversation-activities-toggle/);
+		assert.match(html, />Attività<\/button>/);
+		assert.match(html, />Bozza da preservare<\/textarea>/);
+		assert.ok(!html.includes("data-conversation-actions-toggle"));
 	});
 });
 
@@ -2347,4 +2002,34 @@ describe("renderConversation — il passo che ha una conversazione sua", () => {
 			"un passo dispatch-based ha perso la piega del log: non si leggerebbe da nessuna parte",
 		);
 	});
+});
+
+// Question schemas come from adapters, irrespective of provider or process.
+describe('runtime input questions', () => {
+ const pending = (questions) => withConversation({ session: { archive: 'OPEN', recovery: 'RESUMABLE', pending_inputs: [{ id: 'input-1', title: 'Rispondi all’agente', payload: { nativeSentinel: 'PROTOCOL-ONLY' }, questions }] } });
+ it('renders choices and free text without asking the person for JSON', () => {
+  const html = renderConversation(pending([{ id: 'db', header: 'Database', prompt: 'Quale database?', allow_text: true, options: [{ value: 'sqlite', label: 'SQLite', description: 'Sul computer' }] }]), '', { inputDrafts: { 'input-1': { db: { option: 'sqlite', text: '' } } } });
+  assert.match(html, /Quale database\?/);
+  assert.match(html, /type="radio"[^>]*value="sqlite" checked/);
+  assert.match(html, /Sul computer/);
+  assert.match(html, /Oppure scrivi una risposta/);
+  assert.doesNotMatch(html, /Risposta JSON|PROTOCOL-ONLY/);
+ });
+ it('preserves free answers across renders, escapes native text and masks secret fields', () => {
+  const html = renderConversation(pending([{ id: 'x', prompt: '<script>request</script>', allow_text: true }, { id: 'private', prompt: 'Risposta riservata', allow_text: true, secret: true }]), '', { busy: true, inputDrafts: { 'input-1': { x: { text: '<answer>' } } } });
+  assert.match(html, /&lt;script&gt;request&lt;\/script&gt;/);
+  assert.match(html, /&lt;answer&gt;/);
+  assert.match(html, /type="password"[^>]* disabled/);
+  assert.match(html, /type="submit"[^>]* disabled/);
+ });
+ it('retains the native response fallback for an unknown schema', () => {
+  const html = renderConversation(pending([]), '', {});
+  assert.match(html, /<details><summary>Dettaglio della richiesta/);
+  assert.match(html, /data-conversation-input-draft/);
+ });
+ it('leaves an ordinary conversation free of structured forms', () => {
+  const html = renderConversation(withConversation(), '', {});
+  assert.doesNotMatch(html, /data-conversation-input-form/);
+  assert.match(html, /conv-composer-input/);
+ });
 });

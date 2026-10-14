@@ -1,37 +1,14 @@
-// Package claude implements the ARchetipo execution provider backed by a Claude
-// Code CLI process running on the workspace machine. It is a local provider
-// like codex, and a sibling of it rather than a variation: the same
-// execution.Provider contract and the same spec.plan capability, but a
-// different CLI, different flags and different diagnostics, so the two are kept
-// as separate implementations of the shared contracts instead of one
-// parameterized "local process" provider.
-//
-// The provider never touches the ARchetipo connector. The local agent owns the
-// persistence of the plan; this package only starts the process, waits for it
-// and reports the outcome. That separation is what guarantees that a failed run
-// cannot move the spec.
-//
-// It also bounds what this package can prove. The receipt it demands is a
-// declaration of the agent, not an inspection of the connector, so it rules out
-// an agent that simply terminated but not one that lied. Confirming that the
-// spec really is PLANNED with a readable plan stays one layer up, in
-// execution.VerifyActionEffect, which already holds the connector.
-//
-// Everything that touches the operating system goes through the injectable
-// Runner, so tests exercise the real command building and outcome
-// classification without spawning a process. Claude owns its own
-// authentication: no credential, and no path to its session material, is ever
-// read, stored or logged by this package.
+// Package claude adapts its local harness to the shared Provider and
+// SessionProvider contracts. The batch workflow runner lives in localrun;
+// this package owns process startup, protocol messages and native sessions.
+// Persistence and effect verification belong to the connector and service.
 package claude
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -93,9 +70,7 @@ const (
 // A non-nil err means the process could not be run to completion at all; in
 // that case exitCode carries -1. A command that ran and failed reports a
 // non-zero exitCode with a nil err.
-type Runner interface {
-	Run(ctx context.Context, dir string, name string, args []string) (stdout string, stderr string, exitCode int, err error)
-}
+type Runner = localrun.Runner
 
 // Options carries the injectable seams of the provider. Every field is
 // optional: New fills the zero values with the real implementations.
@@ -185,14 +160,7 @@ func (p *Provider) ID() string { return ProviderID }
 // interfaces the provider implements, so declaring it by hand here would be
 // exactly the mismatch that derivation exists to make impossible.
 func (p *Provider) Capabilities(context.Context) ([]execution.Capability, error) {
-	return []execution.Capability{
-		execution.CapabilitySpecPlan,
-		execution.CapabilitySpecImplement,
-		execution.CapabilitySpecReview,
-		execution.CapabilityWorkspaceInception,
-		execution.CapabilityWorkspaceBacklog,
-		execution.CapabilityWorkspaceSpecDraft,
-	}, nil
+	return execution.WorkflowCapabilities(), nil
 }
 
 // ValidateConfig checks the shape of the non-secret configuration only. It must
@@ -205,219 +173,20 @@ func (p *Provider) ValidateConfig(_ context.Context, raw map[string]any) error {
 	return err
 }
 
-// Execute dispatches one spec.plan action to a local Claude process and reports
-// its outcome.
-//
-// The order is deliberate: everything that can be known before spawning is
-// checked before spawning. A missing runtime and a missing skill both produce a
-// process that would either fail obscurely or burn a full timeout doing
-// nothing, and both are fixed by a single command the diagnostic can name. Only
-// then is the session started, and only a receipt for the dispatched spec turns
-// a finished turn into a success.
-//
-// It never returns an execution.RemoteError. There is no remote unit of work
-// that outlives this call: when Execute returns, the local process has either
-// exited or been killed by the timeout, so there is nothing left for a caller
-// to follow.
+// Execute dispatches any supported workflow action through the common batch
+// runner. Native conversations use SessionProvider and keep their own lifecycle.
 func (p *Provider) Execute(ctx context.Context, req execution.Request) (execution.Result, error) {
 	cfg, dir, err := p.prepare(ctx, req)
 	if err != nil {
 		return execution.Result{}, err
 	}
-	// The fork is on the action and nothing else. Planning keeps the flow it
-	// has always had — one turn, then a receipt — because the moment a turn
-	// ends without one it has failed, and that diagnostic must not become a
-	// wait. Inception, backlog generation and spec drafting are the other
-	// semantics, and each lives in its own function rather than as a set of
-	// conditions inside this one.
-	if req.Action == execution.ActionInception {
-		return p.executeInception(ctx, req, cfg, dir)
-	}
-	if req.Action == execution.ActionBacklog {
-		return p.executeBacklog(ctx, req, cfg, dir)
-	}
-	if req.Action == execution.ActionSpecDraft {
-		return p.executeSpecDraft(ctx, req, cfg, dir)
-	}
-	if req.Action == execution.ActionImplement {
-		return p.executeImplement(ctx, req, cfg, dir)
-	}
-	if req.Action == execution.ActionReview {
-		return p.executeReview(ctx, req, cfg, dir)
-	}
-	if err := ensureSkill(dir, planSkillRelPath, "planning"); err != nil {
-		return execution.Result{}, err
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	subject := specSubject{gerund: "planning", outcome: "a plan for " + req.SpecCode}
-	held, err := p.runSpecConversation(runCtx, req, cfg, dir, buildPrompt(req), subject, func(message string) bool {
-		_, err := execution.AcceptPlanReceipt(message, req.SpecCode)
-		return err == nil
-	})
-	if err != nil {
-		return execution.Result{}, err
-	}
-
-	// The acceptance rule is the shared one: a receipt this provider accepted
-	// and another rejected would be a contract that exists twice. The receipt is
-	// looked for in the message a turn ends on, which is where the prompt asks
-	// for it — never in the stream as a whole. It is parsed back here rather
-	// than carried out of the conversation as a typed value, for the reason
-	// written on converse: the loop recognizes an acceptable closing message,
-	// and which artifact that message describes is this layer's knowledge.
-	receipt, err := execution.AcceptPlanReceipt(held.final, req.SpecCode)
-	if err != nil {
-		held.session.Close(execution.RunCrashed, fmt.Sprintf("the session ended without a plan for %s", req.SpecCode))
-		return execution.Result{}, fmt.Errorf(
-			"the claude command %q ended without having produced a plan for %s%s: %w",
-			cfg.Command, req.SpecCode, localrun.DiagnosticSuffix(held.stderr), err,
-		)
-	}
-	held.session.Close(execution.RunClosed, "")
-	return p.resultFor(cfg, held.exitCode, held.elapsed, receipt)
+	req.WorkingDir = dir
+	return localrun.ExecuteAction(ctx, req, localrun.ActionOptions{
+		ProviderID: p.ID(), Command: cfg.Command, Model: cfg.Model, SkillsDir: ".claude/skills", Opening: localOpening,
+		Timeout: cfg.Timeout, ShutdownGrace: shutdownGrace, Now: p.now,
+	}, actionOpener{provider: p, cfg: cfg, dir: dir})
 }
 
-// specSubject is how one spec-scoped action names itself in a diagnostic.
-//
-// It exists because the three actions differ in exactly two words and in
-// nothing else: what the agent was doing, and what it had to produce. Writing
-// the four failures once and parameterizing them on those two is what keeps
-// "did not finish planning US-1" and "did not finish implementing US-1" two
-// different diagnoses of two different runs, without three copies of the same
-// switch free to classify the same failure differently.
-type specSubject struct {
-	// gerund is the work in progress, as "did not finish <gerund> US-1 within
-	// 1h" reads it: "planning", "implementing", "preparing the review of".
-	gerund string
-	// outcome is what the run had to produce, as "without having produced
-	// <outcome>" reads it: "a plan for US-1", "the review of US-1".
-	outcome string
-}
-
-// specConversation is what a finished spec-scoped conversation leaves behind:
-// the message the agent closed on, the facts a payload or a diagnostic is built
-// from, and the still-open session — which only the caller can close, because
-// only the caller knows whether the message it was given is the receipt it
-// asked for.
-type specConversation struct {
-	session *localrun.Session
-	final   string
-	// turns counts how many times the agent finished speaking before it was
-	// done. It is the cheapest honest measure of a conversation, and it is the
-	// number that says out loud that these actions are no longer single-turn.
-	turns    int
-	exitCode int
-	stderr   string
-	elapsed  time.Duration
-}
-
-// runSpecConversation runs one spec-scoped action as a conversation and reports
-// the message it ended on, or the reason there is none.
-//
-// It is the shape of planning, implementation and review. It used to be one
-// turn, and the reasoning for that was sound as far as it went: those three
-// actions end on a receipt, so a turn that ends without one has not asked a
-// question. What it missed is that a turn can end without a receipt for a
-// reason that is neither success nor failure — the agent needs something only a
-// person can give, and says so. Under one turn that sentence was the end of the
-// work; here it is the agent waiting, and the answer arrives through the run's
-// own dialogue exactly as it does in an inception.
-//
-// The receipt is therefore tried at the end of every turn and not only of the
-// first. Nothing else about the acceptance changed: it is still the shared gate,
-// still read from the message the turn ends on, and still a declaration of the
-// agent rather than an inspection of the connector.
-//
-// Every failure closes the session before returning; a success deliberately
-// leaves it open.
-func (p *Provider) runSpecConversation(runCtx context.Context, req execution.Request, cfg settings, dir, prompt string, subject specSubject, accept func(string) bool) (*specConversation, error) {
-	// Conversational, which is what the whole change amounts to at the protocol
-	// level: the end of a turn no longer ends the session, so a message sent
-	// after it opens the next turn instead of being refused.
-	live, err := p.openSession(runCtx, req, cfg, dir, prompt, true, false, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	final, turns, convErr := converse(runCtx, live.client, accept)
-
-	exitCode, stderr, waitErr := p.shutdown(live.process)
-	elapsed := p.now().Sub(live.startedAt)
-
-	if convErr != nil {
-		// The process left after the agent had finished speaking, and what it
-		// finished on was not the receipt. That is not one of the four failures
-		// below: it is a closing message that has to be judged, and only the
-		// caller can judge it — it is the one layer that knows which receipt it
-		// asked for and can therefore say what was wrong with the one it got.
-		// Handing it over is what keeps "did not emit the expected JSON receipt
-		// line" in the record instead of a flat "the run ended".
-		if errors.Is(convErr, errProcessGone) && live.client.Completed() {
-			return &specConversation{
-				session:  live.session,
-				final:    live.client.FinalMessage(),
-				turns:    turns,
-				exitCode: exitCode,
-				stderr:   stderr,
-				elapsed:  elapsed,
-			}, nil
-		}
-		return nil, p.failSpecConversation(live, cfg, req, subject, runCtx.Err(), convErr, exitCode, stderr, elapsed)
-	}
-	if waitErr != nil {
-		live.session.Close(execution.RunCrashed, waitErr.Error())
-		return nil, fmt.Errorf("the claude command %q could not be run to completion after %s: %w", cfg.Command, elapsed.Round(time.Millisecond), waitErr)
-	}
-	return &specConversation{
-		session:  live.session,
-		final:    final,
-		turns:    turns,
-		exitCode: exitCode,
-		stderr:   stderr,
-		elapsed:  elapsed,
-	}, nil
-}
-
-// failSpecConversation closes the run and composes the diagnostic for a
-// spec-scoped conversation that ended without a receipt.
-//
-// It keeps the four causes apart, because they are four different things to
-// fix: the deadline, a cancellation, a turn the agent itself closed with an
-// error, and a process that left. The wording of the first two is the one those
-// runs have always had, so a record written before this change and one written
-// after read the same way for the same failure.
-func (p *Provider) failSpecConversation(live *liveSession, cfg settings, req execution.Request, subject specSubject, runErr, convErr error, exitCode int, stderr string, elapsed time.Duration) error {
-	rounded := elapsed.Round(time.Millisecond)
-	switch {
-	case errors.Is(convErr, errRunTerminated) && errors.Is(runErr, context.DeadlineExceeded):
-		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude session was stopped after %s: %v", rounded, runErr))
-		return fmt.Errorf("the claude command %q did not finish %s %s within %s", cfg.Command, subject.gerund, req.SpecCode, cfg.Timeout)
-	case errors.Is(convErr, errRunTerminated):
-		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude session was stopped after %s: %v", rounded, runErr))
-		return fmt.Errorf("the claude command %q was stopped after %s without having produced %s: %v", cfg.Command, rounded, subject.outcome, runErr)
-	default:
-		// A turn the agent closed with an error, and a process that left in the
-		// middle of one, are the same sentence because they are the same fact:
-		// the turn never completed, so whatever the agent last said cannot be
-		// read as the outcome of work it never finished. An interrupted turn is
-		// the reason the exit code cannot be the whole condition — stopping the
-		// process afterwards is an ordinary shutdown and can exit 0.
-		live.session.Close(execution.RunCrashed, fmt.Sprintf("the claude process exited %d without completing the turn", exitCode))
-		return fmt.Errorf(
-			"the claude command %q exited %d after %s without %s %s: the turn never completed%s",
-			cfg.Command, exitCode, rounded, subject.gerund, req.SpecCode, localrun.DiagnosticSuffix(stderr),
-		)
-	}
-}
-
-// prepare answers everything that can be known before a process exists: the
-// configuration, the directory the session will run in, and whether the runtime
-// can be used at all. It is shared by every action because none of the three
-// answers depends on which action was dispatched, and a second copy of them
-// would be free to diverge on the order in which they fail.
 func (p *Provider) prepare(ctx context.Context, req execution.Request) (settings, string, error) {
 	cfg, err := parseConfig(req.ProviderConfig)
 	if err != nil {
@@ -519,84 +288,7 @@ func (p *Provider) openSession(runCtx context.Context, req execution.Request, cf
 // fallback for a build that stays: a Wait with no bound would otherwise keep
 // this call inside a process that has decided not to leave.
 func (p *Provider) shutdown(process localrun.Process) (int, string, error) {
-	_ = process.Close()
-	type outcome struct {
-		exitCode int
-		stderr   string
-		err      error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		exitCode, stderr, err := process.Wait()
-		done <- outcome{exitCode: exitCode, stderr: stderr, err: err}
-	}()
-	select {
-	case result := <-done:
-		return result.exitCode, result.stderr, result.err
-	case <-time.After(shutdownGrace):
-		_ = process.Signal()
-	}
-	// The wait that follows the kill is bounded as well, and it is not
-	// belt-and-braces: `Wait` returns when the process has gone *and* its pipes
-	// have been drained, so a killed process whose standard output is still held
-	// open somewhere else leaves this call inside a process that no longer
-	// exists. Whoever asked for the release — the close of a conversation, the
-	// shutdown of the whole viewer — must get an answer either way, and a
-	// session whose runtime was killed is released whatever its pipes do.
-	select {
-	case result := <-done:
-		return result.exitCode, result.stderr, result.err
-	case <-time.After(shutdownGrace):
-		return -1, "", fmt.Errorf("the claude session process did not report its exit after being killed")
-	}
-}
-
-// ensureSkill refuses to spawn Claude when the skill it is asked to invoke is
-// not installed in the workspace. Without this check the run would still start,
-// spend a full timeout, and fail with whatever Claude says about an unknown
-// command — a diagnostic that points nowhere. The message names the command
-// that fixes it instead.
-//
-// It is one function over a name and a path rather than one function per skill:
-// the check and the diagnostic are the same fact for every skill this provider
-// invokes, and two copies of them would be free to say it differently.
-func ensureSkill(dir, relPath, skill string) error {
-	path := filepath.Join(dir, relPath)
-	if _, err := os.Stat(path); err != nil {
-		return fmt.Errorf("the ARchetipo %s skill is not installed for claude in %s (expected %s): run `archetipo init --tool claude` in that directory", skill, dir, relPath)
-	}
-	return nil
-}
-
-// resultFor builds the execution payload. It carries exactly six fields, and
-// none of them is a stream: the agent's stdout and stderr never enter the
-// record. result_summary is the receipt line alone, re-rendered from the parsed
-// receipt rather than sliced out of the output, so nothing the agent printed
-// around it can travel with it.
-func (p *Provider) resultFor(cfg settings, exitCode int, elapsed time.Duration, receipt execution.PlanReceipt) (execution.Result, error) {
-	summary, err := json.Marshal(receipt)
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("encoding the claude plan receipt: %w", err)
-	}
-	payload, err := json.Marshal(struct {
-		Command       string `json:"command"`
-		Model         string `json:"model"`
-		ExitCode      int    `json:"exit_code"`
-		ResultSummary string `json:"result_summary"`
-		PlanTasks     int    `json:"plan_tasks"`
-		DurationMS    int64  `json:"duration_ms"`
-	}{
-		Command:       cfg.Command,
-		Model:         cfg.Model,
-		ExitCode:      exitCode,
-		ResultSummary: string(summary),
-		PlanTasks:     receipt.Tasks,
-		DurationMS:    elapsed.Milliseconds(),
-	})
-	if err != nil {
-		return execution.Result{}, fmt.Errorf("encoding the claude execution payload: %w", err)
-	}
-	return execution.Result{Payload: payload}, nil
+	return localrun.Shutdown(process, p.ID(), shutdownGrace)
 }
 
 // Available reports whether the configured Claude runtime can actually be used,

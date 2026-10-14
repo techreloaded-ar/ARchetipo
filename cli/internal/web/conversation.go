@@ -1273,7 +1273,8 @@ func (s *Server) handleRespondWorkspaceConversationApproval(w http.ResponseWrite
 }
 
 type respondConversationInputRequest struct {
-	Payload json.RawMessage `json:"payload"`
+	Payload json.RawMessage     `json:"payload"`
+	Answers map[string][]string `json:"answers"`
 }
 
 func (s *Server) handleRespondWorkspaceConversationInput(w http.ResponseWriter, r *http.Request) {
@@ -1292,8 +1293,9 @@ func (s *Server) handleRespondWorkspaceConversationInput(w http.ResponseWriter, 
 		writeError(w, err)
 		return
 	}
-	if len(body.Payload) == 0 || string(body.Payload) == "null" {
-		writeError(w, iox.NewInvalidInput("payload is required", "answer the structured input requested by the provider", nil))
+	hasPayload := len(body.Payload) > 0 && string(body.Payload) != "null"
+	if hasPayload == (body.Answers != nil) {
+		writeError(w, iox.NewInvalidInput("provide answers or a native payload", "answer the structured input requested by the provider", nil))
 		return
 	}
 	ws := s.session()
@@ -1303,7 +1305,7 @@ func (s *Server) handleRespondWorkspaceConversationInput(w http.ResponseWriter, 
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "answer a structured input request"))
 		return
 	}
-	if err := s.respondNativeConversationInput(r.Context(), ws, snapshot, inputID, body.Payload); err != nil {
+	if err := s.respondNativeConversationInput(r.Context(), ws, snapshot, inputID, body); err != nil {
 		writeError(w, err)
 		return
 	}

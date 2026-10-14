@@ -29,6 +29,7 @@ type Factory func(t *testing.T) connector.Connector
 func Run(t *testing.T, newConn Factory) {
 	t.Helper()
 	t.Run("InitializeConnector", func(t *testing.T) { testInitialize(t, newConn(t)) })
+	t.Run("FirstStoryCreatesEpic", func(t *testing.T) { testFirstStoryCreatesEpic(t, newConn(t)) })
 	t.Run("BacklogLifecycle", func(t *testing.T) { testBacklogLifecycle(t, newConn(t)) })
 	t.Run("PlanLifecycle", func(t *testing.T) { testPlanLifecycle(t, newConn(t)) })
 	t.Run("AppendSpecs", func(t *testing.T) { testAppendSpecs(t, newConn(t)) })
@@ -46,6 +47,21 @@ func testInitialize(t *testing.T, c connector.Connector) {
 	}
 	if info.Workflow.Statuses.Todo == "" {
 		t.Errorf("workflow statuses not populated")
+	}
+}
+
+func testFirstStoryCreatesEpic(t *testing.T, c connector.Connector) {
+	ctx := context.Background()
+	first := sampleSpecs()[0]
+	if _, err := c.SaveInitialBacklog(ctx, []domain.Spec{first}); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := c.ReadExistingBacklog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Codes) != 1 || summary.Codes[0] != first.Code || len(summary.Epics) != 1 || summary.Epics[0] != first.Epic {
+		t.Fatalf("first story and epic must be discoverable together: %+v", summary)
 	}
 }
 

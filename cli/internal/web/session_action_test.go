@@ -375,3 +375,42 @@ func TestAnActionWhoseReceiptTheWorkspaceDeniesIsRefused(t *testing.T) {
 		t.Fatalf("the unverified claim closed as %+v, want UNCONFIRMED_EFFECT", refused.Error)
 	}
 }
+
+func TestNativeSpecDraftCarriesTheFirstEpicThroughConfirmation(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-first-draft", nil)
+	provider.capabilities = []execution.Capability{execution.CapabilityWorkspaceSpecDraft}
+	srv, _, conn := newEmptyRunServer(t, provider, true)
+	t.Cleanup(func() { srv.session().nativeFollowers.closeAll() })
+	status, started := startWorkspaceAction(t, srv, string(execution.ActionSpecDraft))
+	if status != http.StatusCreated {
+		t.Fatalf("start: %d %v", status, started)
+	}
+	id, _ := started["id"].(string)
+	conversationID := conversationOfExecution(t, srv, id)
+	receipt := execution.SpecDraftReceipt{Artifact: "spec_draft", Status: execution.ProposedStatus, Title: "Prima storia", EpicTitle: "Primo obiettivo", Priority: "MEDIUM", Points: 3, Body: validCreateBody}
+	line, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.completeCurrentTurn(t, string(line), execution.TurnCompleted)
+	awaitRecordSettled(t, srv, conversationID)
+	completed := awaitExecutionStatus(t, srv, id, execution.StatusSucceeded)
+	var payload struct {
+		SpecDraft execution.SpecDraftReceipt `json:"spec_draft"`
+	}
+	if err := json.Unmarshal(completed.Result.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SpecDraft.EpicTitle != receipt.EpicTitle || payload.SpecDraft.Title != receipt.Title {
+		t.Fatalf("proposal not readable from native action: %s", completed.Result.Payload)
+	}
+	if summary, err := conn.ReadExistingBacklog(context.Background()); err == nil && len(summary.Codes) != 0 {
+		t.Fatal("the proposal persisted a story before confirmation")
+	}
+	req := validCreateReq()
+	req["title"], req["epic_code"], req["epic_title"] = receipt.Title, "", payload.SpecDraft.EpicTitle
+	w := postSpec(t, srv, req)
+	if w.Code != http.StatusCreated || decodeCreateView(t, w).Spec.Code != "US-001" {
+		t.Fatalf("confirmation: %d %s", w.Code, w.Body.String())
+	}
+}

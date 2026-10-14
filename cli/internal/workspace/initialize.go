@@ -8,6 +8,8 @@ import (
 	"sort"
 	"syscall"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -129,6 +131,26 @@ func stage(ctx context.Context, dir, skillsDir, runtimeDir string, resolved Reso
 	})
 	if err := os.WriteFile(filepath.Join(archetipoDir, "config.yaml"), []byte(rendered), 0o644); err != nil {
 		return iox.NewInternal("cannot stage config.yaml", err)
+	}
+
+	if resolved.Connector == "file" {
+		cfg, err := config.LoadExact(dir)
+		if err != nil {
+			return err
+		}
+		// A repository can already have a YAML or legacy Markdown backlog
+		// without a workspace config. Do not stage an index that shadows it.
+		existingCfg := cfg
+		existingCfg.ProjectRoot = resolved.Dir
+		if _, err := filefs.New(existingCfg).FetchBacklogItems(ctx, ""); err != nil {
+			var coded *iox.CodedError
+			if !errors.As(err, &coded) || coded.Code != iox.CodePreconditionMissing {
+				return err
+			}
+			if err := filefs.New(cfg).EnsureEmptyBacklog(); err != nil {
+				return err
+			}
+		}
 	}
 
 	sharedSrc := filepath.Join(runtimeDir, "shared-runtime.md")

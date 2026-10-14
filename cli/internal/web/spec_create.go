@@ -18,6 +18,7 @@ import (
 type createSpecReq struct {
 	Title     string   `json:"title"`
 	EpicCode  string   `json:"epic_code"`
+	EpicTitle string   `json:"epic_title,omitempty"`
 	Priority  string   `json:"priority"`
 	Points    int      `json:"points"`
 	Scope     string   `json:"scope"`
@@ -165,7 +166,20 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		summary = domain.BacklogSummary{}
 	}
 
+	// A title with no code explicitly creates an epic alongside the story.
+	// Reuse its persisted identity on retries, just as for existing epics.
 	epic, ok := resolveEpic(summary.Epics, req.EpicCode)
+	if title := strings.TrimSpace(req.EpicTitle); title != "" {
+		if strings.TrimSpace(req.EpicCode) != "" {
+			writeCreateSpecFieldErrors(w, []fieldError{{Field: "epic_title", Code: "SPEC_EPIC_CONFLICT", Message: "choose an existing epic or enter a new epic title, not both"}})
+			return
+		}
+		epic = newSpecEpic(summary.Epics, title)
+		ok = true
+	} else if strings.TrimSpace(req.EpicCode) == "" {
+		writeCreateSpecFieldErrors(w, []fieldError{{Field: "epic_title", Code: "SPEC_EPIC_TITLE_REQUIRED", Message: "enter a title for the new epic"}})
+		return
+	}
 	if !ok {
 		writeCreateSpecFieldErrors(w, []fieldError{{
 			Field:   "epic_code",
@@ -175,7 +189,7 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if found, dup := findExistingSpec(existing, req.EpicCode, req.Title); dup {
+	if found, dup := findExistingSpec(existing, epic.Code, req.Title); dup {
 		writeJSON(w, http.StatusOK, createSpecView{Spec: found, Created: false})
 		return
 	}
@@ -232,6 +246,23 @@ func resolveEpic(epics []domain.Epic, code string) (domain.Epic, bool) {
 		}
 	}
 	return domain.Epic{}, false
+}
+
+// newSpecEpic derives a progressive code and preserves an existing title's
+// identity, so a retried creation cannot create a second epic or story.
+func newSpecEpic(epics []domain.Epic, title string) domain.Epic {
+	highest := 0
+	for _, epic := range epics {
+		if normalizeSpecTitle(epic.Title) == normalizeSpecTitle(title) {
+			return epic
+		}
+		if suffix, ok := strings.CutPrefix(epic.Code, "EP-"); ok {
+			if n, err := strconv.Atoi(suffix); err == nil && n > highest {
+				highest = n
+			}
+		}
+	}
+	return domain.Epic{Code: fmt.Sprintf("EP-%03d", highest+1), Title: title}
 }
 
 // trimCodes normalizes a list of spec codes, dropping the empty entries.
