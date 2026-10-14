@@ -178,11 +178,8 @@ func parseModel(value any) (string, error) {
 }
 
 // parseEffort accepts one of the levels Claude Code understands on `--effort`.
-// Unlike permission_mode it has no default: an absent key means "not set", and
-// then no flag is passed at all, so Claude applies its own level. A key that is
-// present must carry one of the declared levels — a value outside the set would
-// be handed straight to the process and refused there, with a diagnostic that
-// points at the CLI instead of at the option.
+// The runtime catalog validates per-model choices; parsing only validates shape,
+// just as Codex does, so new runtime levels need no ARchetipo release.
 func parseEffort(value any) (string, error) {
 	if value == nil {
 		return "", nil
@@ -195,12 +192,7 @@ func parseEffort(value any) (string, error) {
 	if text == "" {
 		return "", configErr("effort", "must not be empty")
 	}
-	for _, level := range effortLevels {
-		if text == level {
-			return text, nil
-		}
-	}
-	return "", configErr("effort", "must be one of "+strings.Join(effortLevels, ", "))
+	return text, nil
 }
 
 // parsePermissionMode accepts one of the policies Claude Code understands. A

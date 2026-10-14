@@ -171,7 +171,7 @@ func TestNativeClaudeUsesTheCatalogReportedBySystemInitInTheSameSession(t *testi
 	secondProcess := newFakeClaude()
 	process.silent = true
 	secondProcess.silent = true
-	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process, secondProcess}}, Now: time.Now})
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process, newFakeClaude(), secondProcess}}, Now: time.Now})
 	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "skill-conversation", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t)}, Location: "local"}})
 	if err != nil {
 		t.Fatal(err)
@@ -237,5 +237,51 @@ func assertArgumentsContainInOrder(t *testing.T, process *fakeClaude, expected .
 	}
 	if strings.Contains(strings.Join(args, " "), "--continue") || strings.Contains(strings.Join(args, " "), "--no-session-persistence") {
 		t.Fatalf("native arguments contain a forbidden generic/non-persistent flag: %v", args)
+	}
+}
+
+// Discovery must use the connected conversation's process and workspace, not a
+// second runtime, and initialize only once without publishing a user turn.
+func TestNativeClaudeModelCatalogUsesTheConnectedRuntime(t *testing.T) {
+	process := newFakeClaude()
+	process.silent = true
+	process.modelResponse = `{"models":[{"value":"workspace-model","displayName":"Workspace native name","supportsEffort":true,"supportedEffortLevels":["future-effort"]}]}`
+	sequence := &claudeProcessSequence{processes: []*fakeClaude{process}}
+	provider := New(Options{Starter: sequence, Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}})
+	dir := t.TempDir()
+	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "catalog-session", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = provider.ReleaseSession(context.Background(), execution.SessionRequest{Session: created.Session})
+	}()
+	request := execution.SessionDiscoveryRequest{WorkingDir: dir, ProviderConfig: created.Session.Environment.ProviderConfig, Native: &created.Session.Native}
+	first, err := provider.DiscoverSession(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Models) != 1 || first.Models[0].ID != "workspace-model" || first.Models[0].Label != "Workspace native name" || first.SkillsKnown {
+		t.Fatalf("discovery = %#v", first)
+	}
+	first.Models[0].Label = "mutated"
+	first.Models[0].Options[0].Choices[0].Value = "mutated"
+	second, err := provider.DiscoverSession(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Models[0].Label != "Workspace native name" || second.Models[0].Options[0].Choices[0].Value != "future-effort" {
+		t.Fatalf("catalog was mutated: %#v", second.Models)
+	}
+	frames := process.framesReceived()
+	if len(frames) != 1 || !strings.Contains(string(frames[0]), `"subtype":"initialize"`) {
+		t.Fatalf("unexpected work or reinitialization: %s", frames)
+	}
+	if !process.alive() || process.startedIn() != dir {
+		t.Fatalf("discovery released or moved native runtime: alive=%t dir=%s", process.alive(), process.startedIn())
+	}
+	snapshot, err := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+	if err != nil || snapshot.CurrentTurn != nil {
+		t.Fatalf("discovery started a turn: %#v, %v", snapshot, err)
 	}
 }

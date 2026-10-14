@@ -190,7 +190,8 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 func declaredModelOptionNames() []string {
 	seen := map[string]struct{}{}
 	names := []string{}
-	for _, model := range models {
+	catalog, _ := decodeModels([]byte(testModelResponse))
+	for _, model := range catalog {
 		for _, option := range model.Options {
 			if _, ok := seen[option.Name]; ok {
 				continue
@@ -238,8 +239,8 @@ func TestEffortIsUnsetWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestEffortAcceptsEveryDeclaredLevel(t *testing.T) {
-	for _, level := range effortLevels {
+func TestEffortAcceptsRuntimeLevelsWithoutAStaticAllowlist(t *testing.T) {
+	for _, level := range []string{"low", "medium", "high", "xhigh", "max", "future-level"} {
 		cfg, err := parseConfig(map[string]any{"effort": level})
 		if err != nil {
 			t.Fatalf("level %q was rejected: %v", level, err)
@@ -257,7 +258,6 @@ func TestEffortRejectionNamesTheOption(t *testing.T) {
 		name  string
 		value any
 	}{
-		{"a level outside the declared set", "turbo"},
 		{"an empty string", ""},
 		{"blanks only", "   "},
 		{"a value that is not a string", 3},
@@ -276,19 +276,5 @@ func TestEffortRejectionNamesTheOption(t *testing.T) {
 				t.Fatalf("the rejection names field %q, want %q", configErr.Field, "effort")
 			}
 		})
-	}
-}
-
-// The help of the option quotes nothing, but the message of the rejection has
-// to list the levels a person can pick, or the error leaves them guessing.
-func TestEffortRejectionListsTheAcceptedLevels(t *testing.T) {
-	_, err := parseConfig(map[string]any{"effort": "turbo"})
-	if err == nil {
-		t.Fatal("an unknown level was accepted")
-	}
-	for _, level := range effortLevels {
-		if !strings.Contains(err.Error(), level) {
-			t.Fatalf("the rejection does not quote the accepted level %q: %s", level, err.Error())
-		}
 	}
 }

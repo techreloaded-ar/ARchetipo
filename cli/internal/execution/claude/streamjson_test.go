@@ -46,6 +46,8 @@ type fakeClaude struct {
 	// answered. The default is the acknowledgement the real build sends.
 	controlSubtype string
 	controlError   string
+	modelResponse  string
+	controlSilent  bool
 
 	// starts, startDir, startName and startArgs record how the process was
 	// spawned, which is what the provider's own tests assert.
@@ -100,6 +102,9 @@ func (f *fakeClaude) Send(line []byte) error {
 	var incoming struct {
 		Type      string `json:"type"`
 		RequestID string `json:"request_id"`
+		Request   struct {
+			Subtype string `json:"subtype"`
+		} `json:"request"`
 	}
 	if err := json.Unmarshal(line, &incoming); err != nil {
 		return err
@@ -117,6 +122,7 @@ func (f *fakeClaude) Send(line []byte) error {
 		f.announced = true
 	}
 	subtype, failure := f.controlSubtype, f.controlError
+	modelResponse, controlSilent := f.modelResponse, f.controlSilent
 	f.mu.Unlock()
 
 	if announce {
@@ -124,7 +130,16 @@ func (f *fakeClaude) Send(line []byte) error {
 		close(f.started)
 	}
 	if incoming.Type == "control_request" {
+		if controlSilent {
+			return nil
+		}
 		body := map[string]any{"subtype": subtype, "request_id": incoming.RequestID}
+		if incoming.Request.Subtype == "initialize" {
+			if modelResponse == "" {
+				modelResponse = testModelResponse
+			}
+			body["response"] = json.RawMessage(modelResponse)
+		}
 		if failure != "" {
 			body["error"] = failure
 		}

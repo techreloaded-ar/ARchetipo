@@ -173,7 +173,7 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
       throw new Error(`AC-1: the inherited options must be the configured ones; got ${JSON.stringify(choice.options)}`);
     }
     const catalog = choice.models || [];
-    for (const id of ["opus", "sonnet", "haiku"]) {
+    for (const id of ["opus", "sonnet", "haiku", "future-model"]) {
       if (!catalog.some((entry) => entry.id === id)) {
         throw new Error(`AC-1: the catalog must offer ${id}; got ${JSON.stringify(catalog.map((entry) => entry.id))}`);
       }
@@ -184,6 +184,15 @@ async function scenarioPerRunChoiceOverridesOnlyThatRun(runDir) {
       throw new Error(`AC-1: ${RUN_MODEL} must declare the effort option with ${RUN_EFFORT}; got ${JSON.stringify(opus.options)}`);
     }
     ok("AC-1", `the start reports model ${WORKSPACE_MODEL} inherited from the workspace with {effort: ${WORKSPACE_EFFORT}}, beside a catalog offering opus, sonnet and haiku`);
+
+    const futureModel = catalog.find((entry) => entry.id === "future-model");
+    if (futureModel.label !== "Future model from runtime") {
+      throw new Error(`The viewer replaced the native model name: ${JSON.stringify(futureModel)}`);
+    }
+    const opusChoices = catalog.find((entry) => entry.id === "opus").options?.[0]?.choices;
+    if (JSON.stringify(opusChoices?.map((entry) => entry.value)) !== JSON.stringify(["low", "high"]) || opusChoices.some((entry) => entry.default)) {
+      throw new Error(`The viewer replaced the runtime effort choices or invented a default: ${JSON.stringify(opusChoices)}`);
+    }
 
     // 4 — the configuration file as it stands before any run. AC-4 is proved
     // against these exact bytes, not against a re-reading of the same fields.

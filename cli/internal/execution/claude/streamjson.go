@@ -62,16 +62,18 @@ type frame struct {
 // inside the nested object, not next to the frame type.
 type controlResponse struct {
 	Response struct {
-		Subtype   string `json:"subtype"`
-		RequestID string `json:"request_id"`
-		Error     string `json:"error"`
+		Subtype   string          `json:"subtype"`
+		RequestID string          `json:"request_id"`
+		Error     string          `json:"error"`
+		Response  json.RawMessage `json:"response"`
 	} `json:"response"`
 }
 
 // controlOutcome is what a waiter on a control request receives.
 type controlOutcome struct {
-	subtype string
-	err     string
+	subtype  string
+	err      string
+	response json.RawMessage
 }
 
 // TurnOutcome is what one finished turn says about itself, published the
@@ -154,6 +156,8 @@ type streamSession struct {
 	initSessionID string
 	initModel     string
 	initSkills    []string
+	catalogMu     sync.Mutex
+	catalog       []execution.ModelOption
 
 	// turnDone is re-armable: it is closed when the current turn ends and
 	// replaced by a fresh one when the next turn opens. It lives under mu, like
@@ -302,7 +306,7 @@ func (s *streamSession) settle(line []byte) {
 	delete(s.pending, id)
 	s.mu.Unlock()
 	if ok {
-		waiter <- controlOutcome{subtype: answer.Response.Subtype, err: answer.Response.Error}
+		waiter <- controlOutcome{subtype: answer.Response.Subtype, err: answer.Response.Error, response: answer.Response.Response}
 		close(waiter)
 	}
 }
@@ -612,6 +616,27 @@ func (s *streamSession) Interrupt(ctx context.Context) error {
 		return nil
 	default:
 	}
+	outcome, err := s.requestControl(ctx, map[string]any{"subtype": "interrupt"})
+	if err != nil {
+		return err
+	}
+	if outcome.subtype != controlSuccess {
+		return &execution.RunCommandError{
+			Reason: execution.RunRefusedUnsupported,
+			RunID:  s.session.RunID(),
+			Err:    fmt.Errorf("the claude session refused the interrupt: %s", refusalText(outcome)),
+		}
+	}
+	return nil
+}
+
+// requestControl shares correlation, cancellation and process-exit handling
+// between catalog initialization and commands on the same stream.
+func (s *streamSession) requestControl(ctx context.Context, request map[string]any) (controlOutcome, error) {
+	command, _ := request["subtype"].(string)
+	if err := ctx.Err(); err != nil {
+		return controlOutcome{}, err
+	}
 	s.mu.Lock()
 	s.nextControl++
 	id := fmt.Sprintf("req_%d", s.nextControl)
@@ -622,36 +647,26 @@ func (s *streamSession) Interrupt(ctx context.Context) error {
 	payload, err := json.Marshal(map[string]any{
 		"type":       "control_request",
 		"request_id": id,
-		"request":    map[string]any{"subtype": "interrupt"},
+		"request":    request,
 	})
 	if err != nil {
 		s.forget(id)
-		return fmt.Errorf("encoding the interrupt for the claude session: %w", err)
+		return controlOutcome{}, fmt.Errorf("encoding %s for the claude session: %w", command, err)
 	}
 	if err := s.process.Send(payload); err != nil {
 		s.forget(id)
-		return fmt.Errorf("sending the interrupt to the claude session: %w", err)
+		return controlOutcome{}, fmt.Errorf("sending %s to the claude session: %w", command, err)
 	}
 
 	select {
 	case <-ctx.Done():
 		s.forget(id)
-		return fmt.Errorf("the claude session did not answer the interrupt: %w", ctx.Err())
+		return controlOutcome{}, fmt.Errorf("the claude session did not answer %s: %w", command, ctx.Err())
 	case <-s.gone:
 		s.forget(id)
-		return fmt.Errorf("the claude session ended before answering the interrupt")
+		return controlOutcome{}, fmt.Errorf("the claude session ended before answering %s", command)
 	case outcome := <-waiter:
-		if outcome.subtype != controlSuccess {
-			// The process understood the command and declined it. That is a
-			// decision, and the caller branches on the reason rather than on this
-			// sentence.
-			return &execution.RunCommandError{
-				Reason: execution.RunRefusedUnsupported,
-				RunID:  s.session.RunID(),
-				Err:    fmt.Errorf("the claude session refused the interrupt: %s", refusalText(outcome)),
-			}
-		}
-		return nil
+		return outcome, nil
 	}
 }
 

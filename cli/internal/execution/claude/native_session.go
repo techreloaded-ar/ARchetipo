@@ -33,14 +33,25 @@ type nativeSession struct {
 }
 
 func (p *Provider) DiscoverSession(ctx context.Context, request execution.SessionDiscoveryRequest) (execution.SessionDiscovery, error) {
-	if _, err := parseConfig(request.ProviderConfig); err != nil {
-		return execution.SessionDiscovery{}, err
-	}
-	dir, err := p.sessionWorkingDir(request.WorkingDir)
+	cfg, dir, err := p.prepareNativeSession(ctx, request.ProviderConfig, request.WorkingDir)
 	if err != nil {
 		return execution.SessionDiscovery{}, err
 	}
-	if err := p.Available(ctx, request.ProviderConfig); err != nil {
+	var models []execution.ModelOption
+	var client *streamSession
+	if request.Native != nil {
+		if session := p.nativeSession(request.Native.ID); session != nil {
+			session.mu.Lock()
+			client = session.client
+			session.mu.Unlock()
+		}
+	}
+	if client != nil {
+		models, err = client.modelCatalog(ctx)
+	} else {
+		models, err = p.listModels(ctx, cfg, dir)
+	}
+	if err != nil {
 		return execution.SessionDiscovery{}, err
 	}
 	skills, skillsKnown := p.discoverNativeClaudeSkills(request.Native)
@@ -59,7 +70,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 }
 
 func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSessionRequest) (execution.SessionSnapshot, error) {
-	discovery, err := p.DiscoverSession(ctx, execution.SessionDiscoveryRequest{ProviderConfig: request.Environment.ProviderConfig, WorkingDir: request.Environment.WorkingDir})
+	cfg, dir, err := p.prepareNativeSession(ctx, request.Environment.ProviderConfig, request.Environment.WorkingDir)
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
@@ -67,14 +78,29 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
-	cfg, _ := parseConfig(discovery.Environment.ProviderConfig)
-	metadata := execution.SessionMetadata{ConversationID: request.ConversationID, ProviderID: ProviderID, Environment: discovery.Environment, Native: execution.NativeSessionReference{Kind: "claude-session", ID: id}}
+	environment := execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneProviderConfig(request.Environment.ProviderConfig), Location: "local"}
+	metadata := execution.SessionMetadata{ConversationID: request.ConversationID, ProviderID: ProviderID, Environment: environment, Native: execution.NativeSessionReference{Kind: "claude-session", ID: id}}
 	session := newNativeSession(metadata, cfg, false)
 	if err := p.connectNativeProcess(session, false); err != nil {
 		return execution.SessionSnapshot{}, err
 	}
 	p.storeNativeSession(session)
 	return session.snapshot(), nil
+}
+
+func (p *Provider) prepareNativeSession(ctx context.Context, raw map[string]any, workingDir string) (settings, string, error) {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return settings{}, "", err
+	}
+	dir, err := p.sessionWorkingDir(workingDir)
+	if err != nil {
+		return settings{}, "", err
+	}
+	if err := p.Available(ctx, raw); err != nil {
+		return settings{}, "", err
+	}
+	return cfg, dir, nil
 }
 
 func (p *Provider) ResumeSession(ctx context.Context, request execution.ResumeSessionRequest) (execution.SessionSnapshot, error) {

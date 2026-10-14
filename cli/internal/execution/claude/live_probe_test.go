@@ -24,6 +24,29 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
+// This probe uses only initialize: it exercises the shipped catalog decoder
+// against the installed CLI without opening an inference turn.
+func TestLiveClaudeModelCatalog(t *testing.T) {
+	if os.Getenv("LIVE_CLAUDE") == "" {
+		t.Skip("set LIVE_CLAUDE=1 to probe the installed Claude model catalog")
+	}
+	dir := t.TempDir()
+	provider := New(Options{WorkingDir: func() (string, error) { return dir, nil }})
+	models, err := provider.Models(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) == 0 {
+		t.Fatal("the installed Claude runtime returned no supported models")
+	}
+	for _, model := range models {
+		if model.ID == "" || model.Label == "" {
+			t.Fatalf("incomplete runtime model: %#v", model)
+		}
+		t.Logf("%s: %s", model.ID, model.Label)
+	}
+}
+
 // TestLiveClaudeNativeSessionProvider exercises the production SessionProvider
 // boundary used by View: native ID creation, a real filesystem write, release,
 // resume and a second turn with different model/effort and native memory.

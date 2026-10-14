@@ -809,29 +809,39 @@ func (usableRuntime) Run(context.Context, string, string, []string) (string, str
 	return "2.1.236", "", 0, nil
 }
 
-// Start is the interactive half of the same usable runtime. Codex now asks its
-// app server for the catalog, so viewer tests provide the protocol response
-// instead of depending on whichever Codex version is installed on the machine.
+// Start supplies both providers' runtime catalogs through their real protocol
+// decoders, independently of the executables installed on the test machine.
 func (usableRuntime) Start(context.Context, string, string, []string) (localrun.Process, error) {
-	return newCodexCatalogProcess(), nil
+	return newRuntimeCatalogProcess(), nil
 }
 
-type codexCatalogProcess struct {
+type runtimeCatalogProcess struct {
 	lines chan []byte
 	once  sync.Once
 }
 
-func newCodexCatalogProcess() *codexCatalogProcess {
-	return &codexCatalogProcess{lines: make(chan []byte, 4)}
+func newRuntimeCatalogProcess() *runtimeCatalogProcess {
+	return &runtimeCatalogProcess{lines: make(chan []byte, 4)}
 }
 
-func (p *codexCatalogProcess) Send(line []byte) error {
+func (p *runtimeCatalogProcess) Send(line []byte) error {
 	var request struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
+		ID        json.RawMessage `json:"id"`
+		Method    string          `json:"method"`
+		Type      string          `json:"type"`
+		RequestID string          `json:"request_id"`
+		Request   struct {
+			Subtype string `json:"subtype"`
+		} `json:"request"`
 	}
 	if err := json.Unmarshal(line, &request); err != nil {
 		return err
+	}
+	if request.Type == "control_request" && request.Request.Subtype == "initialize" {
+		result := `{"models":[{"value":"default","displayName":"Default (recommended)"},{"value":"sonnet","displayName":"Sonnet from runtime","supportsEffort":true,"supportedEffortLevels":["low","high"]},{"value":"haiku","displayName":"Haiku from runtime"}]}`
+		id, _ := json.Marshal(request.RequestID)
+		p.lines <- []byte(`{"type":"control_response","response":{"subtype":"success","request_id":` + string(id) + `,"response":` + result + `}}`)
+		return nil
 	}
 	var result string
 	switch request.Method {
@@ -846,12 +856,12 @@ func (p *codexCatalogProcess) Send(line []byte) error {
 	return nil
 }
 
-func (p *codexCatalogProcess) Lines() <-chan []byte { return p.lines }
-func (p *codexCatalogProcess) Signal() error        { return p.Close() }
-func (p *codexCatalogProcess) Wait() (int, string, error) {
+func (p *runtimeCatalogProcess) Lines() <-chan []byte { return p.lines }
+func (p *runtimeCatalogProcess) Signal() error        { return p.Close() }
+func (p *runtimeCatalogProcess) Wait() (int, string, error) {
 	return 0, "", nil
 }
-func (p *codexCatalogProcess) Close() error {
+func (p *runtimeCatalogProcess) Close() error {
 	p.once.Do(func() { close(p.lines) })
 	return nil
 }
@@ -881,7 +891,7 @@ func newLocalProviderServer(t *testing.T, id string, providerConfig map[string]a
 	conn := inmemory.New(cfg)
 	registry := execution.NewRegistry()
 	probe := usableRuntime{}
-	if err := registry.Register(claude.New(claude.Options{Runner: probe})); err != nil {
+	if err := registry.Register(claude.New(claude.Options{Runner: probe, Starter: probe})); err != nil {
 		t.Fatal(err)
 	}
 	if err := registry.Register(codex.New(codex.Options{Runner: probe, Starter: probe})); err != nil {
@@ -961,8 +971,8 @@ func TestListExecutionProvidersCarriesTheOptionsDeclaredForEachModel(t *testing.
 			defaults++
 		}
 	}
-	if defaults != 1 {
-		t.Fatalf("%d choices are marked as the provider default, want exactly 1: %#v", defaults, option.Choices)
+	if defaults != 0 {
+		t.Fatalf("the runtime reported no default effort, but the viewer marks %d: %#v", defaults, option.Choices)
 	}
 
 	// AC-5: the model that declares no option carries none, so the panel can
@@ -1095,7 +1105,7 @@ func TestSaveDefaultExecutionProviderPersistsAndReplacesAModelOption(t *testing.
 
 // AC-4: a value the provider refuses names the option and leaves the previously
 // saved configuration exactly as it was, field by field.
-func TestSaveDefaultExecutionProviderRejectsAnUnknownOptionValue(t *testing.T) {
+func TestSaveDefaultExecutionProviderRejectsAnInvalidOptionShape(t *testing.T) {
 	cases := []struct {
 		provider string
 		option   string
@@ -1118,10 +1128,10 @@ func TestSaveDefaultExecutionProviderRejectsAnUnknownOptionValue(t *testing.T) {
 
 			w := doJSON(t, srv, http.MethodPut, "/api/execution/provider/default", map[string]any{
 				"id":     tc.provider,
-				"config": map[string]any{"command": command, "model": tc.model, tc.option: "turbo"},
+				"config": map[string]any{"command": command, "model": tc.model, tc.option: true},
 			})
 			if w.Code != http.StatusBadRequest {
-				t.Fatalf("a value outside the declared set was accepted: %d %s", w.Code, w.Body.String())
+				t.Fatalf("a non-string option was accepted: %d %s", w.Code, w.Body.String())
 			}
 			var payload map[string]any
 			if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {

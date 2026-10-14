@@ -68,7 +68,9 @@ async function report(kind, body) {
 // process, and the only thing that can settle it is the operating system being
 // asked whether that process is still there. A route answering 200 says what
 // the viewer decided, not what became of the process.
-report("argv", { argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
+const native = process.argv.includes("--session-id") || process.argv.includes("--resume");
+let announced = native;
+if (native) report("argv", { argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
 
 const rl = readline.createInterface({ input: process.stdin });
 
@@ -78,6 +80,30 @@ rl.on("line", async (line) => {
   try {
     frame = JSON.parse(line);
   } catch {
+    return;
+  }
+  // Catalog probes have no user message and must not consume commands queued
+  // for an actual turn. Keep their reports separate from agent invocations.
+  const initializing = frame.type === "control_request" && frame.request?.subtype === "initialize";
+  if (!announced) {
+    announced = true;
+    await report(initializing ? "catalog_argv" : "argv", { argv: process.argv.slice(2), cwd: process.cwd(), pid: process.pid });
+    if (!initializing) pump();
+  }
+  if (initializing) {
+    await report("catalog_received", { frame });
+    write({
+      type: "control_response",
+      response: { subtype: "success", request_id: frame.request_id, response: {
+        models: [
+          { value: "default", displayName: "Default (recommended)" },
+          { value: "opus", displayName: "Opus from runtime", supportsEffort: true, supportedEffortLevels: ["low", "high"] },
+          { value: "sonnet", displayName: "Sonnet from runtime", supportsEffort: true, supportedEffortLevels: ["low", "high"] },
+          { value: "haiku", displayName: "Haiku from runtime" },
+          { value: "future-model", displayName: "Future model from runtime" },
+        ],
+      } },
+    });
     return;
   }
   // Every frame is reported as it arrived. Naming it here would mean deciding,
@@ -138,4 +164,4 @@ async function pump() {
   }
 }
 
-pump();
+if (native) pump();
