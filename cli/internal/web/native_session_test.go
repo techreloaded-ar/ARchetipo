@@ -54,9 +54,10 @@ func (s *persistentFakeNativeStore) loseRuntime() {
 }
 
 type persistentFakeNativeProvider struct {
-	id        string
-	store     *persistentFakeNativeStore
-	failStart bool
+	id           string
+	store        *persistentFakeNativeStore
+	failStart    bool
+	interruptErr error
 	// steerFindsNoTurn makes the fake answer a steering the way a runtime does
 	// when the turn ended between the read and the command: the typed refusal,
 	// and the session already idle.
@@ -242,6 +243,9 @@ func (p *persistentFakeNativeProvider) RespondSessionApproval(ctx context.Contex
 	return p.SteerTurn(ctx, request)
 }
 func (p *persistentFakeNativeProvider) InterruptTurn(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
+	if p.interruptErr != nil {
+		return execution.SessionDelivery{}, p.interruptErr
+	}
 	p.store.mu.Lock()
 	defer p.store.mu.Unlock()
 	session := p.store.sessions[request.Session.Native.ID]

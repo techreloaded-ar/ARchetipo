@@ -256,7 +256,7 @@ func threadOfRun(ws *workspaceSession, executionID string) string {
 }
 
 // nativeThreadOfAction names the native conversation carrying this execution,
-// and is empty for an execution that no native session is running.
+// including released sessions, using the durable link rather than a live holder.
 //
 // It is kept apart from threadOfRun because the two answers are not
 // interchangeable: this one says "the work is turns of a session", which is
@@ -267,17 +267,17 @@ func nativeThreadOfAction(ws *workspaceSession, executionID string) string {
 	if ws == nil || strings.TrimSpace(executionID) == "" {
 		return ""
 	}
-	for _, snapshot := range ws.conversation.list() {
-		if snapshot.sessionProvider == nil {
-			continue
-		}
-		record, err := ws.conversationStore().GetMetadata(context.Background(), snapshot.id)
-		if err != nil {
+	records, err := ws.conversationStore().List(context.Background())
+	if err != nil {
+		return ""
+	}
+	for _, record := range records {
+		if !record.Native() {
 			continue
 		}
 		for _, id := range record.ExecutionIDs {
 			if id == executionID {
-				return snapshot.id
+				return record.ID
 			}
 		}
 	}
@@ -471,36 +471,25 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws := s.session()
-	// Cancelling an action of a session stops the action and never the session:
-	// the turn is interrupted if one is speaking, the record is closed, and the
-	// conversation stays open and writable afterwards.
+	if err := s.cancelExecution(r.Context(), ws, id); err != nil {
+		writeError(w, err)
+		return
+	}
+	if s.broker != nil {
+		s.broker.Publish()
+	}
 	if thread := nativeThreadOfAction(ws, id); thread != "" {
-		s.cancelActionInSession(r.Context(), ws, thread, id)
 		view, _ := s.sessionActionRunView(r.Context(), ws, thread, id, afterID)
 		writeJSON(w, http.StatusAccepted, view)
 		return
 	}
 	target, notice, err := s.resolveRunTarget(r.Context(), ws, id)
 	if err != nil {
-		writeError(w, err)
+		writeJSON(w, http.StatusAccepted, emptyRunView(err.Error()))
 		return
 	}
 	if target.follower == nil {
-		// No run behind a RUNNING record may mean its carrier is gone, and then
-		// nothing will ever close it: this cancel is the one gesture left, and it
-		// closes the record under the same rule a restart applies.
-		if closed, ok := ws.closeOrphanedExecution(r.Context(), s.registry, id); ok {
-			if s.broker != nil {
-				s.broker.Publish()
-			}
-			writeJSON(w, http.StatusAccepted, emptyRunView(closed.Error.Message))
-			return
-		}
-		writeError(w, iox.NewConflict("the execution has no run to cancel", notice, nil))
-		return
-	}
-	if err := target.collaborator.CancelRun(r.Context(), target.request); err != nil {
-		writeError(w, mapRunRefusal(err))
+		writeJSON(w, http.StatusAccepted, emptyRunView(notice))
 		return
 	}
 	if snapshot, readErr := target.collaborator.ReadRun(r.Context(), target.request); readErr == nil {

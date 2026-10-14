@@ -16,11 +16,25 @@ const view = {
 const visible = html => html.replace(/<[^>]*>/g, "");
 
 describe("attività della conversazione", () => {
-	it("distingue le attività che partono alla scelta da quelle da descrivere", () => {
+	it("prepara la proposta senza aver ancora aperto una conversazione", () => {
+		const selected = { ...activity, kind: "action", action: "azione-dal-server" };
+		const html = renderConversation({ available: true, events: [] }, "La mia proposta", { activitySelection: selected });
+		assert.match(html, /placeholder="Descrivi il bisogno"/);
+		assert.match(html, />La mia proposta<\/textarea>/);
+		assert.ok(visible(html).includes(activity.description));
+		assert.ok(visible(html).includes(activity.result));
+		assert.doesNotMatch(html, /<textarea[^>]* disabled/);
+	});
+	it("offre Ferma anche quando un’azione aspetta una risposta con il turno fermo", () => {
+		const html = renderConversation({ ...view, runs: [{ id: "run-waiting", awaiting_response: true }] }, "", {});
+		assert.match(html, /data-conversation-interrupt/);
+		assert.ok(visible(html).includes("Ferma"));
+	});
+	it("le attività chiedono una descrizione prima di partire", () => {
 		const html = renderConversation(view, "", { activitiesOpen: true, activities: { items: [
 			activity, { ...activity, id: "start", kind: "action" },
 		] } });
-		assert.match(html, /Avvia attività/);
+		assert.doesNotMatch(html, /Avvia attività/);
 		assert.match(html, /Seleziona e descrivi la richiesta/);
 	});
 	it("mostra le attività dichiarate dal server senza esporre i nomi tecnici", () => {

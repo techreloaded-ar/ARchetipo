@@ -60,9 +60,10 @@
 	// list is, and what it says when it is empty. A caller that wants other
 	// wording passes it in.
 	const DEFAULT_TEXT = {
-		title: "In corso",
+		title: "Esecuzioni in corso",
 		empty: "In questo workspace non sta girando niente.",
 		awaiting: "aspetta te",
+		stop: "Ferma",
 	};
 
 	/** How many targets the closed summary names before it counts the rest. */
@@ -183,6 +184,7 @@
 			<div class="ws-run-head">${head.filter(Boolean).join("")}</div>
 			${renderAwaiting(entry, opts)}
 			${renderNotice(entry)}
+			<button type="button" class="ghost-btn" data-run-stop="${escapeHtml(id)}">${escapeHtml(textOption(opts, "stop"))}</button>
 		</li>`;
 	}
 

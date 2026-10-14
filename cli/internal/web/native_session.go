@@ -915,16 +915,20 @@ func (s *Server) handleArchiveNativeConversation(w http.ResponseWriter, r *http.
 		writeError(w, iox.NewConflict("the conversation "+id+" is a legacy transcript", "legacy transcripts can be deleted but have no native session to archive", nil))
 		return
 	}
+	if err := s.stopNativeConversationWork(r.Context(), ws, id); err != nil {
+		writeError(w, err)
+		return
+	}
 	if snapshot, live := ws.conversation.get(id); live {
 		if err := ws.releaseNativeConversation(r.Context(), snapshot); err != nil {
 			writeError(w, iox.NewInternal("releasing the native conversation "+id, err))
 			return
 		}
-		record, err = ws.conversationStore().GetMetadata(r.Context(), id)
-		if err != nil {
-			writeError(w, iox.NewInternal("reading the released conversation "+id, err))
-			return
-		}
+	}
+	record, err = ws.conversationStore().GetMetadata(r.Context(), id)
+	if err != nil {
+		writeError(w, iox.NewInternal("reading the conversation "+id, err))
+		return
 	}
 	record.Archive = execution.ArchiveArchived
 	record.Connection = execution.ConnectionReleased
@@ -1021,71 +1025,17 @@ func (s *Server) handleInterruptNativeConversation(w http.ResponseWriter, r *htt
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "interrupt its turn"))
 		return
 	}
-	lock, err := ws.conversationStore().Lock(r.Context(), id)
-	if err != nil {
-		writeError(w, iox.NewInternal("locking the conversation "+id, err))
-		return
-	}
 	record, err := ws.conversationStore().GetMetadata(r.Context(), id)
-	if err != nil || record.CurrentTurn == nil || record.Work == execution.SessionIdle {
-		_ = lock.Unlock()
-		// There is no turn to interrupt, but there may still be an action of the
-		// process waiting for an answer that is not coming: the agent asked
-		// something and stopped speaking. Stopping is then cancelling that
-		// action, which closes its record and leaves the conversation itself
-		// alive and writable — the whole point of a session that outlives the
-		// work run in it.
-		if err == nil && ws.cancelSessionAction(r.Context(), id) {
-			writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, 0))
-			return
-		}
-		writeError(w, iox.NewConflict("the conversation "+id+" has no active turn", "start a turn before interrupting it", err))
-		return
-	}
-	submissionID, err := nativeOperationID("submission-")
 	if err != nil {
-		_ = lock.Unlock()
-		writeError(w, iox.NewInternal("generating the interrupt correlation", err))
+		writeError(w, conversationNotFound(id, err))
 		return
 	}
-	delivery := execution.SessionDelivery{SubmissionID: submissionID, TurnID: record.CurrentTurn.ID, State: execution.DeliveryUncertain}
-	record.Deliveries = upsertDelivery(record.Deliveries, delivery)
-	if err := ws.conversationStore().Save(r.Context(), record); err != nil {
-		_ = lock.Unlock()
-		writeError(w, iox.NewInternal("persisting the interrupt", err))
+	if record.Work == execution.SessionIdle && pendingActionExecutionID(r.Context(), ws, record) == "" {
+		writeError(w, iox.NewConflict("the conversation "+id+" has no active turn", "start a turn before interrupting it", nil))
 		return
 	}
-	delivery, interruptErr := snapshot.sessionProvider.InterruptTurn(r.Context(), execution.SessionCommandRequest{
-		Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID,
-	})
-	if delivery.State != "" {
-		record.Deliveries = upsertDelivery(record.Deliveries, delivery)
-	}
-	if observed, readErr := snapshot.sessionProvider.ReadSession(r.Context(), execution.SessionRequest{Session: snapshot.session}); readErr == nil {
-		record.Work = observed.Work
-		if observed.CurrentTurn != nil {
-			interrupted := *observed.CurrentTurn
-			// The link to the action survives the interrupt for the same reason
-			// it survives an ordinary observation: it is ARchetipo's, not the
-			// provider's, and an interrupted turn that forgot which action it
-			// was running would leave that action's record open for ever.
-			if interrupted.ExecutionID == "" && record.CurrentTurn != nil && record.CurrentTurn.ID == interrupted.ID {
-				interrupted.ExecutionID = record.CurrentTurn.ExecutionID
-			}
-			record.CurrentTurn = &interrupted
-			record.Turns = upsertTurn(record.Turns, interrupted)
-		} else {
-			record.CurrentTurn = nil
-		}
-	}
-	_ = ws.conversationStore().Save(context.WithoutCancel(r.Context()), record)
-	_ = lock.Unlock()
-	// The action the interrupted turn was carrying out ends with it: the record
-	// is closed here rather than left to the follower, so the board is right by
-	// the time this response is read.
-	ws.settleSessionActions(r.Context(), id)
-	if interruptErr != nil {
-		writeError(w, iox.NewConflict("the native turn was not confirmed interrupted", "reconcile the session before retrying", interruptErr))
+	if err := s.stopNativeConversationWork(r.Context(), ws, id); err != nil {
+		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, s.nativeConversationView(r.Context(), ws, snapshot, 0))

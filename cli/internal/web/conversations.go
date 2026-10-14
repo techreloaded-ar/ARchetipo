@@ -243,31 +243,49 @@ func (ws *workspaceSession) conversationStore() *conversationlog.FileStore {
 	return ws.journal.store
 }
 
-// handleDeleteWorkspaceConversation erases one past conversation of the open
+// handleDeleteWorkspaceConversation stops and erases one conversation of the open
 // workspace: the record goes, and with it the line the rail was drawing.
 //
 // It is a route of its own and not the DELETE of the conversation, which
-// already means "close it". The two commands must stay apart: one ends a
-// session and keeps everything that was said, this one throws it away. A live
-// conversation is refused for the same reason — someone who has not closed a
-// thread has not decided to lose it.
+// already means "release the connection". Record deletion explicitly stops
+// any work first and preserves the harness's native transcript.
 func (s *Server) handleDeleteWorkspaceConversation(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
 	ctx := r.Context()
 	id := strings.TrimSpace(r.PathValue("id"))
-	if _, live := ws.conversation.get(id); live {
-		writeError(w, iox.NewConflict(
-			"the conversation "+id+" is still live on this workspace",
-			"close it first, then delete it",
-			nil,
-		))
+	// Read before stopping or erasing, and return the final record for undo.
+	record, err := s.readPastConversation(ctx, ws, id)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	// Read before erasing. It is what tells "this workspace never had that
-	// conversation" — a 404 the rail can explain — from a store that could not
-	// be written, it proves the journal is there before Delete is asked for it,
-	// and it is the copy the undo will put back.
-	record, err := s.readPastConversation(ctx, ws, id)
+	if record.Native() {
+		if err := s.stopNativeConversationWork(ctx, ws, id); err != nil {
+			writeError(w, err)
+			return
+		}
+		if snapshot, live := ws.conversation.get(id); live {
+			if err := ws.releaseNativeConversation(ctx, snapshot); err != nil {
+				writeError(w, iox.NewInternal("releasing the conversation "+id, err))
+				return
+			}
+		}
+	} else {
+		if record.ExecutionID != "" {
+			if err := s.cancelExecutionBeforeRemoval(ctx, ws, record.ExecutionID); err != nil {
+				writeError(w, err)
+				return
+			}
+		}
+		if snapshot, live := ws.conversation.get(id); live {
+			ws.sealConversation(ctx, snapshot)
+			if err := ws.conversation.closeOne(ctx, id); err != nil {
+				writeError(w, iox.NewInternal("closing the conversation "+id, err))
+				return
+			}
+		}
+	}
+	record, err = s.readPastConversation(ctx, ws, id)
 	if err != nil {
 		writeError(w, err)
 		return

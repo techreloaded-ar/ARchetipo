@@ -386,6 +386,10 @@ func (s *Server) handleDeleteSpec(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
+	if err := s.cancelSpecExecutions(r.Context(), ws, code); err != nil {
+		writeError(w, err)
+		return
+	}
 	res, err := deleter.DeleteSpec(r.Context(), code)
 	if err != nil {
 		writeError(w, err)

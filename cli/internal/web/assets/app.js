@@ -448,6 +448,7 @@
 	const specDraftModeManual = document.getElementById("spec-draft-mode-manual");
 	const specDraftModeAssisted = document.getElementById("spec-draft-mode-assisted");
 	const specDraftPanel = document.getElementById("spec-draft-panel");
+	const specDraftInput = document.getElementById("spec-draft-input");
 	const specDraftNotice = document.getElementById("spec-draft-notice");
 	const specDraftModelChoice = document.getElementById(
 		"spec-draft-model-choice",
@@ -1634,6 +1635,7 @@
 
 	function renderWorkspaceRunsPanel() {
 		if (!workspaceRunsEl) return;
+		workspaceRunsEl.classList.toggle("has-runs", !!(workspaceRunsView && workspaceRunsView.runs && workspaceRunsView.runs.length));
 		const html = WorkspaceRuns.renderWorkspaceRuns(workspaceRunsView, {
 			expanded: workspaceRunsExpanded,
 		});
@@ -1757,7 +1759,26 @@
 
 		// The strip is redrawn on every poll, so the handler lives on the section
 		// and each row carries its own identity in its data attributes.
-		workspaceRunsEl.addEventListener("click", (e) => {
+		workspaceRunsEl.addEventListener("click", async (e) => {
+			const stop = e.target.closest("[data-run-stop]");
+			if (stop) {
+				stop.disabled = true;
+				try {
+					await apiPost(`/api/execution/${encodeURIComponent(stop.dataset.runStop)}/run/cancel`, {});
+					workspaceRunsView = await apiGet("/api/workspace/runs");
+					renderWorkspaceRunsPanel();
+					await loadConversationsIndex();
+					if (conversationsCurrentId) {
+						const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(conversationsCurrentId)}?after_id=${conversationAfterID}`);
+						applyConversationView(view);
+						renderConversationPanel();
+					}
+					loadWorkspaceStatus();
+					loadConversationActivities();
+				} catch (err) { showToast(err.message || String(err), "err"); }
+				finally { stop.disabled = false; }
+				return;
+			}
 			const row = e.target.closest("[data-run-id]");
 			if (!row) return;
 			// The row declares its identity; the entry behind it declares where
@@ -4449,6 +4470,7 @@
 		if (button) button.disabled = true;
 		try {
 			const body = { action: target.action };
+			if (target.user_input) body.user_input = target.user_input;
 			const from = conversationsCurrentId;
 			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
 				body.conversation_id = from;
@@ -4475,9 +4497,11 @@
 			}
 			loadWorkspaceStatus();
 			loadBoard();
+			return record;
 		} catch (err) {
 			showToast(err.message || String(err), "err");
 			if (button) button.disabled = false;
+			return null;
 		}
 	}
 
@@ -4488,6 +4512,15 @@
 		if (button) button.disabled = true;
 		try {
 			const body = { action: actionID };
+			if (ctx === SPEC_DRAFT_CONTEXT) {
+				body.user_input = specDraftInput.value.trim();
+				if (!body.user_input) {
+					setSpecDraftNotice("Descrivi la tua proposta prima di avviare l’attività.");
+					specDraftInput.focus();
+					if (button) button.disabled = false;
+					return;
+				}
+			}
 			const from = String(conversationID || "");
 			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
 				body.conversation_id = from;
@@ -6427,9 +6460,8 @@
 
 	// deleteConversation butta via una conversazione conclusa, subito e senza
 	// chiedere: la domanda è sostituita dal bottone «Annulla» che compare in
-	// fondo alla lista. Il rifiuto di cancellarne una ancora viva è del server,
-	// e questa non lo ripete — il comando non viene nemmeno disegnato sui thread
-	// in corso.
+	// fondo alla lista. Il server ferma le attività collegate prima di rimuovere
+	// il record, anche quando il runtime è già stato rilasciato.
 	//
 	// L'annullamento è possibile solo perché la DELETE risponde col record
 	// intero: è quella copia, e non la riga sintetica dell'indice, che verrà
@@ -6788,10 +6820,7 @@
 		conversationActivitiesOpen = false;
 		conversationActivitySelection = null;
 		if (item.kind === "action") {
-			conversationBusy = true;
-			renderConversationPanel();
-			try { await startActionOnTarget({ scope: item.scope, action: item.action }, null); }
-			finally { conversationBusy = false; }
+			conversationActivitySelection = Object.assign({}, item);
 		} else if (item.kind === "conversation") {
 			if (!conversationIsActive()) await openConversation();
 		} else if (item.kind === "skill") {
@@ -7528,6 +7557,27 @@
 
 	async function sendConversationMessage() {
 		if (conversationBusy) return;
+		const proposal = conversationDraft.trim();
+		if (conversationActivitySelection && conversationActivitySelection.kind === "action") {
+			if (!proposal) return;
+			const typed = proposal;
+			const activity = conversationActivitySelection;
+			conversationBusy = true;
+			renderConversationPanel();
+			try {
+				const started = await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
+				if (started) {
+					conversationDraft = "";
+					conversationActivitySelection = null;
+					startConversationPolling();
+					loadConversationActivities();
+				}
+			} finally {
+				conversationBusy = false;
+				renderConversationPanel();
+			}
+			return;
+		}
 		const id = conversationsCurrentId;
 		if (!id || !conversationView) return;
 		// Writing in a conversation that has ended is not writing in a live one:
@@ -7540,6 +7590,7 @@
 		}
 		const typed = conversationDraft.trim();
 		if (!typed) return;
+
 		// La barra iniziale è la skill, e da qui in poi le due cose viaggiano
 		// separate: il nome nel campo `skill`, il resto come messaggio.
 		const selectedActivity = conversationActivitySelection;
@@ -7966,11 +8017,12 @@
 	// Lo stato della modale è il form più il corpo nell'editor: il corpo è la
 	// parte che costa di più ed è l'unica che non è un campo del form.
 	const newSpecGuard = createDirtyGuard(
-		() => `${formState(newSpecForm)}\n${newSpecEditor.value()}`,
+		() => `${formState(newSpecForm)}\n${newSpecEditor.value()}\n${specDraftInput.value}`,
 	);
 
 	function openNewSpec() {
 		newSpecForm.reset();
+		specDraftInput.value = "";
 		clearNewSpecErrors();
 		clearSpecDraftNotice();
 		// Every opening starts on the manual form: the assisted mode is an
@@ -8133,6 +8185,11 @@
 		// Only this action is drawn here. An offered action that is not runnable
 		// stays a disabled chip carrying its own reason.
 		renderSpecActions([action]);
+		apiGet("/api/workspace/activities").then((catalog) => {
+			const activity = (catalog.items || []).find((item) => item.action === action.id);
+			if (activity) specDraftInput.placeholder = activity.placeholder || activity.description || "";
+		}).catch(() => {});
+		specDraftInput.focus();
 		// The server hands back the workspace's last execution on every read, so
 		// reopening the modal finds the conversation it left behind instead of
 		// starting a second one.

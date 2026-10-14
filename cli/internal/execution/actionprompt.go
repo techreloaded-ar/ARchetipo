@@ -177,6 +177,9 @@ func SpecDraftPrompt(opening string, _ Request) string {
 // turn started with no instruction would look like work being done and would
 // produce nothing.
 func ActionPrompt(opening string, action ActionID, req Request) (string, error) {
+	if input := strings.TrimSpace(req.UserInput); input != "" {
+		opening += "\n\nThe person supplied this proposal for the action:\n" + input + "\n\nUse it as the starting point and ask follow-up questions when needed."
+	}
 	switch action {
 	case ActionPlan:
 		return PlanPrompt(opening, req), nil

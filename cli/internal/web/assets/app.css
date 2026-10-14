@@ -6909,11 +6909,8 @@ body.no-workspace [data-workspace-scoped] {
 	display: none;
 }
 
-/* Nella vista Conversazione la striscia tace: che cosa sta lavorando, che
-   cosa aspetta una risposta e che cosa c'e' da leggere lo dice gia' l'elenco
-   dei thread accanto, e la stessa cosa detta in due posti e' rumore. Sulla
-   board e nel dettaglio di una spec, dove l'elenco non c'e', resta. */
-#workspace-shell[data-view="conversation"] .workspace-runs {
+/* Keep running executions reachable even when their conversation is gone. */
+#workspace-shell[data-view="conversation"] .workspace-runs:not(.has-runs) {
 	display: none;
 }
 
@@ -8043,3 +8040,6 @@ body.no-workspace [data-workspace-scoped] {
 	.topbar .workspace-indicator-name { min-width: 0; }
 	.topbar .new-spec-btn { white-space: nowrap; }
 }
+
+.conv-activity-selection p { margin: 4px 0; color: var(--text-muted); }
+.conv-activity-selection small { color: var(--text-muted); }

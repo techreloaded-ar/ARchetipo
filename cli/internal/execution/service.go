@@ -114,6 +114,11 @@ func (s *Service) Start(ctx context.Context, spec domain.Spec, action ActionID, 
 // passes none and keeps compiling untouched.
 type StartOption func(*Execution)
 
+// WithUserInput preserves the proposal supplied before the action starts.
+func WithUserInput(input string) StartOption {
+	return func(record *Execution) { record.UserInput = strings.TrimSpace(input) }
+}
+
 // WithModelChoice records on the execution the model and options the run uses.
 // The Options map is copied in depth, so the caller and the stored record never
 // share it: a caller that keeps mutating the map it passed cannot rewrite the
@@ -300,7 +305,7 @@ func (s *Service) start(ctx context.Context, spec domain.Spec, action ActionID, 
 	// literally the one the record says the run started with. The request is
 	// built here and captured by the continuation's closure: a run already in
 	// flight carries its own root and no later workspace switch can rewrite it.
-	request := Request{ExecutionID: id, SpecCode: spec.Code, Action: action, Capability: capability, WorkingDir: started.WorkingDir, ProviderConfig: CloneConfig(validatedConfig)}
+	request := Request{UserInput: started.UserInput, ExecutionID: id, SpecCode: spec.Code, Action: action, Capability: capability, WorkingDir: started.WorkingDir, ProviderConfig: CloneConfig(validatedConfig)}
 	continuation := func(ctx context.Context) (Execution, error) {
 		result, dispatchErr := provider.Execute(ctx, request)
 		if dispatchErr == nil {

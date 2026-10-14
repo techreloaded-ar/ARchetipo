@@ -85,6 +85,7 @@ const (
 )
 
 type Request struct {
+	UserInput   string     `json:"user_input,omitempty"`
 	ExecutionID string     `json:"execution_id"`
 	SpecCode    string     `json:"spec_code"`
 	Action      ActionID   `json:"action"`
@@ -134,6 +135,7 @@ func (e *RemoteError) Error() string {
 func (e *RemoteError) Unwrap() error { return e.Err }
 
 type Execution struct {
+	UserInput        string          `json:"user_input,omitempty"`
 	ID               string          `json:"id"`
 	SpecCode         string          `json:"spec_code"`
 	Action           ActionID        `json:"action"`

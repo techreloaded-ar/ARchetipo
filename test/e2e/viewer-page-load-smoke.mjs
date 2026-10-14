@@ -92,6 +92,8 @@ const CLAIMS = [
   "Conversa sulla card prepara una conversazione collegata alla stessa spec",
   "la conferma del form crea una storia leggibile dal server",
   "un workspace appena inizializzato permette di creare la prima epica e storia",
+  "le attività raccolgono la proposta prima di avviare una skill e conservano il testo se l’avvio fallisce",
+  "le esecuzioni si possono fermare anche dalla vista Conversazione",
 ];
 
 // One entry per proved statement, for the report.
@@ -155,6 +157,7 @@ async function main() {
     console.log(`-> devtools: ${browser.wsEndpoint}`);
 
     await exercisePage(browser, view.url);
+    await exerciseActivityComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
     await runCommand("init-empty", cliPath, ["init", "--tool", "pi", "--connector", "file", "--yes"], {
@@ -367,6 +370,62 @@ async function exercisePage(browser, url) {
   if (created.spec?.title !== storyTitle) throw new Error('Il form non ha persistito la storia attesa');
   assertNoExceptions("La creazione manuale ha emesso eccezioni:");
   ok(CLAIMS[7], "la conferma del form crea US-702 e il dettaglio del server ne restituisce il titolo");
+  await page.close();
+}
+
+// The real page with deterministic provider responses: no agent or credential.
+// Server tests separately prove the native cancellation and persisted effects.
+async function exerciseActivityComposer(browser, url) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+    const originalFetch = window.fetch.bind(window);
+    window.smokeStarts = [];
+    window.smokeStopped = false;
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      const json = (body, status = 200) => new Response(JSON.stringify(body), {status, headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({conversations:[],available:true,closed_limit:20});
+      if (path === '/api/workspace/activities') return json({items:[
+        {id:'story',label:'Nuova storia',description:'Descrivi la tua proposta',placeholder:'Descrivi la tua proposta…',result:'Storia per il backlog',kind:'action',scope:'workspace',action:'spec-draft',primary:true,runnable:true},
+        {id:'product',label:'Definisci un prodotto',description:'Descrivi la tua idea',placeholder:'Descrivi la tua idea…',result:'Documento di prodotto',kind:'action',scope:'workspace',action:'inception',primary:true,runnable:true}
+      ]});
+      if (path === '/api/workspace/execution' && method === 'POST' || path === '/api/workspace/conversations' && method === 'POST') {
+        window.smokeStarts.push({path,body:JSON.parse(options.body)});
+        return json({error:'Avvio rifiutato per la prova'},409);
+      }
+      if (path === '/api/workspace/runs') return json({runs:window.smokeStopped ? [] : [{id:'smoke-active',scope:'workspace',action:'test-action',status:'RUNNING'}]});
+      if (path === '/api/execution/smoke-active/run/cancel') { window.smokeStopped = true; return json({events:[],approvals:[],run:null},202); }
+      return originalFetch(input, options);
+    };
+  ` });
+  await page.send("Page.navigate", { url });
+  await page.once("Page.loadEventFired", 30000, "la pagina con il provider di prova");
+  await page.waitFor(`!!document.querySelector('[data-conversation-activity="story"]:not(:disabled)')`, 10000, "Nuova storia disponibile");
+  await page.evaluate(`document.querySelector('[data-conversation-activity="story"]').click()`);
+  await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua proposta…'`, 10000, "il campo della proposta prima della skill");
+  if (await page.evaluate(`window.smokeStarts.length`) !== 0) throw new Error("La scelta di Nuova storia ha avviato un agente prima della proposta");
+  const proposal = "Voglio cercare le storie per titolo";
+  await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = ${JSON.stringify(proposal)}; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.conv-composer').requestSubmit(); })()`);
+  await page.waitFor(`window.smokeStarts.length === 1 && !document.querySelector('.conv-composer-input').disabled`, 10000, "l’invio della proposta e il rifiuto del provider");
+  const start = await page.evaluate(`window.smokeStarts[0]`);
+  if (start.path !== "/api/workspace/execution" || start.body.action !== "spec-draft" || start.body.user_input !== proposal) throw new Error(`La proposta non raggiunge l’azione: ${JSON.stringify(start)}`);
+  if (await page.evaluate(`document.querySelector('.conv-composer-input').value`) !== proposal) throw new Error("Il rifiuto ha perso il testo della proposta");
+  await page.evaluate(`document.querySelector('[data-conversation-activity-clear]').click(); document.querySelector('[data-conversation-activity="product"]').click()`);
+  await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua idea…'`, 10000, "il campo specifico dell’inception");
+  if (await page.evaluate(`window.smokeStarts.length`) !== 1) throw new Error("La scelta dell’inception è partita prima dell’invio");
+  ok(CLAIMS[9], "storia e inception chiedono la proposta; l’invio la consegna una volta e un rifiuto conserva il testo");
+  await page.waitFor(`!!document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’esecuzione da fermare");
+  await page.evaluate(`document.querySelector('.ws-runs-panel').open = true`);
+  if (await page.evaluate(`getComputedStyle(document.getElementById('workspace-runs')).display`) === "none") throw new Error("Le esecuzioni sono nascoste nella vista Conversazione");
+  await page.evaluate(`document.querySelector('[data-run-stop="smoke-active"]').click()`);
+  await page.waitFor(`window.smokeStopped && !document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’arresto dall’elenco delle esecuzioni");
+  if (exceptions.length) throw new Error(`Eccezioni nel flusso delle attività: ${JSON.stringify(exceptions)}`);
+  ok(CLAIMS[10], "Ferma cancella l’esecuzione dall’elenco anche nella vista Conversazione");
   await page.close();
 }
 

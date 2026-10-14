@@ -41,11 +41,13 @@ type dispatchGroup struct {
 	// already started would call Add concurrently with Wait — a WaitGroup misuse
 	// that panics the whole process. It became reachable when stopping a session
 	// stopped being something only shutdown did.
-	stopped bool
+	stopped       bool
+	cancellations map[string]context.CancelFunc
+	completions   map[string]chan struct{}
 }
 
 func newDispatchGroup() *dispatchGroup {
-	return &dispatchGroup{ctx: context.Background(), inFlight: map[string][]string{}}
+	return &dispatchGroup{ctx: context.Background(), inFlight: map[string][]string{}, cancellations: map[string]context.CancelFunc{}, completions: map[string]chan struct{}{}}
 }
 
 // bind installs the context dispatches will run on. Until Run binds one, the
@@ -109,8 +111,25 @@ func (g *dispatchGroup) current(subject string) (string, bool) {
 // run executes fn on the dispatch context and registers it for the shutdown
 // drain.
 func (g *dispatchGroup) run(fn func(context.Context)) {
+	g.runFor("", fn)
+}
+
+func (g *dispatchGroup) runFor(id string, fn func(context.Context)) {
 	g.mu.Lock()
-	ctx := g.ctx
+	ctx, cancel := context.WithCancel(g.ctx)
+	done := make(chan struct{})
+	if id != "" {
+		g.cancellations[id] = cancel
+		g.completions[id] = done
+	}
+	finish := func() {
+		cancel()
+		g.mu.Lock()
+		delete(g.cancellations, id)
+		delete(g.completions, id)
+		close(done)
+		g.mu.Unlock()
+	}
 	if g.stopped {
 		g.mu.Unlock()
 		// The drain has already begun, so this dispatch cannot join it. It still
@@ -118,15 +137,33 @@ func (g *dispatchGroup) run(fn func(context.Context)) {
 		// makes the continuation close its record as FAILED with a reason instead
 		// of leaving it RUNNING for ever — but it is not registered, because
 		// registering it now would be an Add racing a Wait.
-		go fn(ctx)
+		go func() { defer finish(); fn(ctx) }()
 		return
 	}
 	g.wg.Add(1)
 	g.mu.Unlock()
 	go func() {
 		defer g.wg.Done()
+		defer finish()
 		fn(ctx)
 	}()
+}
+
+// cancelAndWait ends only the named dispatch and waits for its terminal write.
+func (g *dispatchGroup) cancelAndWait(ctx context.Context, id string) (bool, error) {
+	g.mu.Lock()
+	cancel, done := g.cancellations[id], g.completions[id]
+	g.mu.Unlock()
+	if cancel == nil {
+		return false, nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return true, nil
+	case <-ctx.Done():
+		return true, ctx.Err()
+	}
 }
 
 // wait drains the in-flight dispatches for at most timeout. It is bounded on
@@ -400,7 +437,7 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 	// find the thread already there, not a moment later.
 	s.holdRunAsConversation(ctx, ws, &started, provider, effectiveConfig)
 
-	ws.dispatch.run(func(dispatchCtx context.Context) {
+	ws.dispatch.runFor(started.ID, func(dispatchCtx context.Context) {
 		// Deferred in this order so they unwind in the other one: the spec stops
 		// being busy first, and only then is the board of every connected client
 		// refreshed. Publishing while the reservation still stands would send

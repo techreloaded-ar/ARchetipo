@@ -75,6 +75,7 @@ async function main() {
   let failure = null;
   try {
     await scenarioTwoActionsInOneSession(runDir);
+    await scenarioStoppingWork(runDir);
     assertNoSessionMaterialLeaked();
   } catch (error) {
     failure = error;
@@ -209,6 +210,53 @@ async function scenarioTwoActionsInOneSession(runDir) {
       throw new Error(`the workspace holds ${(conversations.conversations || []).length} conversations, want exactly one`);
     }
     ok("one agent", `the two actions and the free message were carried out by one conversation and one native session, never by a second agent`);
+  } finally {
+    await w.close();
+  }
+}
+
+async function scenarioStoppingWork(runDir) {
+  const w = await openWorkspace(runDir, "stop-actions");
+  try {
+    const interruptFrame = entry => entry.kind === "received" && entry.frame?.type === "control_request" && entry.frame?.request?.subtype === "interrupt";
+    const first = await pressSpecAction(w, SPEC, { action: "plan" });
+    await w.control.waitFor(userFrame, 1);
+    const firstThread = await conversationOf(w.view.url, first.id);
+    const interrupted = w.control.count(interruptFrame) + 1;
+    const archiving = apiJSON(`${w.view.url}/api/workspace/conversations/${firstThread}/archive`, postJSON({}), 200);
+    await w.control.waitFor(interruptFrame, interrupted);
+    // Acknowledging interrupt alone does not mean the worker has stopped.
+    const inFlight = await apiJSON(`${w.view.url}/api/execution/${first.id}`);
+    if (inFlight.status !== "RUNNING") throw new Error("archive closed the execution before the native turn stopped");
+    w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "Turn stopped" }));
+    const archived = await archiving;
+    if (archived.session?.archive !== "ARCHIVED") throw new Error("the stopped conversation was not archived");
+    await waitForExecution(w.view.url, first.id, record => record.status === "FAILED");
+    ok("archive stops work", "archive sends a native interrupt, waits for the turn to stop, closes the execution and preserves the native session");
+
+    const second = await pressSpecAction(w, SPEC, { action: "plan" });
+    await w.control.waitFor(userFrame, 2);
+    const secondThread = await conversationOf(w.view.url, second.id);
+    w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: QUESTION }));
+    await waitForConversation(w.view.url, secondThread, view => view.session?.work === "IDLE");
+    await apiJSON(`${w.view.url}/api/workspace/conversations/${secondThread}/archive`, postJSON({}), 200);
+    await waitForExecution(w.view.url, second.id, record => record.status === "FAILED");
+    const deleted = await apiJSON(`${w.view.url}/api/workspace/conversations/${secondThread}/record`, { method: "DELETE" }, 200);
+    if (!deleted.native_session_preserved) throw new Error("record deletion did not preserve the native transcript");
+    ok("waiting actions stop", "archiving and deleting a conversation waiting for an answer leaves no running execution to block the next action");
+
+    const third = await pressSpecAction(w, SPEC, { action: "plan" });
+    await w.control.waitFor(userFrame, 3);
+    const interruptCount = w.control.count(interruptFrame) + 1;
+    const deleting = apiJSON(`${w.view.url}/api/spec/${SPEC}`, { method: "DELETE" }, 200);
+    await w.control.waitFor(interruptFrame, interruptCount);
+    w.control.push(emit({ type: "result", subtype: "success", is_error: false, result: "Turn stopped before card deletion" }));
+    await deleting;
+    await waitForExecution(w.view.url, third.id, record => record.status === "FAILED");
+    const runs = await apiJSON(`${w.view.url}/api/workspace/runs`);
+    if (runs.runs.length) throw new Error(`card deletion left running executions: ${JSON.stringify(runs)}`);
+    await apiJSON(`${w.view.url}/api/spec/${SPEC}`, {}, 404);
+    ok("card stops work", "deleting the card interrupts its native turn before removing the spec and leaves no running execution");
   } finally {
     await w.close();
   }
@@ -499,7 +547,7 @@ async function apiJSON(url, init = {}, expected = null) {
   } catch {
     data = text;
   }
-  if (!response.ok) {
+  if (!response.ok && response.status !== expected) {
     throw new Error(`HTTP ${response.status} for ${url}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   }
   if (expected !== null && response.status !== expected) {

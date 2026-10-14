@@ -547,17 +547,20 @@ func TestDeleteConversationRecordUnknownIsNotFound(t *testing.T) {
 // A live conversation is closed, never thrown away. The rail draws no trash on
 // one, and the route refuses it too: whoever has not closed a thread has not
 // decided to lose what was said in it.
-func TestDeleteConversationRecordRefusesALiveConversation(t *testing.T) {
+func TestDeleteConversationRecordClosesALiveConversation(t *testing.T) {
 	srv := newConversationServer(t, newConversingProvider("chatty", 0))
 	view := openConversationOK(t, srv)
 	id := view.Conversation.ID
 
 	w := doJSON(t, srv, http.MethodDelete, "/api/workspace/conversations/"+id+"/record", nil)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("DELETE of a live record = %d, want 409: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE of a live record = %d, want 200: %s", w.Code, w.Body.String())
 	}
-	if status, _, body := conversationsRouteTestReadTranscript(t, srv, id); status != http.StatusOK {
-		t.Fatalf("the refused conversation is no longer readable: %d %s", status, body)
+	if status, _, body := conversationsRouteTestReadTranscript(t, srv, id); status != http.StatusNotFound {
+		t.Fatalf("the deleted conversation is still readable: %d %s", status, body)
+	}
+	if _, live := srv.session().conversation.get(id); live {
+		t.Fatal("deleted conversation still holds a runtime")
 	}
 }
 

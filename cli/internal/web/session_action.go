@@ -49,6 +49,7 @@ const sessionActionOpening = "Work in the current working directory: it is the A
 // they fill, and a positional call with eight values gives a reader no way to
 // see which kind of action is being started.
 type actionInSession struct {
+	userInput string
 	// conversationID is the thread the action was asked for in, empty when it
 	// was pressed somewhere that belongs to no thread. An empty one is not a
 	// gap: the action opens its own conversation, once, and runs in it.
@@ -99,7 +100,7 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 			nil,
 		)
 	}
-	opts := []execution.StartOption(nil)
+	opts := []execution.StartOption{execution.WithUserInput(plan.userInput)}
 	if plan.modelChoice != nil {
 		opts = append(opts, execution.WithModelChoice(*plan.modelChoice))
 	}
@@ -122,13 +123,17 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 		}
 	}
 	prompt, err := execution.ActionPrompt(sessionActionOpening, plan.action, execution.Request{
-		ExecutionID: opened.ID, SpecCode: plan.specCode, Action: plan.action, WorkingDir: opened.WorkingDir,
+		UserInput: plan.userInput, ExecutionID: opened.ID, SpecCode: plan.specCode, Action: plan.action, WorkingDir: opened.WorkingDir,
 	})
 	if err != nil {
 		ws.settleSessionAction(ctx, opened.ID, nil, err)
 		return nil, iox.NewConflict(err.Error(), "run this action from a coding agent instead", err)
 	}
-	if err := s.startActionTurn(ctx, ws, snapshot, opened.ID, prompt, actionDisplayOf(s.actionLabelOf(ws, plan.action, plan.specCode), plan.specCode)); err != nil {
+	display := actionDisplayOf(s.actionLabelOf(ws, plan.action, plan.specCode), plan.specCode)
+	if plan.userInput != "" {
+		display += "\n\n" + plan.userInput
+	}
+	if err := s.startActionTurn(ctx, ws, snapshot, opened.ID, prompt, display); err != nil {
 		ws.settleSessionAction(ctx, opened.ID, nil, err)
 		return nil, err
 	}
@@ -470,27 +475,6 @@ func (ws *workspaceSession) finalMessageOfTurn(ctx context.Context, conversation
 	return message
 }
 
-// cancelSessionAction closes as failed the action a conversation is carrying
-// out, when the person asks for it to stop and there is no active turn left to
-// interrupt.
-//
-// It is the other half of the stop gesture. Interrupting an active turn already
-// ends the action, because the turn it was running in becomes INTERRUPTED; an
-// action waiting for an answer that will never come has no turn to interrupt,
-// and without this it would stay RUNNING for ever.
-func (ws *workspaceSession) cancelSessionAction(ctx context.Context, conversationID string) bool {
-	record, err := ws.conversationStore().GetMetadata(ctx, conversationID)
-	if err != nil {
-		return false
-	}
-	executionID := pendingActionExecutionID(ctx, ws, record)
-	if executionID == "" {
-		return false
-	}
-	ws.settleSessionAction(ctx, executionID, nil, fmt.Errorf("the action was cancelled in the conversation %s", conversationID))
-	return true
-}
-
 // nativeConversationRuns are the actions of the process this conversation has
 // carried out or is carrying out, drawn at the point of the thread that started
 // each of them.
@@ -616,25 +600,6 @@ func (s *Server) sendActionMessage(ctx context.Context, ws *workspaceSession, co
 	return s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{
 		Message: message, executionID: executionID,
 	})
-}
-
-// cancelActionInSession stops an action without stopping the session it runs
-// in: an active turn is interrupted, and an action that was only waiting for an
-// answer is closed where it stands.
-func (s *Server) cancelActionInSession(ctx context.Context, ws *workspaceSession, conversationID, executionID string) {
-	snapshot, live := ws.conversation.get(conversationID)
-	if live && snapshot.sessionProvider != nil {
-		if record, err := ws.conversationStore().GetMetadata(ctx, conversationID); err == nil &&
-			record.CurrentTurn != nil && record.CurrentTurn.ExecutionID == executionID && !terminalTurn(record.CurrentTurn.State) {
-			submissionID, idErr := nativeOperationID("submission-")
-			if idErr == nil {
-				_, _ = snapshot.sessionProvider.InterruptTurn(ctx, execution.SessionCommandRequest{
-					Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID,
-				})
-			}
-		}
-	}
-	ws.settleSessionAction(ctx, executionID, nil, fmt.Errorf("the action was cancelled in the conversation %s", conversationID))
 }
 
 // chooseNextTurn writes on the conversation the model the next turn is to run

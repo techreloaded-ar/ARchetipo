@@ -128,11 +128,11 @@
 		// Chiusura della conversazione
 		close: "Archivia",
 		closeConversation: "Archivia la conversazione",
-		closeQuestion: "Archiviare la conversazione? Il contesto nativo resterà disponibile.",
+		closeQuestion: "Archiviare la conversazione e fermare le attività in corso? Il contesto nativo resterà disponibile.",
 		closeYes: "Sì, archivia",
 		closeNo: "No",
 		reopen: "Riapri",
-		interrupt: "Interrompi turn",
+		interrupt: "Ferma",
 		// Compositore
 		writePlaceholder: "Scrivi all'agente…",
 		writeClosePlaceholder: "Questa sessione non è recuperabile",
@@ -1115,7 +1115,7 @@
 		if (textAt(session, "archive") === "ARCHIVED") {
 			return `<button type="button" class="conv-close-btn" data-conversation-reopen${disabled}>${escapeHtml(TEXT.reopen)}</button>`;
 		}
-		const interrupt = textAt(session, "work") !== "IDLE"
+		const interrupt = textAt(session, "work") !== "IDLE" || anyAwaiting(view)
 			? `<button type="button" class="conv-close-btn" data-conversation-interrupt${disabled}>${escapeHtml(TEXT.interrupt)}</button>`
 			: "";
 		return `${interrupt}${renderCloseControl(ui)}`;
@@ -1190,8 +1190,7 @@
 		const rows = items.map((item) => {
 			const disabled = item.runnable !== true || ui.busy ? " disabled" : "";
 			const reason = item.runnable === true ? "" : textAt(item, "unavailable_reason");
-			const gesture = item.kind === "action" ? "Avvia attività"
-				: item.kind === "conversation" ? "Apri conversazione" : "Seleziona e descrivi la richiesta";
+			const gesture = item.kind === "conversation" ? "Apri conversazione" : "Seleziona e descrivi la richiesta";
 			return `<button type="button" class="conv-activity-card" data-conversation-activity="${escapeHtml(textAt(item, "id"))}"${disabled}>
 				<span class="conv-activity-label">${escapeHtml(textAt(item, "label"))}</span>
 				${textAt(item, "description") ? `<span class="conv-activity-description">${escapeHtml(textAt(item, "description"))}</span>` : ""}
@@ -1205,7 +1204,7 @@
 
 	function renderActivitySelection(selection) {
 		if (!selection || !textAt(selection, "label")) return "";
-		return `<div class="conv-activity-selection"><span>${escapeHtml(textAt(selection, "label"))}</span><button type="button" class="ghost-btn" data-conversation-activity-clear aria-label="Rimuovi attività">×</button></div>`;
+		return `<div class="conv-activity-selection"><div><strong>${escapeHtml(textAt(selection, "label"))}</strong><p>${escapeHtml(textAt(selection, "description"))}</p>${textAt(selection, "result") ? `<small>Risultato: ${escapeHtml(selection.result)}</small>` : ""}</div><button type="button" class="ghost-btn" data-conversation-activity-clear aria-label="Rimuovi attività">×</button></div>`;
 	}
 
 	function renderActivityMenu(ui) {
@@ -1521,6 +1520,9 @@
 		}
 
 		if (!conversation) {
+			if (local.activitySelection) {
+				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}${renderComposer(false, typed, Object.assign({}, local, { writable: offered }), offered, false, renderConversationModelChoice(value, local, false))}</section>`;
+			}
 			const activities = renderActivities(objectAt(local, "activities"), local, false);
 			if (activities && !local.openingSpecCode) {
 				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}<div class="conv-empty conv-empty-activities">${activities}<div class="conv-empty-command">${renderConversationModelChoice(value, local, false)}</div></div></section>`;

@@ -208,7 +208,7 @@ func TestCancelClosesAnOrphanThatHasNoRun(t *testing.T) {
 		t.Fatalf("the inception is still blocked after the cancel: %s", raw)
 	}
 	// A second cancel finds a terminal record and changes nothing.
-	if w := doJSON(t, srv, http.MethodPost, "/api/execution/exec-cancel-orphan/run/cancel", nil); w.Code != http.StatusConflict {
+	if w := doJSON(t, srv, http.MethodPost, "/api/execution/exec-cancel-orphan/run/cancel", nil); w.Code != http.StatusAccepted {
 		t.Fatalf("a second cancel = %d: %s", w.Code, w.Body.String())
 	}
 }

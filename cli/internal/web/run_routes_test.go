@@ -509,8 +509,12 @@ func TestRunRoutesOnAProviderThatDoesNotCollaborate(t *testing.T) {
 	}
 	for _, route := range routes {
 		w := doJSON(t, fixture.srv, route.method, "/api/execution/"+fixture.executionID+route.path, route.payload)
-		if w.Code != http.StatusConflict {
-			t.Fatalf("%s %s = %d, want 409: %s", route.method, route.path, w.Code, w.Body.String())
+		want := http.StatusConflict
+		if route.path == "/run/cancel" {
+			want = http.StatusAccepted
+		} // A terminal cancellation is idempotent.
+		if w.Code != want {
+			t.Fatalf("%s %s = %d, want %d: %s", route.method, route.path, w.Code, want, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), "interactive run") {
 			t.Fatalf("the error must explain that the provider exposes no interactive run: %s", w.Body.String())
