@@ -1079,6 +1079,9 @@ func (s *Server) respondNativeConversationApproval(ctx context.Context, ws *work
 		return saveErr
 	}
 	if commandErr != nil {
+		if delivery.State == execution.DeliveryUnsent {
+			return iox.NewConflict("l’autorizzazione non è stata inviata", "ricarica la conversazione e rispondi alla richiesta corrente", commandErr)
+		}
 		return iox.NewConflict("the approval delivery was not confirmed", "reconcile the native session before retrying", commandErr)
 	}
 	return nil

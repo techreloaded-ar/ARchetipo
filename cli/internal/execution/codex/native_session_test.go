@@ -211,3 +211,65 @@ func assertFakeResponse(t *testing.T, fake *fakeCodex, id, wanted string) {
 	}
 	t.Fatalf("fake did not receive response id=%s result=%s", id, wanted)
 }
+
+func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fake := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "delegated", Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}) }()
+	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "parent-turn", "parent-submission", "develop", "low", nil)
+	fake.emit("item/agentMessage/delta", `{"threadId":"thread-1","turnId":"turn-1","itemId":"parent-message","delta":"Parent result"}`)
+	fake.emit("turn/started", `{"threadId":"child-plan","turn":{"id":"child-plan-turn"}}`)
+	fake.emit("item/completed", `{"threadId":"child-plan","turnId":"child-plan-turn","item":{"id":"child-message","type":"agentMessage","text":"Child receipt"}}`)
+	fake.emit("turn/completed", `{"threadId":"child-plan","turn":{"id":"child-plan-turn","rootTurnId":"turn-1","status":"completed"}}`)
+	fake.request(71, "item/commandExecution/requestApproval", `{"threadId":"child-implement","turnId":"child-implement-turn","reason":"Check isolated Docker runtime","availableDecisions":["accept","cancel"]}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingApprovals) == 1 })
+	observed, err := provider.ReadSession(ctx, execution.SessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.CurrentTurn.State != execution.TurnActive || observed.Work != execution.SessionWaitingApproval {
+		t.Fatalf("child completion ended the parent: %#v", observed)
+	}
+	client := provider.nativeSession(created.Session.Native.ID).client
+	if client.Completed() || client.FinalMessage() != "Parent result" {
+		t.Fatalf("child changed parent outcome: completed=%v final=%q", client.Completed(), client.FinalMessage())
+	}
+	request := execution.SessionCommandRequest{Session: created.Session, TurnID: "parent-turn", SubmissionID: "approve-child", InteractionID: "71", OptionID: localrun.ApprovalAllow}
+	delivery, err := provider.RespondSessionApproval(ctx, request)
+	if err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("child approval = %#v, %v", delivery, err)
+	}
+	assertFakeResponse(t, fake, "71", `{"decision":"accept"}`)
+	if repeat, err := provider.RespondSessionApproval(ctx, request); err == nil || repeat.State != execution.DeliveryUnsent {
+		t.Fatal("duplicate approval was delivered")
+	}
+	fake.emit("turn/completed", `{"threadId":"child-implement","turn":{"id":"child-implement-turn","status":"completed"}}`)
+	fake.emit("item/completed", `{"threadId":"thread-1","turnId":"turn-1","item":{"id":"parent-message","type":"agentMessage","text":"Parent result"}}`)
+	fake.emit("turn/completed", `{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+	session := provider.nativeSession(created.Session.Native.ID)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	ends := 0
+	children := 0
+	for _, event := range session.events {
+		if event.Kind == localrun.KindTurnEnd {
+			ends++
+			if event.FinalMessage != "Parent result" {
+				t.Fatalf("wrong final message: %#v", event)
+			}
+		}
+		if event.Kind == "turn/completed" {
+			children++
+		}
+	}
+	if ends != 1 || children != 2 {
+		t.Fatalf("end events: parent=%d children=%d", ends, children)
+	}
+}

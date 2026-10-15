@@ -41,6 +41,29 @@ type deltaNotification struct {
 	Text   string `json:"text"`
 }
 
+// A native app-server also streams delegated threads. Their lifecycle is
+// history of the owning conversation, never completion of its current turn.
+func (a *appServer) ownsNotification(params json.RawMessage, matchTurn bool) bool {
+	var identity struct {
+		ThreadID string `json:"threadId"`
+		TurnID   string `json:"turnId"`
+		Turn     struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	_ = json.Unmarshal(params, &identity)
+	a.mu.Lock()
+	threadID, turnID := a.threadID, a.turnID
+	a.mu.Unlock()
+	if identity.ThreadID != "" && threadID != "" && identity.ThreadID != threadID {
+		return false
+	}
+	if identity.TurnID == "" {
+		identity.TurnID = identity.Turn.ID
+	}
+	return !matchTurn || identity.TurnID == "" || turnID == "" || identity.TurnID == turnID
+}
+
 // project translates one notification and, when it carries history, appends it
 // to the session.
 //
@@ -53,6 +76,11 @@ func (a *appServer) project(method string, params json.RawMessage) {
 	if _, noise := noiseNotifications[method]; noise {
 		return
 	}
+	if (method == "turn/started" || method == "turn/completed") && !a.ownsNotification(params, method == "turn/completed") {
+		a.append(method, "", "", params)
+		return
+	}
+
 	switch method {
 	case "turn/started":
 		a.mu.Lock()
@@ -103,8 +131,11 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		delta := decodeDelta(params)
 		var fragment deltaNotification
 		_ = json.Unmarshal(params, &fragment)
+		owned := a.ownsNotification(params, true)
 		a.mu.Lock()
-		a.agent.WriteString(delta)
+		if owned {
+			a.agent.WriteString(delta)
+		}
 		if a.messageText == nil {
 			a.messageText = make(map[string]string)
 		}
@@ -241,8 +272,11 @@ func completedItem(a *appServer, params json.RawMessage) (kind, text, tool strin
 	item := notification.Item
 	switch item.Type {
 	case "agentMessage":
+		owned := a.ownsNotification(params, true)
 		a.mu.Lock()
-		a.lastFull = item.Text
+		if owned {
+			a.lastFull = item.Text
+		}
 		seen := a.messageText[item.ID]
 		if a.messageText == nil {
 			a.messageText = make(map[string]string)

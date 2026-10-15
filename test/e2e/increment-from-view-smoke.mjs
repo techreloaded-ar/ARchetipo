@@ -138,6 +138,10 @@ async function main(){
    await page.waitFor('document.querySelector(\'[data-increment-section="intent"]\')?.open',timeout,"expanded long intent");
    const geometry=await page.evaluate('(()=>{const card=document.querySelector(".conv-increment"),r=card.getBoundingClientRect();return {height:card.clientHeight,content:card.scrollHeight,overflow:getComputedStyle(card).overflowY,x:r.left+r.width/2,y:r.top+Math.min(100,r.height/2)};})()');
    assert.ok(["auto","scroll"].includes(geometry.overflow)&&geometry.content>geometry.height,"long increment needs a bounded scrolling area: "+JSON.stringify(geometry));
+   // Hit testing must see the expanded panel, not the compositor frame
+   // from before the viewport/details changed. Wait for paint, not a timer.
+   await page.send("Input.dispatchMouseEvent",{type:"mouseMoved",x:geometry.x,y:geometry.y});
+   await page.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
    await page.send("Input.dispatchMouseEvent",{type:"mouseWheel",x:geometry.x,y:geometry.y,deltaX:0,deltaY:100000});
    await page.waitFor('document.querySelector(".conv-increment")?.scrollTop>100',timeout,"wheel scroll through the long intent");
    await page.waitFor('(()=>{const card=document.querySelector(".conv-increment");return card.scrollHeight-card.clientHeight-card.scrollTop<2;})()',timeout,"end of increment content");
@@ -158,6 +162,19 @@ async function main(){
   const parentBefore=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(parentBefore.items.length,0);
   await click("approve-intent");
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=2,"development turn");
+  // A planning worker can finish before an implementation worker asks for
+  // permission. Both belong to the still-active parent native turn.
+  control.queue.push({kind:"emit",method:"turn/started",params:{threadId:"child-plan",turn:{id:"child-plan-turn"}}});
+  control.queue.push({kind:"emit",method:"turn/completed",params:{threadId:"child-plan",turn:{id:"child-plan-turn",rootTurnId:"turn-2",status:"completed"}}});
+  control.queue.push({kind:"request",id:0,method:"item/commandExecution/requestApproval",params:{threadId:"child-implement",turnId:"child-implement-turn",reason:"Consenti la verifica locale della fixture?",availableDecisions:["accept","cancel"]}});
+  await page.waitFor('!!document.querySelector(\'[data-run-approval-id="0"][data-run-option-id="allow"]:not(:disabled)\')',timeout,"delegated approval after planning completes");
+  assert.equal((await read()).session.current_turn.state,"ACTIVE");
+  await page.evaluate('document.querySelector(\'[data-run-approval-id="0"][data-run-option-id="allow"]\').click()');
+  await until(()=>control.received.some(e=>e.kind==="response"&&e.id===0&&e.result?.decision==="accept"),"native approval response");
+  await until(async()=>{const view=await read();return view.session.pending_approvals.length===0&&view.session.work==="TURN_ACTIVE";},"approval resolved with parent still active");
+  assert.equal(control.received.filter(e=>e.kind==="response"&&e.id===0).length,1);
+  control.queue.push({kind:"emit",method:"turn/completed",params:{threadId:"child-implement",turn:{id:"child-implement-turn",status:"completed"}}});
+  ok("Il consenso al worker delegato viene consegnato una volta senza chiudere il turno principale.");
   await develop("CSV",2);
   assert.equal(await fs.readFile(path.join(sandbox,"hello.txt"),"utf8"),"originale\n");
   assert.equal(await git(["rev-parse","HEAD"]),baseline);
