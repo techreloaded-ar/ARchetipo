@@ -9,6 +9,21 @@
    rami, log, YAML, diff. La gerarchia la fanno peso e dimensione.
    ========================================================================= */
 
+.conv-increment{margin:16px 0;padding:18px 20px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
+.conv-increment>header{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:15px}
+.conv-increment>header>span{font-size:12px;color:var(--text-muted)}
+.conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.conv-increment details{margin:10px 0}
+.conv-increment summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--accent)}
+.conv-increment .markdown-rendered{margin-top:14px}
+.conv-increment-stories{padding-left:22px}
+.conv-increment-stories>li{margin:12px 0;font-size:14px}
+.conv-increment-note{font-size:12px;line-height:1.65;color:var(--text-muted);margin:12px 0 0}
+.conv-increment .conv-proposal-controls{flex-wrap:wrap;margin-top:14px}
+.conv-increment-result{padding:12px 0;border-top:1px solid var(--border)}
+.conv-increment-result li,.conv-increment-feedback{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+@media(max-width:640px){.conv-increment{padding:14px}.conv-increment>header{align-items:start;flex-direction:column;gap:6px}.conv-increment .approval-btn{white-space:normal;text-align:left}}
+
 :root {
 	--font-sans:
 		"Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",

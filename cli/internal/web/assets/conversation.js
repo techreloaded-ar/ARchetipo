@@ -1556,11 +1556,33 @@
 	 *                            questo modulo.
 	 * @returns {string} HTML string.
 	 */
+	function renderIncrement(increment, ui) {
+		if (!increment) return "";
+		const revisions = arrayAt(increment, "revisions");
+		const latest = revisions[revisions.length - 1];
+		const result = objectAt(increment, "result");
+		const pr = objectAt(increment, "pull_request");
+		const opened = objectAt(ui, "incrementSections") || {};
+		const disabled = ui.busy || increment.busy ? " disabled" : "";
+		const parse = body => typeof ui.markedParse === "function" ? ui.markedParse(body) : "<pre>" + escapeHtml(body) + "</pre>";
+		const link = (url, label) => /^https?:\/\//.test(url) ? '<a class="ghost-btn" target="_blank" rel="noopener noreferrer" href="' + escapeHtml(url) + '">' + escapeHtml(label) + '</a>' : "";
+		const section = (key, label, body) => '<details data-increment-section="' + escapeHtml(key) + '"' + (opened[key] ? " open" : "") + '><summary>' + escapeHtml(label) + '</summary>' + body + '</details>';
+		const renderRevision = revision => '<div class="markdown-rendered">' + parse(textAt(revision, "intent")) + '</div><ol class="conv-increment-stories">' + arrayAt(revision, "stories").map(story => '<li><strong>' + escapeHtml(textAt(story, "title")) + '</strong>' + section("story-" + revision.number + "-" + story.code, "Leggi la storia", '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
+		let contents = "";
+		if (latest) contents += section("intent", "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare"), renderRevision(latest));
+		if (result) contents += '<div class="conv-increment-result"><p>' + escapeHtml(textAt(result, "summary")) + '</p>' + section("checks", "Verifiche eseguite", '<ul>' + arrayAt(result, "checks").map(check => "<li>" + escapeHtml(check) + "</li>").join("") + "</ul>") + link(textAt(result, "preview_url"), "Apri anteprima ↗") + '</div>';
+		if (revisions.length > 1) contents += section("history", "Revisioni precedenti · " + (revisions.length - 1), revisions.slice(0, -1).reverse().map(revision => section("revision-" + revision.number, "Versione " + revision.number, renderRevision(revision) + (revision.feedback ? '<p class="conv-increment-feedback">' + escapeHtml(revision.feedback) + '</p>' : ""))).join(""));
+		if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
+		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
+		return '<section class="conv-increment" aria-label="Incremento di prodotto"><header><strong>' + escapeHtml(textAt(increment, "title")) + '</strong><span>' + escapeHtml(textAt(increment, "status_label")) + '</span></header><p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>' + contents + '<div class="conv-proposal-controls">' + controls + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></section>';
+	}
+
 	function renderConversation(view, draft, ui) {
 		const value = view && typeof view === "object" ? view : {};
 		const local = ui && typeof ui === "object" ? ui : {};
 		const typed = typeof draft === "string" ? draft : "";
 		const blocks = [];
+		if (objectAt(value, "increment")) blocks.push(renderIncrement(objectAt(value, "increment"), local));
 
 		const conversation = objectAt(value, "conversation");
 		// Not offered says a conversation cannot be *opened* here; it says nothing

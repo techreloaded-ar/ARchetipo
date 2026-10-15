@@ -105,6 +105,9 @@ func IsRepo(ctx context.Context, repoRoot string) bool {
 // One list, used by everything that has to say what is not part of an increment,
 // so the diff and the commit cannot disagree about it.
 var RuntimeArtifactPathspecs = []string{
+	":(exclude).archetipo/increments",
+	":(exclude).archetipo/increment-local",
+	":(exclude).archetipo/increment-workspace.json",
 	":(exclude).archetipo/conversations",
 	":(exclude).archetipo/executions",
 	":(exclude).archetipo/tmp",
@@ -382,11 +385,23 @@ func CommitSpecChanges(ctx context.Context, repoRoot, workdirRel, code, title st
 	if strings.TrimSpace(status) == "" {
 		return nil
 	}
-	addArgs := append([]string{"add", "-A", "--", "."}, RuntimeArtifactPathspecs...)
+	addArgs := []string{"add", "-A", "--", "."}
+	for _, exclusion := range RuntimeArtifactPathspecs {
+		// Git rejects an explicitly named ignored path even in an exclusion
+		// pathspec. Ignored runtime files are already outside git add's scope;
+		// retain the exclusion for paths that could otherwise be staged.
+		runtimePath := strings.TrimPrefix(exclusion, ":(exclude)")
+		if !gitOK(ctx, workdirAbs, "check-ignore", "--quiet", "--", runtimePath) {
+			addArgs = append(addArgs, exclusion)
+		}
+	}
 	if _, err := runGitInDir(ctx, workdirAbs, addArgs...); err != nil {
 		return iox.NewConflict(
 			fmt.Sprintf("could not stage changes for %s", code),
 			"inspect the working directory and retry `archetipo spec review`", err)
+	}
+	if gitOK(ctx, workdirAbs, "diff", "--cached", "--quiet") {
+		return nil
 	}
 	msg := ReviewCommitMessage(code, opts, title)
 	if _, err := runGitInDir(ctx, workdirAbs, "commit", "-m", msg); err != nil {

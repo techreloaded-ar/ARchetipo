@@ -324,6 +324,9 @@ func (ws *workspaceSession) resolveSpecDraftSource(ctx context.Context, ref *spe
 	if err != nil {
 		return result, conversationNotFound(ref.ConversationID, err)
 	}
+	if record.IncrementID != "" {
+		return result, iox.NewConflict("increment stories are internal to its sandbox", "approve the increment intent before development; publish its stories with the PR", nil)
+	}
 	if code := record.SpecDraftAcceptances[ref.key()]; code != "" {
 		spec, err := ws.conn.ReadSpecDetail(ctx, code)
 		result.Accepted = &spec

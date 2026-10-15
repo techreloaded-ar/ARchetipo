@@ -19,6 +19,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
@@ -31,10 +32,11 @@ import (
 // provider registry, the SSE broker whose clients stay connected, the registry
 // of known workspaces, and the HTTP plumbing itself.
 type Server struct {
-	registry *execution.Registry
-	mux      *http.ServeMux
-	httpSrv  *http.Server
-	broker   *Broker
+	incrementHosting increment.Hosting
+	registry         *execution.Registry
+	mux              *http.ServeMux
+	httpSrv          *http.Server
+	broker           *Broker
 
 	// workspaces is the user-level registry of known workspaces. It is named
 	// apart from `registry` above, which is the execution provider registry of
@@ -223,6 +225,9 @@ func (s *Server) handleAlways(pattern string, h http.HandlerFunc) {
 }
 
 func (s *Server) registerRoutes() {
+	s.handleWorkspace("POST /api/increments", s.handleCreateIncrement)
+	s.handleWorkspace("GET /api/increments/{id}", s.handleGetIncrement)
+	s.handleWorkspace("POST /api/increments/{id}/{action}", s.handleIncrementAction)
 	s.handleWorkspace("GET /api/board", s.handleGetBoard)
 	s.handleWorkspace("GET /api/board/stream", s.handleStreamBoard)
 	s.handleWorkspace("GET /api/metrics", s.handleGetMetrics)

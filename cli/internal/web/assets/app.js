@@ -6096,6 +6096,7 @@
 	let conversationProposalVersion = "";
 	let conversationDraftDestinations = {};
 	let conversationProposalPreviousOpen = {};
+	let conversationIncrementSections = {};
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -6349,6 +6350,8 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			const incrementAction = e.target.closest("[data-increment-action]");
+			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
 			if (showProposals) {
 				conversationProposalsOpen = true;
@@ -6591,6 +6594,7 @@
 			}
 		});
 		container.addEventListener("toggle", (e) => {
+			if (e.target.matches("[data-increment-section]")) conversationIncrementSections[e.target.getAttribute("data-increment-section")] = e.target.open;
 			if (e.target.matches("[data-proposal-previous]")) conversationProposalPreviousOpen[e.target.getAttribute("data-proposal-previous")] = e.target.open;
 		}, true);
 		container.addEventListener("submit", (e) => {
@@ -7209,7 +7213,7 @@
 		if (!item || !item.runnable || conversationBusy) return;
 		conversationActivitiesOpen = false;
 		conversationActivitySelection = null;
-		if (item.kind === "action") {
+		if (item.kind === "action" || item.kind === "increment") {
 			conversationActivitySelection = Object.assign({}, item);
 		} else if (item.kind === "conversation") {
 			if (!conversationIsActive()) await openConversation();
@@ -7440,6 +7444,7 @@
 		conversationProposalVersion = "";
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
+		conversationIncrementSections = {};
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
@@ -7686,6 +7691,7 @@
 		conversationProposalVersion = "";
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
+		conversationIncrementSections = {};
 		conversationView = null;
 		conversationAfterID = 0;
 		conversationEvents = [];
@@ -7964,17 +7970,49 @@
 		}
 	}
 
+
+	async function runIncrementAction(action) {
+		const current = conversationView && conversationView.increment;
+		if (!current || conversationBusy) return;
+		const revision = (current.revisions || []).at(-1);
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const value = await apiPost('/api/increments/' + encodeURIComponent(current.id) + '/' + encodeURIComponent(action), {revision: revision ? revision.number : 0, head_sha: current.ready_sha || ''});
+			if (conversationView) conversationView.increment = value;
+			conversationRefusal = '';
+			await switchToConversation(conversationsCurrentId);
+			await loadConversationsIndex();
+			loadBoard();
+		} catch (err) { conversationRefusal = err.message || String(err); }
+		finally { conversationBusy = false; renderConversationPanel(); }
+	}
+
+	async function startIncrementFromConversation(proposal) {
+		const body = {request: proposal, origin_conversation_id: conversationsCurrentId || ""};
+		const override = conversationModelOverride();
+		if (override) Object.assign(body, override);
+		try {
+			const view = await apiPost("/api/increments", body);
+			await switchToConversation(conversationIdOf(view), view);
+			await loadConversationsIndex();
+			return true;
+		} catch (err) { conversationRefusal = err.message || String(err); return false; }
+	}
 	async function sendConversationMessage() {
 		if (conversationBusy) return;
 		const proposal = conversationDraft.trim();
-		if (conversationActivitySelection && conversationActivitySelection.kind === "action") {
+
+		if (conversationActivitySelection && ["action", "increment"].includes(conversationActivitySelection.kind)) {
 			if (!proposal) return;
 			const typed = proposal;
 			const activity = conversationActivitySelection;
 			conversationBusy = true;
 			renderConversationPanel();
 			try {
-				const started = await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
+				const started = activity.kind === "increment"
+					? await startIncrementFromConversation(typed)
+					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
 				if (started) {
 					conversationDraft = "";
 					conversationActivitySelection = null;
@@ -8316,6 +8354,7 @@
 				proposalVersion: conversationProposalVersion,
 				draftDestinations: conversationDraftDestinations,
 				proposalPreviousOpen: conversationProposalPreviousOpen,
+				incrementSections: conversationIncrementSections,
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:

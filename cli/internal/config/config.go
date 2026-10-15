@@ -38,6 +38,7 @@ const (
 
 // Config is the parsed shape of .archetipo/config.yaml.
 type Config struct {
+	Increment *IncrementWorkspace   `yaml:"-" json:"increment,omitempty"`
 	Connector string                `yaml:"connector" json:"connector"`
 	Paths     domain.ConfigPaths    `yaml:"paths" json:"paths"`
 	Workflow  domain.WorkflowConfig `yaml:"workflow" json:"workflow"`
@@ -206,7 +207,7 @@ func Load(startDir string) (Config, error) {
 		return Config{}, err
 	}
 	innermostCode := ""
-	for hop := 0; hop < maxWorktreeAscents; hop++ {
+	for hop := 0; hop < maxWorktreeAscents && cfg.Increment == nil; hop++ {
 		parentRoot, worktreeCode, found := resolveNestedWorktreeParent(cfg.ProjectRoot)
 		if !found {
 			break
@@ -491,7 +492,7 @@ func parseRaw(root, cfgPath string, raw []byte) (Config, error) {
 	if err := c.validate(); err != nil {
 		return Config{}, err
 	}
-	return c, nil
+	return applyIncrementWorkspace(c)
 }
 
 func absoluteConfigPath(root string) (absRoot, cfgPath string, err error) {
@@ -1020,6 +1021,14 @@ func find(start string) (root, cfg string, err error) {
 	dir := abs
 	for {
 		candidate := filepath.Join(dir, RelativePath)
+		if isIncrementWorktreeRoot(dir) {
+			if _, markerErr := os.Stat(filepath.Join(dir, IncrementWorkspacePath)); markerErr != nil {
+				return "", "", fmt.Errorf("increment workspace marker is missing or unreadable: %w", markerErr)
+			}
+		}
+		if info, markerErr := os.Stat(filepath.Join(dir, IncrementWorkspacePath)); markerErr == nil && !info.IsDir() {
+			return dir, candidate, nil
+		}
 		info, statErr := os.Stat(candidate)
 		if statErr == nil && !info.IsDir() {
 			return dir, candidate, nil

@@ -93,6 +93,13 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 	if err != nil {
 		return nil, err
 	}
+	record, err := ws.conversationStore().GetMetadata(ctx, snapshot.id)
+	if err != nil {
+		return nil, err
+	}
+	if record.IncrementID != "" {
+		return nil, iox.NewConflict("questa conversazione lavora nella sandbox di un incremento", "usa le azioni dell’incremento; avvia le attività del workspace in una conversazione separata", nil)
+	}
 	if running, found, err := s.actionAlreadyRunningIn(ctx, ws, snapshot.id); err != nil {
 		return nil, err
 	} else if found {

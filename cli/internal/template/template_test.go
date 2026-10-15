@@ -20,6 +20,7 @@ var processSkills = []string{
 	"archetipo-review",
 	"archetipo-spec",
 	"archetipo-wiki",
+	"archetipo-increment",
 }
 
 // processActions is written out in full for the same reason as processSkills:

@@ -49,6 +49,9 @@ type scopedRoute struct {
 var workspaceScopedRoutes = []scopedRoute{
 	{"GET /api/documentation/wiki/actions", http.MethodGet, "/api/documentation/wiki/actions", ""},
 	{"POST /api/documentation/wiki/actions", http.MethodPost, "/api/documentation/wiki/actions", "{}"},
+	{"POST /api/increments", http.MethodPost, "/api/increments", "{}"},
+	{"GET /api/increments/{id}", http.MethodGet, "/api/increments/inc-test", ""},
+	{"POST /api/increments/{id}/{action}", http.MethodPost, "/api/increments/inc-test/publish", "{}"},
 	{"GET /api/documentation", http.MethodGet, "/api/documentation", ""},
 	{"GET /api/documentation/{collection}/page", http.MethodGet, "/api/documentation/wiki/page?id=overview", ""},
 	{"GET /api/board", http.MethodGet, "/api/board", ""},

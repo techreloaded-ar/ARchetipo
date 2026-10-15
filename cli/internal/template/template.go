@@ -74,6 +74,7 @@ type DocumentationAction struct {
 // or native skill. Presentation belongs to the process, not to the browser.
 // Skill is a binding, never evidence that a runtime has discovered it.
 type ConversationActivity struct {
+	Kind        string `json:"kind,omitempty"`
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description"`
@@ -81,6 +82,12 @@ type ConversationActivity struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	Action      string `json:"action,omitempty"`
 	Skill       string `json:"skill,omitempty"`
+}
+
+type IncrementAction struct {
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Statuses []string `json:"statuses"`
 }
 
 const (
@@ -122,6 +129,7 @@ type Stage struct {
 // the condition being evaluated by the caller, never here; Statuses are the
 // workflow labels that process works with.
 type Template struct {
+	IncrementActions       []IncrementAction      `json:"increment_actions,omitempty"`
 	ID                     string                 `json:"id"`
 	Version                string                 `json:"version"`
 	Label                  string                 `json:"label"`
@@ -166,6 +174,10 @@ func (e *RegistryError) Error() string {
 // clone detaches the mutable slices so a caller that edits Skills or Actions
 // cannot reach back into the registry.
 func (t Template) clone() Template {
+	t.IncrementActions = slices.Clone(t.IncrementActions)
+	for i := range t.IncrementActions {
+		t.IncrementActions[i].Statuses = slices.Clone(t.IncrementActions[i].Statuses)
+	}
 	t.Skills = slices.Clone(t.Skills)
 	t.ConversationActivities = slices.Clone(t.ConversationActivities)
 	t.DocumentationActions = slices.Clone(t.DocumentationActions)
@@ -181,10 +193,18 @@ func (t Template) clone() Template {
 
 func builtin() Template {
 	return Template{
+		IncrementActions: []IncrementAction{
+			{ID: "discuss", Label: "Riprendi la definizione", Statuses: []string{"DISCOVERY"}},
+			{ID: "approve-intent", Label: "Approva intento e avvia sviluppo", Statuses: []string{"DISCOVERY"}},
+			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}},
+			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}},
+			{ID: "refresh", Label: "Aggiorna stato PR", Statuses: []string{"PROPOSED"}},
+		},
 		ID:      FabbricaDelSoftware,
 		Version: fabbricaVersion,
 		Label:   "Fabbrica del software",
 		ConversationActivities: []ConversationActivity{
+			{ID: "increment", Kind: "increment", Label: "Sviluppa un incremento", Description: "Chiarisci l’intento, prova il risultato e affinalo in una sandbox dedicata.", Result: "Incremento approvato e PR", Placeholder: "Racconta il risultato che vuoi ottenere e per chi…"},
 			{ID: "product", Label: "Definisci un prodotto", Description: "Chiarisci obiettivi, utenti e perimetro.", Result: "Documento di prodotto", Placeholder: "Descrivi la tua idea: problema, utenti e risultato che vuoi ottenere…", Action: "inception"},
 			{ID: "story", Label: "Nuova storia", Description: "Descrivi il bisogno, rispondi alle domande e rivedi la proposta.", Result: "Storia per il backlog", Placeholder: "Descrivi la tua proposta: chi ne ha bisogno, cosa deve poter fare e perché…", Action: "spec-draft"},
 			{ID: "design", Label: "Nuovo mockup", Description: "Indica la schermata o il flusso che vuoi rappresentare.", Result: "Prototipo consultabile", Placeholder: "Descrivi la schermata o il flusso che vuoi rappresentare…", Skill: "archetipo-design"},
@@ -206,6 +226,7 @@ func builtin() Template {
 			"archetipo-review",
 			"archetipo-spec",
 			"archetipo-wiki",
+			"archetipo-increment",
 		},
 		Actions: []Action{
 			{
@@ -308,4 +329,13 @@ func Resolve(id string) (Template, error) {
 		return Default(), nil
 	}
 	return Template{}, &RegistryError{TemplateID: id, Reason: "is not registered"}
+}
+
+// IncrementStatusLabel belongs to the process vocabulary, like action labels.
+func (t Template) IncrementStatusLabel(status string) string {
+	labels := map[string]string{"DISCOVERY": "Intento da concordare", "DEVELOPING": "Sviluppo nella sandbox", "REVIEW": "Risultato da provare", "PUBLISHING": "Pubblicazione da completare", "PROPOSED": "Proposta in PR", "DELIVERED": "Integrato nel prodotto"}
+	if label, ok := labels[status]; ok {
+		return label
+	}
+	return status
 }
