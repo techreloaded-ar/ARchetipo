@@ -8260,6 +8260,8 @@
 	function renderConversationPanel() {
 		if (!conversationEl) return;
 		const proposalScroll = conversationEl.querySelector(".conv-story-proposals")?.scrollTop || 0;
+		const increment = conversationEl.querySelector(".conv-increment");
+		const incrementScroll = increment && { id: increment.getAttribute("data-increment-id"), top: increment.scrollTop, focused: increment === document.activeElement };
 		const proposalFocused = document.activeElement;
 		const proposalFocusKey = proposalFocused && proposalFocused.getAttribute("data-conversation-draft-destination");
 		const versionHadFocus = proposalFocused && proposalFocused.hasAttribute("data-conversation-proposal-version");
@@ -8372,6 +8374,11 @@
 
 		const proposals = conversationEl.querySelector(".conv-story-proposals");
 		if (proposals) proposals.scrollTop = proposalScroll;
+		const nextIncrement = conversationEl.querySelector(".conv-increment");
+		if (incrementScroll && nextIncrement?.getAttribute("data-increment-id") === incrementScroll.id) {
+			nextIncrement.scrollTop = incrementScroll.top;
+			if (incrementScroll.focused) nextIncrement.focus({ preventScroll: true });
+		}
 		if (versionHadFocus) conversationEl.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
 		if (proposalFocusKey) {
 			Array.from(conversationEl.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
