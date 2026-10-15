@@ -94,7 +94,7 @@ async function main(){
   // listing's envelope shape.
   const id=conversationID||await page.evaluate('document.querySelector("[data-conversation-id].is-current")?.getAttribute("data-conversation-id") || document.querySelector("[data-conversation-id]")?.getAttribute("data-conversation-id")');
   assert.ok(id,"conversation id");
-  const convURL=view.url+"/api/workspace/conversations/"+id;
+  let convURL=view.url+"/api/workspace/conversations/"+id;
   const read=async()=>await (await fetch(convURL)).json();
   let current=await read(),inc=current.increment;
   assert.ok(inc&&inc.workdir!==sandbox);assert.equal(current.session.session.environment.working_dir,inc.workdir);
@@ -107,9 +107,10 @@ async function main(){
    return JSON.parse((await run("CLI",cli,args,{cwd})).stdout).data;
   };
   const finish=async(n,text)=>{
-   control.queue.push({kind:"emit",method:"item/agentMessage/delta",params:{turnId:"turn-"+n,itemId:"answer-"+n,delta:text}});
-   control.queue.push({kind:"emit",method:"item/completed",params:{turnId:"turn-"+n,item:{type:"agentMessage",id:"answer-"+n,text}}});
-   control.queue.push({kind:"emit",method:"turn/completed",params:{turn:{id:"turn-"+n,status:"completed"}}});
+   const nativeTurn=(await read()).session.current_turn.native_id;
+   control.queue.push({kind:"emit",method:"item/agentMessage/delta",params:{turnId:nativeTurn,itemId:"answer-"+n,delta:text}});
+   control.queue.push({kind:"emit",method:"item/completed",params:{turnId:nativeTurn,item:{type:"agentMessage",id:"answer-"+n,text}}});
+   control.queue.push({kind:"emit",method:"turn/completed",params:{turn:{id:nativeTurn,status:"completed"}}});
    await until(async()=>!(await read()).increment.busy,"idle native turn");
   };
   const click=async(action)=>{await page.waitFor('!!document.querySelector(\'[data-increment-action="'+action+'"]:not(:disabled)\')',timeout,action);await page.evaluate('document.querySelector(\'[data-increment-action="'+action+'"]\').click()');};
@@ -189,7 +190,21 @@ async function main(){
   await page.evaluate('(()=>{const input=document.querySelector(".conv-composer-input");input.value="Preferisco Excel al CSV";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()');
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=4,"feedback interview");
   await cliJSON(["increment","feedback",inc.id],{feedback:"Preferisco Excel al CSV"});
-  await propose("Excel",4);await click("approve-intent");
+  await propose("Excel",4);
+  await stopProcess(view.child,run);
+  view=await startViewServer(cli,sandbox,env,"/api/board");
+  convURL=view.url+"/api/workspace/conversations/"+id;
+  const resumesBefore=control.received.filter(e=>e.kind==="thread/resume").length;
+  await page.send("Page.navigate",{url:view.url});await page.once("Page.loadEventFired",timeout,"viewer after restart");
+  await page.waitFor('!!document.querySelector(\'[data-conversation-id="'+id+'"]\')',timeout,"existing conversation after restart");
+  await page.evaluate('document.querySelector(\'[data-conversation-id="'+id+'"]\').click()');
+  await page.waitFor('!!document.querySelector(".conv-increment")',timeout,"same increment after restart");
+  assert.equal(control.received.filter(e=>e.kind==="thread/resume").length,resumesBefore,"read-only history does not resume the native runtime");
+  await click("approve-intent");
+  await until(()=>control.received.filter(e=>e.kind==="thread/resume").length===resumesBefore+1,"native resume before the increment action");
+  assert.equal((await read()).session.session.native.id,native);
+  assert.equal(control.received.filter(e=>e.kind==="thread/start").length,1,"no replacement native thread");
+  ok("Dopo il riavvio l’azione riprende la stessa sessione nativa; leggere la cronologia non avvia l’agente.");
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=5,"second development");
   await develop("Excel",5);
   current=await read();assert.equal(current.session.session.native.id,native);assert.equal(current.increment.id,inc.id);assert.equal(current.increment.revisions.length,2);

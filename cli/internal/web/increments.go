@@ -147,7 +147,10 @@ func (s *Server) handleGetIncrement(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) requireIncrementIdle(ctx context.Context, ws *workspaceSession, r increment.Record) error {
 	if snapshot, live := ws.conversation.get(r.ConversationID); live && snapshot.sessionProvider != nil {
-		observed, err := snapshot.sessionProvider.ReadSession(ctx, execution.SessionRequest{Session: snapshot.session})
+		if err := requireSessionDirectory(snapshot); err != nil {
+			return err
+		}
+		observed, err := s.ensureNativeSession(ctx, ws, snapshot)
 		if err != nil {
 			return err
 		}

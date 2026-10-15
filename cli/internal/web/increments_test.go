@@ -161,6 +161,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		t.Fatal(err)
 	}
 	defer restarted.session().stop(time.Second)
+	resumesBefore := p.store.resumes
 	restored := doJSON(t, restarted, "GET", conversationsRoute+"/"+view.Conversation.ID, nil)
 	var afterRestart conversationView
 	if err = json.Unmarshal(restored.Body.Bytes(), &afterRestart); err != nil {
@@ -169,6 +170,33 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if afterRestart.Increment == nil || afterRestart.Increment.ID != r.ID || afterRestart.Session.Session.Native.ID != view.Session.Session.Native.ID || afterRestart.Session.Session.Environment.WorkingDir != r.Workdir {
 		t.Fatalf("restart lost sandbox or native identity: %s", restored.Body.String())
 	}
+	if p.store.resumes != resumesBefore {
+		t.Fatal("reading a released conversation started its native runtime")
+	}
+	nativeSessionsBefore := p.store.next
+	resumeAction := func() {
+		t.Helper()
+		before := p.store.resumes
+		response := doJSON(t, restarted, "POST", "/api/increments/"+r.ID+"/develop", map[string]any{})
+		if response.Code != 200 {
+			t.Fatalf("resume increment: %d %s", response.Code, response.Body.String())
+		}
+		if p.store.resumes != before+1 || p.store.next != nativeSessionsBefore || len(restoredProvider.turnStarts) == 0 {
+			t.Fatalf("resume did not reuse exactly one native session: resumes=%d starts=%d", p.store.resumes, p.store.next)
+		}
+		last := restoredProvider.lastStart
+		if last.Session.Native.ID != view.Session.Session.Native.ID || last.Session.Environment.WorkingDir != r.Workdir || !strings.Contains(last.Message, "/archetipo-increment "+r.ID) {
+			t.Fatalf("resume changed the increment context: %#v", last)
+		}
+	}
+	// A restarted viewer holds the durable conversation without having an
+	// in-memory Codex connection. The action must resume before checking idle.
+	resumeAction()
+	finishIncrementTurn(t, restarted, restoredProvider, view)
+	// The same recovery also applies if the runtime drops without a viewer
+	// restart, rather than exposing a raw "session is not connected" error.
+	p.store.loseRuntime()
+	resumeAction()
 }
 func gitForIncrementCleanup(root, workdir string) ([]byte, error) {
 	cmd := exec.Command("git", "worktree", "remove", "--force", workdir)
