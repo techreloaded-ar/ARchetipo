@@ -167,7 +167,7 @@ Autonomous acceptance applies the same gate as `/archetipo-review`, verdict incl
 
 ## CLI and commands
 
-The viewer offers Conversation, Board and **Documentation** as peer views. Documentation reads the configured `paths.wiki` even when automatic Wiki maintenance is off: browse by topic, search titles and content, follow Wiki links, and inspect review state and sources. Page URLs support reload and browser Back/Forward. The first collection is a read-only Wiki; other document collections can be added independently.
+The viewer offers Conversation, Board and **Documentation** as peer views. Documentation reads the configured `paths.wiki` even when automatic Wiki maintenance is off: browse by topic, search titles and content, follow Wiki links, and inspect review state and sources. Page URLs support reload and browser Back/Forward. Use **Crea Wiki** for an absent or empty Wiki, **Aggiorna Wiki** to refresh its contents, **Altre azioni → Verifica Wiki** to check and repair it, and **Chiedi su questa pagina** to discuss the selected page. These actions open dedicated native conversations, show progress and changed pages in Documentation, and keep approval separate. **Ricarica** only reloads the reader. Explicit Wiki actions remain available when automatic maintenance is off; they require a local provider with native sessions. Other document collections can be added independently.
 
 ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connector operations. In normal use you speak to the skills; the skills call these commands behind the scenes.
 

@@ -203,7 +203,9 @@
 
             <section id="workspace-documentation" class="documentation shell-pane-documentation is-hidden" aria-label="Documentazione" data-workspace-scoped>
                 <aside class="docs-sidebar" aria-label="Indice della documentazione">
-                    <div class="docs-sidebar-head"><h1>Documentazione</h1><button id="docs-index-toggle" class="ghost-btn docs-index-toggle" type="button" aria-expanded="false" aria-controls="docs-index">Indice</button><button id="docs-refresh" class="ghost-btn" type="button">Aggiorna</button></div>
+                    <div class="docs-sidebar-head"><h1>Documentazione</h1><button id="docs-index-toggle" class="ghost-btn docs-index-toggle" type="button" aria-expanded="false" aria-controls="docs-index">Indice</button><button id="docs-refresh" class="ghost-btn" type="button" title="Ricarica la documentazione">Ricarica</button></div>
+                    <div id="docs-actions" class="docs-actions" aria-label="Azioni Wiki"></div>
+                    <div id="docs-activities" class="docs-activities" aria-live="polite"></div>
                     <label for="docs-search">Cerca nella Wiki</label>
                     <input id="docs-search" type="search" placeholder="Titolo o contenuto…" autocomplete="off" />
                     <p id="docs-status" class="docs-note" role="status" aria-live="polite"></p>

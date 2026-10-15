@@ -1260,6 +1260,7 @@
 	// conversation's history and the text being typed survive untouched.
 
 	let shellView = WorkspaceLayout.DEFAULT_VIEW; // which view owns the primary column
+	let shellViewVersion = 0;
 	let specOpen = false; // a spec is open in the detail pane
 	let shellNarrow = false; // the viewport is below the module's breakpoint
 
@@ -1400,12 +1401,13 @@
 	function setShellView(view) {
 		if (WorkspaceLayout.VIEWS.indexOf(view) === -1) return;
 		const previousView = shellView;
+		shellViewVersion++;
 		shellView = view;
 		if (view === "documentation") {
 			if (historySupported() && !documentationInLocation()) window.history.replaceState({ ...window.history.state, archetipoView: previousView }, "");
 			rememberDocumentation(docsCollection, docsPage, "");
 			applyShellLayout();
-			if (!docsCollections.length) loadDocumentation();
+			loadDocumentation();
 			return;
 		}
 		clearDocumentationLocation(view);
@@ -1437,6 +1439,71 @@
 	let docsIndexVersion = 0;
 	let docsPageVersion = 0;
 	let docsSearchTimer;
+	let docsActions = [];
+	let docsActionView = null;
+	let docsActionsVersion = 0;
+	let docsWorkspaceVersion = 0;
+	let docsActionsTimer;
+	let docsActionBusy = false;
+
+	function drawDocumentationActions() {
+		document.getElementById("docs-actions").innerHTML = Documentation.renderActions(docsActions);
+		document.getElementById("docs-activities").innerHTML = Documentation.renderActivities(docsActionView?.activities);
+		const pageActions = docsContent.querySelector(".docs-page-actions");
+		if (pageActions) {
+			const holder = document.createElement("div");
+			holder.innerHTML = Documentation.renderPage({id: docsPage}, () => "", docsActions);
+			pageActions.innerHTML = holder.querySelector(".docs-page-actions").innerHTML;
+		}
+		if (docsActionBusy) documentationEl.querySelectorAll("[data-doc-action]").forEach(button => { button.disabled = true; });
+	}
+
+	async function loadDocumentationActions() {
+		clearTimeout(docsActionsTimer);
+		if (noWorkspaceMode()) return;
+		const version = ++docsActionsVersion;
+		try {
+			const view = await apiGet("/api/documentation/wiki/actions");
+			if (version !== docsActionsVersion) return;
+			const finished = (docsActionView?.activities || []).some(previous => previous.running && view.activities.some(current => current.execution_id === previous.execution_id && !current.running));
+			docsActionView = view;
+			docsActions = view.actions || [];
+			drawDocumentationActions();
+			if (finished) loadDocumentation();
+			if (view.activities.some(activity => activity.running)) docsActionsTimer = setTimeout(loadDocumentationActions, 2000);
+		} catch (err) {
+			if (version !== docsActionsVersion) return;
+			document.getElementById("docs-actions").textContent = `Azioni Wiki non disponibili: ${err.message || err}`;
+		}
+	}
+
+	async function startDocumentationAction(button) {
+		if (docsActionBusy) return;
+		docsActionBusy = true;
+		const workspaceVersion = docsWorkspaceVersion;
+		const navigationVersion = shellViewVersion;
+		const action = button.dataset.docAction;
+		const pageID = button.dataset.docActionPage || "";
+		drawDocumentationActions();
+		try {
+			const record = await apiPost("/api/documentation/wiki/actions", { action, page_id: pageID });
+			const run = await apiGet(`/api/execution/${encodeURIComponent(record.id)}/run`);
+			if (workspaceVersion !== docsWorkspaceVersion) return;
+			await loadConversationsIndex();
+			if (run.thread_id && navigationVersion === shellViewVersion) {
+				setShellView("conversation");
+				await switchToConversation(run.thread_id);
+			}
+			loadWorkspaceRuns();
+		} catch (err) {
+			showToast(err.message || String(err), "err");
+		} finally {
+			if (workspaceVersion === docsWorkspaceVersion) {
+				docsActionBusy = false;
+				loadDocumentationActions();
+			}
+		}
+	}
 
 	function documentationInLocation() {
 		const url = new URL(window.location.href);
@@ -1477,6 +1544,7 @@
 
 	async function loadDocumentation(searchOnly = false) {
 		if (noWorkspaceMode()) return;
+		if (!searchOnly) loadDocumentationActions();
 		const version = ++docsIndexVersion;
 		const selectionVersion = docsPageVersion;
 		docsStatus.textContent = "Caricamento…";
@@ -1494,8 +1562,8 @@
 				if (!docsPage && shellView === "documentation" && documentationInLocation()) rememberDocumentation(docsCollection, id, "", true);
 				loadDocumentationPage(docsCollection, id);
 			} else {
-				docsContent.textContent = collection && !collection.available
-					? "La Wiki non è ancora stata generata. Puoi richiederla all’agente nella conversazione con /archetipo-wiki."
+				docsContent.textContent = collection && !collection.items.length
+					? "La Wiki del progetto non è ancora disponibile. Creala a partire dal codice e dai documenti del progetto."
 					: collection ? "Scegli una pagina dall’indice della documentazione." : "Raccolta non trovata.";
 			}
 		} catch (err) {
@@ -1562,7 +1630,7 @@
 		try {
 			const page = await apiGet(`/api/documentation/${encodeURIComponent(collection)}/page?id=${encodeURIComponent(id)}`);
 			if (version !== docsPageVersion) return;
-			docsContent.innerHTML = Documentation.renderPage(page, documentationMarkdown);
+			docsContent.innerHTML = Documentation.renderPage(page, documentationMarkdown, docsActions);
 			const firstHeading = docsContent.querySelector(".docs-markdown > :first-child");
 			const title = docsContent.querySelector(".docs-page-header h1");
 			if (firstHeading?.tagName === "H1" && firstHeading.textContent.trim() === title.textContent.trim()) {
@@ -1587,6 +1655,14 @@
 		if (open) docsSearch.focus();
 	});
 	documentationEl.addEventListener("click", event => {
+		const action = event.target.closest("button[data-doc-action]");
+		if (action) { startDocumentationAction(action); return; }
+		const conversation = event.target.closest("button[data-doc-conversation]");
+		if (conversation) {
+			setShellView("conversation");
+			switchToConversation(conversation.dataset.docConversation).catch(err => showToast(err.message || String(err), "err"));
+			return;
+		}
 		const link = event.target.closest("a[data-doc-page]");
 		if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
 		event.preventDefault();
@@ -7580,6 +7656,17 @@
 	// left. The panel that comes back must be the one of the workspace now open,
 	// never a leftover of the previous one.
 	function resetConversationState() {
+		clearTimeout(docsActionsTimer);
+		docsWorkspaceVersion++;
+		docsActionBusy = false;
+		docsActionsVersion++;
+		docsIndexVersion++;
+		docsPageVersion++;
+		docsCollections = [];
+		docsActions = [];
+		docsActionView = null;
+		docsPage = "";
+		drawDocumentationActions();
 		stopConversationPolling();
 		conversationProposalsOpen = false;
 		conversationProposalVersion = "";

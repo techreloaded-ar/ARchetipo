@@ -49,7 +49,9 @@ const sessionActionOpening = "Work in the current working directory: it is the A
 // they fill, and a positional call with eight values gives a reader no way to
 // see which kind of action is being started.
 type actionInSession struct {
-	userInput string
+	userInput    string
+	skill        string
+	wikiBaseline map[string]string
 	// conversationID is the thread the action was asked for in, empty when it
 	// was pressed somewhere that belongs to no thread. An empty one is not a
 	// gap: the action opens its own conversation, once, and runs in it.
@@ -100,7 +102,32 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 			nil,
 		)
 	}
+	if plan.skill != "" {
+		_, discovery, discoveryErr := s.nativeConversationDiscovery(ctx, ws, snapshot.id)
+		if discoveryErr != nil {
+			return nil, discoveryErr
+		}
+		if !discovery.SkillsKnown {
+			// Like the other process actions, the Template's instruction is
+			// delivered as a prompt until this runtime announces a catalog.
+			// No skill catalog or explicit native binding is invented.
+			plan.skill = ""
+		} else {
+			found := false
+			for _, skill := range discovery.Skills {
+				if skill.Name == plan.skill {
+					found = true
+				}
+			}
+			if !found || !execution.SupportsSessionCapability(discovery.Capabilities, execution.SessionCapabilitySkillInvocation) {
+				return nil, iox.NewConflict("L’agente non offre le attività Wiki", "Verifica l’installazione della Wiki per questo agente.", nil)
+			}
+		}
+	}
 	opts := []execution.StartOption{execution.WithUserInput(plan.userInput)}
+	if plan.wikiBaseline != nil {
+		opts = append(opts, func(record *execution.Execution) { record.WikiBaseline = plan.wikiBaseline })
+	}
 	if plan.modelChoice != nil {
 		opts = append(opts, execution.WithModelChoice(*plan.modelChoice))
 	}
@@ -133,7 +160,7 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 	if plan.userInput != "" {
 		display += "\n\n" + plan.userInput
 	}
-	if err := s.startActionTurn(ctx, ws, snapshot, opened.ID, prompt, display); err != nil {
+	if err := s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: prompt, Skill: plan.skill, executionID: opened.ID, display: display}); err != nil {
 		ws.settleSessionAction(ctx, opened.ID, nil, err)
 		return nil, err
 	}
@@ -173,8 +200,12 @@ func (s *Server) conversationForAction(ctx context.Context, ws *workspaceSession
 	// The session is opened on the model the action was started with, not on the
 	// workspace default: an action that overrode the model must not first open a
 	// process on the model it overrode.
+	title := ""
+	if execution.WikiOperation(plan.action) != "" {
+		title = s.actionLabelOf(ws, plan.action, plan.specCode)
+	}
 	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{
-		specCode: plan.specCode, model: plan.model, modelOptions: plan.modelOptions,
+		title: title, specCode: plan.specCode, model: plan.model, modelOptions: plan.modelOptions,
 	})
 	if err != nil {
 		return conversationSnapshot{}, err
@@ -187,19 +218,6 @@ func (s *Server) conversationForAction(ctx context.Context, ws *workspaceSession
 		)
 	}
 	return opened.snapshot, nil
-}
-
-// startActionTurn sends the action prompt into the session as a turn that names
-// the execution it is carrying out.
-//
-// It is the ordinary send of the conversation, with one field added: the turn
-// carries the execution id, so every later reader — the reconciliation, a
-// restart, a second tab — can tell which turns of this thread belong to which
-// action without holding anything in memory.
-func (s *Server) startActionTurn(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, executionID, prompt, display string) error {
-	return s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{
-		Message: prompt, executionID: executionID, display: display,
-	})
 }
 
 // actionDisplayOf is the line the history shows for the start of an action:
@@ -414,6 +432,10 @@ func (ws *workspaceSession) actionConfirmationFor(executionID string) execution.
 		if strings.TrimSpace(key) == "" {
 			key = workspaceExecutionKey
 		}
+		if execution.WikiOperation(outcome.Action) != "" {
+			ws.confirmWikiAction(outcome)
+			return
+		}
 		_ = execution.VerifyActionEffect(confirmCtx, ws.conn, outcome.Action, key, outcome)
 		if outcome.Status != execution.StatusFailed || outcome.Error == nil {
 			return
@@ -502,6 +524,15 @@ func (s *Server) nativeConversationRuns(ctx context.Context, ws *workspaceSessio
 			view.Notice = err.Error()
 			views = append(views, view)
 			continue
+		}
+		if execution.WikiOperation(stored.Action) != "" {
+			if turn, found := lastTurnOfExecution(record, executionID); found {
+				for _, line := range strings.Split(ws.finalMessageOfTurn(ctx, record.ID, turn.ID), "\n") {
+					if _, _, err := execution.AcceptActionReceipt(stored.Action, "", line); err == nil {
+						view.ReceiptLines = append(view.ReceiptLines, strings.TrimSpace(line))
+					}
+				}
+			}
 		}
 		view.Action = stored.Action
 		view.Label = s.actionLabelOf(ws, stored.Action, stored.SpecCode)

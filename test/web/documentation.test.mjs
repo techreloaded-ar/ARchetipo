@@ -36,3 +36,22 @@ test('page presents provenance and issues without interpreting review states', (
  assert.match(html, /&lt;script&gt;/);
  assert.match(html, /<p>body<\/p>/);
 });
+
+test('Wiki controls echo server actions, availability and placement without skill terminology', () => {
+ const { renderActions, renderActivities } = require('../../cli/internal/web/assets/documentation.js');
+ const actions = [{id:'future-create',label:'Crea conoscenza',placement:'primary',runnable:true},{id:'future-check',label:'Verifica contenuti',placement:'menu',runnable:false,unavailable_reason:'Motivo <sicuro>'},{id:'future-query',label:'Domanda sulla pagina',placement:'page',runnable:true}];
+ const toolbar = renderActions(actions);
+ assert.match(toolbar, /data-doc-action="future-create"/);
+ assert.match(toolbar, /Altre azioni/);
+ assert.match(toolbar, /data-doc-action="future-check" disabled/);
+ assert.match(toolbar, /Motivo &lt;sicuro&gt;/);
+ assert.doesNotMatch(toolbar, /future-query|archetipo-wiki/);
+ const page = renderPage({id:'engineering/code-map',meta:{}},()=>'',actions);
+ assert.match(page, /data-doc-action="future-query" data-doc-action-page="engineering\/code-map"/);
+ assert.doesNotMatch(page, /future-create|future-check/);
+ const activities = renderActivities([{label:'Aggiornamento Wiki',status_label:'In attesa della risposta',conversation_id:'conv-123',changed_pages:['overview','bad"<id>']}]);
+ assert.match(activities, /data-doc-conversation="conv-123"/);
+ assert.match(activities, /Pagine cambiate \(2\)/);
+ assert.match(activities, /bad&quot;&lt;id&gt;/);
+ assert.doesNotMatch(activities, /<id>/);
+});

@@ -36,6 +36,8 @@ func ActionResultFields(action ActionID, receipt json.RawMessage) (map[string]an
 		target = &PRDReceipt{}
 	case ActionBacklog:
 		target = &BacklogReceipt{}
+	case ActionWikiCreate, ActionWikiRefresh, ActionWikiLint, ActionWikiQuery:
+		target = &WikiReceipt{}
 	case ActionSpecDraft:
 		target = &SpecDraftReceipt{}
 	default:
@@ -55,6 +57,8 @@ func ActionResultFields(action ActionID, receipt json.RawMessage) (map[string]an
 		fields["prd_path"] = got.Path
 	case *BacklogReceipt:
 		fields["backlog_epics"], fields["backlog_specs"] = got.Epics, got.Specs
+	case *WikiReceipt:
+		fields["wiki_operation"] = got.Operation
 	case *SpecDraftReceipt:
 		if got.Proposals != nil {
 			fields["spec_drafts"] = got.Drafts()

@@ -405,3 +405,15 @@ func TestDefaultStagesAreNotAliased(t *testing.T) {
 		t.Fatalf("builtin stages were mutated through the returned slice: id = %q", got)
 	}
 }
+
+func TestDocumentationActionsAreDeclaredAndNotAliased(t *testing.T) {
+	first := Default()
+	if len(first.DocumentationActions) != 4 {
+		t.Fatalf("documentation actions: %+v", first.DocumentationActions)
+	}
+	first.DocumentationActions[0].Label = "changed"
+	second := Default()
+	if second.DocumentationActions[0].Label != "Crea Wiki" || second.DocumentationActions[3].Placement != "page" {
+		t.Fatal("documentation action definitions were aliased or lost their placement")
+	}
+}

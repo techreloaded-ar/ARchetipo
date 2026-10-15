@@ -2079,3 +2079,12 @@ describe('runtime input questions', () => {
   assert.match(html, /conv-composer-input/);
  });
 });
+
+describe('process receipt presentation', () => {
+ it('hides only the receipt lines supplied by the server and preserves the answer', () => {
+  const line='{"artifact":"wiki","operation":"query","status":"COMPLETED"}';
+  const html=renderConversation(withConversation({events:[{id:2,kind:'text',text:`Risposta leggibile.\n${line}`}],runs:[{receipt_lines:[line],in_this_thread:true}]}),'',{});
+  assert.match(html,/Risposta leggibile/);
+  assert.doesNotMatch(html,/COMPLETED|&quot;artifact&quot;/);
+ });
+});

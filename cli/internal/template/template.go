@@ -63,6 +63,13 @@ type WorkspaceAction struct {
 	Skill string `json:"skill"`
 }
 
+// DocumentationAction presents a Wiki operation without exposing its agent binding.
+type DocumentationAction struct {
+	WorkspaceAction
+	Placement    string `json:"placement"`
+	RequiresWiki bool   `json:"requires_wiki"`
+}
+
 // ConversationActivity describes a user-facing entry into an existing action
 // or native skill. Presentation belongs to the process, not to the browser.
 // Skill is a binding, never evidence that a runtime has discovered it.
@@ -124,6 +131,7 @@ type Template struct {
 	Stages                 []Stage                `json:"stages"`
 	Statuses               domain.StatusLabels    `json:"statuses"`
 	ConversationActivities []ConversationActivity `json:"conversation_activities,omitempty"`
+	DocumentationActions   []DocumentationAction  `json:"documentation_actions,omitempty"`
 }
 
 // ActionsFor returns the actions the process admits in status, in declaration
@@ -160,6 +168,7 @@ func (e *RegistryError) Error() string {
 func (t Template) clone() Template {
 	t.Skills = slices.Clone(t.Skills)
 	t.ConversationActivities = slices.Clone(t.ConversationActivities)
+	t.DocumentationActions = slices.Clone(t.DocumentationActions)
 	actions := make([]Action, len(t.Actions))
 	for i, action := range t.Actions {
 		actions[i] = action.clone()
@@ -181,6 +190,12 @@ func builtin() Template {
 			{ID: "design", Label: "Nuovo mockup", Description: "Indica la schermata o il flusso che vuoi rappresentare.", Result: "Prototipo consultabile", Placeholder: "Descrivi la schermata o il flusso che vuoi rappresentare…", Skill: "archetipo-design"},
 			{ID: "autopilot", Label: "Avvia il workflow autonomo", Description: "Pianifica, implementa e verifica le storie del backlog in autonomia.", Placeholder: "Indica le storie o le epiche da completare, oppure chiedi di elaborare tutto il backlog…", Skill: "archetipo-autopilot"},
 			{ID: "conversation", Label: "Conversazione libera", Description: "Fai domande sul progetto o su una storia.", Placeholder: "Scrivi all’agente…"},
+		},
+		DocumentationActions: []DocumentationAction{
+			{WorkspaceAction: WorkspaceAction{ID: "wiki-create", Label: "Crea Wiki", Skill: "archetipo-wiki"}, Placement: "primary"},
+			{WorkspaceAction: WorkspaceAction{ID: "wiki-refresh", Label: "Aggiorna Wiki", Skill: "archetipo-wiki"}, Placement: "primary", RequiresWiki: true},
+			{WorkspaceAction: WorkspaceAction{ID: "wiki-lint", Label: "Verifica Wiki", Skill: "archetipo-wiki"}, Placement: "menu", RequiresWiki: true},
+			{WorkspaceAction: WorkspaceAction{ID: "wiki-query", Label: "Chiedi su questa pagina", Skill: "archetipo-wiki"}, Placement: "page", RequiresWiki: true},
 		},
 		Skills: []string{
 			"archetipo-autopilot",

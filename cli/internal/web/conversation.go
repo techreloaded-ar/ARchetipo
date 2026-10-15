@@ -154,6 +154,7 @@ const conversationRunEventWindow = 200
 // types the browser already knows from the run panel, so the same rendering
 // code reads a run whether it is met in the panel or inside the conversation.
 type conversationRunView struct {
+	ReceiptLines []string `json:"receipt_lines,omitempty"`
 	runView
 	ExecutionID string `json:"execution_id"`
 	// AnchorEventID is the id of the event that carried the proposal whose

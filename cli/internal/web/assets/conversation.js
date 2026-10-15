@@ -1008,7 +1008,7 @@
 			let agentRun = [];
 			const flushAgent = () => {
 				if (!agentRun.length) return;
-				rows.push(renderAgentText(agentRun, markedParse, arrayAt(objectAt(view, "spec_drafts"), "receipt_lines")));
+				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))]));
 				agentRun = [];
 			};
 			for (const event of events) {

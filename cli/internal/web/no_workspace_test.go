@@ -47,6 +47,8 @@ type scopedRoute struct {
 // TestRouteClassificationIsExhaustive reads server.go and fails as soon as a
 // route is registered without landing in this table or in homeRoutes.
 var workspaceScopedRoutes = []scopedRoute{
+	{"GET /api/documentation/wiki/actions", http.MethodGet, "/api/documentation/wiki/actions", ""},
+	{"POST /api/documentation/wiki/actions", http.MethodPost, "/api/documentation/wiki/actions", "{}"},
 	{"GET /api/documentation", http.MethodGet, "/api/documentation", ""},
 	{"GET /api/documentation/{collection}/page", http.MethodGet, "/api/documentation/wiki/page?id=overview", ""},
 	{"GET /api/board", http.MethodGet, "/api/board", ""},

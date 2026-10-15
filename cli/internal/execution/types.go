@@ -25,7 +25,11 @@ const (
 	// interviews the person and proposes a spec, which somebody else then
 	// confirms. It is deliberately not a variant of ActionBacklog — that action
 	// generates a whole backlog and persists it, this one persists nothing.
-	ActionSpecDraft ActionID = "spec-draft"
+	ActionSpecDraft   ActionID = "spec-draft"
+	ActionWikiCreate  ActionID = "wiki-create"
+	ActionWikiRefresh ActionID = "wiki-refresh"
+	ActionWikiLint    ActionID = "wiki-lint"
+	ActionWikiQuery   ActionID = "wiki-query"
 
 	CapabilitySpecPlan Capability = "spec.plan"
 	// CapabilitySpecImplement says that a provider can execute the persisted
@@ -56,6 +60,7 @@ const (
 	// declares this capability is saying it can draft, never that it can add
 	// anything to the backlog.
 	CapabilityWorkspaceSpecDraft Capability = "workspace.spec_draft"
+	CapabilityWorkspaceWiki      Capability = "workspace.wiki"
 	// CapabilityRunDialog says that a provider exposes a run one can follow and
 	// command while it works: read its history, send it a message, cancel it. It
 	// is not a statement about the work the provider can do — a provider can
@@ -167,6 +172,9 @@ type Execution struct {
 	// another live viewer — from one whose carrier is gone and that nothing will
 	// ever close. Zero means a record written before this field existed.
 	OwnerPID int `json:"owner_pid,omitempty"`
+	// WikiBaseline freezes page digests before a Wiki action, so its effect can
+	// still be verified and its changed pages reported after a viewer restart.
+	WikiBaseline map[string]string `json:"wiki_baseline,omitempty"`
 }
 
 type ActionError struct{ Action ActionID }
@@ -187,6 +195,8 @@ func RequiredCapability(action ActionID) (Capability, error) {
 		return CapabilityWorkspaceBacklog, nil
 	case ActionSpecDraft:
 		return CapabilityWorkspaceSpecDraft, nil
+	case ActionWikiCreate, ActionWikiRefresh, ActionWikiLint, ActionWikiQuery:
+		return CapabilityWorkspaceWiki, nil
 	default:
 		return "", &ActionError{Action: action}
 	}
@@ -195,7 +205,7 @@ func RequiredCapability(action ActionID) (Capability, error) {
 // WorkflowCapabilities is the common action contract of the two local harnesses.
 // Protocol-specific controls are still discovered from each native session.
 func WorkflowCapabilities() []Capability {
-	actions := []ActionID{ActionPlan, ActionImplement, ActionReview, ActionInception, ActionBacklog, ActionSpecDraft}
+	actions := []ActionID{ActionPlan, ActionImplement, ActionReview, ActionInception, ActionBacklog, ActionSpecDraft, ActionWikiCreate}
 	result := make([]Capability, 0, len(actions))
 	for _, action := range actions {
 		capability, _ := RequiredCapability(action)
@@ -221,7 +231,7 @@ func ActionScope(action ActionID) (Scope, error) {
 	switch action {
 	case ActionPlan, ActionImplement, ActionReview:
 		return ScopeSpec, nil
-	case ActionInception, ActionBacklog, ActionSpecDraft:
+	case ActionInception, ActionBacklog, ActionSpecDraft, ActionWikiCreate, ActionWikiRefresh, ActionWikiLint, ActionWikiQuery:
 		return ScopeWorkspace, nil
 	default:
 		return "", &ActionError{Action: action}

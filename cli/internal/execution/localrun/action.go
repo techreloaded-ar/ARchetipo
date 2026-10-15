@@ -57,6 +57,8 @@ func subjectFor(req execution.Request) (actionSubject, error) {
 		return actionSubject{"archetipo-inception", "inception", "the inception", "having produced a PRD", "the inception", "the inception"}, nil
 	case execution.ActionBacklog:
 		return actionSubject{"archetipo-spec", "spec", "the backlog generation", "having produced a backlog", "the backlog", "the backlog generation"}, nil
+	case execution.ActionWikiCreate, execution.ActionWikiRefresh, execution.ActionWikiLint, execution.ActionWikiQuery:
+		return actionSubject{"archetipo-wiki", "Wiki", "the Wiki operation", "having completed the Wiki operation", "the Wiki operation", "the Wiki operation"}, nil
 	case execution.ActionSpecDraft:
 		return actionSubject{"archetipo-spec", "spec", "the spec proposal", "having proposed a spec", "the spec proposal", "the conversation"}, nil
 	default:

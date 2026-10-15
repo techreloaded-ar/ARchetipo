@@ -49,6 +49,9 @@ func AcceptActionReceipt(action ActionID, specCode, message string) (json.RawMes
 	case ActionBacklog:
 		receipt, err := AcceptBacklogReceipt(message)
 		return encodeReceipt(receiptPresence[BacklogReceipt](message, backlogReceiptFields), receipt, err)
+	case ActionWikiCreate, ActionWikiRefresh, ActionWikiLint, ActionWikiQuery:
+		receipt, err := AcceptWikiReceipt(message, action)
+		return encodeReceipt(receiptPresence[WikiReceipt](message, wikiReceiptFields), receipt, err)
 	case ActionSpecDraft:
 		receipt, err := AcceptSpecDraftReceipt(message)
 		_, parseErr := ParseSpecDraftReceipt(message)

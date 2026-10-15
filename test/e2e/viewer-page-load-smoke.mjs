@@ -614,6 +614,8 @@ async function exerciseDocumentation(browser, url, runDir) {
   await page.waitFor(`document.getElementById('workspace-conversation').textContent.includes('${AGENT_SENTINEL}')`,10000,'cronologia della conversazione');
   await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click()`);
   await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'lettura della Wiki');
+  await page.waitFor(`document.querySelector('[data-doc-action="wiki-refresh"]') && document.querySelector('[data-doc-action="wiki-lint"]') && document.querySelector('[data-doc-action="wiki-query"][data-doc-action-page="overview"]')`,10000,'azioni Wiki dal server e contesto della pagina');
+  if (!await page.evaluate(`document.getElementById('docs-refresh').textContent === 'Ricarica' && !document.getElementById('workspace-documentation').textContent.includes('archetipo-wiki')`)) throw new Error('La documentazione espone il nome della skill o confonde ricaricamento e aggiornamento');
   const safe = await page.evaluate(`!window.documentationUnsafe && !document.querySelector('#docs-content script, #docs-content img, #docs-content [onclick], #docs-content a[href^="javascript:"]')`);
   if (!safe) throw new Error('Markdown attivo nel lettore');
   await page.evaluate(`document.querySelector('[data-shell-view="conversation"]').click()`);
@@ -764,7 +766,7 @@ async function exerciseEmptyWorkspace(browser, url) {
   }
   ok(CLAIMS[8], "la conferma crea US-001 e la prima epica EP-001 in un workspace appena inizializzato");
   await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click()`);
-  await page.waitFor(`document.getElementById('docs-content').textContent.includes('non è ancora stata generata')`, 10000, "Wiki assente distinta da un errore");
+  await page.waitFor(`document.getElementById('docs-content').textContent.includes('non è ancora disponibile')`, 10000, "Wiki assente distinta da un errore");
   await page.close();
 }
 

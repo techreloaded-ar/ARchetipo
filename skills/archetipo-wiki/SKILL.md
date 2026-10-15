@@ -90,6 +90,16 @@ Bring the Wiki back in line with code that landed outside the spec workflow — 
 4. Repair `WIKI_CORE_PAGE_UNANCHORED` by adding the directory the page's aggregate claims are about — the narrowest one that covers them, not `.` by reflex, because a whole-project source makes the page a candidate on every future spec. Read the page first: the right directory is the area it summarizes. While you are there, rewrite enumerations that will age on their own ("three modules", "13 migrations") as structural statements. Adding a source is a content change, so the sequence is `reset`, edit, validate, `approve`.
 5. Re-run validation and catalog. Do not approve without an explicit review request.
 
+## Viewer completion receipt
+
+When a viewer action explicitly requests a completion receipt, finish the selected operation first, then emit its requested JSON line as the final line:
+
+```json
+{"artifact":"wiki","operation":"bootstrap|refresh|lint|query","status":"COMPLETED"}
+```
+
+Use exactly the selected operation, not the pipe-separated example. A question awaiting an answer is not completion. Bootstrap still requires the final successful `wiki validate --profile bootstrap` gate. Report unresolved lint findings before its receipt. A receipt never approves or reconfirms pages and never closes the native conversation. Standalone invocation remains independent of the viewer.
+
 ## Safety
 
 - Never branch on connector type; Wiki storage is local for every connector. Branch on `error.code`, never `error.message`.

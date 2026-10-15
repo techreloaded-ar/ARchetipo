@@ -114,6 +114,11 @@ func (s *Server) actionLabelOf(ws *workspaceSession, action execution.ActionID, 
 		}
 		return string(action)
 	}
+	for _, candidate := range tpl.DocumentationActions {
+		if candidate.ID == string(action) {
+			return candidate.Label
+		}
+	}
 	for _, candidate := range tpl.WorkspaceActions {
 		if candidate.ID == string(action) {
 			return candidate.Label

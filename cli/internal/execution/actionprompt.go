@@ -196,6 +196,8 @@ func ActionPrompt(opening string, action ActionID, req Request) (string, error) 
 		return BacklogPrompt(opening, req), nil
 	case ActionSpecDraft:
 		return SpecDraftPrompt(opening, req), nil
+	case ActionWikiCreate, ActionWikiRefresh, ActionWikiLint, ActionWikiQuery:
+		return WikiPrompt(opening, req), nil
 	}
 	return "", fmt.Errorf("no prompt is defined for the %q action", action)
 }
