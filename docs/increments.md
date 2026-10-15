@@ -28,7 +28,10 @@ Non introduce una seconda board, una chat diversa o nuovi stati delle storie.
 
 ## Isolamento e persistenza
 
-Il record sta in `.archetipo/increments/<id>.json`; il worktree dedicato in
+L’indice sta in `.archetipo/increments/<id>.json`; lo stato corrente e il suo
+lock restano nel worktree, sotto `.archetipo/increment-local/increment.json` e
+`.archetipo/conversations/`. I record precedenti vengono letti senza modifiche
+e migrano nello stesso worktree al primo aggiornamento. Il worktree dedicato sta in
 `.archetipo/increments/worktrees/<id>`, sul branch
 `archetipo/increments/<id>`. La base è il commit del branch corrente:
 modifiche non committate nel workspace di origine non vengono copiate.
@@ -37,7 +40,10 @@ Il worktree contiene il normale codice e la configurazione versionata.
 Un piccolo riferimento runtime, `.archetipo/increment-workspace.json`,
 seleziona un backlog file locale sotto `.archetipo/increment-local/` e
 disabilita i worktree per singola storia. Il caricamento della configurazione
-riconosce esplicitamente questa radice: i comandi delle skill non risalgono
+riconosce esplicitamente questa radice anche senza `config.yaml` locale.
+Le impostazioni del padre vengono lette senza prove di scrittura; le verifiche
+dei percorsi si eseguono solo dopo averle riportate nella sandbox. I comandi
+delle skill non risalgono
 al backlog principale. PRD, Wiki, mockup e risultati puntano al checkout
 isolato; percorsi configurati esterni al progetto sono rifiutati.
 

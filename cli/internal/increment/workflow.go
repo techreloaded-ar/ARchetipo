@@ -44,7 +44,7 @@ func frozen(r Record) bool {
 }
 
 func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err
@@ -93,7 +93,7 @@ func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, e
 }
 
 func (s *Service) Approve(ctx context.Context, id string, revision int) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err
@@ -152,7 +152,7 @@ func (s *Service) Approve(ctx context.Context, id string, revision int) (Record,
 }
 
 func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err
@@ -263,7 +263,7 @@ func (s *Service) requireClean(ctx context.Context, r Record) error {
 	return nil
 }
 func (s *Service) FeedbackFor(ctx context.Context, id, feedback string) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err

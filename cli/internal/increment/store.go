@@ -28,7 +28,13 @@ func (s *Service) Read(id string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	raw, err := os.ReadFile(path)
+	localPath := filepath.Join(s.dir(), "worktrees", id, ".archetipo", "increment-local", "increment.json")
+	raw, err := os.ReadFile(localPath)
+	if errors.Is(err, os.ErrNotExist) {
+		// Existing increments migrate on their next mutation, without a write
+		// during reads or touching the parent from a sandboxed agent.
+		raw, err = os.ReadFile(path)
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, iox.NewPrecondition("increment not found", "use an increment of this workspace", err)
 	}
@@ -45,11 +51,11 @@ func (s *Service) Read(id string) (Record, error) {
 	return record, nil
 }
 func (s *Service) save(r Record) error {
-	path, err := s.path(r.ID)
-	if err != nil {
+	if _, err := s.path(r.ID); err != nil {
 		return err
 	}
-	return recordfile.WriteAtomic(s.dir(), path, ".increment-", r)
+	dir := filepath.Join(s.dir(), "worktrees", r.ID, ".archetipo", "increment-local")
+	return recordfile.WriteAtomic(dir, filepath.Join(dir, "increment.json"), ".increment-", r)
 }
 func (s *Service) List() ([]Record, error) {
 	entries, err := os.ReadDir(s.dir())
@@ -87,8 +93,32 @@ func (s *Service) locked(ctx context.Context, fn func() (Record, error)) (Record
 	defer func() { _ = lock.Unlock() }()
 	return fn()
 }
+
+// lockedRecord keeps the evolving intent, results and its lock in the sandbox.
+// Publication additionally takes the workspace lock to allocate official codes.
+func (s *Service) lockedRecord(ctx context.Context, id string, fn func() (Record, error)) (Record, error) {
+	r, err := s.Read(id)
+	if err != nil {
+		return r, err
+	}
+	store, err := conversationlog.NewFileStore(r.Workdir)
+	if err != nil {
+		return r, err
+	}
+	lock, err := store.Lock(ctx, "increment-mutations")
+	if err != nil {
+		return r, err
+	}
+	defer func() { _ = lock.Unlock() }()
+	return fn()
+}
+
+func (s *Service) lockedWorkspaceRecord(ctx context.Context, id string, fn func() (Record, error)) (Record, error) {
+	return s.locked(ctx, func() (Record, error) { return s.lockedRecord(ctx, id, fn) })
+}
+
 func (s *Service) Bind(ctx context.Context, id, conversationID string) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err

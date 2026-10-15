@@ -19,6 +19,10 @@ the record in `data`. Its `workdir` is the only code/workflow root for
 this increment. Inside it, ordinary CLI commands use the isolated file
 connector; increment commands resolve its owning record automatically.
 Always pass `-C <workdir>` for subsequent CLI calls.
+The sandbox marker resolves inherited configuration even when no local
+`.archetipo/config.yaml` is present. Use `archetipo config show` to inspect the
+effective isolated settings; do not copy the parent configuration or infer a
+missing configuration from the absence of that file.
 
 Without an ID, discover the idea in conversation first. When the person asks
 to begin an isolated increment, use `increment create --file -` with

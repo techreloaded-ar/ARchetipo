@@ -55,7 +55,7 @@ func applyIncrementWorkspace(c Config) (Config, error) {
 	if _, err := os.Stat(filepath.Join(ref.ParentRoot, IncrementWorkspacePath)); !errors.Is(err, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("nested increment workspaces are not supported")
 	}
-	parent, err := LoadExact(ref.ParentRoot)
+	parent, err := LoadExactReadOnly(ref.ParentRoot)
 	if err != nil {
 		return Config{}, err
 	}

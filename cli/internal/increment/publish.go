@@ -27,7 +27,7 @@ func nextCode(specs []domain.Spec, prefix string) int {
 }
 
 func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision int) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err
@@ -189,7 +189,7 @@ func (s *Service) publishStories(ctx context.Context, r Record, stories []domain
 }
 
 func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
-	return s.locked(ctx, func() (Record, error) {
+	return s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err

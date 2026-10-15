@@ -302,6 +302,16 @@ func resolveNestedWorktreeParent(worktreeRoot string) (parentRoot, worktreeCode 
 // nested-worktree correction: the nearest config wins. When not found, the
 // default config rooted at startDir is returned.
 func LoadExact(startDir string) (Config, error) {
+	return loadExact(startDir, true)
+}
+
+// LoadExactReadOnly reads inherited settings without creating directories or
+// probing writes in the source checkout. Validation of values still applies.
+func LoadExactReadOnly(startDir string) (Config, error) {
+	return loadExact(startDir, false)
+}
+
+func loadExact(startDir string, checkWritable bool) (Config, error) {
 	root, cfgPath, err := find(startDir)
 	if err != nil {
 		return Config{}, err
@@ -317,7 +327,7 @@ func LoadExact(startDir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return parseRaw(root, cfgPath, []byte(raw))
+	return parseRawWithPathChecks(root, cfgPath, []byte(raw), checkWritable)
 }
 
 // LoadForTarget resolves runtime configuration for an explicit checkout path.
@@ -480,6 +490,10 @@ func UpdateDefaultProvider(root string, selection DefaultProviderConfig) (string
 }
 
 func parseRaw(root, cfgPath string, raw []byte) (Config, error) {
+	return parseRawWithPathChecks(root, cfgPath, raw, true)
+}
+
+func parseRawWithPathChecks(root, cfgPath string, raw []byte, checkWritable bool) (Config, error) {
 	if err := rejectLegacyKeys(raw, cfgPath); err != nil {
 		return Config{}, err
 	}
@@ -489,10 +503,14 @@ func parseRaw(root, cfgPath string, raw []byte) (Config, error) {
 	}
 	c.applyDefaults()
 	c.ProjectRoot = root
-	if err := c.validate(); err != nil {
+	c, err := applyIncrementWorkspace(c)
+	if err != nil {
 		return Config{}, err
 	}
-	return applyIncrementWorkspace(c)
+	if err := c.validate(checkWritable); err != nil {
+		return Config{}, err
+	}
+	return c, nil
 }
 
 func absoluteConfigPath(root string) (absRoot, cfgPath string, err error) {
@@ -641,7 +659,7 @@ func (c *Config) applyDefaults() {
 // exists (or is creatable) and that the location is writable. A missing leaf
 // file (e.g. paths.prd before the first write) is acceptable. Paths used only
 // by the active connector are checked; paths from other connectors are not.
-func (c *Config) validate() error {
+func (c *Config) validate(checkWritable bool) error {
 	checks := []struct {
 		key  string
 		path string
@@ -658,7 +676,7 @@ func (c *Config) validate() error {
 		)
 	}
 	for _, ck := range checks {
-		if ck.path == "" {
+		if ck.path == "" || !checkWritable {
 			continue
 		}
 		if err := checkPathWritable(c.AbsPath(ck.path)); err != nil {

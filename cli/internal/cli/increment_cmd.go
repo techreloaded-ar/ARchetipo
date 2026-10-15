@@ -29,10 +29,13 @@ func newIncrementCmd(s streams) *cobra.Command {
 				// Standalone skills inside the sandbox address its owning increment,
 				// while every ordinary spec command stays in the local file workspace.
 				ref := cfg.Increment
+				if operation == "create" {
+					return iox.NewConflict("cannot create an increment inside another increment", "open the original workspace", nil)
+				}
 				if len(args) > 0 && args[0] != ref.ID {
 					return iox.NewConflict("increment is outside this sandbox", "use its own increment id", nil)
 				}
-				cfg, err = config.LoadExact(ref.ParentRoot)
+				cfg, err = config.LoadExactReadOnly(ref.ParentRoot)
 				if err != nil {
 					return err
 				}

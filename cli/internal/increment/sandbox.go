@@ -81,7 +81,12 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 		if err = filefs.New(cfg).EnsureEmptyBacklog(); err != nil {
 			return Record{}, err
 		}
-		err = s.save(record)
+		if err = s.save(record); err == nil {
+			// The parent keeps only the discovery index. All later changes live
+			// in the sandbox, which is the native agent’s writable boundary.
+			path, _ := s.path(record.ID)
+			err = recordfile.WriteAtomic(s.dir(), path, ".increment-", record)
+		}
 		return record, err
 	})
 }
@@ -89,7 +94,7 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 // RemoveUnused rolls back a failed native-session open. It can never remove
 // an increment that has begun work, acquired a conversation, or changed code.
 func (s *Service) RemoveUnused(ctx context.Context, id string) error {
-	_, err := s.locked(ctx, func() (Record, error) {
+	_, err := s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
 		r, readErr := s.Read(id)
 		if readErr != nil {
 			return r, readErr
