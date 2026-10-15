@@ -179,6 +179,7 @@ func builtin() Template {
 			{ID: "product", Label: "Definisci un prodotto", Description: "Chiarisci obiettivi, utenti e perimetro.", Result: "Documento di prodotto", Placeholder: "Descrivi la tua idea: problema, utenti e risultato che vuoi ottenere…", Action: "inception"},
 			{ID: "story", Label: "Nuova storia", Description: "Descrivi il bisogno, rispondi alle domande e rivedi la proposta.", Result: "Storia per il backlog", Placeholder: "Descrivi la tua proposta: chi ne ha bisogno, cosa deve poter fare e perché…", Action: "spec-draft"},
 			{ID: "design", Label: "Nuovo mockup", Description: "Indica la schermata o il flusso che vuoi rappresentare.", Result: "Prototipo consultabile", Placeholder: "Descrivi la schermata o il flusso che vuoi rappresentare…", Skill: "archetipo-design"},
+			{ID: "autopilot", Label: "Avvia il workflow autonomo", Description: "Pianifica, implementa e verifica le storie del backlog in autonomia.", Placeholder: "Indica le storie o le epiche da completare, oppure chiedi di elaborare tutto il backlog…", Skill: "archetipo-autopilot"},
 			{ID: "conversation", Label: "Conversazione libera", Description: "Fai domande sul progetto o su una storia.", Placeholder: "Scrivi all’agente…"},
 		},
 		Skills: []string{

@@ -60,18 +60,45 @@ func TestConversationActivitiesKeepTheProcessesOwnOffersAndReasons(t *testing.T)
 	}
 }
 
-func TestConversationActivityLabelsDoNotExposeOtherCatalogNames(t *testing.T) {
+func TestConversationActivityLabelsDoNotExposeAgentInstructions(t *testing.T) {
 	items := resolveConversationActivities(template.Default(), nil, conversationlog.Record{}, execution.SessionDiscovery{
 		SkillsKnown: true,
 		Skills: []execution.SessionSkill{
 			{Name: "archetipo-design"},
-			{Name: "helper", Description: "Prepara helper dopo archetipo-design"},
+			{Name: "plugin:build-report", Description: "Prepara plugin:build-report dopo archetipo-design. " + strings.Repeat("Use when the user asks for a report. ", 30)},
 		},
 	}, "")
-	item, found := activityByID(items, "native:helper")
-	if !found || strings.Contains(item.Label, "helper") || strings.Contains(item.Label, "archetipo-design") {
-		t.Fatalf("catalog names exposed in a label: %+v", item)
+	item, found := activityByID(items, "native:plugin:build-report")
+	if !found || item.Label != "plugin · build report" || item.Description != "" || item.Skill != "plugin:build-report" {
+		t.Fatalf("agent instructions became activity presentation: %+v", item)
 	}
+}
+
+func TestConversationAutopilotUsesTemplatePresentationAndNativeInvocation(t *testing.T) {
+	provider := &activityCatalogProvider{
+		persistentFakeNativeProvider: newPersistentFakeNativeProvider("native-autopilot", nil), known: true,
+		skills: []execution.SessionSkill{{Name: "archetipo-autopilot", Description: "Runs the ARchetipo pipeline autonomously end to end. " + strings.Repeat("Requires a fresh isolated worker. ", 30), Invocation: "/archetipo-autopilot"}},
+	}
+	srv, _, _ := newRunServer(t, provider, true)
+	id := openConversationOK(t, srv).Conversation.ID
+	view := readActivityCatalog(t, srv, id)
+	activity, found := activityByID(view.Items, "autopilot")
+	if !found || !activity.Runnable || activity.Label != "Avvia il workflow autonomo" || activity.Description != "Pianifica, implementa e verifica le storie del backlog in autonomia." || activity.Placeholder == "" {
+		t.Fatalf("autopilot lacks user-facing presentation: %+v", activity)
+	}
+	if _, found := activityByID(view.Items, "native:archetipo-autopilot"); found {
+		t.Fatal("autopilot is duplicated by the native catalog")
+	}
+	w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{
+		"message": "Completa US-001", "skill": activity.Skill,
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("selected autopilot = %d: %s", w.Code, w.Body.String())
+	}
+	if provider.lastStart.Message != "Completa US-001" || len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != "archetipo-autopilot" || provider.lastStart.Session.ConversationID != id {
+		t.Fatalf("autopilot changed message, invocation or session: %+v", provider.lastStart)
+	}
+	closeConversation(t, srv, id)
 }
 
 type activityCatalogProvider struct {

@@ -145,21 +145,8 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 				slices.ContainsFunc(tpl.WorkspaceActions, func(action template.WorkspaceAction) bool { return action.Skill == skill.Name }) {
 				continue
 			}
-			label := skill.Description
-			for _, catalogEntry := range discovery.Skills {
-				if catalogEntry.Name != "" {
-					label = strings.ReplaceAll(label, catalogEntry.Name, "attività")
-				}
-			}
-			label = strings.TrimSpace(label)
-			if label == "" {
-				label = nativeActivityLabel(skill.Name)
-			}
-			if first, _, found := strings.Cut(label, "\n"); found {
-				label = first
-			}
 			item := conversationActivityView{
-				ConversationActivity: template.ConversationActivity{ID: "native:" + skill.Name, Label: label, Skill: skill.Name},
+				ConversationActivity: template.ConversationActivity{ID: "native:" + skill.Name, Label: nativeActivityLabel(skill.Name), Skill: skill.Name},
 				Kind:                 "skill", Runnable: slices.Contains(discovery.Capabilities, execution.SessionCapabilitySkillInvocation),
 			}
 			if !item.Runnable {
@@ -173,8 +160,9 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 	return items
 }
 
-// Claude announces skill names without descriptions. Preserve their identity
-// in a readable label rather than producing dozens of identical menu entries.
+// Skill descriptions are instructions for the agent, not menu titles. Without
+// presentation from the Template, preserve the skill's identity in a readable
+// label, including for runtimes that announce names without descriptions.
 func nativeActivityLabel(name string) string {
 	label := strings.NewReplacer("-", " ", "_", " ", ":", " · ", "/", " · ").Replace(name)
 	return strings.Join(strings.Fields(label), " ")
