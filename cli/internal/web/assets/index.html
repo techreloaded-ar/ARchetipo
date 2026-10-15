@@ -62,7 +62,7 @@
             </button>
         </div>
 
-        <!-- La barra permanente delle viste: Conversazione · Board, e nient'altro.
+        <!-- La barra permanente delle viste: Conversazione · Board · Documentazione.
              La riempie app.js dalla lista di commutatori che il modulo di layout
              restituisce, così la board è sempre a un comando dalla casa del
              workspace. Il dettaglio spec non ha una linguetta: si apre da una
@@ -200,6 +200,17 @@
             <section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" data-workspace-scoped></section>
 
             <main id="board" class="board shell-pane-board is-hidden"></main>
+
+            <section id="workspace-documentation" class="documentation shell-pane-documentation is-hidden" aria-label="Documentazione" data-workspace-scoped>
+                <aside class="docs-sidebar" aria-label="Indice della documentazione">
+                    <div class="docs-sidebar-head"><h1>Documentazione</h1><button id="docs-index-toggle" class="ghost-btn docs-index-toggle" type="button" aria-expanded="false" aria-controls="docs-index">Indice</button><button id="docs-refresh" class="ghost-btn" type="button">Aggiorna</button></div>
+                    <label for="docs-search">Cerca nella Wiki</label>
+                    <input id="docs-search" type="search" placeholder="Titolo o contenuto…" autocomplete="off" />
+                    <p id="docs-status" class="docs-note" role="status" aria-live="polite"></p>
+                    <nav id="docs-index" aria-label="Pagine della documentazione"></nav>
+                </aside>
+                <article id="docs-content" class="docs-content" aria-label="Pagina della documentazione"></article>
+            </section>
 
             <!-- The spec detail. It is not an overlaid window: it is a view of
                  the primary column, called into the same space the conversation
@@ -879,6 +890,7 @@
     <script src="/workspace-home.js"></script>
     <script src="/provider-fields.js"></script>
 <script src="/workspace-layout.js"></script>
+<script src="/documentation.js"></script>
     <script src="/workspace-runs.js"></script>
     <script src="/workspace-identity.js"></script>
     <script src="/app.js"></script>

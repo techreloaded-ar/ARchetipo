@@ -36,19 +36,19 @@
 
 	// Every pane the primary column can own. Order is the reading order of the
 	// shell: the home first, then the views that are called into its place.
-	const PANES = ["conversation", "board", "spec"];
+	const PANES = ["conversation", "board", "documentation", "spec"];
 
 	// Every view the primary column can be showing. Same set as the panes,
 	// because a view *is* the pane that occupies the column.
-	const VIEWS = ["conversation", "board", "spec"];
+	const VIEWS = ["conversation", "board", "documentation", "spec"];
 
-	// Le linguette della barra in alto, e sono queste due e basta. Il dettaglio
+	// Le viste principali della barra: Conversazione, Board, Documentazione. Il dettaglio
 	// spec non è una vista fra pari: è il dettaglio di una card della board, si
 	// apre scegliendo la card e si chiude col comando di ritorno. Dargli una
-	// linguetta faceva comparire e sparire una terza voce a seconda di ciò che
+	// linguetta faceva comparire e sparire una voce a seconda di ciò che
 	// era aperto, e una barra che cambia numero di voci non è più una barra:
 	// è un elenco di cose che capitano.
-	const TABS = ["conversation", "board"];
+	const TABS = ["conversation", "board", "documentation"];
 
 	// The home of the workspace. An empty state — the page that has just booted
 	// and asked for nothing — resolves to this, so opening a workspace lands on
@@ -62,6 +62,7 @@
 			label: "Conversazione",
 		},
 		board: { className: "shell-pane-board", label: "Board" },
+		documentation: { className: "shell-pane-documentation", label: "Documentazione" },
 		spec: { className: "shell-pane-spec", label: "Spec" },
 	};
 
@@ -78,8 +79,8 @@
 	// while a spec is open.
 	function presentPanes(specOpen) {
 		return specOpen
-			? ["conversation", "board", "spec"]
-			: ["conversation", "board"];
+			? ["conversation", "board", "documentation", "spec"]
+			: ["conversation", "board", "documentation"];
 	}
 
 	// A view is admissible only if it is known and, for the spec, only while a
@@ -92,7 +93,7 @@
 	}
 
 	// La linguetta accesa nella barra, o la stringa vuota quando non ce n'è
-	// nessuna: mentre il dettaglio spec occupa la colonna nessuna delle due è la
+	// nessuna: mentre il dettaglio spec occupa la colonna nessuna delle viste principali è la
 	// vista corrente, e restano entrambe premibili — la board perché chiude il
 	// dettaglio e torna in colonna, la conversazione perché è la casa. Accendere
 	// una linguetta che non è ciò che si sta guardando direbbe una cosa falsa.
@@ -136,7 +137,7 @@
 
 		// Ogni linguetta che non è quella corrente è a un solo comando, in
 		// entrambe le larghezze: la barra è permanente, non un ripiego per la
-		// finestra stretta. Le linguette sono sempre le stesse due, così la
+		// finestra stretta. Le linguette sono sempre le stesse, così la
 		// barra non cambia forma sotto le dita mentre si lavora.
 		const switchers = TABS.filter(
 			(pane) => present.indexOf(pane) !== -1 && pane !== view,
@@ -172,7 +173,7 @@
 		return {
 			view: view,
 			// La linguetta accesa nella barra: la vista corrente quando è una
-			// delle due, la stringa vuota mentre in colonna c'è il dettaglio
+			// delle principali, la stringa vuota mentre in colonna c'è il dettaglio
 			// spec, che linguetta non ne ha.
 			currentTab: currentTab,
 			narrow: narrow,
@@ -211,8 +212,8 @@
 		if (selection === "board") {
 			return { view: "board", specOpen: false, narrow: narrow };
 		}
-		if (selection === "conversation") {
-			return { view: "conversation", specOpen: specOpen, narrow: narrow };
+		if (selection === "conversation" || selection === "documentation") {
+			return { view: selection, specOpen: specOpen, narrow: narrow };
 		}
 		// An unknown selection changes nothing.
 		return { view: view, specOpen: specOpen, narrow: narrow };

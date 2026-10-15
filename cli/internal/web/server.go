@@ -226,6 +226,8 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/board", s.handleGetBoard)
 	s.handleWorkspace("GET /api/board/stream", s.handleStreamBoard)
 	s.handleWorkspace("GET /api/metrics", s.handleGetMetrics)
+	s.handleWorkspace("GET /api/documentation", s.handleGetDocumentation)
+	s.handleWorkspace("GET /api/documentation/{collection}/page", s.handleGetDocumentationPage)
 	s.handleWorkspace("GET /api/spec/{code}", s.handleGetSpec)
 	s.handleWorkspace("POST /api/spec", s.handleCreateSpec)
 	s.handleWorkspace("PUT /api/spec/{code}", s.handleUpdateSpec)

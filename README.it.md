@@ -163,6 +163,8 @@ L'accettazione autonoma applica lo stesso gate di `/archetipo-review`, verdetto 
 
 ## CLI e comandi
 
+Il viewer offre Conversazione, Board e **Documentazione** come viste allo stesso livello. Documentazione legge `paths.wiki` anche con la manutenzione automatica disattivata: puoi navigare per argomento, cercare in titoli e contenuti, seguire i link della Wiki e consultare stato di revisione e fonti. Gli indirizzi delle pagine supportano ricaricamento e Indietro/Avanti. La prima raccolta è la Wiki in sola lettura; altre raccolte potranno essere aggiunte con un proprio ciclo di gestione.
+
 ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza e operazioni sui connector. Nel flusso normale parli con le skill; sono loro a chiamare questi comandi in background.
 
 | Comando | Scopo |
