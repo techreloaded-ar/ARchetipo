@@ -28,7 +28,7 @@ type ConfigField struct {
 	Name string `json:"name"`
 	// Label is what a person reads next to the input.
 	Label string `json:"label"`
-	// Type is "text" or "integer" and only says how to render the input; the
+	// Type is "text", "integer" or "select" and only says how to render the input; the
 	// authority on what is acceptable remains Provider.ValidateConfig.
 	Type string `json:"type"`
 	// Help explains the field, including the default applied when it is left
@@ -38,6 +38,14 @@ type ConfigField struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	// Required marks a field the provider cannot work without.
 	Required bool `json:"required"`
+	// Choices, when present, are declared and validated by the provider.
+	Choices []ConfigChoice `json:"choices,omitempty"`
+}
+
+type ConfigChoice struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 }
 
 // ConfigDescriber is implemented by providers that can describe their

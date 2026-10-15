@@ -59,7 +59,7 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 		t.Fatalf("created session = %#v", created)
 	}
 	threadParams := firstFake.paramsOf(methodThreadStart)
-	if threadParams["ephemeral"] != false || threadParams["approvalPolicy"] != "untrusted" || threadParams["cwd"] != dir {
+	if threadParams["ephemeral"] != false || threadParams["approvalPolicy"] != "on-request" || threadParams["cwd"] != dir {
 		t.Fatalf("thread/start params = %#v", threadParams)
 	}
 

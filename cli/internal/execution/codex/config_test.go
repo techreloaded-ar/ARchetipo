@@ -122,7 +122,7 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 		if strings.TrimSpace(field.Help) == "" {
 			t.Fatalf("field %q has no help text", field.Name)
 		}
-		if field.Type != "text" && field.Type != "integer" {
+		if field.Type != "text" && field.Type != "integer" && field.Type != "select" {
 			t.Fatalf("field %q has unsupported type %q", field.Name, field.Type)
 		}
 		if field.Required {
@@ -139,7 +139,7 @@ func TestConfigFieldsDeclareNoSecretAndMatchAcceptedKeys(t *testing.T) {
 		names = append(names, field.Name)
 	}
 	sort.Strings(names)
-	want := []string{"command", "model", "sandbox", "timeout_seconds"}
+	want := []string{"command", "model", "permission_profile", "sandbox", "timeout_seconds"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("declared fields = %v, want %v", names, want)
 	}

@@ -6,13 +6,9 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 )
 
-// The two answers a local approval accepts, and the only two. A local process
-// asks whether it may use a tool, and the question has exactly one shape: yes
-// or no. Richer vocabularies — "always allow", "allow with a different input" —
-// exist in the protocol underneath, and are deliberately not offered here: an
-// option the viewer renders is an option somebody will press, and every one of
-// them would have to mean the same thing on every local provider or the buttons
-// of a run would depend on which agent happens to be behind it.
+// Baseline answers for local providers that implement one-time decisions.
+// Adapters with richer native support declare their own options per request;
+// the viewer renders those declarations without inventing shared semantics.
 const (
 	ApprovalAllow = "allow"
 	ApprovalDeny  = "deny"

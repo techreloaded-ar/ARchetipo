@@ -74,7 +74,7 @@ async function main() {
       throw new Error(`The codex provider does not declare the run.dialog capability: ${JSON.stringify(codex)}`);
     }
     const codexFields = (codex.config_fields || []).map((f) => f.name).sort();
-    const wantCodexFields = ["command", "model", "sandbox", "timeout_seconds"];
+    const wantCodexFields = ["command", "model", "permission_profile", "sandbox", "timeout_seconds"];
     if (codexFields.join(",") !== wantCodexFields.join(",")) {
       throw new Error(`Unexpected configurable fields for codex: [${codexFields.join(", ")}]`);
     }
@@ -103,7 +103,7 @@ async function main() {
       throw new Error(`The claude provider does not declare the run.dialog capability: ${JSON.stringify(claude)}`);
     }
     const claudeFields = (claude.config_fields || []).map((f) => f.name).sort();
-    const wantClaudeFields = ["command", "model", "permission_mode", "timeout_seconds"];
+    const wantClaudeFields = ["command", "model", "permission_mode", "permission_profile", "timeout_seconds"];
     if (claudeFields.join(",") !== wantClaudeFields.join(",")) {
       throw new Error(`Unexpected configurable fields for claude: [${claudeFields.join(", ")}]`);
     }
@@ -173,7 +173,7 @@ async function main() {
     await apiJSON(`${view.url}/api/execution/provider/default`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: "codex", config: { model: offCatalogModel } }),
+      body: JSON.stringify({ id: "codex", config: { model: offCatalogModel, permission_profile: "workspace_no_prompt" } }),
     });
     const withOffCatalog = await apiJSON(`${view.url}/api/execution/providers`);
     if (!withOffCatalog.default || withOffCatalog.default.id !== "codex") {
@@ -182,6 +182,18 @@ async function main() {
     if (withOffCatalog.default.config.model !== offCatalogModel) {
       throw new Error(`A model outside the catalog was not preserved: ${JSON.stringify(withOffCatalog.default.config)}`);
     }
+    if (withOffCatalog.default.config.permission_profile !== "workspace_no_prompt") {
+      throw new Error(`The permission default was not persisted: ${JSON.stringify(withOffCatalog.default.config)}`);
+    }
+    const beforeInvalidPermission = await fs.readFile(configPath, "utf8");
+    await expectStatus(`${view.url}/api/execution/provider/default`, 400, {
+      method: "PUT", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({id:"codex", config:{permission_profile:"invented-profile"}}),
+    });
+    if (await fs.readFile(configPath, "utf8") !== beforeInvalidPermission) {
+      throw new Error("An invalid permission profile changed the saved workspace configuration");
+    }
+    console.log("-> permission profiles: default persisted; unknown profile rejected without changing configuration");
     // The excursion ends here: the blocks that follow assert on the arcipelago
     // default, so it is put back exactly as it was before this paragraph.
     await apiJSON(`${view.url}/api/execution/provider/default`, {

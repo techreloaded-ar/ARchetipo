@@ -48,20 +48,22 @@ const defaultSandbox = "workspace-write"
 // authenticates by itself, so no credential — and no path to its session
 // material — is ever part of this struct.
 type settings struct {
-	Command         string
-	Model           string
-	ReasoningEffort string
-	Sandbox         string
-	Timeout         time.Duration
+	PermissionProfile string
+	Command           string
+	Model             string
+	ReasoningEffort   string
+	Sandbox           string
+	Timeout           time.Duration
 }
 
 var knownConfigKeys = map[string]any{
-	"command":         true,
-	"model":           true,
-	effortField:       true,
-	legacyEffortField: true,
-	"sandbox":         true,
-	"timeout_seconds": true,
+	"permission_profile": true,
+	"command":            true,
+	"model":              true,
+	effortField:          true,
+	legacyEffortField:    true,
+	"sandbox":            true,
+	"timeout_seconds":    true,
 }
 
 // ConfigFields declares the non-secret settings this provider accepts, so a
@@ -71,6 +73,7 @@ var knownConfigKeys = map[string]any{
 // own authentication and ARchetipo never touches that material.
 func (p *Provider) ConfigFields() []execution.ConfigField {
 	return []execution.ConfigField{
+		execution.PermissionConfigField((&Provider{}).PermissionProfiles()),
 		{
 			Name:        "command",
 			Label:       "Codex command",
@@ -122,6 +125,13 @@ func parseConfig(raw map[string]any) (settings, error) {
 	if err := rejectUnknownKeys(raw); err != nil {
 		return settings{}, err
 	}
+	profile, err := providerconfig.String(raw["permission_profile"], "permission_profile", "", true)
+	if err != nil {
+		return settings{}, err
+	}
+	if err := execution.ValidatePermissionProfile((&Provider{}).PermissionProfiles(), profile); err != nil {
+		return settings{}, configErr("permission_profile", err.Error())
+	}
 	command, err := parseCommand(raw["command"])
 	if err != nil {
 		return settings{}, err
@@ -143,11 +153,12 @@ func parseConfig(raw map[string]any) (settings, error) {
 		return settings{}, err
 	}
 	return settings{
-		Command:         command,
-		Model:           model,
-		ReasoningEffort: reasoningEffort,
-		Sandbox:         sandbox,
-		Timeout:         time.Duration(timeoutSeconds) * time.Second,
+		PermissionProfile: profile,
+		Command:           command,
+		Model:             model,
+		ReasoningEffort:   reasoningEffort,
+		Sandbox:           sandbox,
+		Timeout:           time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }
 

@@ -129,8 +129,9 @@ const (
 // TurnConfiguration keeps the requested and provider-applied values separate.
 // Options include effort when the selected model exposes it.
 type TurnConfiguration struct {
-	Model   string            `json:"model,omitempty"`
-	Options map[string]string `json:"options,omitempty"`
+	PermissionProfile string            `json:"permission_profile,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	Options           map[string]string `json:"options,omitempty"`
 }
 
 // SessionSkill is one skill reported by the actual harness in this session's
@@ -226,11 +227,13 @@ type SessionDiscoveryRequest struct {
 }
 
 type SessionDiscovery struct {
-	Capabilities []SessionCapability `json:"capabilities"`
-	Models       []ModelOption       `json:"models"`
-	Skills       []SessionSkill      `json:"skills"`
-	SkillsKnown  bool                `json:"skills_known"`
-	Environment  SessionEnvironment  `json:"environment"`
+	PermissionProfiles []PermissionProfile `json:"permission_profiles,omitempty"`
+	PermissionProfile  string              `json:"permission_profile,omitempty"`
+	Capabilities       []SessionCapability `json:"capabilities"`
+	Models             []ModelOption       `json:"models"`
+	Skills             []SessionSkill      `json:"skills"`
+	SkillsKnown        bool                `json:"skills_known"`
+	Environment        SessionEnvironment  `json:"environment"`
 }
 
 type CreateSessionRequest struct {
@@ -247,11 +250,12 @@ type SessionRequest struct {
 }
 
 type StartTurnRequest struct {
-	Session      SessionMetadata `json:"session"`
-	TurnID       string          `json:"turn_id"`
-	SubmissionID string          `json:"submission_id"`
-	ExecutionID  string          `json:"execution_id,omitempty"`
-	Message      string          `json:"message"`
+	PermissionProfile string          `json:"permission_profile,omitempty"`
+	Session           SessionMetadata `json:"session"`
+	TurnID            string          `json:"turn_id"`
+	SubmissionID      string          `json:"submission_id"`
+	ExecutionID       string          `json:"execution_id,omitempty"`
+	Message           string          `json:"message"`
 	// Display is how the message is shown in the history when it is an
 	// instruction the caller composed rather than words the person wrote: the
 	// prompt that starts an ARchetipo action is such a message. Empty, the

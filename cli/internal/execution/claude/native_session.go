@@ -62,6 +62,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			execution.SessionCapabilitySkillInvocation, execution.SessionCapabilityApproval,
 			execution.SessionCapabilitySteering, execution.SessionCapabilityInterrupt,
 		}),
+		PermissionProfiles: p.PermissionProfiles(), PermissionProfile: defaultNativePermissionProfile(cfg),
 		Models:      execution.CloneModels(models),
 		Skills:      skills,
 		SkillsKnown: skillsKnown,
@@ -80,6 +81,8 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 	}
 	environment := execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneProviderConfig(request.Environment.ProviderConfig), Location: "local"}
 	metadata := execution.SessionMetadata{ConversationID: request.ConversationID, ProviderID: ProviderID, Environment: environment, Native: execution.NativeSessionReference{Kind: "claude-session", ID: id}}
+	_, mode, _ := nativePermissionMode(cfg, "")
+	cfg.PermissionMode = mode
 	session := newNativeSession(metadata, cfg, false)
 	if err := p.connectNativeProcess(session, false); err != nil {
 		return execution.SessionSnapshot{}, err
@@ -128,6 +131,8 @@ func (p *Provider) ResumeSession(ctx context.Context, request execution.ResumeSe
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
+	_, mode, _ := nativePermissionMode(cfg, "")
+	cfg.PermissionMode = mode
 	session := newNativeSession(request.Session, cfg, true)
 	if err := p.connectNativeProcess(session, true); err != nil {
 		return execution.SessionSnapshot{}, err
@@ -157,6 +162,17 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 		return execution.SessionTurnStarted{Delivery: delivery}, fmt.Errorf("claude session already has an active turn")
 	}
 	cfg := session.cfg
+	baseCfg, configErr := parseConfig(session.metadata.Environment.ProviderConfig)
+	if configErr != nil {
+		session.mu.Unlock()
+		return execution.SessionTurnStarted{Delivery: delivery}, configErr
+	}
+	profile, mode, permissionErr := nativePermissionMode(baseCfg, request.PermissionProfile)
+	if permissionErr != nil {
+		session.mu.Unlock()
+		return execution.SessionTurnStarted{Delivery: delivery}, permissionErr
+	}
+	cfg.PermissionMode = mode
 	if request.Model != "" {
 		cfg.Model = request.Model
 	}
@@ -170,7 +186,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	resume := session.started
 	process := session.process
 	client := session.client
-	if process == nil || cfg.Model != session.cfg.Model || cfg.Effort != session.cfg.Effort {
+	if process == nil || cfg.Model != session.cfg.Model || cfg.Effort != session.cfg.Effort || cfg.PermissionMode != session.cfg.PermissionMode {
 		if process != nil {
 			_, _, _ = p.shutdown(process)
 			session.process, session.client = nil, nil
@@ -186,7 +202,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	client.correlate(request.TurnID, request.SubmissionID)
 	message := nativeTurnMessage(request)
 	client.expectInstruction(message, request.Display)
-	turn := execution.SessionTurn{ID: request.TurnID, ExecutionID: request.ExecutionID, State: execution.TurnActive, Requested: execution.TurnConfiguration{Model: request.Model, Options: cloneStringMap(request.Options)}, StartedAt: p.now().UTC()}
+	turn := execution.SessionTurn{ID: request.TurnID, ExecutionID: request.ExecutionID, State: execution.TurnActive, Requested: execution.TurnConfiguration{PermissionProfile: request.PermissionProfile, Model: request.Model, Options: cloneStringMap(request.Options)}, StartedAt: p.now().UTC()}
 	session.process, session.client, session.current = process, client, &turn
 	session.connected = true
 	session.mu.Unlock()
@@ -205,7 +221,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 		delivery.State = execution.DeliveryUncertain
 		return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, err
 	}
-	turn.Applied = execution.TurnConfiguration{Model: cfg.Model, Options: mapIfSet("effort", cfg.Effort)}
+	turn.Applied = execution.TurnConfiguration{PermissionProfile: profile, Model: cfg.Model, Options: mapIfSet("effort", cfg.Effort)}
 	if observedModel != "" {
 		turn.Applied.Model = observedModel
 	}

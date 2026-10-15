@@ -4480,6 +4480,7 @@
 				body.model = override.model;
 				body.model_options = override.model_options;
 			}
+			if (body.conversation_id) await conversationNextTurnSaves.get(body.conversation_id);
 			const record = await apiPost(url, body);
 			let threadID = "";
 			try {
@@ -5513,7 +5514,7 @@
 				// and an unknown one simply gets the neutral button.
 				const tone = approvalOptionTone(option);
 				const off = runBusy ? " disabled" : "";
-				return `<button type="button" class="approval-btn${tone}" data-approval-id="${id}" data-option-id="${escapeHtml(option.id)}"${off}>${escapeHtml(option.label || option.id)}</button>`;
+				return `<span><button type="button" class="approval-btn${tone}" data-approval-id="${id}" data-option-id="${escapeHtml(option.id)}"${off}>${escapeHtml(option.label || option.id)}</button>${option.description ? `<small class="field-help">${escapeHtml(option.description)}</small>` : ""}</span>`;
 			})
 			.join("");
 		return `<div class="run-approval" role="group" aria-label="${TEXT.runApprovalPending}">
@@ -5788,6 +5789,8 @@
 	// process action, so touching one surface can never change the other.
 	let conversationModelChoiceView = null;
 	let conversationModelChoiceSelection = null;
+	const conversationNextTurnSaves = new Map();
+	let conversationNextTurnSaveVersion = 0;
 	// Il menu delle azioni del compositore: aperto o no, e le voci lette dal
 	// server l'ultima volta che e' stato aperto. Si rilegge a ogni apertura,
 	// perche' che cosa si puo' avviare cambia con lo stato del workspace.
@@ -6101,6 +6104,17 @@
 				pickConversationSkill(
 					skillOption.getAttribute("data-conversation-skill-option") || "",
 				);
+				return;
+			}
+			const permissionChoice = e.target.closest("[data-conversation-permission-choice]");
+			if (permissionChoice) {
+				const current = currentConversationModelChoice();
+				current.permission_profile = permissionChoice.getAttribute("data-conversation-permission-choice");
+				conversationModelChoiceSelection = current;
+				conversationModelChoiceOpen = "";
+				renderConversationPanel();
+				persistConversationNextTurn();
+				focusConversationPill("permissions");
 				return;
 			}
 			const modelChoice = e.target.closest("[data-conversation-model-choice]");
@@ -6684,12 +6698,14 @@
 			return {
 				model: String(conversationModelChoiceSelection.model || ""),
 				options: Object.assign({}, conversationModelChoiceSelection.options),
+				permission_profile: String(conversationModelChoiceSelection.permission_profile || ""),
 			};
 		}
 		const view = conversationModelChoiceView || {};
 		return {
 			model: view.model === undefined || view.model === null ? "" : String(view.model),
 			options: Object.assign({}, view.options || {}),
+			permission_profile: String(view.permission_profile || ""),
 		};
 	}
 
@@ -6707,7 +6723,6 @@
 	}
 
 	function chooseConversationModel(value) {
-		const previous = conversationModelChoiceSelection;
 		const current = currentConversationModelChoice();
 		const model = value === undefined || value === null ? "" : String(value);
 		const options = {};
@@ -6716,41 +6731,64 @@
 				options[name] = String(current.options[name]);
 			}
 		});
-		conversationModelChoiceSelection = { model, options };
+		conversationModelChoiceSelection = { model, options, permission_profile: current.permission_profile };
 		renderConversationPanel();
-		persistConversationNextTurn(previous);
+		persistConversationNextTurn();
 	}
 
 	// Ridisegna, a differenza di prima: il valore non vive più in un `<select>`
 	// che se lo tiene da sé, ma è scritto sulla pastiglia e nel segmento premuto,
 	// e senza ridisegno resterebbero entrambi a dire il valore di prima.
 	function chooseConversationOption(name, value) {
-		const previous = conversationModelChoiceSelection;
 		const current = currentConversationModelChoice();
 		current.options[String(name)] =
 			value === undefined || value === null ? "" : String(value);
 		conversationModelChoiceSelection = current;
 		renderConversationPanel();
-		persistConversationNextTurn(previous);
+		persistConversationNextTurn();
 	}
 
-	async function persistConversationNextTurn(previous) {
+	async function persistConversationNextTurn() {
 		const id = conversationsCurrentId;
 		if (!id || !conversationView || !conversationView.session) return;
 		const chosen = currentConversationModelChoice();
+		const version = ++conversationNextTurnSaveVersion;
+		const pending = conversationNextTurnSaves.get(id) || Promise.resolve();
+		const save = pending.catch(() => {}).then(() => apiPut(
+			`/api/workspace/conversations/${encodeURIComponent(id)}/next-turn`,
+			{ model: chosen.model, model_options: normalizeOptionMap(chosen.options), permission_profile: chosen.permission_profile },
+		));
+		conversationNextTurnSaves.set(id, save);
 		try {
-			const result = await apiPut(
-				`/api/workspace/conversations/${encodeURIComponent(id)}/next-turn`,
-				{ model: chosen.model, model_options: normalizeOptionMap(chosen.options) },
-			);
+			const result = await save;
 			if (conversationsCurrentId !== id) return;
-			conversationRefusal = "";
-			if (result && result.next_turn) conversationView.next_turn = result.next_turn;
+			if (result && result.next_turn) {
+				conversationView.next_turn = result.next_turn;
+				conversationModelChoiceView = Object.assign({}, conversationModelChoiceView, {
+					model: result.next_turn.model || "",
+					options: result.next_turn.options || {},
+					permission_profile: result.next_turn.permission_profile || "",
+				});
+			}
+			if (version === conversationNextTurnSaveVersion) conversationRefusal = "";
 		} catch (err) {
-			if (conversationsCurrentId !== id) return;
-			conversationModelChoiceSelection = previous;
+			if (conversationsCurrentId !== id || version !== conversationNextTurnSaveVersion) return;
+			conversationModelChoiceSelection = null;
 			showConversationRefusal(err);
 			renderConversationPanel();
+			// A lost reply may have saved the policy. Read it back before allowing
+			// a turn to start with permissions different from those on screen.
+			const recovery = apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/model-choice`).then((view) => {
+				if (conversationsCurrentId === id && version === conversationNextTurnSaveVersion) {
+					conversationModelChoiceView = view;
+					renderConversationPanel();
+				}
+			});
+			conversationNextTurnSaves.set(id, recovery);
+			try { await recovery; } catch (_) {
+				// Keep the failed reconciliation in the queue: sending stays blocked
+				// until a subsequent explicit choice is confirmed.
+			}
 		}
 	}
 
@@ -7608,6 +7646,8 @@
 		conversationDraft = "";
 		renderConversationPanel();
 		try {
+			await conversationNextTurnSaves.get(id);
+			if (conversationsCurrentId !== id) return;
 			const view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
 				{ message, skill },

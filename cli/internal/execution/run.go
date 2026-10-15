@@ -58,9 +58,11 @@ type RunEvent struct {
 
 // ApprovalOption is one answer a pending approval accepts.
 type ApprovalOption struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Kind  string `json:"kind"`
+	Description string `json:"description,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Kind        string `json:"kind"`
 }
 
 // PendingApproval is a decision the remote agent is waiting on. It carries the

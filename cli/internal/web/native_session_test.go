@@ -54,10 +54,13 @@ func (s *persistentFakeNativeStore) loseRuntime() {
 }
 
 type persistentFakeNativeProvider struct {
-	id           string
-	store        *persistentFakeNativeStore
-	failStart    bool
-	interruptErr error
+	permissionProfiles []execution.PermissionProfile
+	permissionProfile  string
+	noModels           bool
+	id                 string
+	store              *persistentFakeNativeStore
+	failStart          bool
+	interruptErr       error
 	// steerFindsNoTurn makes the fake answer a steering the way a runtime does
 	// when the turn ended between the read and the command: the typed refusal,
 	// and the session already idle.
@@ -100,11 +103,15 @@ func (p *persistentFakeNativeProvider) Execute(context.Context, execution.Reques
 	return execution.Result{}, nil
 }
 func (p *persistentFakeNativeProvider) DiscoverSession(_ context.Context, request execution.SessionDiscoveryRequest) (execution.SessionDiscovery, error) {
-	return execution.SessionDiscovery{Capabilities: []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInterrupt, execution.SessionCapabilitySteering, execution.SessionCapabilityTurnModel, execution.SessionCapabilityTurnOptions, execution.SessionCapabilitySkillDiscovery, execution.SessionCapabilitySkillInvocation},
+	discovery := execution.SessionDiscovery{PermissionProfiles: p.permissionProfiles, PermissionProfile: p.permissionProfile, Capabilities: []execution.SessionCapability{execution.SessionCapabilityResume, execution.SessionCapabilityInterrupt, execution.SessionCapabilitySteering, execution.SessionCapabilityTurnModel, execution.SessionCapabilityTurnOptions, execution.SessionCapabilitySkillDiscovery, execution.SessionCapabilitySkillInvocation},
 		Models:      []execution.ModelOption{{ID: "fake-large", Default: true, Options: []execution.ModelOptionField{{Name: "effort", Choices: []execution.ModelOptionChoice{{Value: "high"}, {Value: "low"}}}}}},
 		Skills:      []execution.SessionSkill{{Name: "plugin:fixture", Description: "Fixture", Namespace: "plugin", Origin: "repo", Invocation: "$plugin:fixture"}},
 		SkillsKnown: true,
-		Environment: p.environmentFor(request)}, nil
+		Environment: p.environmentFor(request)}
+	if p.noModels {
+		discovery.Models = nil
+	}
+	return discovery, nil
 }
 
 func (p *persistentFakeNativeProvider) environmentFor(request execution.SessionDiscoveryRequest) execution.SessionEnvironment {

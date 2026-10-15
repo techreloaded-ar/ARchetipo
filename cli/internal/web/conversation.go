@@ -979,7 +979,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 			ProviderID: created.Session.ProviderID, OpenedAt: openedAt, LastMessageAt: openedAt,
 			Session: &created.Session, Archive: created.Archive, Connection: created.Connection,
 			Recovery: created.Recovery, Work: created.Work, CurrentTurn: created.CurrentTurn,
-			NextTurn: execution.TurnConfiguration{Model: model, Options: modelOptions},
+			NextTurn: execution.TurnConfiguration{Model: model, Options: modelOptions, PermissionProfile: discovery.PermissionProfile},
 		}
 		if title := strings.TrimSpace(spec.title); title != "" {
 			record.Title = truncateRunes(title, conversationTitleLimit)

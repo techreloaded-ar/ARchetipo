@@ -94,6 +94,7 @@ const CLAIMS = [
   "un workspace appena inizializzato permette di creare la prima epica e storia",
   "le attività raccolgono la proposta prima di avviare una skill e conservano il testo se l’avvio fallisce",
   "le esecuzioni si possono fermare anche dalla vista Conversazione",
+  "i permessi dichiarati dal provider si scelgono e si salvano dal prossimo turno senza perdersi cambiando modello",
 ];
 
 // One entry per proved statement, for the report.
@@ -158,6 +159,7 @@ async function main() {
 
     await exercisePage(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
+    await exercisePermissionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
     await runCommand("init-empty", cliPath, ["init", "--tool", "pi", "--connector", "file", "--yes"], {
@@ -426,6 +428,61 @@ async function exerciseActivityComposer(browser, url) {
   await page.waitFor(`window.smokeStopped && !document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’arresto dall’elenco delle esecuzioni");
   if (exceptions.length) throw new Error(`Eccezioni nel flusso delle attività: ${JSON.stringify(exceptions)}`);
   ok(CLAIMS[10], "Ferma cancella l’esecuzione dall’elenco anche nella vista Conversazione");
+  await page.close();
+}
+
+async function exercisePermissionComposer(browser, url) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {source: `
+    const originalFetch = window.fetch.bind(window);
+    window.permissionSaves = [];
+    window.permissionCatalogReads = 0;
+    window.losePermissionReply = false;
+    let next = {model:'fixture-one',options:{},permission_profile:'limited'};
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'permission-fixture',title:'Permessi fixture',live:true,message_count:0}],closed_limit:20});
+      if (path === '/api/workspace/conversations/permission-fixture') return json({available:true,provider_id:'fixture',conversation:{id:'permission-fixture',state:'ACTIVE'},session:{work:'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},next_turn:next,events:[],approvals:[],runs:[]});
+      if (path === '/api/workspace/conversations/permission-fixture/model-choice') { window.permissionCatalogReads++; return json({available:true,provider_id:'fixture',model:next.model,options:next.options,permission_profile:next.permission_profile,models:[{id:'fixture-one',label:'Modello uno'},{id:'fixture-two',label:'Modello due'}],permission_profiles:[{id:'limited',label:'Solo progetto',description:'Limiti del provider'},{id:'wide',label:'Ampia autonomia',description:'Accesso fuori cartella'}],capabilities:[]}); }
+      if (path === '/api/workspace/conversations/permission-fixture/next-turn' && method === 'PUT') {
+        const body = JSON.parse(options.body);
+        window.permissionSaves.push(body);
+        if (window.permissionSaves.length === 1) await new Promise(resolve => { window.releasePermissionSave = resolve; });
+        next = {model:body.model,options:body.model_options,permission_profile:body.permission_profile};
+        if (window.losePermissionReply) { window.losePermissionReply = false; throw new Error('Risposta persa dopo il salvataggio'); }
+        return json({next_turn:next});
+      }
+      if (path === '/api/workspace/activities') return json({items:[]});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input, options);
+    };
+  `});
+  await page.send("Page.navigate", {url});
+  await page.once("Page.loadEventFired", 30000, "la pagina della selezione permessi");
+  await page.waitFor(`!!document.querySelector('[data-conversation-pill="permissions"]')`, 10000, "i permessi dichiarati dal provider");
+  await page.evaluate(`document.querySelector('[data-conversation-pill="permissions"]').click()`);
+  await page.waitFor(`!document.querySelector('[data-conversation-pop="permissions"]').hidden`, 10000, "il menu dei permessi");
+  const labels = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-permission-choice]')).map(b=>b.textContent)`);
+  if (labels.length !== 2 || !labels[1].includes("Accesso fuori cartella")) throw new Error(`Il menu non rispetta il catalogo: ${JSON.stringify(labels)}`);
+  await page.evaluate(`document.querySelector('[data-conversation-permission-choice="wide"]').click()`);
+  await page.waitFor(`window.permissionSaves.length === 1`, 10000, "il primo salvataggio dei permessi");
+  await page.evaluate(`document.querySelector('[data-conversation-pill="model"]').click(); document.querySelector('[data-conversation-model-choice="fixture-two"]').click()`);
+  if (await page.evaluate(`window.permissionSaves.length`) !== 1) throw new Error("I salvataggi del prossimo turno sono concorrenti");
+  await page.evaluate(`window.releasePermissionSave()`);
+  await page.waitFor(`window.permissionSaves.length === 2`, 10000, "il salvataggio successivo del modello");
+  const saves = await page.evaluate(`window.permissionSaves`);
+  if (saves[0].permission_profile !== "wide" || saves[1].permission_profile !== "wide" || saves[1].model !== "fixture-two") throw new Error(`Cambio modello ha perso i permessi: ${JSON.stringify(saves)}`);
+  const readsBeforeFailure = await page.evaluate(`window.permissionCatalogReads`);
+  await page.evaluate(`window.losePermissionReply = true; document.querySelector('[data-conversation-pill="permissions"]').click(); document.querySelector('[data-conversation-permission-choice="limited"]').click()`);
+  await page.waitFor(`window.permissionSaves.length === 3 && window.permissionCatalogReads > ${readsBeforeFailure} && document.querySelector('[data-conversation-pill="permissions"]').textContent.includes('Solo progetto')`, 10000, "i permessi riletti dopo una risposta persa");
+  if (exceptions.length) throw new Error(`Eccezioni nel selettore dei permessi: ${JSON.stringify(exceptions)}`);
+  ok(CLAIMS[11], "Permessi mostra solo il catalogo del provider, salva la scelta e la conserva cambiando modello con richieste ordinate");
   await page.close();
 }
 

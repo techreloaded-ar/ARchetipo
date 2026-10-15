@@ -191,6 +191,8 @@
 		let notice = "";
 		if (isCatalogField && models.length) {
 			control = renderModelSelect(field, value, models);
+		} else if (Array.isArray(field.choices) && field.choices.length) {
+			control = `<select name="provider_${escapeHtml(field.name)}"><option value=""${value === "" ? " selected" : ""}>Default del provider</option>${field.choices.map((choice) => `<option value="${escapeHtml(choice.id)}"${choice.id === value ? " selected" : ""}>${escapeHtml(choice.label || choice.id)} — ${escapeHtml(choice.description || "")}</option>`).join("")}</select>`;
 		} else {
 			control = renderTextInput(field, value);
 			// No catalog but a stated reason: the reader is told why the list
@@ -650,13 +652,24 @@
 	}
 
 	function renderConversationModelChoice(view, selection, open) {
-		return renderScopedModelChoice(
+		const model = renderScopedModelChoice(
 			view,
 			selection,
 			CONVERSATION_SCOPE,
 			"",
 			open,
 		);
+		const profiles = view && Array.isArray(view.permission_profiles)
+			? view.permission_profiles.filter((profile) => profile && profile.id) : [];
+		if (!profiles.length) return model;
+		const value = selection && selection.permission_profile !== undefined
+			? String(selection.permission_profile) : String(view.permission_profile || "");
+		const selected = profiles.find((profile) => profile.id === value);
+		const label = selected ? selected.label || selected.id : "Permessi configurati";
+		const body = renderRowEyebrow("Permessi dal prossimo turno") + profiles.map((profile) =>
+			`<button type="button" class="conv-pop-entry" role="menuitemradio" aria-checked="${profile.id === value}" data-conversation-permission-choice="${escapeHtml(profile.id)}">${rowCheck()}<span class="conv-pop-entry-text">${escapeHtml(profile.label || profile.id)}<small class="field-help">${escapeHtml(profile.description || "")}</small></span></button>`
+		).join("") + renderRowFoot("La scelta resta in questa conversazione; il default del workspace non cambia.", true);
+		return model + `<span class="conv-agent-row">${renderRowPill(CONVERSATION_SCOPE, "permissions", label, selected ? selected.description : "Permessi del prossimo turno", false, open === "permissions", body)}</span>`;
 	}
 
 	// ---- exports ----

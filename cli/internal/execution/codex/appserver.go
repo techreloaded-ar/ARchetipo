@@ -350,12 +350,22 @@ func (a *appServer) openThread(ctx context.Context, cfg settings, dir, resumeID 
 }
 
 func (a *appServer) startTurn(ctx context.Context, prompt, model, effort string, skills []execution.SessionSkill) (string, error) {
+	return a.startTurnWithPermissions(ctx, prompt, model, effort, skills, "", nil)
+}
+
+func (a *appServer) startTurnWithPermissions(ctx context.Context, prompt, model, effort string, skills []execution.SessionSkill, approval string, sandbox map[string]any) (string, error) {
 	threadID, _ := a.ids()
 	input := []any{map[string]any{"type": "text", "text": prompt}}
 	for _, skill := range skills {
 		input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
 	params := map[string]any{"threadId": threadID, "input": input}
+	if approval != "" {
+		params["approvalPolicy"] = approval
+	}
+	if sandbox != nil {
+		params["sandboxPolicy"] = sandbox
+	}
 	if model != "" {
 		params["model"] = model
 	}

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -673,7 +674,7 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	}
 	started, startErr := snapshot.sessionProvider.StartTurn(ctx, execution.StartTurnRequest{
 		Session: snapshot.session, TurnID: turnID, SubmissionID: submissionID, ExecutionID: executionID,
-		Message: body.Message, Display: body.display, Model: requested.Model, Options: cloneModelOptions(requested.Options), Skills: selectedSkills,
+		PermissionProfile: requested.PermissionProfile, Message: body.Message, Display: body.display, Model: requested.Model, Options: cloneModelOptions(requested.Options), Skills: selectedSkills,
 	})
 	if started.Delivery.State != "" {
 		delivery = started.Delivery
@@ -1113,11 +1114,14 @@ func (s *Server) respondNativeConversationInput(ctx context.Context, ws *workspa
 }
 
 type nativeNextTurnRequest struct {
-	Model        string            `json:"model"`
-	ModelOptions map[string]string `json:"model_options"`
+	PermissionProfile *string           `json:"permission_profile"`
+	Model             *string           `json:"model"`
+	ModelOptions      map[string]string `json:"model_options"`
 }
 
 type nativeConversationModelChoiceView struct {
+	PermissionProfiles []execution.PermissionProfile `json:"permission_profiles,omitempty"`
+	PermissionProfile  string                        `json:"permission_profile,omitempty"`
 	executionModelChoiceView
 	Capabilities []execution.SessionCapability `json:"capabilities"`
 	Environment  execution.SessionEnvironment  `json:"environment"`
@@ -1160,6 +1164,7 @@ func (s *Server) handleGetNativeConversationModelChoice(w http.ResponseWriter, r
 		return
 	}
 	view := nativeConversationModelChoiceView{
+		PermissionProfiles: discovery.PermissionProfiles, PermissionProfile: record.NextTurn.PermissionProfile,
 		executionModelChoiceView: executionModelChoiceView{
 			ProviderID: record.Session.ProviderID, ModelField: execution.ModelFieldName,
 			Model: record.NextTurn.Model, Options: cloneModelOptions(record.NextTurn.Options),
@@ -1169,6 +1174,9 @@ func (s *Server) handleGetNativeConversationModelChoice(w http.ResponseWriter, r
 		Environment:  discovery.Environment,
 		Skills:       discovery.Skills,
 		SkillsKnown:  discovery.SkillsKnown,
+	}
+	if view.PermissionProfile == "" {
+		view.PermissionProfile = discovery.PermissionProfile
 	}
 	if len(discovery.Models) == 0 {
 		view.UnavailableReason = "the session provider returned an empty model catalog"
@@ -1195,8 +1203,21 @@ func (s *Server) handleUpdateNativeConversationNextTurn(w http.ResponseWriter, r
 		writeError(w, err)
 		return
 	}
-	nextTurn := execution.TurnConfiguration{Model: strings.TrimSpace(body.Model), Options: cloneModelOptions(body.ModelOptions)}
-	if err := execution.ValidateTurnConfiguration(discovery.Models, nextTurn); err != nil {
+	nextTurn := record.NextTurn
+	if body.Model != nil {
+		nextTurn.Model = strings.TrimSpace(*body.Model)
+		nextTurn.Options = cloneModelOptions(body.ModelOptions)
+	} else if body.ModelOptions != nil {
+		nextTurn.Options = cloneModelOptions(body.ModelOptions)
+	}
+	if body.PermissionProfile != nil {
+		nextTurn.PermissionProfile = strings.TrimSpace(*body.PermissionProfile)
+	}
+	if err := execution.ValidatePermissionProfile(discovery.PermissionProfiles, nextTurn.PermissionProfile); err != nil {
+		writeError(w, iox.NewInvalidInput(err.Error(), "choose a permission profile declared by this session provider", err))
+		return
+	}
+	if err := validateNativeNextTurn(discovery, record.NextTurn, nextTurn); err != nil {
 		writeError(w, iox.NewInvalidInput(err.Error(), "choose a model and options declared by this session provider", err))
 		return
 	}
@@ -1256,4 +1277,13 @@ func (ws *workspaceSession) rememberDecidedProposal(ctx context.Context, id stri
 	}
 	record.DecidedProposalID = proposalID
 	return ws.conversationStore().Save(ctx, record)
+}
+
+// Permission changes are independent of the model catalog. In particular an
+// unchanged runtime-selected or legacy model need not be in today's catalog.
+func validateNativeNextTurn(discovery execution.SessionDiscovery, previous, next execution.TurnConfiguration) error {
+	if next.Model == previous.Model && maps.Equal(next.Options, previous.Options) {
+		return nil
+	}
+	return execution.ValidateTurnConfiguration(discovery.Models, next)
 }

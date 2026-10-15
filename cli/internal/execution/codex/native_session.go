@@ -75,6 +75,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			execution.SessionCapabilityApproval, execution.SessionCapabilitySteering,
 			execution.SessionCapabilityInterrupt,
 		}),
+		PermissionProfiles: p.PermissionProfiles(), PermissionProfile: defaultNativePermissionProfile(cfg),
 		Models: models, Skills: skills, SkillsKnown: true,
 		Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneCodexProviderConfig(request.ProviderConfig), Location: "local"},
 	}, nil
@@ -96,7 +97,10 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
-	thread, err := client.openThread(ctx, cfg, dir, "", false, "untrusted")
+	_, sandbox, approval, _ := nativePermissions(cfg, "")
+	threadCfg := cfg
+	threadCfg.Sandbox = sandbox
+	thread, err := client.openThread(ctx, threadCfg, dir, "", false, approval)
 	if err != nil {
 		_, _, _ = p.shutdown(process)
 		return execution.SessionSnapshot{}, err
@@ -140,7 +144,10 @@ func (p *Provider) ResumeSession(ctx context.Context, request execution.ResumeSe
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
-	thread, err := client.openThread(ctx, cfg, dir, request.Session.Native.ID, false, "untrusted")
+	_, sandbox, approval, _ := nativePermissions(cfg, "")
+	threadCfg := cfg
+	threadCfg.Sandbox = sandbox
+	thread, err := client.openThread(ctx, threadCfg, dir, request.Session.Native.ID, false, approval)
 	if err != nil {
 		_, _, _ = p.shutdown(process)
 		return execution.SessionSnapshot{}, err
@@ -195,23 +202,27 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	}
 	client := session.client
 	session.mu.Unlock()
+	profile, sandbox, approval, err := nativePermissions(cfg, request.PermissionProfile)
+	if err != nil {
+		return execution.SessionTurnStarted{Delivery: delivery}, err
+	}
 	if err := validateCodexTurn(ctx, client, request, cfg); err != nil {
 		return execution.SessionTurnStarted{Delivery: delivery}, err
 	}
 	turn := execution.SessionTurn{
 		ID: request.TurnID, ExecutionID: request.ExecutionID, State: execution.TurnActive,
-		Requested: execution.TurnConfiguration{Model: request.Model, Options: cloneCodexStringMap(request.Options)}, StartedAt: p.now().UTC(),
+		Requested: execution.TurnConfiguration{PermissionProfile: request.PermissionProfile, Model: request.Model, Options: cloneCodexStringMap(request.Options)}, StartedAt: p.now().UTC(),
 	}
 	client.correlate(request.TurnID, request.SubmissionID)
 	message := codexTurnMessage(request)
 	client.expectInstruction(message, request.Display)
-	nativeID, err := client.startTurn(ctx, message, cfg.Model, cfg.ReasoningEffort, request.Skills)
+	nativeID, err := client.startTurnWithPermissions(ctx, message, cfg.Model, cfg.ReasoningEffort, request.Skills, approval, nativeSandboxPolicy(sandbox, session.metadata.Environment.WorkingDir))
 	if err != nil {
 		delivery.State = execution.DeliveryUncertain
 		return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, err
 	}
 	turn.NativeID = nativeID
-	turn.Applied = execution.TurnConfiguration{Model: cfg.Model, Options: codexMapIfSet(effortField, cfg.ReasoningEffort)}
+	turn.Applied = execution.TurnConfiguration{PermissionProfile: profile, Model: cfg.Model, Options: codexMapIfSet(effortField, cfg.ReasoningEffort)}
 	session.mu.Lock()
 	session.cfg, session.current = cfg, &turn
 	session.mu.Unlock()
@@ -268,10 +279,22 @@ func (p *Provider) InterruptTurn(ctx context.Context, request execution.SessionC
 }
 
 func (p *Provider) RespondSessionApproval(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	if request.OptionID != localrun.ApprovalAllow && request.OptionID != localrun.ApprovalDeny {
-		return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}, fmt.Errorf("codex approval option %q is not supported", request.OptionID)
+	delivery := execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}
+	session := p.nativeSession(request.Session.Native.ID)
+	if session == nil {
+		return delivery, fmt.Errorf("codex session is not connected")
 	}
-	return p.respondCodexServerRequest(request, approvalResult(request.OptionID))
+	session.mu.Lock()
+	nativeRequest, pending := session.requests[request.InteractionID]
+	session.mu.Unlock()
+	if pending && (nativeRequest.Method == "item/commandExecution/requestApproval" || nativeRequest.Method == "item/fileChange/requestApproval") {
+		for _, choice := range approvalChoices(nativeRequest) {
+			if choice.option.ID == request.OptionID {
+				return p.respondCodexServerRequest(request, map[string]any{"decision": choice.decision})
+			}
+		}
+	}
+	return delivery, fmt.Errorf("codex approval option %q is not offered by this pending request", request.OptionID)
 }
 
 func (p *Provider) RespondSessionInput(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
@@ -323,17 +346,6 @@ func (p *Provider) respondCodexServerRequest(request execution.SessionCommandReq
 	session.resolveRequest(request.InteractionID)
 	delivery.State, delivery.NativeDeliveryID = execution.DeliveryConfirmed, request.InteractionID
 	return delivery, nil
-}
-
-func approvalResult(option string) map[string]any {
-	decision := option
-	switch option {
-	case localrun.ApprovalAllow:
-		decision = "accept"
-	case localrun.ApprovalDeny:
-		decision = "decline"
-	}
-	return map[string]any{"decision": decision}
 }
 
 func (p *Provider) codexNativeCommand(request execution.SessionCommandRequest, command func(*appServer) error) (execution.SessionDelivery, error) {
@@ -497,7 +509,7 @@ func (s *nativeSession) handleRequest(request rpcMessage) {
 		if title == "" {
 			title = "Codex richiede un'approvazione"
 		}
-		s.approvals[id] = execution.PendingApproval{ID: id, ToolName: request.Method, Title: title, Args: request.Params, Options: localrun.ApprovalOptions(), CreatedAt: now}
+		s.approvals[id] = execution.PendingApproval{ID: id, ToolName: request.Method, Title: title, Args: request.Params, Options: approvalOptions(request), CreatedAt: now}
 	case "item/tool/requestUserInput":
 		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: request.Params, Questions: inputQuestions(request.Params), CreatedAt: now}
 	default:

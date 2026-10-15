@@ -1,0 +1,104 @@
+schema: archetipo/plan/v2
+spec_code: US-062
+body: |-
+  # Piano tecnico US-062
+
+  ## Soluzione
+  Il dominio execution espone PermissionProfile (id, label, description) e un descrittore opzionale di profili del provider. SessionDiscovery riporta il catalogo e il profilo ereditato. TurnConfiguration e StartTurnRequest trasportano permission_profile separatamente dalle opzioni del modello. Nessun cambiamento ai metodi obbligatori di Provider o SessionProvider. Un catalogo assente significa capacità assente: valori non vuoti vengono rifiutati. ApprovalOption ammette descrizione e scope; ogni adapter produce e valida soltanto le decisioni che può tradurre, senza deduzioni del frontend.
+
+  Codex dichiara profili provider_default, workspace, workspace_no_prompt e full_access; provider_default usa il sandbox configurato e on-request, gli altri usano rispettivamente workspace-write/on-request, workspace-write/never e danger-full-access/never. Il default non amplia il sandbox configurato. Il catalogo viene esposto come campo configurabile permission_profile con scelte dichiarate. Le sessioni native abbandonano untrusted; il batch resta invariato. Ogni turn/start nativo riceve approvalPolicy e sandboxPolicy esatti. Le richieste Codex espongono decisioni native disponibili, accettazione per sessione e regola solo quando proposta; validazione contro la richiesta pendente e nessun payload arbitrario dal browser. La persistenza delle regole rimane nativa.
+
+  Claude dichiara provider_default, auto, accept_edits e full_access, mappati alla modalità permission_mode configurata, auto, acceptEdits e bypassPermissions. Nessuna promessa di sandbox per cartella. Un cambio di profilo usa il medesimo meccanismo di riconnessione nativa già usato per modello/effort; mantiene l'identità e non semina transcript. Solo approvazioni una tantum finché non esiste supporto verificato delle altre durate.
+
+  Il viewer aggiunge un controllo generico Permessi alla riga del modello della conversazione. Le impostazioni del provider usano scelte dichiarate per il default. PUT next-turn salva il profilo nel record senza cambiare il workspace. La scelta si applica dal turno successivo, è preservata dalle modifiche del modello e viene validata anche se il catalogo modelli è assente. Le vecchie conversazioni con campo assente mantengono la configurazione del provider. Niente Wiki: gate disabilitato.
+
+  ## Baseline
+  - `go test ./internal/execution/... ./internal/web/...` da cli: PASS.
+  - `npm run test:web`: PASS, 379 test.
+  - Modifica preesistente `.archetipo/config.yaml`: preservare, non includere in un eventuale commit.
+
+  ## Mappa evidenze
+  AC-1, AC-2: catalogo profili e scelte config con test provider e renderer.
+  AC-3, AC-4, AC-5: test HTTP next-turn, persistenza record, rifiuto sconosciuti, turn request e profilo applicato.
+  AC-6, AC-7: fixture richieste native, wire JSON esatto, decisioni non dichiarate rifiutate senza consegna.
+  AC-8, AC-10: test adapter e descrizioni visibili dei limiti.
+  AC-9: provider fake senza descrittore e renderer senza catalogo.
+
+  ## Verifica
+  Test Go mirati, suite web, page-load smoke eseguito nel browser reale e smoke execution-config aggiornato per il nuovo campo pubblico. Gate completo: gofmt -l ., go vet ./..., go build ./..., go test ./..., golangci-lint run --timeout 5m ./..., npm run test:web, npm run test:view-page-load-smoke, npm run test:view-execution-smoke. Non registrare video in implementazione. Nessun mockup: si aggiungono campi e scelte ai controlli esistenti senza cambiare layout.
+tasks:
+  - id: TASK-01
+    title: Contratto dichiarativo di permessi e implementazioni native
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Esporre e applicare profili e decisioni native senza vincolare il core ai provider.
+      ## Read
+      cli/internal/execution/session.go, provider.go, run.go; codex/config.go, appserver.go, native_session.go; claude/config.go, native_session.go, approvals.go.
+      ## Change
+      Dominio execution e adapter codex/claude; test locali dei contratti aggiornati. Nessuna modifica ad arcipelago né lifecycle batch.
+      ## Steps
+      1. Aggiungere catalogo opzionale, validazione profili e metadati descrittivi delle approvazioni.
+      2. Dichiarare profili configurabili nei provider e applicarli esclusivamente sul percorso nativo.
+      3. Tradurre le risposte Codex disponibili; preservare payload della regola proposta; rifiutare opzioni non presenti.
+      4. Verificare wire payload e identità di sessione, inclusi default e input sconosciuti.
+      ## Verify
+      Da cli: `go test ./internal/execution/...` deve passare, inclusi i nuovi test.
+      ## Done
+      - [ ] AC-1, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10 verificati dai contratti e payload nativi.
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Persistenza e selezione dei permessi nel viewer
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Scegliere e ritrovare il profilo della conversazione dal prossimo turno.
+      ## Read
+      cli/internal/web/native_session.go, conversation.go; assets/app.js, provider-fields.js, conversation.js; test/web/provider-fields.test.mjs.
+      ## Change
+      Endpoint esistenti di discovery e next-turn, creazione conversazione, renderer puri e binding esistenti. Aggiungere test HTTP e renderer.
+      ## Steps
+      1. Esporre profili/default dalla discovery nativa e salvare permission_profile in NextTurn.
+      2. Validare la scelta e trasportarla a StartTurn senza alterare il default del workspace.
+      3. Aggiungere select generiche per campi con choices e controllo Permessi nella conversazione con descrizioni del provider.
+      4. Preservare il profilo quando si cambia modello/opzione e impedire salvataggi concorrenti di perderlo.
+      5. Mostrare scope e descrizione delle risposte estese; nessuna logica provider nel frontend.
+      ## Verify
+      Da cli: `go test ./internal/web/...`; dalla root: `npm run test:web`.
+      ## Done
+      - [ ] AC-2, AC-3, AC-4, AC-5, AC-6, AC-9: default e profilo della conversazione restano distinti e persistiti.
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Verifica integrata, regressioni e gate finale
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Dimostrare la funzionalità completa e consegnare la spec verificata in REVIEW.
+      ## Read
+      AGENTS.md; test/e2e/viewer-page-load-smoke.mjs, execution-config-view-smoke.mjs; test e diff della spec.
+      ## Change
+      Smoke pertinenti e documentazione mirata dei permessi; correggere difetti emersi nei soli file della funzionalità.
+      ## Steps
+      1. Aggiungere oracoli per selezione, risposta estesa e assenza di capacità nei test appropriati e aggiornare il contratto config dello smoke.
+      2. Eseguire tutti i controlli del piano, inclusi browser reale e lint Go, e correggere errori introdotti.
+      3. Confrontare diff e AC, fare review del codice e correggere difetti bloccanti.
+      4. Dopo i controlli segnare questo task DONE, ricaricare la spec e verificare che nessun task resti TODO; solo allora richiedere REVIEW tramite CLI.
+      ## Verify
+      Da cli: `gofmt -l .`, `go vet ./...`, `go build ./...`, `go test ./...`, `golangci-lint run --timeout 5m ./...`. Dalla root: `npm run test:web`, `npm run test:view-page-load-smoke`, `npm run test:view-execution-smoke`. Tutti verdi e gofmt senza output.
+      ## Done
+      - [ ] AC-1 fino ad AC-10 coperti da evidenze di test; tutti i task DONE prima del passaggio REVIEW.
+      ## Blockers
+      None.
+    ref: TASK-03

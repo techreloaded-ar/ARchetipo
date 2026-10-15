@@ -751,7 +751,8 @@
 					typeof option.label === "string" && option.label
 						? option.label
 						: optionID;
-				return `<button type="button" class="approval-btn${tone}" data-run-approval-id="${escapeHtml(id)}" data-run-option-id="${escapeHtml(optionID)}" data-execution-id="${escapeHtml(execution)}"${off}>${escapeHtml(label)}</button>`;
+				const description = textAt(option, "description");
+				return `<span><button type="button" class="approval-btn${tone}" data-run-approval-id="${escapeHtml(id)}" data-run-option-id="${escapeHtml(optionID)}" data-execution-id="${escapeHtml(execution)}"${off}>${escapeHtml(label)}</button>${description ? `<small class="field-help">${escapeHtml(description)}</small>` : ""}</span>`;
 			})
 			.join("");
 
