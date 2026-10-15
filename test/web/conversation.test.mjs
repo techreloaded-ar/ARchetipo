@@ -710,6 +710,32 @@ describe("renderConversation — bozza consegnata", () => {
 	});
 });
 
+describe("renderConversation — proposte strutturate", () => {
+	const labels = {title:"RISULTATI",intro:"TESTO DAL SERVER",pending:"DA DECIDERE",accepted:"ACCETTATA",accept:"CONFERMA DAL SERVER",edit:"MODIFICA",revise:"RAGIONIAMOCI",open:"APRI"};
+	const drafts = {event_id:42,labels,receipt_lines:['{"receipt":"hidden"}'],items:[{title:"Prima <proposta>",body:"**Obiettivo**\nUna storia.",metadata:["META DAL SERVER"]},{title:"Seconda",body:"Altra storia",spec_code:"US-123",metadata:[]}]};
+	it("mostra ogni storia formattata, le etichette del server e decisioni separate", () => {
+		const html = renderConversation({...LIVE,spec_drafts:drafts,events:[{id:42,kind:"text",text:'Spiegazione\n{"receipt":"hidden"}'}]}, "", {writable:true,markedParse:body=>`<strong>${body}</strong>`});
+		assert.match(html, /Prima &lt;proposta&gt;/);
+		assert.match(html, /<strong>\*\*Obiettivo\*\*/);
+		assert.match(html, /META DAL SERVER/);
+		assert.match(html, /CONFERMA DAL SERVER/);
+		assert.match(html, /data-conversation-draft-accept="42:0"/);
+		assert.match(html, /data-conversation-draft-edit="42:0"/);
+		assert.match(html, /data-conversation-draft-revise="42:0"/);
+		assert.match(html, /data-conversation-draft-open="US-123"/);
+		assert.doesNotMatch(html, /data-conversation-draft-accept="42:1"/);
+		assert.match(html, /Spiegazione/);
+		assert.doesNotMatch(html, /&quot;receipt&quot;/);
+	});
+	it("mantiene leggibili proposte parziali senza parser e blocca i comandi durante il lavoro", () => {
+		const html = renderConversation({...LIVE,spec_drafts:drafts}, "", {working:{active:true}});
+		assert.match(html, /<pre>\*\*Obiettivo\*\*/);
+		assert.match(html, /data-conversation-draft-accept="42:0" disabled/);
+		assert.doesNotMatch(html, /data-conversation-draft-revise/);
+		assert.doesNotThrow(() => renderConversation({...LIVE,spec_drafts:{items:[{}]}}));
+	});
+});
+
 describe("renderConversation — esito", () => {
 	it("l'esito accettato resta compatto e non offre una vecchia run", () => {
 		const html = renderConversation(

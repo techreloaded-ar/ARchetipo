@@ -78,6 +78,9 @@ const CONVERSATION_ID = "smoke-page-load-conversation";
 const CONVERSATION_TITLE = "Conversazione di prova del caricamento pagina";
 const HUMAN_SENTINEL = "smoke-page-load-human-said-sentinel";
 const AGENT_SENTINEL = "smoke-page-load-agent-said-sentinel";
+const DRAFT_BODY = "**User Story**\nCome revisore voglio valutare una proposta prima di accettarla.\n\n**Dimostrazione**\nLeggo la proposta e la accetto nel backlog.\n\n**Criteri di accettazione**\n- [ ] AC-1 — Solo la conferma crea la storia.\n";
+const DRAFT_STORIES = ["Prima proposta da rivedere", "Seconda proposta da accettare"].map(title => ({title,epic_code:"EP-700",priority:"MEDIUM",points:3,scope:"MVP",blocked_by:[],body:DRAFT_BODY}));
+const DRAFT_RECEIPT = JSON.stringify({artifact:"spec_draft",status:"PROPOSED",proposals:DRAFT_STORIES});
 
 // What this smoke claims to prove. Printed on success one by one, and printed
 // again — as *unproved* — when a missing browser makes it skip, so a skip can
@@ -95,6 +98,8 @@ const CLAIMS = [
   "le attività raccolgono la proposta prima di avviare una skill e conservano il testo se l’avvio fallisce",
   "le esecuzioni si possono fermare anche dalla vista Conversazione",
   "i permessi dichiarati dal provider si scelgono e si salvano dal prossimo turno senza perdersi cambiando modello",
+  "più proposte si leggono formattate in chat, si modificano e si accettano separatamente senza duplicati dopo il ricaricamento",
+  "Continua in chat prepara una modifica senza inviarla e la risposta aggiorna la proposta nella stessa conversazione",
 ];
 
 // One entry per proved statement, for the report.
@@ -157,9 +162,10 @@ async function main() {
     browser = await launchChrome(chromePath, path.join(runDir, "chrome-profile"));
     console.log(`-> devtools: ${browser.wsEndpoint}`);
 
-    await exercisePage(browser, view.url);
+    await exercisePage(browser, view.url, runDir);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url);
+    await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
     await runCommand("init-empty", cliPath, ["init", "--tool", "pi", "--connector", "file", "--yes"], {
@@ -187,7 +193,7 @@ async function main() {
 
 // --- The page itself ---------------------------------------------------------
 
-async function exercisePage(browser, url) {
+async function exercisePage(browser, url, runDir) {
   const page = await browser.newPage();
 
   // Every uncaught exception the page reports, in order, with the phase it
@@ -372,6 +378,38 @@ async function exercisePage(browser, url) {
   if (created.spec?.title !== storyTitle) throw new Error('Il form non ha persistito la storia attesa');
   assertNoExceptions("La creazione manuale ha emesso eccezioni:");
   ok(CLAIMS[7], "la conferma del form crea US-702 e il dettaglio del server ne restituisce il titolo");
+  phase = "revisione e accettazione di più proposte";
+  await page.waitFor(`document.getElementById('workspace-shell').dataset.view === 'spec'`, 10000, "il dettaglio della storia appena creata");
+  await page.evaluate(`document.getElementById('modal-close').click()`);
+  await page.waitFor(`document.getElementById('workspace-shell').dataset.view === 'board'`, 10000, "il ritorno alla board");
+  await page.evaluate(`document.querySelector('[data-shell-view="conversation"]').click(); document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`document.querySelectorAll('.conv-story-proposal').length === 2 && document.querySelector('.conv-story-proposal').checkVisibility()`, 10000, "le due proposte visibili nella conversazione");
+  const preview = await page.evaluate(`({body:document.querySelector('.conv-story-proposal-body').innerHTML,timeline:document.querySelector('.conv-timeline').textContent})`);
+  if (!preview.body.includes('<strong>User Story</strong>') || preview.timeline.includes('"artifact"')) throw new Error(`Proposta non formattata o receipt esposta: ${JSON.stringify(preview)}`);
+  const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
+  await fs.writeFile(path.join(runDir, 'story-proposals.png'), Buffer.from(screenshot.data, 'base64'));
+  const beforeAcceptance = await (await fetch(`${url}/api/board`)).json();
+  if (beforeAcceptance.columns.flatMap(column => column.specs || []).some(item => DRAFT_STORIES.some(draft => draft.title === item.title))) throw new Error('La lettura ha già persistito una proposta');
+  await page.evaluate(`document.querySelector('[data-conversation-draft-edit="2:0"]').click()`);
+  await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden') && document.getElementById('new-spec-form').elements.title.value === ${JSON.stringify(DRAFT_STORIES[0].title)}`, 10000, "il form con la prima proposta");
+  await page.evaluate(`document.getElementById('new-spec-form').elements.title.value = 'Titolo rivisto prima della conferma'; document.getElementById('new-spec-submit').click()`);
+  await page.waitFor(`document.getElementById('new-spec-modal').classList.contains('hidden') && !!document.querySelector('[data-conversation-draft-open="US-703"]')`, 10000, "l’accettazione della proposta modificata", () => page.evaluate(`document.getElementById('new-spec-status').textContent`));
+  const edited = await (await fetch(`${url}/api/spec/US-703`)).json();
+  if (edited.spec?.title !== 'Titolo rivisto prima della conferma') throw new Error('La revisione del titolo è andata persa');
+  await page.waitFor(`document.getElementById('workspace-shell').dataset.view === 'spec'`, 10000, "il dettaglio della proposta accettata");
+  await page.evaluate(`document.getElementById('modal-close').click()`);
+  await page.waitFor(`document.getElementById('workspace-shell').dataset.view !== 'spec'`, 10000, "il ritorno dal dettaglio");
+  await page.evaluate(`document.querySelector('[data-shell-view="conversation"]').click(); document.querySelector('[data-conversation-draft-accept="2:1"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-draft-open="US-704"]')`, 10000, "la seconda accettazione dalla chat");
+  await page.send('Page.reload');
+  await page.once('Page.loadEventFired', 30000, 'il ricaricamento delle proposte accettate');
+  await page.waitFor(`!!document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]')`, 10000, "la cronologia dopo il ricaricamento");
+  await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`document.querySelectorAll('.conv-story-proposal.is-accepted').length === 2 && !document.querySelector('[data-conversation-draft-accept]')`, 10000, "le accettazioni durature senza altri pulsanti Accetta");
+  const retry = await (await fetch(`${url}/api/spec`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...DRAFT_STORIES[0],proposal:{conversation_id:CONVERSATION_ID,event_id:2,index:0}})})).json();
+  if (retry.created !== false || retry.spec?.code !== 'US-703') throw new Error('Una conferma ripetuta ha creato un duplicato');
+  assertNoExceptions('Le proposte hanno emesso eccezioni:');
+  ok(CLAIMS[12], "due proposte formattate, prima modificata e poi confermata, seconda accettata dalla chat; le accettazioni resistono al reload e al retry");
   await page.close();
 }
 
@@ -486,6 +524,44 @@ async function exercisePermissionComposer(browser, url) {
   await page.close();
 }
 
+async function exerciseProposalRevisionComposer(browser, url) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on('Runtime.exceptionThrown', params => exceptions.push(params.exceptionDetails));
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.addScriptToEvaluateOnNewDocument', {source: `
+    const originalFetch = window.fetch.bind(window);
+    window.revisionMessages = [];
+    const view = () => ({available:true,provider_id:'fixture',conversation:{id:'revision-fixture',state:'ACTIVE'},session:{work:'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},events:[],approvals:[],runs:[],spec_drafts:{event_id:window.revisionMessages.length ? 43 : 42,receipt_lines:[],labels:{title:'Proposte',intro:'Rivedi la storia',pending:'Proposta',accept:'Accetta',edit:'Modifica',revise:'Continua in chat'},items:[{title:window.revisionMessages.length ? 'Proposta rivista' : 'Proposta iniziale',body:'**User Story**\\nUna proposta da discutere.',metadata:[]}]}});
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'revision-fixture',title:'Revisione proposta',live:true,message_count:0}],closed_limit:20});
+      if (path === '/api/workspace/conversations/revision-fixture') return json(view());
+      if (path === '/api/workspace/conversations/revision-fixture/model-choice') return json({available:true,models:[],capabilities:[]});
+      if (path === '/api/workspace/conversations/revision-fixture/messages' && method === 'POST') {window.revisionMessages.push(JSON.parse(options.body));return json(view());}
+      if (path === '/api/workspace/activities') return json({items:[]});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input, options);
+    };
+  `});
+  await page.send('Page.navigate', {url});
+  await page.once('Page.loadEventFired', 30000, 'la conversazione di revisione');
+  await page.waitFor(`!!document.querySelector('[data-conversation-draft-revise="42:0"]')`, 10000, 'la proposta con il comando di revisione');
+  await page.evaluate(`document.querySelector('[data-conversation-draft-revise="42:0"]').click()`);
+  await page.waitFor(`document.querySelector('.conv-composer-input').value.includes('Proposta iniziale')`, 10000, 'il riferimento alla proposta nel compositore');
+  if (await page.evaluate('window.revisionMessages.length') !== 0) throw new Error('Continua in chat ha inviato prima che la persona scrivesse');
+  await page.evaluate(`(() => {const input = document.querySelector('.conv-composer-input');input.value += 'limitiamo il risultato agli utenti nuovi';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.conv-composer').requestSubmit();})()`);
+  await page.waitFor(`window.revisionMessages.length === 1 && document.querySelector('.conv-story-proposal h3').textContent === 'Proposta rivista'`, 10000, 'la proposta rivista nello stesso thread');
+  const delivered = await page.evaluate('window.revisionMessages[0]');
+  if (!delivered.message.includes('limitiamo il risultato agli utenti nuovi')) throw new Error('Le modifiche sono andate perse');
+  if (exceptions.length) throw new Error(`Eccezioni nella revisione della proposta: ${JSON.stringify(exceptions)}`);
+  ok(CLAIMS[13], 'Continua in chat prepara il riferimento; la persona aggiunge le modifiche e la proposta viene aggiornata nello stesso thread');
+  await page.close();
+}
+
 async function exerciseEmptyWorkspace(browser, url) {
   const page = await browser.newPage();
   await page.send("Runtime.enable");
@@ -562,7 +638,7 @@ async function seedConversationRecord(sandboxDir) {
     final_state: "closed",
     events: [
       { id: 1, seq: 1, at: openedAt, kind: "user_message", text: HUMAN_SENTINEL },
-      { id: 2, seq: 2, at: openedAt, kind: "text", text: AGENT_SENTINEL },
+      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}` },
     ],
   };
   await fs.writeFile(path.join(dir, `${CONVERSATION_ID}.json`), `${JSON.stringify(record, null, 2)}\n`, {

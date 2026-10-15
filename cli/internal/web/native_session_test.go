@@ -278,6 +278,9 @@ func (p *persistentFakeNativeProvider) ReleaseSession(_ context.Context, request
 func TestNativeConversationPersistsWithoutReadsResumesSameIDAndSteersActiveTurn(t *testing.T) {
 	provider := newPersistentFakeNativeProvider("native-fake", nil)
 	srv, cfg, conn := newRunServer(t, provider, true)
+	// Releasing a session cancels its follower asynchronously. Join both
+	// viewers' writers before TempDir removes their shared conversation store.
+	t.Cleanup(func() { srv.session().nativeFollowers.closeAll() })
 	opened := openConversationOK(t, srv)
 	id := opened.Conversation.ID
 
@@ -371,6 +374,7 @@ func TestNativeConversationPersistsWithoutReadsResumesSameIDAndSteersActiveTurn(
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { restarted.session().nativeFollowers.closeAll() })
 	w := doJSON(t, restarted, "POST", conversationsRoute+"/"+id+"/messages", map[string]any{"message": "same session"})
 	if w.Code != 202 {
 		t.Fatalf("message after restart = %d: %s", w.Code, w.Body.String())

@@ -135,7 +135,8 @@ type conversationView struct {
 	// the decisions were taken. It is never nil, so a client always iterates an
 	// array: a conversation that has started nothing answers with an empty list
 	// and not with null.
-	Runs []conversationRunView `json:"runs"`
+	Runs       []conversationRunView       `json:"runs"`
+	SpecDrafts *conversationSpecDraftsView `json:"spec_drafts,omitempty"`
 }
 
 // conversationRunEventWindow bounds how many events of a single run travel
@@ -514,6 +515,7 @@ func (s *Server) conversationViewOf(ctx context.Context, ws *workspaceSession, t
 	if proposal, proposalID, pending := pendingProposal(session.Events(0), snapshot.decidedProposalID); pending {
 		view.Proposal = s.resolveProposal(ctx, ws, proposal, proposalID)
 	}
+	view.SpecDrafts = ws.specDraftsView(ctx, snapshot.id, session.Events(0))
 	events := session.Events(afterID)
 	// The read of the live conversation is also what writes it down. It is
 	// journalled from the whole history and not from the tail this caller asked
@@ -749,6 +751,7 @@ func (s *Server) handleGetWorkspaceConversation(w http.ResponseWriter, r *http.R
 		return
 	}
 	view := pastConversationViewOf(record, s.conversationOpenabilityOf(ctx, ws), afterID)
+	view.SpecDrafts = ws.specDraftsView(ctx, id, record.Events)
 	// Il record di un passo finito si legge qui e non dentro
 	// pastConversationViewOf, che non tocca nessun archivio: è la stessa lettura
 	// che la gemella viva fa dal suo, con la stessa regola sul fallimento —

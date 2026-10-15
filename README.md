@@ -210,6 +210,8 @@ A conversation in `archetipo view` is not a chat wrapped around a one-shot invoc
 
 Claude and Codex support the same six workflow actions: inception, backlog generation, story draft, planning, implementation and review. Their local batch executions share receipt acceptance, question/answer handling, result projection and bounded shutdown. In the viewer, each action runs in a durable native session and its receipt closes only the action. Story drafting also works before a PRD or populated backlog exists: the agent can propose a new epic name, and the story and epic are persisted only after confirmation.
 
+Story discovery brings in the inception personalities: Andrea, Costanza, Livia, Leonardo and Emanuele challenge value, assumptions, user experience, feasibility and acceptance criteria, with one question at a time. One `/archetipo-spec` invocation can produce several stories when the agreed scope benefits from a split. In the viewer, proposals appear as formatted cards: accept each story into the backlog, edit it in the form, or continue refining it in the same chat. Acceptance survives reloads and retries, including when you changed the proposed title.
+
 Native controls remain explicit capabilities of each harness. Codex exposes structured input requests: the viewer renders their choices, free answers and masked secret fields as ordinary form controls, and the adapter encodes the response for its runtime. Claude's stream-json protocol supports questions as ordinary messages and does not advertise structured input; workflow actions require neither a structured-input capability nor a particular question format. Models and permission settings remain those of the selected runtime.
 
 What that means in practice:

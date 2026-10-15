@@ -204,6 +204,8 @@ I record delle execution sono stato runtime locale sotto `.archetipo/executions/
 
 Una conversazione in `archetipo view` non è una chat costruita attorno a un'invocazione usa e getta: è una **sessione durevole dell'harness di sviluppo** — Claude Code o Codex CLI — che gira sulla tua macchina, nella directory del tuo progetto, con i tuoi tool e le skill che il tuo runtime ha davvero.
 
+La scoperta delle storie coinvolge le personalità dell'inception: Andrea, Costanza, Livia, Leonardo ed Emanuele mettono alla prova valore, assunzioni, esperienza d'uso, fattibilità e criteri di accettazione, con una domanda alla volta. Una chiamata a `/archetipo-spec` può produrre più storie quando lo scope concordato beneficia di una suddivisione. Nel viewer le proposte compaiono come schede formattate: puoi accettare ogni storia nel backlog, modificarla nel modulo o continuare a ragionarci nella stessa chat. L'accettazione resiste al ricaricamento e ai tentativi ripetuti, anche dopo una modifica del titolo proposto.
+
 In pratica:
 
 - **Non scade.** Nessun timeout globale e nessun timeout di inattività chiudono una conversazione. Chiudere la tab del browser non interrompe il lavoro; interrompere un turn ferma quel turn e nient'altro. Una conversazione finisce quando la chiudi tu.

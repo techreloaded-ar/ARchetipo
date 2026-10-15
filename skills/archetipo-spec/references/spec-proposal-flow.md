@@ -1,6 +1,6 @@
 # Spec proposal flow
 
-Use this flow for one story proposed for review, before persistence. It works standalone and when another caller requests a structured receipt.
+Use this flow for one or more stories proposed for review, before persistence. It works standalone and when another caller requests a structured receipt.
 
 The shared runtime has already been read by the entry skill; do not read it again.
 
@@ -17,12 +17,14 @@ extension. A request to evaluate an idea is exploratory even when the caller
 asks for a single proposed story. Agree on the outcome and scope before writing
 acceptance criteria. No artifact or receipt is due while a question is pending.
 
-## Propose one story
+## Propose the agreed stories
 
 - Use the repository and the person's request as context. No PRD, populated backlog or existing epic is required. Do not redirect to inception or generate a whole backlog.
 - Use the agreed outcome and scope. Include a user story, a concrete demonstration and verifiable acceptance criteria.
 - Reuse a declared epic with `epic_code`, or propose a new epic name with `epic_title` and an empty `epic_code`. Leave new epic and story codes unassigned until confirmation.
 - Do not run `archetipo spec add` or write backlog/spec files. Present the proposal for review.
+- One invocation can propose several independently demonstrable stories when
+  the agreed scope warrants it. Respect an explicit single-story request.
 
 When a structured receipt is requested, close with one JSON line using this shape, with markdown newlines escaped as `\n`:
 
@@ -31,3 +33,17 @@ When a structured receipt is requested, close with one JSON line using this shap
 ```
 
 For an existing epic, supply its `epic_code` and omit `epic_title` or leave it empty. Persist only when the person subsequently requests creation, using the existing CLI extension flow.
+
+For several stories, emit one receipt containing the complete set:
+
+```json
+{"artifact":"spec_draft","status":"PROPOSED","proposals":[{"title":"First story","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"},{"title":"Second story","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"}]}
+```
+
+When a structured receipt is requested, keep the surrounding chat to a short
+explanation of decisions and the split: the caller renders each story from the
+receipt. A request for changes continues this conversation and produces a new
+complete receipt replacing the proposed set, without persistence. Preserve
+unchanged pending stories in that set. Stories already accepted into the
+backlog are no longer pending; revise them only on explicit request. Standalone,
+present readable markdown and use the same confirmation-before-persistence rule.

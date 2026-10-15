@@ -51,7 +51,8 @@ func AcceptActionReceipt(action ActionID, specCode, message string) (json.RawMes
 		return encodeReceipt(receiptPresence[BacklogReceipt](message, backlogReceiptFields), receipt, err)
 	case ActionSpecDraft:
 		receipt, err := AcceptSpecDraftReceipt(message)
-		return encodeReceipt(receiptPresence[SpecDraftReceipt](message, specDraftReceiptFields), receipt, err)
+		_, parseErr := ParseSpecDraftReceipt(message)
+		return encodeReceipt(parseErr == nil, receipt, err)
 	}
 	return nil, false, fmt.Errorf("no receipt is defined for the %q action", action)
 }

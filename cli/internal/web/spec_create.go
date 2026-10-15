@@ -16,14 +16,15 @@ import (
 // deliberately absent: it is a result of the operation, assigned by the
 // server from the persisted backlog, never chosen by the browser.
 type createSpecReq struct {
-	Title     string   `json:"title"`
-	EpicCode  string   `json:"epic_code"`
-	EpicTitle string   `json:"epic_title,omitempty"`
-	Priority  string   `json:"priority"`
-	Points    int      `json:"points"`
-	Scope     string   `json:"scope"`
-	BlockedBy []string `json:"blocked_by"`
-	Body      string   `json:"body"`
+	Title     string              `json:"title"`
+	EpicCode  string              `json:"epic_code"`
+	EpicTitle string              `json:"epic_title,omitempty"`
+	Priority  string              `json:"priority"`
+	Points    int                 `json:"points"`
+	Scope     string              `json:"scope"`
+	BlockedBy []string            `json:"blocked_by"`
+	Body      string              `json:"body"`
+	Proposal  *specDraftReference `json:"proposal,omitempty"`
 }
 
 // createSpecView is the JSON response of POST /api/spec. Created is false
@@ -138,6 +139,17 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	ws.specCreateMu.Lock()
+	defer ws.specCreateMu.Unlock()
+	accepted, err := ws.resolveSpecDraftSource(ctx, req.Proposal)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if accepted != nil {
+		writeJSON(w, http.StatusOK, createSpecView{Spec: *accepted, Created: false})
+		return
+	}
 
 	existing, err := ws.conn.FetchBacklogItems(ctx, "")
 	if err != nil {
@@ -190,6 +202,10 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if found, dup := findExistingSpec(existing, epic.Code, req.Title); dup {
+		if err := ws.rememberSpecDraftAcceptance(ctx, req.Proposal, found.Code); err != nil {
+			writeError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, createSpecView{Spec: found, Created: false})
 		return
 	}
@@ -226,6 +242,10 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 	// content "readable from the connector" rather than merely accepted.
 	saved, err := ws.conn.ReadSpecDetail(ctx, spec.Code)
 	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := ws.rememberSpecDraftAcceptance(ctx, req.Proposal, saved.Code); err != nil {
 		writeError(w, err)
 		return
 	}

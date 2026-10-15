@@ -8043,3 +8043,10 @@ body.no-workspace [data-workspace-scoped] {
 
 .conv-activity-selection p { margin: 4px 0; color: var(--text-muted); }
 .conv-activity-selection small { color: var(--text-muted); }
+.conv-story-proposals { display: grid; gap: 16px; padding: 12px 20px 20px; }
+.conv-story-proposals-intro, .conv-story-proposal-meta { color: var(--text-muted); font-size: 12px; margin: 0 0 8px; }
+.conv-story-proposal { border: 1px solid var(--border); border-radius: 12px; padding: 18px; background: var(--surface); }
+.conv-story-proposal h3 { font-size: 16px; margin: 8px 0; line-height: 1.4; }
+.conv-story-proposal-body { max-height: 380px; overflow: auto; margin: 16px 0; line-height: 1.6; }
+.conv-story-proposal-body pre { white-space: pre-wrap; }
+.conv-story-proposal .conv-proposal-controls { flex-wrap: wrap; }

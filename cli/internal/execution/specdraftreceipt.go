@@ -42,16 +42,19 @@ var specDraftReceiptFields = []string{"artifact", "status", "title", "epic_code"
 // prompt rather than a limitation of the format: JSON carries the markdown
 // intact, and the parsed value holds real line breaks again.
 type SpecDraftReceipt struct {
-	Artifact  string   `json:"artifact"`
-	Status    string   `json:"status"`
-	Title     string   `json:"title"`
-	EpicCode  string   `json:"epic_code"`
-	EpicTitle string   `json:"epic_title,omitempty"`
-	Priority  string   `json:"priority"`
-	Points    int      `json:"points"`
-	Scope     string   `json:"scope"`
-	BlockedBy []string `json:"blocked_by"`
-	Body      string   `json:"body"`
+	// Proposals carries a set of independently reviewable stories. The flat
+	// fields remain supported for receipts emitted by already installed skills.
+	Proposals []SpecDraftProposal `json:"proposals,omitempty"`
+	Artifact  string              `json:"artifact"`
+	Status    string              `json:"status"`
+	Title     string              `json:"title"`
+	EpicCode  string              `json:"epic_code"`
+	EpicTitle string              `json:"epic_title,omitempty"`
+	Priority  string              `json:"priority"`
+	Points    int                 `json:"points"`
+	Scope     string              `json:"scope"`
+	BlockedBy []string            `json:"blocked_by"`
+	Body      string              `json:"body"`
 }
 
 // ParseSpecDraftReceipt extracts the spec draft receipt from an agent output,
@@ -61,11 +64,27 @@ type SpecDraftReceipt struct {
 // It only extracts: the policy on what counts as an acceptable receipt lives in
 // AcceptSpecDraftReceipt.
 func ParseSpecDraftReceipt(output string) (SpecDraftReceipt, error) {
-	got, ok := parseTrailingReceipt[SpecDraftReceipt](output, specDraftReceiptFields)
-	if !ok {
-		return SpecDraftReceipt{}, fmt.Errorf("the agent did not emit the expected JSON receipt line")
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		for _, fields := range [][]string{{"artifact", "status", "proposals"}, specDraftReceiptFields} {
+			if got, ok := parseTrailingReceipt[SpecDraftReceipt](lines[i], fields); ok {
+				return got, nil
+			}
+		}
 	}
-	return got, nil
+	return SpecDraftReceipt{}, fmt.Errorf("the agent did not emit the expected JSON receipt line")
+}
+
+// Drafts normalizes the old single-story receipt and the proposed story set.
+func (r SpecDraftReceipt) Drafts() []SpecDraftProposal {
+	if r.Proposals != nil {
+		drafts := append([]SpecDraftProposal{}, r.Proposals...)
+		for i := range drafts {
+			drafts[i].BlockedBy = append([]string{}, drafts[i].BlockedBy...)
+		}
+		return drafts
+	}
+	return []SpecDraftProposal{{Title: r.Title, EpicCode: r.EpicCode, EpicTitle: r.EpicTitle, Priority: r.Priority, Points: r.Points, Scope: r.Scope, BlockedBy: append([]string{}, r.BlockedBy...), Body: r.Body}}
 }
 
 // AcceptSpecDraftReceipt parses the output and applies the acceptance rule: the
@@ -95,8 +114,14 @@ func AcceptSpecDraftReceipt(output string) (SpecDraftReceipt, error) {
 	if got.Artifact != specDraftArtifact || got.Status != ProposedStatus {
 		return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
 	}
-	if strings.TrimSpace(got.Title) == "" || (strings.TrimSpace(got.EpicCode) == "" && strings.TrimSpace(got.EpicTitle) == "") || strings.TrimSpace(got.Body) == "" {
+	drafts := got.Drafts()
+	if len(drafts) == 0 || (got.Proposals != nil && (got.Title != "" || got.Body != "")) {
 		return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
+	}
+	for _, draft := range drafts {
+		if strings.TrimSpace(draft.Title) == "" || (strings.TrimSpace(draft.EpicCode) == "" && strings.TrimSpace(draft.EpicTitle) == "") || strings.TrimSpace(draft.Body) == "" {
+			return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
+		}
 	}
 	return got, nil
 }

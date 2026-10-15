@@ -54,8 +54,11 @@ func ActionResultFields(action ActionID, receipt json.RawMessage) (map[string]an
 	case *BacklogReceipt:
 		fields["backlog_epics"], fields["backlog_specs"] = got.Epics, got.Specs
 	case *SpecDraftReceipt:
-		blocked := append([]string{}, got.BlockedBy...)
-		fields["spec_draft"] = SpecDraftProposal{Title: got.Title, EpicCode: got.EpicCode, EpicTitle: got.EpicTitle, Priority: got.Priority, Points: got.Points, Scope: got.Scope, BlockedBy: blocked, Body: got.Body}
+		if got.Proposals != nil {
+			fields["spec_drafts"] = got.Drafts()
+		} else {
+			fields["spec_draft"] = got.Drafts()[0]
+		}
 	}
 	return fields, nil
 }

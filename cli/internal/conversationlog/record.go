@@ -83,6 +83,9 @@ type Record struct {
 	// again: the card would ask to start a second time what has already been
 	// started once.
 	DecidedProposalID int64 `json:"decided_proposal_id,omitempty"`
+	// SpecDraftAcceptances links a receipt item (event:index) to its persisted
+	// spec, even when the person changed its title before accepting it.
+	SpecDraftAcceptances map[string]string `json:"spec_draft_acceptances,omitempty"`
 }
 
 const CurrentVersion = 2

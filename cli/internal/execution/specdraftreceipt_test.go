@@ -236,3 +236,40 @@ func TestAcceptSpecDraftReceiptAllowsANewEpicTitle(t *testing.T) {
 		t.Fatal("a proposal must have an existing epic code or a new epic title")
 	}
 }
+
+func TestSpecDraftReceiptSupportsStorySetsWithoutLosingLegacyReceipts(t *testing.T) {
+	drafts := fixtureDraft().Drafts()
+	drafts = append(drafts, drafts[0])
+	drafts[1].Title = "Filtrare le storie da esportare"
+	receipt := SpecDraftReceipt{Artifact: "spec_draft", Status: ProposedStatus, Proposals: drafts}
+	line := nominalDraftLine(t, receipt)
+	got, emitted, err := AcceptActionReceipt(ActionSpecDraft, "", line)
+	if err != nil || !emitted {
+		t.Fatalf("set receipt: %s %t %v", got, emitted, err)
+	}
+	fields, err := ActionResultFields(ActionSpecDraft, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed := fields["spec_drafts"].([]SpecDraftProposal)
+	if len(proposed) != 2 || proposed[1].Title != drafts[1].Title || proposed[0].Body != drafts[0].Body {
+		t.Fatalf("lost stories: %+v", proposed)
+	}
+	// The last receipt wins across the two supported shapes.
+	last, err := AcceptSpecDraftReceipt(nominalDraftLine(t, fixtureDraft()) + "\n" + line)
+	if err != nil || len(last.Drafts()) != 2 {
+		t.Fatalf("last set: %+v %v", last, err)
+	}
+	last, err = AcceptSpecDraftReceipt(line + "\n" + nominalDraftLine(t, fixtureDraft()))
+	if err != nil || len(last.Drafts()) != 1 {
+		t.Fatalf("last legacy: %+v %v", last, err)
+	}
+	for _, invalid := range []string{
+		`{"artifact":"spec_draft","status":"PROPOSED","proposals":[]}`,
+		`{"artifact":"spec_draft","status":"PROPOSED","proposals":[{"title":"Missing body","epic_code":"EP-001"}]}`,
+	} {
+		if _, emitted, err := AcceptActionReceipt(ActionSpecDraft, "", invalid); !emitted || err == nil {
+			t.Fatalf("invalid set treated as pending or accepted: %s %t %v", invalid, emitted, err)
+		}
+	}
+}

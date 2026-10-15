@@ -391,7 +391,7 @@
 	// nudo, o se la pagina non ha caricato marked — resta il testo escapato di
 	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
 	// postura con cui la pagina rende i corpi di spec, piano e PRD.
-	function renderAgentText(events, parse) {
+	function renderAgentText(events, parse, receiptLines) {
 		if (!events.length) return "";
 		const last = events[events.length - 1];
 		const head = [
@@ -403,7 +403,11 @@
 		}
 		const text = events
 			.map((e) => String(e.text === null || e.text === undefined ? "" : e.text))
-			.join("");
+			.join("")
+			.split("\n")
+			.filter((line) => !receiptLines.includes(line.trim()))
+			.join("\n").trim();
+		if (!text) return "";
 		const lines = [];
 		if (text) {
 			lines.push(
@@ -999,7 +1003,7 @@
 			let agentRun = [];
 			const flushAgent = () => {
 				if (!agentRun.length) return;
-				rows.push(renderAgentText(agentRun, markedParse));
+				rows.push(renderAgentText(agentRun, markedParse, arrayAt(objectAt(view, "spec_drafts"), "receipt_lines")));
 				agentRun = [];
 			};
 			for (const event of events) {
@@ -1036,6 +1040,8 @@
 			for (const row of blocks) rows.push(row);
 		}
 		for (const row of pending) rows.push(row);
+		const storyProposals = renderSpecDrafts(objectAt(view, "spec_drafts"), local);
+		if (storyProposals) rows.push(`<li class="conv-story-proposals-row">${storyProposals}</li>`);
 		// In fondo a tutto, il messaggio che chi guarda ha appena scritto.
 		//
 		// Il server non lo scrive nella storia — un messaggio consegnato diventa
@@ -1454,6 +1460,35 @@
 		</div>`;
 	}
 
+	function renderSpecDrafts(drafts, ui) {
+		if (!drafts) return "";
+		const labels = objectAt(drafts, "labels") || {};
+		const disabled = ui.busy || (ui.working && ui.working.active) ? " disabled" : "";
+		const writable = ui.writable === true;
+		return `<section class="conv-story-proposals" aria-label="${escapeHtml(textAt(labels, "title"))}">
+			<p class="conv-story-proposals-intro">${escapeHtml(textAt(labels, "intro"))}</p>
+			${arrayAt(drafts, "items").map((draft, index) => {
+				const key = `${drafts.event_id}:${index}`;
+				const code = textAt(draft, "spec_code");
+				const body = textAt(draft, "body");
+				const rendered = typeof ui.markedParse === "function" ? ui.markedParse(body) : `<pre>${escapeHtml(body)}</pre>`;
+				const metadata = arrayAt(draft, "metadata");
+				return `<article class="conv-story-proposal${code ? " is-accepted" : ""}">
+					<header><span class="conv-proposal-mark">${code ? `${escapeHtml(textAt(labels, "accepted"))} · ${escapeHtml(code)}` : escapeHtml(textAt(labels, "pending"))}</span><h3>${escapeHtml(textAt(draft, "title"))}</h3></header>
+					<p class="conv-story-proposal-meta">${metadata.map(escapeHtml).join(" · ")}</p>
+					<div class="conv-story-proposal-body markdown-rendered">${rendered}</div>
+					${arrayAt(draft, "blocked_by").length ? `<p class="conv-story-proposal-meta">${escapeHtml(textAt(labels, "blocked_by"))}: ${arrayAt(draft, "blocked_by").map(escapeHtml).join(", ")}</p>` : ""}
+					<div class="conv-proposal-controls">${code
+						? `<button type="button" class="approval-btn" data-conversation-draft-open="${escapeHtml(code)}">${escapeHtml(textAt(labels, "open"))}</button>`
+						: `<button type="button" class="approval-btn allow" data-conversation-draft-accept="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "accept"))}</button>
+						<button type="button" class="approval-btn" data-conversation-draft-edit="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "edit"))}</button>
+						${writable ? `<button type="button" class="approval-btn" data-conversation-draft-revise="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "revise"))}</button>` : ""}`}
+					</div>
+				</article>`;
+			}).join("")}
+		</section>`;
+	}
+
 	// ---- public API ----
 
 	/**
@@ -1587,7 +1622,7 @@
 		// riconoscerla vuol dire sapere quale run la produce, ed è un sapere che
 		// questo modulo non ha.
 		const delivered = objectAt(local, "deliveredDraft");
-		if (delivered) blocks.push(renderDeliveredDraft(delivered, local));
+		if (delivered && !objectAt(value, "spec_drafts")) blocks.push(renderDeliveredDraft(delivered, local));
 		const starter = active && !arrayAt(value, "events").length && !local.pendingMessage && !local.activitySelection
 			? renderActivities(objectAt(local, "activities"), local, false) : "";
 		blocks.push(starter || renderTimeline(value, active, local));

@@ -837,6 +837,7 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	view.NextTurn = record.NextTurn
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
 	view.Runs = s.nativeConversationRuns(ctx, ws, record)
+	view.SpecDrafts = ws.specDraftsView(ctx, record.ID, history.Events)
 	// A conversation may declare a step it would take, and offering it is the
 	// same act here as it was for a legacy run: read the process, resolve the
 	// declaration against it, write nothing. What has changed is only where the
@@ -888,6 +889,9 @@ func (s *Server) pastNativeConversationView(ws *workspaceSession, record convers
 			ExecutionIDs: append([]string(nil), record.ExecutionIDs...)},
 	}
 	view.NextTurn = record.NextTurn
+	if history, readErr := ws.conversationStore().ReadEvents(context.Background(), record.ID, 0, 0); readErr == nil {
+		view.SpecDrafts = ws.specDraftsView(context.Background(), record.ID, history.Events)
+	}
 	view.Runs = s.nativeConversationRuns(context.Background(), ws, record)
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
 	if record.Session != nil {

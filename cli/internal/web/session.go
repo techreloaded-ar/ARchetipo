@@ -76,6 +76,8 @@ type workspaceSession struct {
 	// before it started, which cannot be read again afterwards without
 	// describing what the action itself did. See registerActionConfirmation.
 	actionConfirmations sync.Map
+	// A manual creation and a proposed story share progressive code assignment.
+	specCreateMu sync.Mutex
 
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.

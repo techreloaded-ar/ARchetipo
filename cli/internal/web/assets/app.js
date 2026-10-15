@@ -677,6 +677,7 @@
 	// the user from firing twice; the server, not this flag, is what guarantees
 	// that a repeated confirmation never creates a second spec.
 	let newSpecBusy = false;
+	let newSpecProposal = null;
 	let newWorkspaceBusy = false;
 	let currentConfigSnapshot = null; // last loaded effective config
 	let currentConfigRaw = ""; // last loaded/saved config YAML
@@ -6227,6 +6228,32 @@
 			// comando porta a quel modulo con la proposta già versata dentro,
 			// che è esattamente ciò che il modulo mostrerebbe se lo si aprisse
 			// a mano. Da qui in poi la creazione è quella di sempre.
+			const draftCommand = e.target.closest("[data-conversation-draft-accept], [data-conversation-draft-edit], [data-conversation-draft-revise], [data-conversation-draft-open]");
+			if (draftCommand) {
+				if (draftCommand.hasAttribute("data-conversation-draft-open")) {
+					openEditor(draftCommand.getAttribute("data-conversation-draft-open"));
+					return;
+				}
+				const operation = ["accept", "edit", "revise"].find((name) => draftCommand.hasAttribute(`data-conversation-draft-${name}`));
+				const selected = conversationSpecDraft(draftCommand.getAttribute(`data-conversation-draft-${operation}`));
+				if (!selected) return;
+				if (operation === "accept") acceptConversationSpecDraft(selected);
+				if (operation === "edit") {
+					openNewSpec();
+					applySpecDraft(selected.draft);
+					newSpecProposal = selected.proposal;
+				}
+				if (operation === "revise") {
+					const input = conversationEl.querySelector(".conv-composer-input");
+					if (input && !input.disabled) {
+						if (!input.value.trim()) input.value = `Vorrei modificare la proposta «${selected.draft.title}»: `;
+						input.dispatchEvent(new Event("input", { bubbles: true }));
+						input.focus();
+						input.setSelectionRange(input.value.length, input.value.length);
+					}
+				}
+				return;
+			}
 			const deliveredDraft = e.target.closest(
 				"[data-conversation-delivered-draft]",
 			);
@@ -8061,6 +8088,7 @@
 	);
 
 	function openNewSpec() {
+		newSpecProposal = null;
 		newSpecForm.reset();
 		specDraftInput.value = "";
 		clearNewSpecErrors();
@@ -8253,6 +8281,11 @@
 		// non è una bozza illeggibile: è un'altra cosa, e questo pannello
 		// conclude soltanto ciò che sa concludere.
 		if (record.action !== SPEC_DRAFT_ACTION) return;
+		const proposals = record.result && record.result.payload && record.result.payload.spec_drafts;
+		if (Array.isArray(proposals) && proposals.length) {
+			setSpecDraftNotice("Le proposte sono pronte nella conversazione: puoi rivederle e accettarle singolarmente.");
+			return;
+		}
 		const draft =
 			record.result && record.result.payload && record.result.payload.spec_draft;
 		if (!draft || typeof draft !== "object") {
@@ -8284,6 +8317,47 @@
 		const draft =
 			record.result && record.result.payload && record.result.payload.spec_draft;
 		return draft && typeof draft === "object" ? draft : null;
+	}
+
+	function conversationSpecDraft(key) {
+		const view = conversationView && conversationView.spec_drafts;
+		if (!view || !Array.isArray(view.items)) return null;
+		const index = view.items.findIndex((_, i) => `${view.event_id}:${i}` === key);
+		if (index < 0) return null;
+		return { draft: view.items[index], proposal: { conversation_id: conversationsCurrentId, event_id: view.event_id, index } };
+	}
+
+	async function acceptConversationSpecDraft(selected) {
+		if (conversationBusy) return;
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const draft = selected.draft;
+			const result = await apiPost("/api/spec", {
+				title: draft.title, epic_code: draft.epic_code, epic_title: draft.epic_title,
+				priority: draft.priority, points: draft.points, scope: draft.scope,
+				blocked_by: draft.blocked_by, body: draft.body, proposal: selected.proposal,
+			});
+			await loadBoard();
+			await loadWorkspaceStatus();
+			if (conversationsCurrentId === selected.proposal.conversation_id) {
+				const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(selected.proposal.conversation_id)}?after_id=${conversationAfterID}`);
+				if (conversationsCurrentId === selected.proposal.conversation_id) applyConversationView(view);
+			}
+			showToast(TEXT.specCreated(result.spec.code), "ok");
+		} catch (err) {
+			// Validation still belongs to the ordinary creation route. Open its
+			// editable form with the proposal intact and its field-level errors.
+			if (Array.isArray(err.fields)) {
+				openNewSpec();
+				applySpecDraft(selected.draft);
+				newSpecProposal = selected.proposal;
+				showNewSpecErrors(err.fields);
+			} else showToast(err.message || String(err), "err");
+		} finally {
+			conversationBusy = false;
+			renderConversationPanel();
+		}
 	}
 
 	function applySpecDraft(draft) {
@@ -8405,6 +8479,8 @@
 			blocked_by: blocked,
 			body: newSpecEditor.value(),
 		};
+		const sourceProposal = newSpecProposal;
+		if (sourceProposal) payload.proposal = sourceProposal;
 		try {
 			const res = await apiPost("/api/spec", payload);
 			const code = res && res.spec && res.spec.code;
@@ -8416,6 +8492,10 @@
 			closeNewSpec();
 			await loadBoard();
 			await loadWorkspaceStatus();
+			if (sourceProposal && conversationsCurrentId === sourceProposal.conversation_id) {
+				const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(sourceProposal.conversation_id)}?after_id=${conversationAfterID}`);
+				if (conversationsCurrentId === sourceProposal.conversation_id) applyConversationView(view);
+			}
 			if (res && res.created === false) {
 				showToast(TEXT.specExisted(code), "ok");
 			} else {
