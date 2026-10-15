@@ -426,6 +426,25 @@
 	 * spiega un vuoto.
 	 */
 	function renderAgentRow(view, model, optionValues, naming, open) {
+		// Conversations keep the model and every runtime-declared option in one
+		// menu. Batch runs retain their existing independent controls.
+		if (naming === CONVERSATION_SCOPE) {
+			const models = catalogOf(view);
+			const entry = models.find((item) => String(item.id || "") === model);
+			const options = optionsOfModel(view, model) || [];
+			const label = [model ? (entry && entry.label || model) : ROW_EMPTY_MODEL_LABEL,
+				...options.map((option) => rowOptionLabel(option, currentValue(optionValues, option.name)))].join(" · ");
+			const inherited = view.model_source === WORKSPACE_SOURCE ? `${INHERITED_COPY} · ` : "";
+			const changed = model !== currentValue(view, "model") || options.some((option) =>
+				currentValue(optionValues, option.name) !== currentValue(view.options, option.name));
+			const body = renderRowEyebrow(ROW_MODEL_EYEBROW) +
+				renderRowModelEntries(naming, models, model, model === "") +
+				(options.length ? '<div class="conv-pop-rule"></div>' : "") +
+				options.map((option) => renderRowOptionBody(naming, option, currentValue(optionValues, option.name))).join("") +
+				renderRowFoot(`${inherited}${ROW_MODEL_FIXED_COPY}`, true);
+			return `<div class="conv-agent-row" data-conversation-field="model">${renderRowPill(naming, "model", label,
+				`${ROW_MODEL_TITLE} · ${inherited}${ROW_MODEL_FIXED_COPY}`, changed, open === "model", body)}</div>`;
+		}
 		const cells = [];
 		const models = catalogOf(view);
 		const inheritedModel = currentValue(view, "model");
@@ -652,6 +671,7 @@
 	}
 
 	function renderConversationModelChoice(view, selection, open) {
+		if (!view || typeof view !== "object") return "";
 		const model = renderScopedModelChoice(
 			view,
 			selection,
@@ -661,15 +681,15 @@
 		);
 		const profiles = view && Array.isArray(view.permission_profiles)
 			? view.permission_profiles.filter((profile) => profile && profile.id) : [];
-		if (!profiles.length) return model;
+		if (!profiles.length) return `<div class="conv-turn-controls">${model}</div>`;
 		const value = selection && selection.permission_profile !== undefined
 			? String(selection.permission_profile) : String(view.permission_profile || "");
 		const selected = profiles.find((profile) => profile.id === value);
 		const label = selected ? selected.label || selected.id : "Permessi configurati";
 		const body = renderRowEyebrow("Permessi dal prossimo turno") + profiles.map((profile) =>
-			`<button type="button" class="conv-pop-entry" role="menuitemradio" aria-checked="${profile.id === value}" data-conversation-permission-choice="${escapeHtml(profile.id)}">${rowCheck()}<span class="conv-pop-entry-text">${escapeHtml(profile.label || profile.id)}<small class="field-help">${escapeHtml(profile.description || "")}</small></span></button>`
+			`<button type="button" class="conv-pop-entry" role="menuitemradio" aria-checked="${profile.id === value}" data-conversation-permission-choice="${escapeHtml(profile.id)}">${rowCheck()}<span class="conv-pop-entry-text"><strong>${escapeHtml(profile.label || profile.id)}</strong><small class="field-help">${escapeHtml(profile.description || "")}</small></span></button>`
 		).join("") + renderRowFoot("La scelta resta in questa conversazione; il default del workspace non cambia.", true);
-		return model + `<span class="conv-agent-row">${renderRowPill(CONVERSATION_SCOPE, "permissions", label, selected ? selected.description : "Permessi del prossimo turno", false, open === "permissions", body)}</span>`;
+		return `<div class="conv-turn-controls"><span class="conv-agent-row conv-permissions">${renderRowPill(CONVERSATION_SCOPE, "permissions", label, selected ? selected.description : "Permessi del prossimo turno", value !== String(view.permission_profile || ""), open === "permissions", body)}</span>${model}</div>`;
 	}
 
 	// ---- exports ----

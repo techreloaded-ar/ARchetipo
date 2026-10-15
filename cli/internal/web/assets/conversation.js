@@ -953,7 +953,13 @@
 		const pending = [];
 		for (const run of arrayAt(view, "runs")) {
 			if (!run || typeof run !== "object") continue;
-			const block = renderRunBlock(run, local);
+			// Same-session execution metadata belongs to the technical view;
+			// pending decisions and notices remain visible in the discussion.
+			const reveal = local.technicalAll === true || (local.highlightAnchor && String(local.highlightAnchor) === String(run.anchor_event_id));
+			const block = run.in_this_thread && !reveal
+				? arrayAt(run, "approvals").map((approval) => renderRunApprovalCard(approval, run, local)).join("") +
+					(textAt(run, "notice") ? renderNotice("info", TEXT.markNote, textAt(run, "notice")) : "")
+				: renderRunBlock(run, local);
 			if (!block) continue;
 			const anchor =
 				run.anchor_event_id === null || run.anchor_event_id === undefined
@@ -1184,20 +1190,19 @@
 		const await_ = awaiting
 			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
-		// Campo e comando sulla stessa riga: il pulsante sta a destra, allineato
-		// in fondo al campo, e non su una riga propria. La riga sotto costava al
-		// pannello un'altezza intera per un solo bottone, e la conversazione è
-		// ciò che quello spazio deve avere.
+		// The prompt owns the full width. Its toolbar stays below as it grows.
 		return `<form class="conv-composer">
 			${renderActivitySelection(objectAt(ui, "activitySelection"))}
-			<div class="conv-composer-row">
-				<textarea class="conv-composer-input" rows="1" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
+			<div class="conv-composer-surface">
+				<textarea class="conv-composer-input" rows="1" aria-label="Messaggio all’agente" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
-				${typeof agentRow === "string" ? agentRow : ""}
-				${hintHtml}
-				${renderActivityMenu(ui)}
-				<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
+				<div class="conv-composer-row">
+					${renderActivityMenu(ui)}
+					${typeof agentRow === "string" ? agentRow : ""}
+					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
+				</div>
 			</div>
+			${hintHtml}
 			${await_}
 		</form>`;
 	}
@@ -1230,7 +1235,7 @@
 	function renderActivityMenu(ui) {
 		const view = objectAt(ui, "activities");
 		if (!view || !arrayAt(view, "items").length) return "";
-		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""}>Attività</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
+		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""} aria-label="Scegli attività" title="Scegli attività">+</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
 	}
 
 	function renderInputQuestion(question, index, draft, busy) {

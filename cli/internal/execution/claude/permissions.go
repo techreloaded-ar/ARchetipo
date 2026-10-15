@@ -4,10 +4,10 @@ import "github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 
 func (*Provider) PermissionProfiles() []execution.PermissionProfile {
 	return []execution.PermissionProfile{
-		{ID: "provider_default", Label: "Permessi configurati", Description: "Usa la modalità permission_mode configurata in Claude. Non impone un sandbox nella cartella."},
-		{ID: "auto", Label: "Approvazione automatica Claude", Description: "Claude valuta le operazioni e può richiedere conferme. Non impone un sandbox nella cartella."},
-		{ID: "accept_edits", Label: "Modifiche autorizzate", Description: "Claude autorizza le modifiche ai file; i comandi possono richiedere conferma. Non impone un sandbox nella cartella."},
-		{ID: "full_access", Label: "Accesso completo", Description: "Disattiva i controlli di permesso Claude. Non limita l'accesso alla cartella del progetto."},
+		{ID: "provider_default", Label: "Impostazioni del workspace", Description: "Usa la modalità di permessi scelta nelle impostazioni del workspace. Non limita l’accesso ai file alla cartella del progetto."},
+		{ID: "auto", Label: "Conferme gestite da Claude", Description: "Claude valuta quali operazioni autorizzare e quando chiedere conferma. I file accessibili non sono limitati alla cartella del progetto."},
+		{ID: "accept_edits", Label: "Modifiche ai file autorizzate", Description: "Autorizza le modifiche ai file; i comandi possono richiedere conferma. I file accessibili non sono limitati alla cartella del progetto."},
+		{ID: "full_access", Label: "Accesso completo", Description: "Esegue le operazioni senza chiedere conferma. L’accesso ai file può estendersi oltre la cartella del progetto."},
 	}
 }
 

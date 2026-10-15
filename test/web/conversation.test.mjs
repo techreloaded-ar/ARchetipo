@@ -1261,7 +1261,7 @@ describe("conversazione senza comandi duplicati del backlog", () => {
 			activitiesOpen: true,
 		});
 		assert.match(html, /data-conversation-activities-toggle/);
-		assert.match(html, />Attività<\/button>/);
+		assert.match(html, /aria-label="Scegli attività"[^>]*>\+<\/button>/);
 		assert.match(html, />Bozza da preservare<\/textarea>/);
 		assert.ok(!html.includes("data-conversation-actions-toggle"));
 	});

@@ -4,10 +4,10 @@ import "github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 
 func (*Provider) PermissionProfiles() []execution.PermissionProfile {
 	return []execution.PermissionProfile{
-		{ID: "provider_default", Label: "Permessi configurati", Description: "Usa il sandbox configurato; chiede quando occorre superarne i limiti."},
-		{ID: "workspace", Label: "Autonomia nel progetto", Description: "Scrive nel progetto e nelle directory temporanee; esegue comandi locali e chiede per superare i limiti. Può leggere fuori dal progetto. La rete dei comandi è limitata."},
-		{ID: "workspace_no_prompt", Label: "Progetto senza conferme", Description: "Mantiene il sandbox del progetto e delle directory temporanee senza conferme: le operazioni oltre i limiti vengono bloccate. Può leggere fuori dal progetto. La rete dei comandi è limitata."},
-		{ID: "full_access", Label: "Accesso completo", Description: "Nessun sandbox per file o rete e nessuna conferma dei comandi. Accesso anche fuori dal progetto."},
+		{ID: "provider_default", Label: "Impostazioni del workspace", Description: "Usa il sandbox scelto nelle impostazioni del workspace. Chiede conferma per le operazioni che richiedono permessi aggiuntivi."},
+		{ID: "workspace", Label: "Progetto · con conferme", Description: "Modifica i file nel progetto e nelle cartelle temporanee. Chiede conferma per uscire da questi limiti o usare la rete dai comandi. Può leggere anche fuori dal progetto."},
+		{ID: "workspace_no_prompt", Label: "Progetto · senza conferme", Description: "Modifica i file nel progetto e nelle cartelle temporanee senza chiedere conferma. Le operazioni fuori da questi limiti e la rete dei comandi restano bloccate. Può leggere anche fuori dal progetto."},
+		{ID: "full_access", Label: "Accesso completo", Description: "Può modificare file anche fuori dal progetto e usare la rete. I comandi vengono eseguiti senza sandbox e senza chiedere conferma."},
 	}
 }
 

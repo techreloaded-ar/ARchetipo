@@ -171,7 +171,7 @@ async function main() {
     await exerciseDocumentation(browser, view.url, runDir);
     await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
-    await exercisePermissionComposer(browser, view.url);
+    await exercisePermissionComposer(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
@@ -527,6 +527,11 @@ async function exerciseActivityComposer(browser, url) {
   await page.evaluate(`document.querySelector('[data-conversation-activity-clear]').click(); document.querySelector('[data-conversation-activity="product"]').click()`);
   await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua idea…'`, 10000, "il campo specifico dell’inception");
   if (await page.evaluate(`window.smokeStarts.length`) !== 1) throw new Error("La scelta dell’inception è partita prima dell’invio");
+  await page.evaluate(`document.querySelector('[data-conversation-activities-toggle]').click()`);
+  await page.waitFor(`!!document.querySelector('.conv-activities.is-menu')`, 10000, "le attività nel menu +");
+  const activityMenu = await page.evaluate(`(() => {const r = document.querySelector('.conv-activities.is-menu').getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight};})()`);
+  if (activityMenu.left < 0 || activityMenu.right > activityMenu.width || activityMenu.top < 0 || activityMenu.bottom > activityMenu.height) throw new Error('Il menu + esce dalla finestra: ' + JSON.stringify(activityMenu));
+  await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape'});
   ok(CLAIMS[9], "storia e inception chiedono la proposta; l’invio la consegna una volta e un rifiuto conserva il testo");
   await page.waitFor(`!!document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’esecuzione da fermare");
   await page.evaluate(`document.querySelector('.ws-runs-panel').open = true`);
@@ -538,7 +543,7 @@ async function exerciseActivityComposer(browser, url) {
   await page.close();
 }
 
-async function exercisePermissionComposer(browser, url) {
+async function exercisePermissionComposer(browser, url, runDir) {
   const page = await browser.newPage();
   const exceptions = [];
   page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
@@ -549,14 +554,15 @@ async function exercisePermissionComposer(browser, url) {
     window.permissionSaves = [];
     window.permissionCatalogReads = 0;
     window.losePermissionReply = false;
-    let next = {model:'fixture-one',options:{},permission_profile:'limited'};
+    let next = {model:'fixture-one',options:{effort:'low'},permission_profile:'limited'};
+    const effort = [{name:'effort',label:'Ragionamento',choices:[{value:'low',label:'Basso'},{value:'high',label:'Alto'}]}];
     window.fetch = async (input, options = {}) => {
       const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
       const method = options.method || 'GET';
       const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
       if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'permission-fixture',title:'Permessi fixture',live:true,message_count:0}],closed_limit:20});
-      if (path === '/api/workspace/conversations/permission-fixture') return json({available:true,provider_id:'fixture',conversation:{id:'permission-fixture',state:'ACTIVE'},session:{work:'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},next_turn:next,events:[],approvals:[],runs:[]});
-      if (path === '/api/workspace/conversations/permission-fixture/model-choice') { window.permissionCatalogReads++; return json({available:true,provider_id:'fixture',model:next.model,options:next.options,permission_profile:next.permission_profile,models:[{id:'fixture-one',label:'Modello uno'},{id:'fixture-two',label:'Modello due'}],permission_profiles:[{id:'limited',label:'Solo progetto',description:'Limiti del provider'},{id:'wide',label:'Ampia autonomia',description:'Accesso fuori cartella'}],capabilities:[]}); }
+      if (path === '/api/workspace/conversations/permission-fixture') return json({available:true,provider_id:'fixture',conversation:{id:'permission-fixture',state:'ACTIVE'},session:{work:'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},next_turn:next,events:[],approvals:[],runs:[{execution_id:'fixture-action',in_this_thread:true,label:'Proponi una spec',progress_label:'Proposta pronta'}],spec_drafts:{event_id:42,receipt_lines:[],labels:{title:'Proposte',pending:'Proposta',show:'Vedi proposta',close:'Chiudi proposte',accept:'Accetta',edit:'Modifica',revise:'Continua in chat'},items:[{title:'Proposta per la prova del compositore',body:'Una storia da rivedere.',metadata:[]}]}});
+      if (path === '/api/workspace/conversations/permission-fixture/model-choice') { window.permissionCatalogReads++; return json({available:true,provider_id:'fixture',model:next.model,options:next.options,permission_profile:next.permission_profile,models:[{id:'fixture-one',label:'Modello uno',options:effort},{id:'fixture-two',label:'Modello due',options:effort}],permission_profiles:[{id:'limited',label:'Solo progetto',description:'Modifica i file nel progetto e nelle cartelle temporanee. Chiede conferma per uscire da questi limiti o usare la rete dai comandi. Può leggere anche fuori dal progetto.'},{id:'wide',label:'Ampia autonomia',description:'Accesso fuori cartella'},{id:'configured',label:'Impostazioni del workspace',description:'Usa il sandbox scelto nelle impostazioni del workspace. Chiede conferma per le operazioni che richiedono permessi aggiuntivi.'},{id:'blocked',label:'Progetto senza conferme',description:'Modifica i file nel progetto e nelle cartelle temporanee senza chiedere conferma. Le operazioni fuori da questi limiti e la rete dei comandi restano bloccate. Può leggere anche fuori dal progetto.'}],capabilities:[]}); }
       if (path === '/api/workspace/conversations/permission-fixture/next-turn' && method === 'PUT') {
         const body = JSON.parse(options.body);
         window.permissionSaves.push(body);
@@ -576,7 +582,7 @@ async function exercisePermissionComposer(browser, url) {
   await page.evaluate(`document.querySelector('[data-conversation-pill="permissions"]').click()`);
   await page.waitFor(`!document.querySelector('[data-conversation-pop="permissions"]').hidden`, 10000, "il menu dei permessi");
   const labels = await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-permission-choice]')).map(b=>b.textContent)`);
-  if (labels.length !== 2 || !labels[1].includes("Accesso fuori cartella")) throw new Error(`Il menu non rispetta il catalogo: ${JSON.stringify(labels)}`);
+  if (labels.length !== 4 || !labels[1].includes("Accesso fuori cartella")) throw new Error(`Il menu non rispetta il catalogo: ${JSON.stringify(labels)}`);
   await page.evaluate(`document.querySelector('[data-conversation-permission-choice="wide"]').click()`);
   await page.waitFor(`window.permissionSaves.length === 1`, 10000, "il primo salvataggio dei permessi");
   await page.evaluate(`document.querySelector('[data-conversation-pill="model"]').click(); document.querySelector('[data-conversation-model-choice="fixture-two"]').click()`);
@@ -588,6 +594,51 @@ async function exercisePermissionComposer(browser, url) {
   const readsBeforeFailure = await page.evaluate(`window.permissionCatalogReads`);
   await page.evaluate(`window.losePermissionReply = true; document.querySelector('[data-conversation-pill="permissions"]').click(); document.querySelector('[data-conversation-permission-choice="limited"]').click()`);
   await page.waitFor(`window.permissionSaves.length === 3 && window.permissionCatalogReads > ${readsBeforeFailure} && document.querySelector('[data-conversation-pill="permissions"]').textContent.includes('Solo progetto')`, 10000, "i permessi riletti dopo una risposta persa");
+  // Geometry must be checked in the browser: pure renderer tests cannot
+  // detect a prompt squeezed by its toolbar or a menu outside the viewport.
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
+  await page.waitFor(`!!document.querySelector('.has-proposals-open')`, 10000, "le proposte accanto al compositore");
+  if (await page.evaluate(`!!document.querySelector('.conv-run-head')`)) throw new Error("Il riepilogo tecnico occupa ancora la chat");
+  await page.evaluate(`document.querySelector('[data-conversation-technical-all]').click()`);
+  await page.waitFor(`!!document.querySelector('.conv-run-head')`, 10000, "il riepilogo nel dettaglio tecnico");
+  await page.evaluate(`document.querySelector('[data-conversation-technical-all]').click()`);
+  const emptyHeight = await page.evaluate(`document.querySelector('.conv-composer-input').getBoundingClientRect().height`);
+  await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = Array(8).fill('Un prompt che cresce mentre scrivo e lascia spazio alle scelte.').join('\\n'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  const geometry = await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input').getBoundingClientRect(); const surface = document.querySelector('.conv-composer-surface').getBoundingClientRect(); const toolbar = document.querySelector('.conv-composer-row').getBoundingClientRect(); return {width:input.width,surface:surface.width,height:input.height,bottom:input.bottom,toolbar:toolbar.top}; })()`);
+  if (geometry.height <= emptyHeight || geometry.width < geometry.surface - 4 || geometry.toolbar < geometry.bottom - 1) throw new Error('Prompt compresso dai controlli: ' + JSON.stringify(geometry));
+  await page.evaluate(`document.querySelector('[data-conversation-pill="model"]').click()`);
+  await page.waitFor(`document.querySelector('[data-conversation-pop="model"]:not([hidden]) [data-conversation-option="effort"]') !== null`, 10000, "modello e ragionamento nello stesso menu");
+  await page.evaluate(`document.querySelector('[data-conversation-option="effort"][data-conversation-option-choice="high"]').click()`);
+  await page.waitFor(`window.permissionSaves.length === 4 && document.querySelector('[data-conversation-pill="model"]').textContent.includes('Alto')`, 10000, "il ragionamento salvato per il prossimo turno");
+  const finalSave = await page.evaluate(`window.permissionSaves[3]`);
+  if (finalSave.model !== 'fixture-two' || finalSave.model_options.effort !== 'high' || finalSave.permission_profile !== 'limited') throw new Error('Il menu unificato perde le scelte: ' + JSON.stringify(finalSave));
+  await page.evaluate(`document.querySelector('[data-conversation-pill="permissions"]').click()`);
+  const assertMenu = async () => {
+    const geometry = await page.evaluate(`(() => {const pop = document.querySelector('[data-conversation-pop="permissions"]'); const r = pop.getBoundingClientRect(); return {hidden:pop.hidden,left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,clipped:Array.from(pop.querySelectorAll('.conv-pop-entry-text')).some(el => el.scrollWidth > el.clientWidth + 1)};})()`);
+    if (geometry.hidden || geometry.left < 0 || geometry.top < 0 || geometry.right > geometry.width || geometry.bottom > geometry.height || geometry.clipped) throw new Error('Menu permessi tagliato: ' + JSON.stringify(geometry));
+  };
+  await assertMenu();
+  const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
+  await fs.writeFile(path.join(runDir, 'composer-proposals-permissions.png'), Buffer.from(screenshot.data, 'base64'));
+  await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape'});
+  if (await page.evaluate(`!document.querySelector('.has-proposals-open')`)) throw new Error('Escape ha chiuso le proposte prima del menu');
+  await page.evaluate(`document.querySelector('[data-conversation-proposals-close]').click()`);
+  // Chrome acknowledges viewport emulation before dispatching resize. The
+  // app intentionally closes menus on resize, so open only after that event.
+  await page.evaluate(`window.permissionResize = new Promise(resolve => window.addEventListener('resize', () => resolve(true), {once:true})); true`);
+  await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:640,deviceScaleFactor:1,mobile:true});
+  await page.evaluate(`window.permissionResize`);
+  await page.evaluate(`document.querySelector('[data-conversation-pill="permissions"]').click()`);
+  await assertMenu();
+  await page.evaluate(`document.querySelector('[data-conversation-pop="permissions"]').scrollTop = 1000`);
+  await assertMenu();
+  await page.evaluate(`document.querySelector('[data-conversation-permission-choice="wide"]').click()`);
+  await page.waitFor(`window.permissionSaves.length === 5`, 10000, "la scelta dal menu su schermo stretto");
+  await page.send('Emulation.clearDeviceMetricsOverride');
+  await page.evaluate(`(() => {const input = document.querySelector('.conv-composer-input');input.value = '';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  const resetHeight = await page.evaluate(`document.querySelector('.conv-composer-input').getBoundingClientRect().height`);
+  if (resetHeight > emptyHeight + 1) throw new Error('Il campo non torna compatto cancellando il prompt');
+  ok("compositore espandibile", "prompt a tutta larghezza con proposte aperte, menu unificato, descrizioni leggibili e permessi accessibili anche a 390px");
   if (exceptions.length) throw new Error(`Eccezioni nel selettore dei permessi: ${JSON.stringify(exceptions)}`);
   ok(CLAIMS[11], "Permessi mostra solo il catalogo del provider, salva la scelta e la conserva cambiando modello con richieste ordinate");
   await page.close();

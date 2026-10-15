@@ -767,16 +767,13 @@ describe("renderModelChoice — la riga agente della singola run", () => {
 		assert.ok(empty[0].checked, "la voce vuota in vigore non è quella spuntata");
 	});
 
-	it("i due ambiti disegnano la stessa riga con marcatori distinti", () => {
+	it("i due ambiti offrono lo stesso catalogo con marcatori distinti", () => {
 		const selection = { model: "modello-uno", options: { sforzo: "b" } };
 		const run = renderModelChoice(CHOICE_VIEW, selection);
 		const conversation = renderConversationModelChoice(CHOICE_VIEW, selection);
 
-		assert.deepEqual(
-			runRow(run).map((cell) => [cell.key, cell.value]),
-			agentRow(conversation).map((cell) => [cell.key, cell.value]),
-			"le due righe non offrono le stesse pastiglie con gli stessi valori",
-		);
+		assert.deepEqual(runRow(run)[0].entries, agentRow(conversation)[0].entries);
+		assert.deepEqual(runRow(run)[1].segments, agentRow(conversation)[0].segments);
 		assert.ok(
 			!run.includes("data-conversation-"),
 			"la riga della run porta i marcatori della conversazione",
@@ -876,7 +873,7 @@ function runRow(html) {
 }
 
 describe("renderConversationModelChoice — la riga agente", () => {
-	it("disegna una pastiglia per il modello e una per la sua prima opzione", () => {
+	it("riunisce modello e opzioni in un’unica pastiglia", () => {
 		const row = agentRow(
 			renderConversationModelChoice(CHOICE_VIEW, {
 				model: "modello-uno",
@@ -886,15 +883,11 @@ describe("renderConversationModelChoice — la riga agente", () => {
 
 		assert.deepEqual(
 			row.map((pill) => pill.key),
-			["model", "option:sforzo"],
-			"la riga non è modello più prima opzione",
+			["model"],
+			"la riga non riunisce modello e opzioni",
 		);
-		assert.equal(row[0].value, "Modello Uno", "la pastiglia non dice il modello");
-		assert.equal(
-			row[1].value,
-			"Scelta B",
-			"la pastiglia dell'opzione non dice il valore in vigore",
-		);
+		assert.equal(row[0].value, "Modello Uno · Scelta B", "la pastiglia non dice modello e opzione");
+		assert.ok(row[0].segments.some((segment) => segment.value === "b" && segment.pressed));
 	});
 
 	it("non produce nessun controllo degli altri due ambiti", () => {
@@ -907,7 +900,7 @@ describe("renderConversationModelChoice — la riga agente", () => {
 	it("mostra il modello del workspace finché non viene cambiato", () => {
 		const row = agentRow(renderConversationModelChoice(CHOICE_VIEW, null));
 
-		assert.equal(row[0].value, "Modello Uno");
+		assert.equal(row[0].value, "Modello Uno · auto");
 		assert.ok(!row[0].chosen, "una scelta ereditata è segnata come scelta propria");
 		assert.ok(
 			/ereditato dal workspace/i.test(row[0].title),
@@ -1013,7 +1006,7 @@ describe("renderConversationModelChoice — la riga agente", () => {
 				options: {},
 			}),
 		);
-		const segments = row[1].segments;
+		const segments = row[0].segments;
 
 		assert.deepEqual(
 			segments.map((segment) => segment.value),
@@ -1022,7 +1015,7 @@ describe("renderConversationModelChoice — la riga agente", () => {
 		);
 		assert.equal(segments[0].text, "auto");
 		assert.ok(segments[0].pressed, "il valore vuoto in vigore non è quello premuto");
-		assert.equal(row[1].value, "auto");
+		assert.equal(row[0].value, "Modello Uno · auto");
 	});
 
 	it("non disegna la seconda pastiglia se il modello non dichiara opzioni", () => {
@@ -1036,7 +1029,7 @@ describe("renderConversationModelChoice — la riga agente", () => {
 		assert.deepEqual(row.map((pill) => pill.key), ["model"]);
 	});
 
-	it("raccoglie le opzioni oltre la prima in una pastiglia sola", () => {
+	it("raccoglie tutte le opzioni dichiarate nello stesso menu", () => {
 		const view = {
 			...CHOICE_VIEW,
 			models: [
@@ -1055,14 +1048,14 @@ describe("renderConversationModelChoice — la riga agente", () => {
 
 		assert.deepEqual(
 			row.map((pill) => pill.key),
-			["model", "option:sforzo", "more"],
+			["model"],
 			"la riga cresce oltre tre voci",
 		);
-		assert.equal(row[2].value, "+2 opzioni");
+		assert.ok(row[0].value.startsWith("Modello Uno"));
 		assert.deepEqual(
-			[...new Set(row[2].segments.map((segment) => segment.option))],
-			["verbosita", "lingua"],
-			"la pastiglia di coda non raccoglie le opzioni oltre la prima",
+			[...new Set(row[0].segments.map((segment) => segment.option))],
+			["sforzo", "verbosita", "lingua"],
+			"il menu non raccoglie tutte le opzioni",
 		);
 	});
 
@@ -1070,12 +1063,12 @@ describe("renderConversationModelChoice — la riga agente", () => {
 	// arriva da fuori, e uno solo alla volta.
 	it("apre il popover che le viene chiesto, e uno solo", () => {
 		const row = agentRow(
-			renderConversationModelChoice(CHOICE_VIEW, null, "option:sforzo"),
+			renderConversationModelChoice(CHOICE_VIEW, null, "model"),
 		);
 
 		assert.deepEqual(
 			row.map((pill) => pill.open),
-			[false, true],
+			[true],
 			"l'apertura chiesta non è quella disegnata",
 		);
 	});

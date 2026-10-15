@@ -32,11 +32,22 @@ describe("attività della conversazione", () => {
 			status: "RUNNING", progress_label: "In attesa della tua risposta", awaiting_response: true,
 		}] }, "La risposta", {});
 		assert.ok(visible(html).includes("In attesa della tua risposta"));
-		assert.ok(visible(html).includes("Proponi una spec"));
+		assert.ok(!visible(html).includes("Proponi una spec"));
+		const technical = renderConversation({ ...view, runs: [{ execution_id: "exec-draft", in_this_thread: true, label: "Proponi una spec", progress_label: "In attesa della tua risposta", awaiting_response: true }] }, "", { technicalAll: true });
+		assert.ok(visible(technical).includes("Proponi una spec"));
+		assert.match(technical, /class="conv-run is-waiting"/);
 		assert.ok(!visible(html).includes("RUNNING"));
-		assert.match(html, /class="conv-run is-waiting"/);
+		assert.doesNotMatch(html, /class="conv-run is-waiting"/);
 		assert.doesNotMatch(html, /<span class="conv-run-mark">run<\/span>/);
 		assert.doesNotMatch(html, /<textarea[^>]* disabled/);
+	});
+	it("le approvazioni di un’azione nella sessione restano visibili senza il riepilogo tecnico", () => {
+		const html = renderConversation({ ...view, runs: [{
+			execution_id: "exec-draft", in_this_thread: true, label: "Proponi una spec",
+			approvals: [{ id: "approval-visible", message: "Autorizzi il comando?", options: [{ id: "yes", label: "Autorizza" }] }],
+		}] }, "", {});
+		assert.match(html, /data-run-approval-id="approval-visible"/);
+		assert.ok(!visible(html).includes("Proponi una spec"));
 	});
 	it("una domanda strutturata resta rispondibile senza indicare lavoro in corso", () => {
 		const html = renderConversation({ ...view, session: { ...view.session, work: "WAITING_INPUT", pending_inputs: [{

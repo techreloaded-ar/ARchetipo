@@ -4617,17 +4617,23 @@
 			`data-${prefix}-pill`,
 			pop.getAttribute(`data-${prefix}-pop`) || "",
 		);
-		if (!pill) return;
+		placeFloatingMenu(pop, pill);
+	}
+
+	function placeFloatingMenu(pop, pill) {
+		if (!pop || !pill) return;
 		const anchor = pill.getBoundingClientRect();
+		const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+		const above = Math.max(0, anchor.top - CHOICE_POP_GAP - CHOICE_POP_EDGE);
+		const below = Math.max(0, viewportHeight - anchor.bottom - CHOICE_POP_GAP - CHOICE_POP_EDGE);
+		pop.style.maxHeight = `${Math.max(above, below)}px`;
 		const box = pop.getBoundingClientRect();
-		const above = anchor.top - box.height - CHOICE_POP_GAP;
-		pop.style.top = `${
-			above >= CHOICE_POP_EDGE ? above : anchor.bottom + CHOICE_POP_GAP
-		}px`;
-		pop.style.left = `${Math.max(
-			CHOICE_POP_EDGE,
-			Math.min(anchor.left, window.innerWidth - box.width - CHOICE_POP_EDGE),
-		)}px`;
+		const top = above >= box.height || above >= below
+			? anchor.top - box.height - CHOICE_POP_GAP
+			: anchor.bottom + CHOICE_POP_GAP;
+		pop.style.top = `${Math.max(CHOICE_POP_EDGE, Math.min(top, viewportHeight - box.height - CHOICE_POP_EDGE))}px`;
+		pop.style.left = `${Math.max(CHOICE_POP_EDGE,
+			Math.min(anchor.left, window.innerWidth - box.width - CHOICE_POP_EDGE))}px`;
 	}
 
 	// Un popover aperto si chiude quando la pagina si muove sotto di lui: è
@@ -4649,13 +4655,16 @@
 	window.addEventListener(
 		"scroll",
 		(e) => {
-			const pop = document.querySelector(".conv-pop:not([hidden])");
-			if (pop && e.target !== document && !e.target.contains(pop)) return;
+			const pop = document.querySelector(".conv-pop:not([hidden]), .conv-activities.is-menu");
+			if (pop && e.target !== document && (pop.contains(e.target) || !e.target.contains(pop))) return;
 			closeChoicePopovers();
 		},
 		true,
 	);
-	window.addEventListener("resize", closeChoicePopovers);
+	window.addEventListener("resize", () => {
+		closeChoicePopovers();
+		adattaAltezzaCompositore(conversationEl?.querySelector(".conv-composer-input"));
+	});
 
 	// ---- Spec actions --------------------------------------------------------
 
@@ -6412,11 +6421,11 @@
 			}
 			const modelChoice = e.target.closest("[data-conversation-model-choice]");
 			if (modelChoice) {
-				conversationModelChoiceOpen = "";
+				conversationModelChoiceOpen = "model";
 				chooseConversationModel(
 					modelChoice.getAttribute("data-conversation-model-choice"),
 				);
-				focusConversationPill("model");
+				focusConversationPopover("model");
 				return;
 			}
 			const optionChoice = e.target.closest(
@@ -6635,7 +6644,7 @@
 		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
 		// scrivendo.
 		container.addEventListener("keydown", (e) => {
-			if (e.key === "Escape" && conversationProposalsOpen && !topModal()) {
+			if (e.key === "Escape" && conversationProposalsOpen && !conversationModelChoiceOpen && !conversationActivitiesOpen && !topModal()) {
 				e.preventDefault();
 				e.stopPropagation();
 				closeConversationProposals();
@@ -6697,6 +6706,11 @@
 		renderConversationPanel();
 	});
 	choicePopoverClosers.push(() => {
+		if (!conversationActivitiesOpen) return;
+		conversationActivitiesOpen = false;
+		renderConversationPanel();
+	});
+	choicePopoverClosers.push(() => {
 		if (!modelChoiceOpen) return;
 		modelChoiceOpen = "";
 		renderModelChoicePanel();
@@ -6707,7 +6721,7 @@
 	// il pannello finisce; il fuoco non viene spostato, perché chi ha cliccato
 	// altrove ha già deciso dove guardare.
 	document.addEventListener("click", (e) => {
-		if (e.target.closest && e.target.closest(".conv-agent-row")) return;
+		if (e.target.closest && e.target.closest(".conv-agent-row, .conv-activity-picker")) return;
 		closeChoicePopovers();
 	});
 
@@ -8349,8 +8363,10 @@
 				if (typeof answerFocus.start === "number" && typeof field.setSelectionRange === "function") field.setSelectionRange(answerFocus.start, answerFocus.end);
 			}
 		}
-		restoreConversationChoiceFocus(agentRowFocus);
 		placeChoicePopover(conversationEl, "conversation");
+		placeFloatingMenu(conversationEl.querySelector(".conv-activities.is-menu"),
+			conversationEl.querySelector("[data-conversation-activities-toggle]"));
+		restoreConversationChoiceFocus(agentRowFocus);
 	}
 
 	// ---- API helpers --------------------------------------------------------

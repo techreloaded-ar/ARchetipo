@@ -237,7 +237,7 @@ func TestProviderDeclaresIdentityAndPlanCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft}) {
+	if !reflect.DeepEqual(capabilities, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft, execution.CapabilityWorkspaceWiki}) {
 		t.Fatalf("capabilities = %#v, want spec.plan, spec.implement, spec.review, workspace.inception, workspace.backlog and workspace.spec_draft", capabilities)
 	}
 }
@@ -617,14 +617,14 @@ func TestProviderDeclaresTheDialogueThroughTheInterface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft}) {
-		t.Fatalf("Capabilities = %#v, want the six dispatched actions: run.dialog is derived, not declared", declared)
+	if !reflect.DeepEqual(declared, []execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft, execution.CapabilityWorkspaceWiki}) {
+		t.Fatalf("Capabilities = %#v, want the declared workflow capabilities: run.dialog is derived, not declared", declared)
 	}
 	got, err := execution.DeclaredCapabilities(context.Background(), provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft, execution.CapabilityRunDialog, execution.CapabilityWorkspaceConverse})
+	want := execution.NormalizeCapabilities([]execution.Capability{execution.CapabilitySpecPlan, execution.CapabilitySpecImplement, execution.CapabilitySpecReview, execution.CapabilityWorkspaceInception, execution.CapabilityWorkspaceBacklog, execution.CapabilityWorkspaceSpecDraft, execution.CapabilityWorkspaceWiki, execution.CapabilityRunDialog, execution.CapabilityWorkspaceConverse})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DeclaredCapabilities = %#v, want %#v", got, want)
 	}
