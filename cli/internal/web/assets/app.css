@@ -9,7 +9,7 @@
    rami, log, YAML, diff. La gerarchia la fanno peso e dimensione.
    ========================================================================= */
 
-.conv-increment{flex:0 1 auto;min-height:0;max-height:50%;overflow-y:auto;overscroll-behavior:contain;margin:16px 0;padding:18px 20px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
+.conv-increment{flex:0 0 auto;min-height:0;max-height:50%;overflow-y:auto;overscroll-behavior:contain;margin:16px 0;padding:18px 20px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
 .conv-increment>header{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:15px}
 .conv-increment>header>span{font-size:12px;color:var(--text-muted)}
 .conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}

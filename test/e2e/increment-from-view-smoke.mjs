@@ -115,7 +115,7 @@ async function main(){
   const click=async(action)=>{await page.waitFor('!!document.querySelector(\'[data-increment-action="'+action+'"]:not(:disabled)\')',timeout,action);await page.evaluate('document.querySelector(\'[data-increment-action="'+action+'"]\').click()');};
   const propose=async(format,n)=>{
    await cliJSON(["increment","propose",inc.id],{intent:"Preparare la revisione commerciale con un file "+format+".\n\n"+Array.from({length:24},(_,i)=>"### Punto "+(i+1)+"\nDescrizione concordata: esportare i clienti selezionati e verificare il contenuto del file prima della revisione commerciale.").join("\n\n")+"\n\nFine dell’intento da leggere.",stories:[story(format)]});
-   await finish(n,"Ho preparato l’intento e una storia. Leggili prima di approvare.");
+   await finish(n,"Ho preparato l’intento e una storia. Leggili prima di approvare.\n\n"+Array.from({length:80},(_,i)=>"Passaggio "+(i+1)+": abbiamo chiarito il risultato e le verifiche da eseguire prima dell’approvazione.").join("\n\n"));
    await page.waitFor('document.querySelector(".conv-increment")?.textContent.includes("'+format+'")',timeout,"persisted intent");
   };
   const develop=async(format,n)=>{
@@ -130,6 +130,8 @@ async function main(){
    await page.waitFor('!!document.querySelector(\'[data-increment-action="publish"]:not(:disabled)\')',timeout,"business review");
   };
   await propose("CSV",1);
+  const collapsedIntent=await page.evaluate('(()=>{const summary=document.querySelector(\'[data-increment-section="intent"]>summary\'),r=summary.getBoundingClientRect(),card=summary.closest(".conv-increment");const button=card.querySelector(\'[data-increment-action="approve-intent"]\'),b=button.getBoundingClientRect();return {visible:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)===summary&&document.elementFromPoint(b.left+b.width/2,b.top+b.height/2)===button,cardHeight:card.clientHeight,content:card.scrollHeight};})()');
+  assert.equal(collapsedIntent.visible,true,"intent revision remains visible beside a long conversation: "+JSON.stringify(collapsedIntent));
   const verifyIntentScroll=async(width,height)=>{
    await page.send("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:false});
    await page.evaluate('(()=>{const section=document.querySelector(\'[data-increment-section="intent"]\');if(!section.open)section.querySelector("summary").click();})()');
