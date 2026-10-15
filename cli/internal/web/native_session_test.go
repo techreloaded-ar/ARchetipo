@@ -562,7 +562,10 @@ func TestRestoredReleasedNativeConversationIsWritableWithoutReopen(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { restarted.session().dispatch.wait(5 * time.Second) })
+	t.Cleanup(func() {
+		restarted.session().dispatch.wait(5 * time.Second)
+		restarted.session().nativeFollowers.closeAll()
+	})
 
 	w := doJSON(t, restarted, http.MethodGet, conversationsRoute+"/"+id, nil)
 	view := decodeConversation(t, w.Body.String())

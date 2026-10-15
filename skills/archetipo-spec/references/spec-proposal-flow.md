@@ -23,6 +23,13 @@ acceptance criteria. No artifact or receipt is due while a question is pending.
 - Use the agreed outcome and scope. Include a user story, a concrete demonstration and verifiable acceptance criteria.
 - Reuse a declared epic with `epic_code`, or propose a new epic name with `epic_title` and an empty `epic_code`. Leave new epic and story codes unassigned until confirmation.
 - Do not run `archetipo spec add` or write backlog/spec files. Present the proposal for review.
+- Give each story a stable `draft_id` such as `story-1`; keep that identity
+  when changing its title or order. A new story still has no assigned code.
+- When the person asks to revise a story already accepted into the backlog,
+  read its current content with `archetipo spec list`, retain its `draft_id`
+  when known and set `revises_spec` to its existing code. Do not infer a target
+  from array positions. If a renamed legacy proposal has no clear identity,
+  ask which story it updates. Do not run `archetipo spec update` during drafting.
 - One invocation can propose several independently demonstrable stories when
   the agreed scope warrants it. Respect an explicit single-story request.
 
@@ -47,3 +54,19 @@ complete receipt replacing the proposed set, without persistence. Preserve
 unchanged pending stories in that set. Stories already accepted into the
 backlog are no longer pending; revise them only on explicit request. Standalone,
 present readable markdown and use the same confirmation-before-persistence rule.
+
+Example revision item (inside `proposals`, or in the single-story receipt):
+
+```json
+{"draft_id":"story-1","revises_spec":"US-001","title":"Revised title","epic_code":"EP-001","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete revised story markdown"}
+```
+
+Standalone, after explicit approval of a revision, use
+`archetipo spec update US-001 --file -` with a JSON partial patch containing
+only the approved `title`, `priority`, `points`, `scope`, `blocked_by`, `body`
+and, if changed, `epic: {"code":"EP-001","title":"Existing epic title"}`.
+Expect `kind: write_result` and `data.ok: true` in the standard envelope;
+handle `E_PRECONDITION` by rereading the backlog and resolving a missing target,
+and follow the shared error rules for other codes. Preserve the story's status,
+plan, worktree and implementation metadata. Verify the result with
+`archetipo spec list`. Never use `spec add` to apply a revision.

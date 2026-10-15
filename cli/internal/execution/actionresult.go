@@ -8,14 +8,16 @@ import (
 // SpecDraftProposal is the reviewable content of a receipt, without lifecycle
 // metadata. Both batch and native actions expose it to the same creation form.
 type SpecDraftProposal struct {
-	Title     string   `json:"title"`
-	EpicCode  string   `json:"epic_code"`
-	EpicTitle string   `json:"epic_title,omitempty"`
-	Priority  string   `json:"priority"`
-	Points    int      `json:"points"`
-	Scope     string   `json:"scope"`
-	BlockedBy []string `json:"blocked_by"`
-	Body      string   `json:"body"`
+	DraftID     string   `json:"draft_id,omitempty"`
+	RevisesSpec string   `json:"revises_spec,omitempty"`
+	Title       string   `json:"title"`
+	EpicCode    string   `json:"epic_code"`
+	EpicTitle   string   `json:"epic_title,omitempty"`
+	Priority    string   `json:"priority"`
+	Points      int      `json:"points"`
+	Scope       string   `json:"scope"`
+	BlockedBy   []string `json:"blocked_by"`
+	Body        string   `json:"body"`
 }
 
 // ActionResultFields projects a validated receipt into the existing result

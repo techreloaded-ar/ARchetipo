@@ -44,17 +44,19 @@ var specDraftReceiptFields = []string{"artifact", "status", "title", "epic_code"
 type SpecDraftReceipt struct {
 	// Proposals carries a set of independently reviewable stories. The flat
 	// fields remain supported for receipts emitted by already installed skills.
-	Proposals []SpecDraftProposal `json:"proposals,omitempty"`
-	Artifact  string              `json:"artifact"`
-	Status    string              `json:"status"`
-	Title     string              `json:"title"`
-	EpicCode  string              `json:"epic_code"`
-	EpicTitle string              `json:"epic_title,omitempty"`
-	Priority  string              `json:"priority"`
-	Points    int                 `json:"points"`
-	Scope     string              `json:"scope"`
-	BlockedBy []string            `json:"blocked_by"`
-	Body      string              `json:"body"`
+	Proposals   []SpecDraftProposal `json:"proposals,omitempty"`
+	DraftID     string              `json:"draft_id,omitempty"`
+	RevisesSpec string              `json:"revises_spec,omitempty"`
+	Artifact    string              `json:"artifact"`
+	Status      string              `json:"status"`
+	Title       string              `json:"title"`
+	EpicCode    string              `json:"epic_code"`
+	EpicTitle   string              `json:"epic_title,omitempty"`
+	Priority    string              `json:"priority"`
+	Points      int                 `json:"points"`
+	Scope       string              `json:"scope"`
+	BlockedBy   []string            `json:"blocked_by"`
+	Body        string              `json:"body"`
 }
 
 // ParseSpecDraftReceipt extracts the spec draft receipt from an agent output,
@@ -84,7 +86,7 @@ func (r SpecDraftReceipt) Drafts() []SpecDraftProposal {
 		}
 		return drafts
 	}
-	return []SpecDraftProposal{{Title: r.Title, EpicCode: r.EpicCode, EpicTitle: r.EpicTitle, Priority: r.Priority, Points: r.Points, Scope: r.Scope, BlockedBy: append([]string{}, r.BlockedBy...), Body: r.Body}}
+	return []SpecDraftProposal{{DraftID: r.DraftID, RevisesSpec: r.RevisesSpec, Title: r.Title, EpicCode: r.EpicCode, EpicTitle: r.EpicTitle, Priority: r.Priority, Points: r.Points, Scope: r.Scope, BlockedBy: append([]string{}, r.BlockedBy...), Body: r.Body}}
 }
 
 // AcceptSpecDraftReceipt parses the output and applies the acceptance rule: the
@@ -118,7 +120,14 @@ func AcceptSpecDraftReceipt(output string) (SpecDraftReceipt, error) {
 	if len(drafts) == 0 || (got.Proposals != nil && (got.Title != "" || got.Body != "")) {
 		return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
 	}
+	ids := map[string]bool{}
 	for _, draft := range drafts {
+		if draft.DraftID != "" && ids[draft.DraftID] {
+			return SpecDraftReceipt{}, fmt.Errorf("the receipt repeats a story identity")
+		}
+		if draft.DraftID != "" {
+			ids[draft.DraftID] = true
+		}
 		if strings.TrimSpace(draft.Title) == "" || (strings.TrimSpace(draft.EpicCode) == "" && strings.TrimSpace(draft.EpicTitle) == "") || strings.TrimSpace(draft.Body) == "" {
 			return SpecDraftReceipt{}, fmt.Errorf("the receipt does not declare a proposed spec")
 		}

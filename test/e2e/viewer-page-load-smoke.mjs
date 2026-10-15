@@ -100,6 +100,7 @@ const CLAIMS = [
   "i permessi dichiarati dal provider si scelgono e si salvano dal prossimo turno senza perdersi cambiando modello",
   "più proposte si leggono formattate in chat, si modificano e si accettano separatamente senza duplicati dopo il ricaricamento",
   "Continua in chat prepara una modifica senza inviarla e la risposta aggiorna la proposta nella stessa conversazione",
+  "le revisioni aggiornano gli stessi codici, conservano versioni leggibili e lasciano gli ultimi messaggi in fondo alla chat",
 ];
 
 // One entry per proved statement, for the report.
@@ -383,6 +384,9 @@ async function exercisePage(browser, url, runDir) {
   await page.evaluate(`document.getElementById('modal-close').click()`);
   await page.waitFor(`document.getElementById('workspace-shell').dataset.view === 'board'`, 10000, "il ritorno alla board");
   await page.evaluate(`document.querySelector('[data-shell-view="conversation"]').click(); document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`!!document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]')`, 10000, "il riepilogo delle proposte");
+  if (await page.evaluate(`!!document.querySelector('.conv-timeline .conv-story-proposal-body') || !!document.querySelector('.conv-proposals-panel')`)) throw new Error('I corpi delle proposte occupano ancora la chat');
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
   await page.waitFor(`document.querySelectorAll('.conv-story-proposal').length === 2 && document.querySelector('.conv-story-proposal').checkVisibility()`, 10000, "le due proposte visibili nella conversazione");
   const preview = await page.evaluate(`({body:document.querySelector('.conv-story-proposal-body').innerHTML,timeline:document.querySelector('.conv-timeline').textContent})`);
   if (!preview.body.includes('<strong>User Story</strong>') || preview.timeline.includes('"artifact"')) throw new Error(`Proposta non formattata o receipt esposta: ${JSON.stringify(preview)}`);
@@ -405,12 +409,66 @@ async function exercisePage(browser, url, runDir) {
   await page.once('Page.loadEventFired', 30000, 'il ricaricamento delle proposte accettate');
   await page.waitFor(`!!document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]')`, 10000, "la cronologia dopo il ricaricamento");
   await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`!!document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]')`, 10000, "il riepilogo dopo il ricaricamento");
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
   await page.waitFor(`document.querySelectorAll('.conv-story-proposal.is-accepted').length === 2 && !document.querySelector('[data-conversation-draft-accept]')`, 10000, "le accettazioni durature senza altri pulsanti Accetta");
   const retry = await (await fetch(`${url}/api/spec`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...DRAFT_STORIES[0],proposal:{conversation_id:CONVERSATION_ID,event_id:2,index:0}})})).json();
   if (retry.created !== false || retry.spec?.code !== 'US-703') throw new Error('Una conferma ripetuta ha creato un duplicato');
   assertNoExceptions('Le proposte hanno emesso eccezioni:');
   ok(CLAIMS[12], "due proposte formattate, prima modificata e poi confermata, seconda accettata dalla chat; le accettazioni resistono al reload e al retry");
+  await exercisePersistedStoryRevisions(page, url, runDir);
+  assertNoExceptions('Le revisioni persistite hanno emesso eccezioni:');
   await page.close();
+}
+
+async function exercisePersistedStoryRevisions(page, url, runDir) {
+  const recordPath = path.join(runDir, 'sandbox', '.archetipo', 'conversations', `${CONVERSATION_ID}.json`);
+  const record = JSON.parse(await fs.readFile(recordPath, 'utf8'));
+  const revised = DRAFT_STORIES.map(story => ({...story, body:story.body + '\nTipi supportati: MTB, Gravel e Stradale.\n'}));
+  revised[0].title = 'Titolo rinominato nella revisione';
+  const at = new Date().toISOString();
+  record.events.push({id:3,seq:3,at,kind:'user_message',text:'Aggiungiamo i tipi di bicicletta'}, {id:4,seq:4,at,kind:'text',turn_id:'revision',text:JSON.stringify({artifact:'spec_draft',status:'PROPOSED',proposals:revised})});
+  await fs.writeFile(recordPath, JSON.stringify(record));
+  await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-proposal-anchor="4"]') && !document.querySelector('.conv-proposals-panel')`, 10000, 'il richiamo compatto della revisione');
+  if (await page.evaluate(`!!document.querySelector('.conv-timeline .conv-story-proposal-body')`)) throw new Error('Le revisioni hanno rimesso i corpi nella chat');
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-draft-destination="4:0"]')`, 10000, 'la scelta esplicita per la proposta rinominata');
+  const controls = await page.evaluate(`({ambiguous:document.querySelector('[data-conversation-draft-accept="4:0"]').disabled,known:document.querySelector('[data-conversation-draft-destination="4:1"]').value})`);
+  if (!controls.ambiguous || controls.known !== 'US-704') throw new Error(`Le revisioni sono collegate per posizione o senza identità: ${JSON.stringify(controls)}`);
+  await page.evaluate(`(() => {const select=document.querySelector('[data-conversation-draft-destination="4:0"]');select.value='US-703';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await page.waitFor(`document.querySelector('[data-conversation-draft-accept="4:0"]').textContent === 'Approva modifiche'`, 10000, 'la conferma delle modifiche alla storia esistente');
+  const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
+  await fs.writeFile(path.join(runDir, 'story-revisions.png'), Buffer.from(screenshot.data, 'base64'));
+  await page.evaluate(`document.querySelector('[data-conversation-draft-accept="4:0"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-draft-open="US-703"]')`, 10000, 'la revisione del titolo sullo stesso codice');
+  await page.evaluate(`document.querySelector('[data-conversation-draft-accept="4:1"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-draft-open="US-704"]') && !document.querySelector('[data-conversation-draft-accept]')`, 10000, 'la revisione del corpo con titolo invariato');
+  for (const [i, code] of ['US-703','US-704'].entries()) {
+    const saved = await (await fetch(`${url}/api/spec/${code}`)).json();
+    if (saved.spec.title !== revised[i].title || saved.spec.body !== revised[i].body) throw new Error(`La revisione ${code} non è persistita`);
+  }
+  const board = await (await fetch(`${url}/api/board`)).json();
+  if (board.columns.flatMap(column => column.specs || []).length !== 4) throw new Error('La revisione ha creato una storia duplicata');
+  await page.evaluate(`(() => {const version=document.querySelector('[data-conversation-proposal-version]');version.value='2';version.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await page.waitFor(`document.querySelector('.conv-story-proposal h3').textContent === ${JSON.stringify(DRAFT_STORIES[0].title)} && !document.querySelector('[data-conversation-draft-accept]') && !document.querySelector('[data-conversation-draft-edit]')`, 10000, 'la versione precedente consultabile in sola lettura');
+  if (await page.evaluate(`document.querySelector('.conv-story-proposal-body').textContent.includes('Gravel')`)) throw new Error('La versione precedente è stata sovrascritta');
+  await page.evaluate(`document.querySelector('[data-conversation-proposals-close]').click()`);
+  const latest = JSON.parse(await fs.readFile(recordPath, 'utf8'));
+  latest.events.push({id:5,seq:5,at,kind:'user_message',text:'PARLIAMONE ANCORA'}, {id:6,seq:6,at,kind:'text',turn_id:'followup',text:'DOMANDA SUCCESSIVA ALLE STORIE'});
+  await fs.writeFile(recordPath, JSON.stringify(latest));
+  await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('DOMANDA SUCCESSIVA ALLE STORIE')`, 10000, 'il proseguimento della conversazione');
+  const order = await page.evaluate(`(() => {const timeline=document.querySelector('.conv-timeline');const rows=Array.from(timeline.children);return {anchor:rows.findIndex(row=>row.dataset.proposalAnchor==='4'),question:rows.findIndex(row=>row.textContent.includes('DOMANDA SUCCESSIVA ALLE STORIE')),body:!!timeline.querySelector('.conv-story-proposal-body')};})()`);
+  if (order.anchor < 0 || order.anchor >= order.question || order.body) throw new Error(`Le proposte sono ancora in fondo alla chat: ${JSON.stringify(order)}`);
+  await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
+  await page.waitFor(`!!document.querySelector('.conv-proposals-panel')`, 10000, 'il pannello su schermo piccolo');
+  const bounds = await page.evaluate(`(() => {const panel=document.querySelector('.conv-proposals-panel').getBoundingClientRect();return {left:panel.left,right:panel.right,width:innerWidth};})()`);
+  if (bounds.left < -1 || bounds.right > bounds.width + 1) throw new Error(`Il pannello esce dallo schermo piccolo: ${JSON.stringify(bounds)}`);
+  await page.evaluate(`document.querySelector('[data-conversation-proposals-close]').click()`);
+  await page.send('Emulation.clearDeviceMetricsOverride');
+  ok(CLAIMS[14], 'revisioni sugli stessi codici, destinazione esplicita dopo rinomina, versione precedente intatta, chat in ordine e pannello utilizzabile su schermo piccolo');
 }
 
 // The real page with deterministic provider responses: no agent or credential.
@@ -549,11 +607,15 @@ async function exerciseProposalRevisionComposer(browser, url) {
   `});
   await page.send('Page.navigate', {url});
   await page.once('Page.loadEventFired', 30000, 'la conversazione di revisione');
+  await page.waitFor(`!!document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]')`, 10000, 'il riepilogo della proposta');
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
   await page.waitFor(`!!document.querySelector('[data-conversation-draft-revise="42:0"]')`, 10000, 'la proposta con il comando di revisione');
   await page.evaluate(`document.querySelector('[data-conversation-draft-revise="42:0"]').click()`);
   await page.waitFor(`document.querySelector('.conv-composer-input').value.includes('Proposta iniziale')`, 10000, 'il riferimento alla proposta nel compositore');
   if (await page.evaluate('window.revisionMessages.length') !== 0) throw new Error('Continua in chat ha inviato prima che la persona scrivesse');
   await page.evaluate(`(() => {const input = document.querySelector('.conv-composer-input');input.value += 'limitiamo il risultato agli utenti nuovi';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.conv-composer').requestSubmit();})()`);
+  await page.waitFor(`window.revisionMessages.length === 1 && !document.querySelector('.conv-proposals-panel')`, 10000, 'il ritorno alla chat durante la revisione');
+  await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
   await page.waitFor(`window.revisionMessages.length === 1 && document.querySelector('.conv-story-proposal h3').textContent === 'Proposta rivista'`, 10000, 'la proposta rivista nello stesso thread');
   const delivered = await page.evaluate('window.revisionMessages[0]');
   if (!delivered.message.includes('limitiamo il risultato agli utenti nuovi')) throw new Error('Le modifiche sono andate perse');

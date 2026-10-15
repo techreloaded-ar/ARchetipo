@@ -967,6 +967,11 @@
 			if (!anchored.has(anchor)) anchored.set(anchor, []);
 			anchored.get(anchor).push(row);
 		}
+		const storyAnchors = new Map();
+		const storyView = objectAt(view, "spec_drafts");
+		for (const version of arrayAt(storyView, "versions")) {
+			storyAnchors.set(String(version.event_id), renderDraftSummary(version, objectAt(storyView, "labels") || {}));
+		}
 		const emitted = new Set();
 		const rows = [];
 		if (view.truncated) {
@@ -1024,6 +1029,11 @@
 					event && event.id !== null && event.id !== undefined
 						? String(event.id)
 						: "";
+				if (storyAnchors.has(id)) {
+					flushTechnical();
+					flushAgent();
+					rows.push(storyAnchors.get(id));
+				}
 				if (!id || emitted.has(id) || !anchored.has(id)) continue;
 				emitted.add(id);
 				// Un blocco run ancorato a un frammento chiude anche la risposta
@@ -1040,8 +1050,6 @@
 			for (const row of blocks) rows.push(row);
 		}
 		for (const row of pending) rows.push(row);
-		const storyProposals = renderSpecDrafts(objectAt(view, "spec_drafts"), local);
-		if (storyProposals) rows.push(`<li class="conv-story-proposals-row">${storyProposals}</li>`);
 		// In fondo a tutto, il messaggio che chi guarda ha appena scritto.
 		//
 		// Il server non lo scrive nella storia — un messaggio consegnato diventa
@@ -1460,33 +1468,55 @@
 		</div>`;
 	}
 
-	function renderSpecDrafts(drafts, ui) {
+	function renderDraftSummary(version, labels) {
+		return `<li class="conv-story-summary" data-proposal-anchor="${escapeHtml(version.event_id)}"><span>${escapeHtml(textAt(version, "label"))}</span><button type="button" class="ghost-btn" data-conversation-proposals-show="${escapeHtml(version.event_id)}">${escapeHtml(textAt(labels, "show"))}</button></li>`;
+	}
+
+	function renderDraftToolbar(drafts, ui) {
 		if (!drafts) return "";
 		const labels = objectAt(drafts, "labels") || {};
+		return `<div class="conv-proposals-toolbar"><span>${escapeHtml(textAt(drafts, "summary"))}</span><button type="button" class="ghost-btn" data-conversation-proposals-show="${escapeHtml(drafts.event_id)}" aria-expanded="${!!ui.proposalsOpen}">${escapeHtml(textAt(labels, "show"))}</button></div>`;
+	}
+
+	function renderSpecDrafts(drafts, ui) {
+		if (!drafts || !ui.proposalsOpen) return "";
+		const labels = objectAt(drafts, "labels") || {};
+		const versions = arrayAt(drafts, "versions");
+		const version = versions.find(item => String(item.event_id) === String(ui.proposalVersion)) || versions.find(item => item.current) || {event_id:drafts.event_id, current:true, items:arrayAt(drafts, "items")};
 		const disabled = ui.busy || (ui.working && ui.working.active) ? " disabled" : "";
 		const writable = ui.writable === true;
-		return `<section class="conv-story-proposals" aria-label="${escapeHtml(textAt(labels, "title"))}">
-			<p class="conv-story-proposals-intro">${escapeHtml(textAt(labels, "intro"))}</p>
-			${arrayAt(drafts, "items").map((draft, index) => {
-				const key = `${drafts.event_id}:${index}`;
+		const parseBody = body => typeof ui.markedParse === "function" ? ui.markedParse(body) : `<pre>${escapeHtml(body)}</pre>`;
+		return `<aside class="conv-proposals-panel" tabindex="-1" aria-label="${escapeHtml(textAt(labels, "title"))}">
+			<header class="conv-proposals-panel-head"><h2>${escapeHtml(textAt(labels, "title"))}</h2><button type="button" class="ghost-btn" data-conversation-proposals-close>${escapeHtml(textAt(labels, "close"))}</button></header>
+			${versions.length > 1 ? `<label class="conv-proposals-versions">${escapeHtml(textAt(labels, "version"))}<select data-conversation-proposal-version>${versions.map(item=>`<option value="${escapeHtml(item.event_id)}"${item.event_id === version.event_id ? " selected" : ""}>${escapeHtml(textAt(item, "label"))}</option>`).join("")}</select></label>` : ""}
+			<div class="conv-story-proposals">
+			<p class="conv-story-proposals-intro">${escapeHtml(textAt(labels, version.current ? "intro" : "historical"))}</p>
+			${arrayAt(version, "items").map((draft, index) => {
+				const key = `${version.event_id}:${index}`;
 				const code = textAt(draft, "spec_code");
-				const body = textAt(draft, "body");
-				const rendered = typeof ui.markedParse === "function" ? ui.markedParse(body) : `<pre>${escapeHtml(body)}</pre>`;
-				const metadata = arrayAt(draft, "metadata");
+				const readOnly = !version.current || draft.read_only === true;
+				const destinations = arrayAt(draft, "destinations");
+				const selectedID = (objectAt(ui, "draftDestinations") || {})[key] || textAt(draft, "destination_id");
+				const destination = destinations.find(item => item.id === selectedID) || (!destinations.length ? {accept_label:textAt(labels,"accept"),state_label:textAt(labels,"pending")} : null);
+				const unavailable = textAt(draft, "unavailable_reason");
+				const stateLabel = readOnly ? textAt(labels, "historical") : code ? `${textAt(labels, "accepted")} · ${code}` : destination ? textAt(destination, "state_label") : textAt(labels,"choose_destination");
+				const previous = objectAt(destination, "previous");
 				return `<article class="conv-story-proposal${code ? " is-accepted" : ""}">
-					<header><span class="conv-proposal-mark">${code ? `${escapeHtml(textAt(labels, "accepted"))} · ${escapeHtml(code)}` : escapeHtml(textAt(labels, "pending"))}</span><h3>${escapeHtml(textAt(draft, "title"))}</h3></header>
-					<p class="conv-story-proposal-meta">${metadata.map(escapeHtml).join(" · ")}</p>
-					<div class="conv-story-proposal-body markdown-rendered">${rendered}</div>
+					<header><span class="conv-proposal-mark">${escapeHtml(stateLabel)}</span><h3>${escapeHtml(textAt(draft, "title"))}</h3></header>
+					<p class="conv-story-proposal-meta">${arrayAt(draft,"metadata").map(escapeHtml).join(" · ")}</p>
+					${!code && !readOnly && destinations.length > 1 ? `<label class="conv-proposal-destination">${escapeHtml(textAt(labels,"destination"))}<select data-conversation-draft-destination="${escapeHtml(key)}"${disabled}><option value="" disabled${!selectedID ? " selected" : ""}>${escapeHtml(textAt(labels,"choose_destination"))}</option>${destinations.map(item=>`<option value="${escapeHtml(item.id)}"${item.id === selectedID ? " selected" : ""}>${escapeHtml(textAt(item,"label"))}</option>`).join("")}</select></label>` : ""}
+					${previous ? `<p class="conv-proposal-changes">${escapeHtml(textAt(labels,"changes"))}: ${arrayAt(destination,"changes").map(escapeHtml).join(", ")}</p><details class="conv-proposal-previous" data-proposal-previous="${escapeHtml(key)}"${(objectAt(ui,"proposalPreviousOpen") || {})[key] ? " open" : ""}><summary>${escapeHtml(textAt(labels,"previous"))}</summary><h4>${escapeHtml(textAt(previous,"title"))}</h4><div class="markdown-rendered">${parseBody(textAt(previous,"body"))}</div></details>` : ""}
+					<div class="conv-story-proposal-body markdown-rendered">${parseBody(textAt(draft,"body"))}</div>
 					${arrayAt(draft, "blocked_by").length ? `<p class="conv-story-proposal-meta">${escapeHtml(textAt(labels, "blocked_by"))}: ${arrayAt(draft, "blocked_by").map(escapeHtml).join(", ")}</p>` : ""}
-					<div class="conv-proposal-controls">${code
+					${unavailable ? `<p role="alert">${escapeHtml(unavailable)}</p>` : ""}
+					${readOnly ? "" : `<div class="conv-proposal-controls">${code
 						? `<button type="button" class="approval-btn" data-conversation-draft-open="${escapeHtml(code)}">${escapeHtml(textAt(labels, "open"))}</button>`
-						: `<button type="button" class="approval-btn allow" data-conversation-draft-accept="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "accept"))}</button>
-						<button type="button" class="approval-btn" data-conversation-draft-edit="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "edit"))}</button>
-						${writable ? `<button type="button" class="approval-btn" data-conversation-draft-revise="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "revise"))}</button>` : ""}`}
-					</div>
+						: `<button type="button" class="approval-btn allow" data-conversation-draft-accept="${escapeHtml(key)}"${disabled || (!destination || unavailable ? " disabled" : "")}>${escapeHtml(destination ? textAt(destination,"accept_label") : textAt(labels,"accept"))}</button><button type="button" class="approval-btn" data-conversation-draft-edit="${escapeHtml(key)}"${disabled || (!destination ? " disabled" : "")}>${escapeHtml(textAt(labels,"edit"))}</button>`}
+						${writable ? `<button type="button" class="approval-btn" data-conversation-draft-revise="${escapeHtml(key)}"${disabled}>${escapeHtml(textAt(labels, "revise"))}</button>` : ""}</div>`}
 				</article>`;
 			}).join("")}
-		</section>`;
+			</div>
+		</aside>`;
 	}
 
 	// ---- public API ----
@@ -1659,9 +1689,12 @@
 		// viva, lasciarla andare. Il primo c'e' sempre, perche' una
 		// conversazione conclusa la si rilegge esattamente come una viva.
 		const controls = `${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
-		return `<section class="conv-panel ${variant}" aria-label="${escapeHtml(TEXT.panel)}">
-			${renderHead(value, badge, variant, controls)}
-			${blocks.join("")}
+		const drafts = objectAt(value, "spec_drafts");
+		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
+			<div class="conv-discussion">${renderHead(value, badge, variant, controls)}
+			${renderDraftToolbar(drafts, local)}
+			${blocks.join("")}</div>
+			${renderSpecDrafts(drafts, local)}
 		</section>`;
 	}
 

@@ -8043,10 +8043,28 @@ body.no-workspace [data-workspace-scoped] {
 
 .conv-activity-selection p { margin: 4px 0; color: var(--text-muted); }
 .conv-activity-selection small { color: var(--text-muted); }
-.conv-story-proposals { display: grid; gap: 16px; padding: 12px 20px 20px; }
+/* Proposal content has its own reading panel; the discussion keeps only
+   compact, chronologically anchored references. */
+.conv-discussion { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; }
+.conv-panel.has-proposals-open { flex-direction: row; position: relative; }
+.conv-proposals-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px var(--gutter); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 13px; }
+.conv-story-summary { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 13px; }
+.conv-proposals-panel { display: flex; flex-direction: column; flex: 0 0 min(560px, 48%); min-width: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); outline: none; }
+.conv-proposals-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.conv-proposals-panel-head h2 { font-size: 16px; margin: 0; }
+.conv-proposals-versions, .conv-proposal-destination { display: grid; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.conv-proposals-versions { padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.conv-proposals-versions select, .conv-proposal-destination select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface); }
+.conv-story-proposals { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; gap: 16px; padding: 16px 18px; }
 .conv-story-proposals-intro, .conv-story-proposal-meta { color: var(--text-muted); font-size: 12px; margin: 0 0 8px; }
-.conv-story-proposal { border: 1px solid var(--border); border-radius: 12px; padding: 18px; background: var(--surface); }
+.conv-story-proposal { flex: 0 0 auto; border: 1px solid var(--border); border-radius: 12px; padding: 18px; background: var(--surface); }
 .conv-story-proposal h3 { font-size: 16px; margin: 8px 0; line-height: 1.4; }
-.conv-story-proposal-body { max-height: 380px; overflow: auto; margin: 16px 0; line-height: 1.6; }
+.conv-story-proposal-body { margin: 16px 0; line-height: 1.6; }
 .conv-story-proposal-body pre { white-space: pre-wrap; }
 .conv-story-proposal .conv-proposal-controls { flex-wrap: wrap; }
+.conv-proposal-changes { font-size: 12px; line-height: 1.6; }
+.conv-proposal-previous { padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.conv-proposal-previous summary { cursor: pointer; }
+@media (max-width: 900px) {
+ .conv-panel.has-proposals-open .conv-proposals-panel { position: absolute; inset: 0; width: 100%; z-index: 6; border-left: 0; }
+}

@@ -5807,6 +5807,10 @@
 	let conversationActivitySelection = null;
 	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
+	let conversationProposalsOpen = false;
+	let conversationProposalVersion = "";
+	let conversationDraftDestinations = {};
+	let conversationProposalPreviousOpen = {};
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -6060,6 +6064,18 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			const showProposals = e.target.closest("[data-conversation-proposals-show]");
+			if (showProposals) {
+				conversationProposalsOpen = true;
+				conversationProposalVersion = showProposals.getAttribute("data-conversation-proposals-show");
+				renderConversationPanel();
+				conversationEl.querySelector(".conv-proposals-panel")?.focus({preventScroll:true});
+				return;
+			}
+			if (e.target.closest("[data-conversation-proposals-close]")) {
+				closeConversationProposals();
+				return;
+			}
 			if (e.target.closest("[data-conversation-activities-toggle]")) {
 				conversationActivitiesOpen = !conversationActivitiesOpen;
 				renderConversationPanel();
@@ -6238,18 +6254,18 @@
 				const selected = conversationSpecDraft(draftCommand.getAttribute(`data-conversation-draft-${operation}`));
 				if (!selected) return;
 				if (operation === "accept") acceptConversationSpecDraft(selected);
-				if (operation === "edit") {
-					openNewSpec();
-					applySpecDraft(selected.draft);
-					newSpecProposal = selected.proposal;
-				}
+				if (operation === "edit") openSpecDraftEditor(selected);
 				if (operation === "revise") {
 					const input = conversationEl.querySelector(".conv-composer-input");
 					if (input && !input.disabled) {
-						if (!input.value.trim()) input.value = `Vorrei modificare la proposta «${selected.draft.title}»: `;
+						const code = selected.draft.spec_code || (selected.destination && selected.destination.previous ? selected.destination.id : "");
+						if (!input.value.trim()) input.value = `Vorrei modificare ${code ? code + " " : "la proposta "}«${selected.draft.title}»: `;
 						input.dispatchEvent(new Event("input", { bubbles: true }));
-						input.focus();
-						input.setSelectionRange(input.value.length, input.value.length);
+						conversationProposalsOpen = false;
+						renderConversationPanel();
+						const composer = conversationEl.querySelector(".conv-composer-input");
+						composer.focus();
+						composer.setSelectionRange(composer.value.length, composer.value.length);
 					}
 				}
 				return;
@@ -6279,6 +6295,19 @@
 				}
 			}
 		});
+		container.addEventListener("change", (e) => {
+			if (e.target.matches("[data-conversation-proposal-version]")) {
+				conversationProposalVersion = e.target.value;
+				renderConversationPanel();
+			}
+			if (e.target.matches("[data-conversation-draft-destination]")) {
+				conversationDraftDestinations[e.target.getAttribute("data-conversation-draft-destination")] = e.target.value;
+				renderConversationPanel();
+			}
+		});
+		container.addEventListener("toggle", (e) => {
+			if (e.target.matches("[data-proposal-previous]")) conversationProposalPreviousOpen[e.target.getAttribute("data-proposal-previous")] = e.target.open;
+		}, true);
 		container.addEventListener("submit", (e) => {
 			const requestedInput = e.target.closest("[data-conversation-input-form]");
 			if (requestedInput) {
@@ -6330,6 +6359,12 @@
 		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
 		// scrivendo.
 		container.addEventListener("keydown", (e) => {
+			if (e.key === "Escape" && conversationProposalsOpen && !topModal()) {
+				e.preventDefault();
+				e.stopPropagation();
+				closeConversationProposals();
+				return;
+			}
 			// Un popover aperto si chiude con Esc e riporta il fuoco alla
 			// pastiglia; dentro di esso le frecce percorrono le voci e i
 			// segmenti come un controllo solo, e Invio è il clic che il
@@ -7111,6 +7146,10 @@
 		if (!id) return;
 		stopConversationPolling();
 		conversationsCurrentId = id;
+		conversationProposalsOpen = false;
+		conversationProposalVersion = "";
+		conversationDraftDestinations = {};
+		conversationProposalPreviousOpen = {};
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
@@ -7342,6 +7381,10 @@
 	// never a leftover of the previous one.
 	function resetConversationState() {
 		stopConversationPolling();
+		conversationProposalsOpen = false;
+		conversationProposalVersion = "";
+		conversationDraftDestinations = {};
+		conversationProposalPreviousOpen = {};
 		conversationView = null;
 		conversationAfterID = 0;
 		conversationEvents = [];
@@ -7877,6 +7920,10 @@
 	// being typed and the reading position in the timeline.
 	function renderConversationPanel() {
 		if (!conversationEl) return;
+		const proposalScroll = conversationEl.querySelector(".conv-story-proposals")?.scrollTop || 0;
+		const proposalFocused = document.activeElement;
+		const proposalFocusKey = proposalFocused && proposalFocused.getAttribute("data-conversation-draft-destination");
+		const versionHadFocus = proposalFocused && proposalFocused.hasAttribute("data-conversation-proposal-version");
 		const timeline = conversationEl.querySelector(".conv-timeline");
 		const previousTop = timeline ? timeline.scrollTop : 0;
 		const wasAtBottom = timeline
@@ -7964,6 +8011,10 @@
 				// consegnata una. Riconoscerla vuol dire sapere quale azione la
 				// produce, ed è un sapere di questa pagina e non del renderer.
 				deliveredDraft: conversationDeliveredSpecDraft(),
+				proposalsOpen: conversationProposalsOpen,
+				proposalVersion: conversationProposalVersion,
+				draftDestinations: conversationDraftDestinations,
+				proposalPreviousOpen: conversationProposalPreviousOpen,
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:
@@ -7979,6 +8030,12 @@
 		if (conversationWorkingSince) startConversationWorkingTicker();
 		else stopConversationWorkingTicker();
 
+		const proposals = conversationEl.querySelector(".conv-story-proposals");
+		if (proposals) proposals.scrollTop = proposalScroll;
+		if (versionHadFocus) conversationEl.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
+		if (proposalFocusKey) {
+			Array.from(conversationEl.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
+		}
 		const nextTimeline = conversationEl.querySelector(".conv-timeline");
 		if (nextTimeline) {
 			nextTimeline.scrollTop = wasAtBottom
@@ -8089,6 +8146,8 @@
 
 	function openNewSpec() {
 		newSpecProposal = null;
+		document.getElementById("new-spec-title").textContent = "Aggiungi una storia al backlog";
+		newSpecSubmit.textContent = "Crea la spec";
 		newSpecForm.reset();
 		specDraftInput.value = "";
 		clearNewSpecErrors();
@@ -8319,12 +8378,31 @@
 		return draft && typeof draft === "object" ? draft : null;
 	}
 
+	function closeConversationProposals() {
+		conversationProposalsOpen = false;
+		renderConversationPanel();
+		conversationEl.querySelector(".conv-proposals-toolbar [data-conversation-proposals-show]")?.focus({preventScroll:true});
+	}
+
 	function conversationSpecDraft(key) {
 		const view = conversationView && conversationView.spec_drafts;
 		if (!view || !Array.isArray(view.items)) return null;
 		const index = view.items.findIndex((_, i) => `${view.event_id}:${i}` === key);
 		if (index < 0) return null;
-		return { draft: view.items[index], proposal: { conversation_id: conversationsCurrentId, event_id: view.event_id, index } };
+		const draft = view.items[index];
+		const destinationID = conversationDraftDestinations[key] || draft.destination_id;
+		const destination = (draft.destinations || []).find(item => item.id === destinationID);
+		return {draft, destination, proposal: {conversation_id:conversationsCurrentId, event_id:view.event_id, index, target_spec:destinationID, base_hash:destination && destination.base_hash}};
+	}
+
+	function openSpecDraftEditor(selected) {
+		openNewSpec();
+		applySpecDraft(selected.draft);
+		newSpecProposal = selected.proposal;
+		if (selected.destination && selected.destination.previous) {
+			document.getElementById("new-spec-title").textContent = `Modifiche a ${selected.destination.id}`;
+			newSpecSubmit.textContent = selected.destination.accept_label;
+		}
 	}
 
 	async function acceptConversationSpecDraft(selected) {
@@ -8344,16 +8422,22 @@
 				const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(selected.proposal.conversation_id)}?after_id=${conversationAfterID}`);
 				if (conversationsCurrentId === selected.proposal.conversation_id) applyConversationView(view);
 			}
-			showToast(TEXT.specCreated(result.spec.code), "ok");
+			showToast(result.updated ? `${result.spec.code} aggiornata` : result.created === false ? TEXT.specExisted(result.spec.code) : TEXT.specCreated(result.spec.code), "ok");
 		} catch (err) {
 			// Validation still belongs to the ordinary creation route. Open its
 			// editable form with the proposal intact and its field-level errors.
 			if (Array.isArray(err.fields)) {
-				openNewSpec();
-				applySpecDraft(selected.draft);
-				newSpecProposal = selected.proposal;
+				openSpecDraftEditor(selected);
 				showNewSpecErrors(err.fields);
-			} else showToast(err.message || String(err), "err");
+			} else {
+				showToast(err.message || String(err), "err");
+				if (err.status === 409 && conversationsCurrentId === selected.proposal.conversation_id) {
+					try {
+						const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(selected.proposal.conversation_id)}?after_id=${conversationAfterID}`);
+						if (conversationsCurrentId === selected.proposal.conversation_id) applyConversationView(view);
+					} catch (_) { /* Keep the readable proposal when a refresh fails. */ }
+				}
+			}
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
@@ -8461,7 +8545,7 @@
 		clearNewSpecErrors();
 		newSpecBusy = true;
 		newSpecSubmit.disabled = true;
-		newSpecStatus.textContent = TEXT.creating;
+		newSpecStatus.textContent = newSpecProposal && newSpecProposal.base_hash ? "Salvataggio modifiche…" : TEXT.creating;
 		newSpecStatus.className = "status-msg";
 		const blocked = newSpecForm.blocked_by.value
 			.split(",")
@@ -8496,7 +8580,9 @@
 				const view = await apiGet(`/api/workspace/conversations/${encodeURIComponent(sourceProposal.conversation_id)}?after_id=${conversationAfterID}`);
 				if (conversationsCurrentId === sourceProposal.conversation_id) applyConversationView(view);
 			}
-			if (res && res.created === false) {
+			if (res && res.updated) {
+				showToast(`${code} aggiornata`, "ok");
+			} else if (res && res.created === false) {
 				showToast(TEXT.specExisted(code), "ok");
 			} else {
 				showToast(TEXT.specCreated(code), "ok");

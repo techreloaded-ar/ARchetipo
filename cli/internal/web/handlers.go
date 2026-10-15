@@ -357,6 +357,8 @@ func (s *Server) handleUpdateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	ws.specCreateMu.Lock()
+	defer ws.specCreateMu.Unlock()
 	if _, err := ws.conn.UpdateSpec(r.Context(), code, patch); err != nil {
 		writeError(w, err)
 		return

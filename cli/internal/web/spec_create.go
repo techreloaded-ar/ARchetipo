@@ -32,6 +32,7 @@ type createSpecReq struct {
 type createSpecView struct {
 	Spec    domain.Spec `json:"spec"`
 	Created bool        `json:"created"`
+	Updated bool        `json:"updated,omitempty"`
 }
 
 // fieldError binds a validation failure to the form field that produced it,
@@ -141,13 +142,13 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 	}
 	ws.specCreateMu.Lock()
 	defer ws.specCreateMu.Unlock()
-	accepted, err := ws.resolveSpecDraftSource(ctx, req.Proposal)
+	resolution, err := ws.resolveSpecDraftSource(ctx, req.Proposal)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if accepted != nil {
-		writeJSON(w, http.StatusOK, createSpecView{Spec: *accepted, Created: false})
+	if resolution.Accepted != nil {
+		writeJSON(w, http.StatusOK, createSpecView{Spec: *resolution.Accepted, Created: false})
 		return
 	}
 
@@ -201,7 +202,7 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if found, dup := findExistingSpec(existing, epic.Code, req.Title); dup {
+	if found, dup := findExistingSpec(existing, epic.Code, req.Title); dup && resolution.Target == nil {
 		if err := ws.rememberSpecDraftAcceptance(ctx, req.Proposal, found.Code); err != nil {
 			writeError(w, err)
 			return
@@ -222,13 +223,18 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		Body:      req.Body,
 	}
 	spec.Ref = spec.Code
+	if resolution.Target != nil {
+		spec.Code, spec.Ref, spec.Status = resolution.Target.Code, resolution.Target.Ref, resolution.Target.Status
+	}
 
 	if result := validation.ValidateSpecs("POST /api/spec", []domain.Spec{spec}); !result.OK {
 		writeCreateSpecFieldErrors(w, createSpecFieldErrors(result.Findings))
 		return
 	}
 
-	if len(existing) == 0 {
+	if resolution.Target != nil {
+		_, err = ws.conn.UpdateSpec(ctx, spec.Code, domain.SpecUpdate{Title: &spec.Title, Epic: &spec.Epic, Priority: &spec.Priority, Points: &spec.Points, Scope: &spec.Scope, BlockedBy: &spec.BlockedBy, Body: &spec.Body})
+	} else if len(existing) == 0 {
 		_, err = ws.conn.SaveInitialBacklog(ctx, []domain.Spec{spec})
 	} else {
 		_, err = ws.conn.AppendSpecs(ctx, []domain.Spec{spec})
@@ -249,7 +255,11 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, createSpecView{Spec: saved, Created: true})
+	if resolution.Target != nil {
+		writeJSON(w, http.StatusOK, createSpecView{Spec: saved, Updated: true})
+	} else {
+		writeJSON(w, http.StatusCreated, createSpecView{Spec: saved, Created: true})
+	}
 }
 
 // resolveEpic looks the submitted epic code up among the epics the workspace

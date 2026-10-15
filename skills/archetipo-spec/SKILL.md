@@ -64,6 +64,7 @@ In this mode:
    - `archetipo spec list`
    - `archetipo validate spec --file <path|->`
    - `archetipo spec add --file <path|->`
+   - `archetipo spec update US-XXX --file <path|->` (only after approval of a revision; payload and envelopes in `spec-proposal-flow.md`)
    - `archetipo wiki search [query]` (only when the Wiki gate is on)
 
 Extract and keep available from `data`:

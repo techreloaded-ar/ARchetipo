@@ -714,7 +714,7 @@ describe("renderConversation — proposte strutturate", () => {
 	const labels = {title:"RISULTATI",intro:"TESTO DAL SERVER",pending:"DA DECIDERE",accepted:"ACCETTATA",accept:"CONFERMA DAL SERVER",edit:"MODIFICA",revise:"RAGIONIAMOCI",open:"APRI"};
 	const drafts = {event_id:42,labels,receipt_lines:['{"receipt":"hidden"}'],items:[{title:"Prima <proposta>",body:"**Obiettivo**\nUna storia.",metadata:["META DAL SERVER"]},{title:"Seconda",body:"Altra storia",spec_code:"US-123",metadata:[]}]};
 	it("mostra ogni storia formattata, le etichette del server e decisioni separate", () => {
-		const html = renderConversation({...LIVE,spec_drafts:drafts,events:[{id:42,kind:"text",text:'Spiegazione\n{"receipt":"hidden"}'}]}, "", {writable:true,markedParse:body=>`<strong>${body}</strong>`});
+		const html = renderConversation({...LIVE,spec_drafts:drafts,events:[{id:42,kind:"text",text:'Spiegazione\n{"receipt":"hidden"}'}]}, "", {proposalsOpen:true,writable:true,markedParse:body=>`<strong>${body}</strong>`});
 		assert.match(html, /Prima &lt;proposta&gt;/);
 		assert.match(html, /<strong>\*\*Obiettivo\*\*/);
 		assert.match(html, /META DAL SERVER/);
@@ -728,12 +728,32 @@ describe("renderConversation — proposte strutturate", () => {
 		assert.doesNotMatch(html, /&quot;receipt&quot;/);
 	});
 	it("mantiene leggibili proposte parziali senza parser e blocca i comandi durante il lavoro", () => {
-		const html = renderConversation({...LIVE,spec_drafts:drafts}, "", {working:{active:true}});
+		const html = renderConversation({...LIVE,spec_drafts:drafts}, "", {proposalsOpen:true,working:{active:true}});
 		assert.match(html, /<pre>\*\*Obiettivo\*\*/);
 		assert.match(html, /data-conversation-draft-accept="42:0" disabled/);
 		assert.doesNotMatch(html, /data-conversation-draft-revise/);
 		assert.doesNotThrow(() => renderConversation({...LIVE,spec_drafts:{items:[{}]}}));
 	});
+	it("ancora i richiami alla versione e lascia i messaggi successivi sotto, senza corpi in chat", () => {
+		const versioned = {...drafts, summary:"RIEPILOGO DAL SERVER", versions:[{event_id:42,label:"VERSIONE UNO",current:true,items:drafts.items}]};
+		const view = {...LIVE,spec_drafts:versioned,events:[{id:42,kind:"text",text:'Spiegazione\n{"receipt":"hidden"}'},{id:43,kind:"user_message",text:"PARLIAMONE ANCORA"},{id:44,kind:"text",text:"DOMANDA SUCCESSIVA"}]};
+		const html = renderConversation(view, "");
+		assert.ok(html.indexOf('data-proposal-anchor="42"') < html.indexOf("PARLIAMONE ANCORA"));
+		assert.ok(html.indexOf("PARLIAMONE ANCORA") < html.indexOf("DOMANDA SUCCESSIVA"));
+		assert.doesNotMatch(html, /conv-story-proposal-body/);
+		assert.match(html, /RIEPILOGO DAL SERVER/);
+		const paginated = renderConversation({...view, events:[]}, "");
+		assert.match(paginated, /data-conversation-proposals-show="42"/);
+		assert.doesNotMatch(paginated, /conv-story-proposal-body/);
+	});
+	it("le versioni precedenti sono consultabili senza offrire comandi di scrittura", () => {
+		const versioned = {...drafts,versions:[{event_id:41,label:"VERSIONE UNO",current:false,items:drafts.items},{event_id:42,label:"VERSIONE DUE",current:true,items:drafts.items}]};
+		const html = renderConversation({...LIVE,spec_drafts:versioned}, "", {proposalsOpen:true,proposalVersion:"41",writable:true});
+		assert.match(html, /Prima &lt;proposta&gt;/);
+		assert.match(html, /data-conversation-proposal-version/);
+		assert.doesNotMatch(html, /data-conversation-draft-(accept|edit|revise)/);
+	});
+
 });
 
 describe("renderConversation — esito", () => {

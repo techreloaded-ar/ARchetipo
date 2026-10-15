@@ -85,7 +85,8 @@ type Record struct {
 	DecidedProposalID int64 `json:"decided_proposal_id,omitempty"`
 	// SpecDraftAcceptances links a receipt item (event:index) to its persisted
 	// spec, even when the person changed its title before accepting it.
-	SpecDraftAcceptances map[string]string `json:"spec_draft_acceptances,omitempty"`
+	SpecDraftAcceptances     map[string]string                      `json:"spec_draft_acceptances,omitempty"`
+	SpecDraftAcceptedContent map[string]execution.SpecDraftProposal `json:"spec_draft_accepted_content,omitempty"`
 }
 
 const CurrentVersion = 2
