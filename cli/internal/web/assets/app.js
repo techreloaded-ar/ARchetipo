@@ -1136,6 +1136,7 @@
 		// refused, and the refusal is not news the home has to report.
 		if (noWorkspaceMode()) return;
 		loadBoard();
+		if (shellView === "documentation") loadDocumentation();
 		loadWorkspaceStatus();
 		// The conversation is re-read from the beginning, not resumed: after a
 		// workspace change the one to show is the one of the workspace now open,
@@ -1311,13 +1312,13 @@
 		el.classList.toggle(WorkspaceLayout.PANE_HIDDEN_CLASS, !rail.visible);
 	}
 
-	// La barra è permanente, in entrambe le larghezze, e ha due linguette e
-	// basta: Conversazione · Board, con quella corrente accesa. Le linguette non
+	// La barra permanente offre Conversazione, Board e Documentazione,
+	// con la vista corrente accesa. Le linguette non
 	// correnti vengono dalla lista di commutatori del modulo; quella corrente
 	// dal modulo stesso, così le due non possono contraddirsi. Il dettaglio spec
 	// non è una linguetta — si apre da una card della board e si chiude col
 	// comando di ritorno — quindi mentre occupa la colonna `current` è nullo e
-	// nessuna delle due risulta accesa: accenderne una direbbe che si sta
+	// nessuna linguetta risulta accesa: accenderne una direbbe che si sta
 	// guardando qualcosa che non si sta guardando.
 	function renderShellViews(switchers, current) {
 		if (!shellViewsEl) return;
@@ -1327,7 +1328,7 @@
 			current: false,
 		}));
 		// Senza linguetta corrente — è il dettaglio spec a occupare la colonna —
-		// la barra resta quella di sempre, con le sue due voci, e nessuna accesa.
+		// la barra resta quella di sempre, con le sue tre voci, e nessuna accesa.
 		if (current) {
 			buttons.push({
 				view: current.view,
@@ -1335,10 +1336,10 @@
 				current: true,
 			});
 		}
-		// L'ordine di lettura delle linguette: Conversazione · Board. È
+		// L'ordine di lettura delle linguette: Conversazione · Board · Documentazione. È
 		// presentazione, non una decisione su che cosa sia su schermo — quella
-		// resta al modulo, che dichiara le stesse due linguette in TABS.
-		const order = ["conversation", "board"];
+		// resta al modulo, che dichiara le stesse linguette in TABS.
+		const order = WorkspaceLayout.TABS;
 		buttons.sort((a, b) => order.indexOf(a.view) - order.indexOf(b.view));
 		shellViewsEl.innerHTML = buttons
 			.map(
@@ -1368,6 +1369,7 @@
 		shellEl.dataset.view = layout.view;
 		applyPaneState(conversationEl, layout.panes.conversation);
 		applyPaneState(boardEl, layout.panes.board);
+		applyPaneState(documentationEl, layout.panes.documentation);
 		applyPaneState(modal, layout.panes.spec);
 		applyRailState(conversationsRailEl, layout.rail);
 		const currentTab = layout.currentTab
@@ -1396,7 +1398,20 @@
 	// happens here: no pane is unmounted and no panel is redrawn.
 	function setShellView(view) {
 		if (WorkspaceLayout.VIEWS.indexOf(view) === -1) return;
+		const previousView = shellView;
 		shellView = view;
+		if (view === "documentation") {
+			if (historySupported() && !documentationInLocation()) window.history.replaceState({ ...window.history.state, archetipoView: previousView }, "");
+			rememberDocumentation(docsCollection, docsPage, "");
+			applyShellLayout();
+			if (!docsCollections.length) loadDocumentation();
+			return;
+		}
+		clearDocumentationLocation(view);
+		if (view === "board" && specOpen && previousView === "documentation") {
+			closeModal();
+			return;
+		}
 		if (view === "board" && specOpen) {
 			// Il ritorno alla board passa dalla cronologia: leaveSpecDetail
 			// torna indietro di una voce e sarà popstate a chiudere davvero,
@@ -1407,6 +1422,184 @@
 		}
 		applyShellLayout();
 	}
+
+	// Documentation owns its reads and scroll position; changing shell views
+	// only hides it, just as it hides the native conversation.
+	const documentationEl = document.getElementById("workspace-documentation");
+	const docsIndex = document.getElementById("docs-index");
+	const docsContent = document.getElementById("docs-content");
+	const docsSearch = document.getElementById("docs-search");
+	const docsStatus = document.getElementById("docs-status");
+	let docsCollections = [];
+	let docsCollection = "wiki";
+	let docsPage = "";
+	let docsIndexVersion = 0;
+	let docsPageVersion = 0;
+	let docsSearchTimer;
+
+	function documentationInLocation() {
+		const url = new URL(window.location.href);
+		return url.searchParams.get("view") === "documentation";
+	}
+
+	function rememberDocumentation(collection, id, anchor, replace) {
+		if (!historySupported() || navigatingFromHistory) return;
+		const url = new URL(Documentation.pageURL(collection, id, anchor), window.location.href);
+		const state = { archetipoView: "documentation" };
+		if (!replace && url.href === window.location.href) return;
+		window.history[replace ? "replaceState" : "pushState"](state, "", url.pathname + url.search + url.hash);
+	}
+
+	function clearDocumentationLocation(view) {
+		if (!historySupported() || !documentationInLocation()) return;
+		const url = new URL(window.location.href);
+		for (const key of ["view", "collection", "page"]) url.searchParams.delete(key);
+		url.hash = "";
+		window.history.pushState({ archetipoView: view }, "", url.pathname + url.search);
+	}
+
+	function restoreDocumentationFromLocation() {
+		if (!documentationInLocation()) return false;
+		const url = new URL(window.location.href);
+		docsPageVersion++;
+		docsCollection = url.searchParams.get("collection") || "wiki";
+		docsPage = url.searchParams.get("page") || "";
+		shellView = "documentation";
+		applyShellLayout();
+		loadDocumentation();
+		return true;
+	}
+
+	function drawDocumentationIndex() {
+		docsIndex.innerHTML = Documentation.renderIndex(docsCollections, docsCollection, docsPage);
+	}
+
+	async function loadDocumentation(searchOnly = false) {
+		if (noWorkspaceMode()) return;
+		const version = ++docsIndexVersion;
+		const selectionVersion = docsPageVersion;
+		docsStatus.textContent = "Caricamento…";
+		try {
+			const result = await apiGet(`/api/documentation?q=${encodeURIComponent(docsSearch.value)}`);
+			if (version !== docsIndexVersion) return;
+			docsCollections = result.collections || [];
+			drawDocumentationIndex();
+			const count = docsCollections.reduce((sum, collection) => sum + collection.items.length, 0);
+			docsStatus.textContent = `${count} ${count === 1 ? "pagina" : "pagine"}`;
+			if (searchOnly || selectionVersion !== docsPageVersion) return;
+			const collection = docsCollections.find(value => value.id === docsCollection);
+			const id = docsPage || collection?.items.find(page => page.id === "overview")?.id || collection?.items[0]?.id;
+			if (id) {
+				if (!docsPage && shellView === "documentation" && documentationInLocation()) rememberDocumentation(docsCollection, id, "", true);
+				loadDocumentationPage(docsCollection, id);
+			} else {
+				docsContent.textContent = collection && !collection.available
+					? "La Wiki non è ancora stata generata. Puoi richiederla all’agente nella conversazione con /archetipo-wiki."
+					: collection ? "Scegli una pagina dall’indice della documentazione." : "Raccolta non trovata.";
+			}
+		} catch (err) {
+			if (version !== docsIndexVersion) return;
+			docsStatus.textContent = `Impossibile caricare la documentazione: ${err.message || err}`;
+			if (!searchOnly) docsContent.textContent = "La documentazione non è leggibile. Usa Aggiorna per riprovare.";
+		}
+	}
+
+	// Marked supplies Markdown parsing. The inert template is then reduced to
+	// reading markup: no scripts, event handlers, arbitrary attributes or local
+	// file URLs can enter the live document from a Wiki page.
+	function documentationMarkdown(markdown) {
+		const template = document.createElement("template");
+		template.innerHTML = marked.parse(markdown);
+		const allowed = new Set(["P", "BR", "HR", "H1", "H2", "H3", "H4", "H5", "H6", "UL", "OL", "LI", "BLOCKQUOTE", "PRE", "CODE", "EM", "STRONG", "DEL", "S", "A", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DL", "DT", "DD", "DETAILS", "SUMMARY"]);
+		const headings = new Map();
+		for (const element of template.content.querySelectorAll("*")) {
+			if (!allowed.has(element.tagName)) {
+				if (["SCRIPT", "STYLE", "IFRAME", "OBJECT", "SVG", "MATH", "FORM", "TEMPLATE"].includes(element.tagName)) element.remove();
+				else element.replaceWith(...element.childNodes);
+				continue;
+			}
+			const href = element.getAttribute("href");
+			for (const attr of Array.from(element.attributes)) element.removeAttribute(attr.name);
+			if (/^H[1-6]$/.test(element.tagName)) {
+				const slug = element.textContent.toLowerCase().trim().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s+/g, "-") || "sezione";
+				const count = headings.get(slug) || 0;
+				headings.set(slug, count + 1);
+				element.id = `docs-heading-${slug}${count ? `-${count}` : ""}`;
+			}
+			if (element.tagName !== "A" || !href) continue;
+			const target = Documentation.wikiLink(`${docsPage}.md`, href);
+			if (target || href.startsWith("#")) {
+				const id = target ? target.id : docsPage;
+				const anchor = target ? target.anchor : href.slice(1);
+				element.href = Documentation.pageURL(docsCollection, id, anchor);
+				element.dataset.docCollection = docsCollection;
+				element.dataset.docPage = id;
+				element.dataset.docAnchor = anchor;
+			} else if (/^(https?:|mailto:)/i.test(href)) {
+				element.href = href;
+				element.target = "_blank";
+				element.rel = "noopener noreferrer";
+			}
+		}
+		return template.innerHTML;
+	}
+
+	function scrollDocumentationToAnchor() {
+		let anchor = "";
+		try { anchor = decodeURIComponent(window.location.hash.slice(1)); } catch (_) { /* malformed anchor */ }
+		const heading = anchor && document.getElementById(`docs-heading-${anchor}`);
+		if (heading && docsContent.contains(heading)) heading.scrollIntoView({ block: "start" });
+		else docsContent.scrollTop = 0;
+	}
+
+	async function loadDocumentationPage(collection, id) {
+		docsCollection = collection;
+		docsPage = id;
+		const version = ++docsPageVersion;
+		drawDocumentationIndex();
+		docsContent.textContent = "Caricamento della pagina…";
+		try {
+			const page = await apiGet(`/api/documentation/${encodeURIComponent(collection)}/page?id=${encodeURIComponent(id)}`);
+			if (version !== docsPageVersion) return;
+			docsContent.innerHTML = Documentation.renderPage(page, documentationMarkdown);
+			const firstHeading = docsContent.querySelector(".docs-markdown > :first-child");
+			const title = docsContent.querySelector(".docs-page-header h1");
+			if (firstHeading?.tagName === "H1" && firstHeading.textContent.trim() === title.textContent.trim()) {
+				title.id = firstHeading.id;
+				firstHeading.remove();
+			}
+			scrollDocumentationToAnchor();
+		} catch (err) {
+			if (version !== docsPageVersion) return;
+			docsContent.textContent = `Impossibile aprire la pagina: ${err.message || err}`;
+		}
+	}
+
+	const docsIndexToggle = document.getElementById("docs-index-toggle");
+	function setDocumentationIndexOpen(open) {
+		documentationEl.querySelector(".docs-sidebar").classList.toggle("is-expanded", open);
+		docsIndexToggle.setAttribute("aria-expanded", String(open));
+	}
+	docsIndexToggle.addEventListener("click", () => {
+		const open = docsIndexToggle.getAttribute("aria-expanded") !== "true";
+		setDocumentationIndexOpen(open);
+		if (open) docsSearch.focus();
+	});
+	documentationEl.addEventListener("click", event => {
+		const link = event.target.closest("a[data-doc-page]");
+		if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+		event.preventDefault();
+		setDocumentationIndexOpen(false);
+		rememberDocumentation(link.dataset.docCollection, link.dataset.docPage, link.dataset.docAnchor || "");
+		loadDocumentationPage(link.dataset.docCollection, link.dataset.docPage);
+	});
+	docsSearch.addEventListener("input", () => {
+		clearTimeout(docsSearchTimer);
+		// Invalidate an in-flight search as soon as input changes.
+		docsIndexVersion++;
+		docsSearchTimer = setTimeout(() => loadDocumentation(true), 180);
+	});
+	document.getElementById("docs-refresh").addEventListener("click", () => loadDocumentation());
 
 	// ---- Cronologia del browser ----------------------------------------------
 	//
@@ -1457,6 +1650,8 @@
 	/** L'indirizzo che descrive la schermata con quella spec aperta (o nessuna). */
 	function locationWithSpec(code) {
 		const url = new URL(window.location.href);
+		for (const key of ["view", "collection", "page"]) url.searchParams.delete(key);
+		if (documentationInLocation()) url.hash = "";
 		if (code) url.searchParams.set(SPEC_QUERY_PARAM, code);
 		else url.searchParams.delete(SPEC_QUERY_PARAM);
 		return url.pathname + url.search + url.hash;
@@ -1509,14 +1704,18 @@
 	// mette d'accordo con lei.
 	if (historySupported()) {
 		window.addEventListener("popstate", (e) => {
+			if (restoreDocumentationFromLocation()) return;
 			const code =
 				(e.state && e.state.archetipoSpec) || specCodeInLocation() || "";
 			navigatingFromHistory = true;
 			try {
 				if (code) {
 					if (!specOpen || currentSpecCode !== code) openEditor(code);
-				} else if (specOpen) {
-					closeModal();
+					else { shellView = "spec"; applyShellLayout(); }
+				} else {
+					if (specOpen) closeModal();
+					shellView = e.state?.archetipoView || "board";
+					applyShellLayout();
 				}
 			} finally {
 				navigatingFromHistory = false;
@@ -1529,6 +1728,7 @@
 	// del dettaglio. Così il primo Indietro porta alla board di questo
 	// workspace, non fuori dall'applicazione.
 	function restoreSpecFromLocation() {
+		if (restoreDocumentationFromLocation()) return;
 		const code = specCodeInLocation();
 		if (!code) return;
 		if (historySupported()) {
@@ -8732,7 +8932,7 @@
 			// che qui non esiste. Si guarda l'indirizzo, non la voce di
 			// cronologia: il parametro può esserci anche prima che qualcuno
 			// abbia aperto qualcosa.
-			if (historySupported() && specCodeInLocation()) {
+			if (historySupported() && (specCodeInLocation() || documentationInLocation())) {
 				window.history.replaceState(
 					{ archetipoSpec: "" },
 					"",

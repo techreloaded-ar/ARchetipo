@@ -167,6 +167,8 @@ Autonomous acceptance applies the same gate as `/archetipo-review`, verdict incl
 
 ## CLI and commands
 
+The viewer offers Conversation, Board and **Documentation** as peer views. Documentation reads the configured `paths.wiki` even when automatic Wiki maintenance is off: browse by topic, search titles and content, follow Wiki links, and inspect review state and sources. Page URLs support reload and browser Back/Forward. The first collection is a read-only Wiki; other document collections can be added independently.
+
 ARchetipo uses a deterministic Go CLI, `archetipo`, for persistence and connector operations. In normal use you speak to the skills; the skills call these commands behind the scenes.
 
 | Command | Purpose |

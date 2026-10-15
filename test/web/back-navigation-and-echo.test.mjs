@@ -128,8 +128,8 @@ describe("il tasto Indietro riporta dalla spec alla board", () => {
 		const shellView = sectionOf(js, "function setShellView(");
 		assert.ok(
 			shellView.includes("leaveSpecDetail()") &&
-				!shellView.includes("closeModal()"),
-			"la linguetta Board chiude di nuovo per conto proprio invece di tornare indietro di una voce",
+				shellView.includes('previousView === "documentation"'),
+			"la linguetta Board deve usare la cronologia del dettaglio; solo una spec nascosta dalla Documentazione si chiude direttamente",
 		);
 		const leave = sectionOf(js, "function leaveSpecDetail(");
 		assert.ok(

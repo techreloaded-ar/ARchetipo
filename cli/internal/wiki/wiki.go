@@ -98,9 +98,15 @@ func Init(root string) ([]string, error) {
 	return created, nil
 }
 
+// Load confines Markdown reads to the configured Wiki root, including symlinks.
 func Load(root string) ([]Page, error) {
+	directory, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer directory.Close()
 	pages := []Page{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err = fs.WalkDir(directory.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -110,16 +116,17 @@ func Load(root string) ([]Page, error) {
 		if filepath.Ext(path) != ".md" || filepath.Base(path) == "index.md" || filepath.Base(path) == "log.md" {
 			return nil
 		}
-		page, err := parsePage(root, path)
+		raw, err := fs.ReadFile(directory.FS(), path)
+		if err != nil {
+			return err
+		}
+		page, err := parsePageContent(root, filepath.Join(root, filepath.FromSlash(path)), raw)
 		if err != nil {
 			return err
 		}
 		pages = append(pages, page)
 		return nil
 	})
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	}
 	sort.Slice(pages, func(i, j int) bool { return pages[i].ID < pages[j].ID })
 	return pages, err
 }
@@ -129,6 +136,10 @@ func parsePage(root, path string) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
+	return parsePageContent(root, path, raw)
+}
+
+func parsePageContent(root, path string, raw []byte) (Page, error) {
 	match := wikiFrontmatterPattern.FindSubmatchIndex(raw)
 	if match == nil {
 		return Page{}, fmt.Errorf("%s: missing YAML frontmatter", path)
@@ -609,7 +620,6 @@ func Search(projectRoot, root, query, pageType, status string) ([]Page, error) {
 }
 
 func searchPagesWithSnapshot(snapshot *evidenceSnapshot, pages []Page, query, pageType, status string) []Page {
-	q := strings.ToLower(strings.TrimSpace(query))
 	result := []Page{}
 	for _, p := range pages {
 		if pageType != "" && p.Meta.Type != pageType {
@@ -618,8 +628,7 @@ func searchPagesWithSnapshot(snapshot *evidenceSnapshot, pages []Page, query, pa
 		if status != "" && pageStateWithSnapshot(snapshot, p) != status {
 			continue
 		}
-		haystack := strings.ToLower(p.ID + " " + p.Meta.Title + " " + p.Meta.Description + " " + p.Body)
-		if q != "" && !strings.Contains(haystack, q) {
+		if !MatchesQuery(p, query) {
 			continue
 		}
 		p.Body = ""
@@ -1619,4 +1628,10 @@ func isExternal(sourcePath string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")
+}
+
+// MatchesQuery shares the CLI's literal, case-insensitive full-text search.
+func MatchesQuery(page Page, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	return q == "" || strings.Contains(strings.ToLower(page.ID+" "+page.Meta.Title+" "+page.Meta.Description+" "+page.Body), q)
 }

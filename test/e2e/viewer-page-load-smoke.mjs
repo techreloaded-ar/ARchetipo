@@ -95,6 +95,9 @@ const CLAIMS = [
   "le attività raccolgono la proposta prima di avviare una skill e conservano il testo se l’avvio fallisce",
   "le esecuzioni si possono fermare anche dalla vista Conversazione",
   "i permessi dichiarati dal provider si scelgono e si salvano dal prossimo turno senza perdersi cambiando modello",
+  "Documentazione legge la Wiki, cerca nel contenuto e naviga tra pagine con cronologia e link diretti",
+  "Documentazione conserva la bozza di conversazione e rende il Markdown senza contenuti attivi",
+  "Documentazione è leggibile su schermi stretti e distingue Wiki assente e pagina mancante",
 ];
 
 // One entry per proved statement, for the report.
@@ -150,6 +153,7 @@ async function main() {
       env: cliEnv,
     });
     await seedConversationRecord(sandboxDir);
+    await seedDocumentation(sandboxDir);
 
     view = await startViewServer(sandboxDir, cliEnv);
     console.log(`-> view ready: ${view.url}`);
@@ -158,6 +162,8 @@ async function main() {
     console.log(`-> devtools: ${browser.wsEndpoint}`);
 
     await exercisePage(browser, view.url);
+    await exerciseDocumentation(browser, view.url, runDir);
+    await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
@@ -412,7 +418,12 @@ async function exerciseActivityComposer(browser, url) {
   await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua proposta…'`, 10000, "il campo della proposta prima della skill");
   if (await page.evaluate(`window.smokeStarts.length`) !== 0) throw new Error("La scelta di Nuova storia ha avviato un agente prima della proposta");
   const proposal = "Voglio cercare le storie per titolo";
-  await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = ${JSON.stringify(proposal)}; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.conv-composer').requestSubmit(); })()`);
+  await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = ${JSON.stringify(proposal)}; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-shell-view="documentation"]').click(); })()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'Wiki dalla bozza');
+  await page.evaluate(`document.querySelector('[data-shell-view="conversation"]').click()`);
+  if (await page.evaluate(`document.querySelector('.conv-composer-input').value`) !== proposal) throw new Error('Documentazione perde la bozza della conversazione');
+  ok(CLAIMS[13], 'la documentazione preserva cronologia e bozza e il lettore esclude contenuti attivi');
+  await page.evaluate(`document.querySelector('.conv-composer').requestSubmit()`);
   await page.waitFor(`window.smokeStarts.length === 1 && !document.querySelector('.conv-composer-input').disabled`, 10000, "l’invio della proposta e il rifiuto del provider");
   const start = await page.evaluate(`window.smokeStarts[0]`);
   if (start.path !== "/api/workspace/execution" || start.body.action !== "spec-draft" || start.body.user_input !== proposal) throw new Error(`La proposta non raggiunge l’azione: ${JSON.stringify(start)}`);
@@ -486,6 +497,105 @@ async function exercisePermissionComposer(browser, url) {
   await page.close();
 }
 
+async function seedDocumentation(sandboxDir) {
+  const root = path.join(sandboxDir, 'docs', 'wiki');
+  await fs.mkdir(path.join(root, 'engineering'), {recursive:true});
+  const page = (title, body) => `---\ntype: overview\ntitle: ${title}\ndescription: Documentazione di prova\nstatus: generated\n---\n${body}\n`;
+  await fs.writeFile(path.join(root,'overview.md'), page('Panoramica Wiki', '# Panoramica Wiki\n\n[Codice](engineering/code-map.md#dettagli)\n\n<script>window.documentationUnsafe = true</script>\n<img src=x onerror="window.documentationUnsafe=true">\n<a href="javascript:window.documentationUnsafe=true">Inerte</a>\n<div onclick="window.documentationUnsafe=true">Testo innocuo</div>'));
+  await fs.writeFile(path.join(root,'engineering','code-map.md'), page('Mappa del codice', '# Mappa del codice\n\n## Dettagli\n\nUnicocontenuto della mappa.\n\n[Panoramica](/overview.md)\n\n[Mancante](missing.md)\n\n' + 'Paragrafo di prova.\n\n'.repeat(80)));
+}
+
+async function exerciseDocumentation(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on('Runtime.exceptionThrown', params => exceptions.push(params.exceptionDetails));
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.navigate', {url});
+  await page.once('Page.loadEventFired',30000,'pagina Documentazione');
+  await page.waitFor(`document.querySelector('[data-shell-view="documentation"]') && document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]')`,20000,'terza vista e conversazione');
+  await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`document.getElementById('workspace-conversation').textContent.includes('${AGENT_SENTINEL}')`,10000,'cronologia della conversazione');
+  await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'lettura della Wiki');
+  const safe = await page.evaluate(`!window.documentationUnsafe && !document.querySelector('#docs-content script, #docs-content img, #docs-content [onclick], #docs-content a[href^="javascript:"]')`);
+  if (!safe) throw new Error('Markdown attivo nel lettore');
+  await page.evaluate(`document.querySelector('[data-shell-view="conversation"]').click()`);
+  if (!await page.evaluate(`document.getElementById('workspace-conversation').textContent.includes('${AGENT_SENTINEL}')`)) throw new Error('Cambio vista perde la cronologia');
+  await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click()`);
+  const screenshot = await page.send('Page.captureScreenshot', {format:'png'});
+  await fs.writeFile(path.join(runDir,'documentation-desktop.png'),Buffer.from(screenshot.data,'base64'));
+  await page.evaluate(`(() => {const search=document.getElementById('docs-search'); search.value='UNICOCONTENUTO';search.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await page.waitFor(`document.querySelectorAll('#docs-index [data-doc-page]').length === 1 && document.querySelector('#docs-index [data-doc-page]').dataset.docPage === 'engineering/code-map'`,10000,'ricerca nel corpo del documento');
+  await page.evaluate(`(() => {const search=document.getElementById('docs-search');search.value='';search.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await page.waitFor(`document.querySelectorAll('#docs-index [data-doc-page]').length === 2`,10000,'indice completo');
+  await page.evaluate(`document.querySelector('#docs-content a[data-doc-page="engineering/code-map"]').click()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Mappa del codice' && location.hash === '#dettagli'`,10000,'link relativo con ancora');
+  await page.evaluate(`history.back()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'Indietro alla panoramica');
+  await page.evaluate(`history.forward()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Mappa del codice'`,10000,'Avanti alla mappa');
+  await page.evaluate(`document.querySelector('#docs-content a[data-doc-page="overview"]').click()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'link dalla radice Wiki');
+  await page.evaluate(`history.back()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Mappa del codice'`,10000,'ritorno alla mappa');
+  await page.send('Page.reload', {ignoreCache:true});
+  await page.once('Page.loadEventFired',30000,'ricaricamento del link diretto');
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Mappa del codice' && document.querySelector('[data-shell-view="documentation"]').getAttribute('aria-selected') === 'true'`,15000,'documento dal link diretto');
+  ok(CLAIMS[12], 'ricerca nel contenuto, link relativi e assoluti, Indietro/Avanti e ricaricamento funzionano sulla Wiki reale');
+  await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
+  await page.waitFor(`getComputedStyle(document.getElementById('workspace-documentation')).display === 'grid' && document.getElementById('docs-content').clientHeight > 200`,10000,'lettore in finestra stretta');
+  if (await page.evaluate(`document.documentElement.scrollWidth > innerWidth`)) throw new Error('Overflow orizzontale della documentazione mobile');
+  await page.evaluate(`document.getElementById('docs-index-toggle').click()`);
+  await page.waitFor(`document.getElementById('docs-index-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(document.getElementById('docs-index')).display !== 'none'`,10000,'indice espandibile su telefono');
+  await page.evaluate(`document.getElementById('docs-index-toggle').click();document.getElementById('docs-content').scrollTop=0;`);
+  const mobile = await page.send('Page.captureScreenshot', {format:'png'});
+  await fs.writeFile(path.join(runDir,'documentation-mobile.png'),Buffer.from(mobile.data,'base64'));
+  await page.evaluate(`document.querySelector('#docs-content a[data-doc-page="engineering/missing"]').click()`);
+  await page.waitFor(`document.getElementById('docs-content').textContent.includes('Pagina non trovata')`,10000,'pagina mancante distinta da Wiki vuota');
+  ok(CLAIMS[14], 'la lettura resta accessibile su 390px e i link mancanti mostrano un errore esplicito');
+  if (exceptions.length) throw new Error(`Eccezioni in Documentazione: ${JSON.stringify(exceptions)}`);
+  await page.close();
+}
+
+// Hold a real response to prove a late read cannot navigate over a newer choice.
+async function exerciseDocumentationRace(browser, url) {
+  const page = await browser.newPage();
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.addScriptToEvaluateOnNewDocument', {source: `
+    const originalFetch = window.fetch.bind(window);
+    let hold = true;
+    window.fetch = async (input, options) => {
+      const response = await originalFetch(input, options);
+      if (hold && new URL(typeof input === 'string' ? input : input.url, location.href).pathname === '/api/documentation') {
+        hold = false;
+        await new Promise(resolve => { window.releaseDocumentation = resolve; });
+      }
+      return response;
+    };
+  `});
+  await page.send('Page.navigate', {url});
+  await page.once('Page.loadEventFired',30000,'pagina per la risposta ritardata');
+  await page.waitFor(`document.querySelector('[data-shell-view="documentation"]')`,10000,'terza vista');
+  await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click(); document.querySelector('[data-shell-view="conversation"]').click();`);
+  await page.waitFor(`typeof window.releaseDocumentation === 'function'`,10000,'risposta Wiki in attesa');
+  await page.evaluate(`window.releaseDocumentation()`);
+  await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'lettura completata dietro la conversazione');
+  if (!await page.evaluate(`document.getElementById('workspace-shell').dataset.view === 'conversation' && !new URL(location.href).searchParams.has('page')`)) throw new Error('La lettura ritardata ha sovrascritto la navigazione');
+  // A spec held behind Documentation is restored by Back, then Board leaves it.
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click()`);
+  await page.waitFor(`document.querySelector('.card[data-code="US-701"]')`,10000,'card della board');
+  await page.evaluate(`document.querySelector('.card[data-code="US-701"]').click()`);
+  await page.waitFor(`new URL(location.href).searchParams.get('spec') === 'US-701'`,10000,'spec nel dettaglio');
+  await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click(); history.back();`);
+  await page.waitFor(`document.getElementById('workspace-shell').dataset.view === 'spec'`,10000,'Indietro dalla Wiki alla stessa spec');
+  await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click(); document.querySelector('[data-shell-view="board"]').click();`);
+  await page.waitFor(`document.getElementById('workspace-shell').dataset.view === 'board' && !new URL(location.href).searchParams.has('spec')`,10000,'board dalla documentazione con una spec nascosta');
+  console.log('-> ok: le risposte ritardate preservano la navigazione e la documentazione convive con la cronologia del dettaglio spec');
+  await page.close();
+}
+
 async function exerciseEmptyWorkspace(browser, url) {
   const page = await browser.newPage();
   await page.send("Runtime.enable");
@@ -515,6 +625,8 @@ async function exerciseEmptyWorkspace(browser, url) {
     throw new Error('La prima storia non ha persistito la nuova epica');
   }
   ok(CLAIMS[8], "la conferma crea US-001 e la prima epica EP-001 in un workspace appena inizializzato");
+  await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click()`);
+  await page.waitFor(`document.getElementById('docs-content').textContent.includes('non è ancora stata generata')`, 10000, "Wiki assente distinta da un errore");
   await page.close();
 }
 

@@ -4,7 +4,7 @@
 // Run: node --test test/web/workspace-layout.test.mjs
 //
 // The oracles here are *invariants over every state*, not examples: the module
-// takes a view plus two booleans, so the whole input space is twelve states and
+// takes a view plus two booleans, so the whole input space is sixteen states and
 // the tests enumerate it rather than sampling it. What the person sees on
 // screen is decided entirely by this function, so a rule that holds on a chosen
 // example but breaks on a forgotten combination is a bug nobody would notice.
@@ -14,10 +14,10 @@
 //     not admissible, resolve to the conversation, in both widths
 //   - AC-2 ogni linguetta della barra che esiste e non è la vista corrente è
 //     raggiungibile con esattamente un commutatore — un comando, un bottone
-//   - la barra ha due linguette e sempre le stesse: Conversazione e Board. Il
+//   - la barra ha tre linguette permanenti: Conversazione, Board e Documentazione. Il
 //     dettaglio spec non è una linguetta — si apre scegliendo una card della
 //     board e si chiude col comando di ritorno — quindi nessuno stato può farne
-//     comparire una terza
+//     comparire una quarta
 //   - AC-4 in a wide window the primary column shows exactly one view and
 //     nothing is laid over anything
 //   - AC-6 in a narrow window the conversation is always on screen and the
@@ -112,7 +112,7 @@ function overlaidPanes(layout) {
 
 describe("resolveLayout — enumerazione di tutti gli stati", () => {
 	it("copre lo spazio degli stati per intero", () => {
-		// Twelve states: the tests below are exhaustive only if this is.
+		// Sixteen states: the tests below are exhaustive only if this is.
 		assert.equal(STATES.length, VIEWS.length * 2 * 2);
 		assert.ok(WIDE_STATES.length > 0);
 		assert.ok(NARROW_STATES.length > 0);
@@ -248,7 +248,7 @@ describe("nulla di irraggiungibile", () => {
 	it("raggiunge con un commutatore ogni linguetta esistente e non corrente", () => {
 		// Il dettaglio spec è deliberatamente fuori da questa regola: non è una
 		// vista fra pari ma il dettaglio di una card, e si raggiunge scegliendo
-		// la card. Ciò che deve restare a un comando sono le due linguette della
+		// la card. Ciò che deve restare a un comando sono le tre linguette della
 		// barra, da qualunque stato.
 		for (const state of STATES) {
 			const layout = resolveLayout(state);
@@ -270,8 +270,8 @@ describe("nulla di irraggiungibile", () => {
 		}
 	});
 
-	it("la barra ha sempre e solo le due linguette dichiarate", () => {
-		assert.deepEqual(Array.from(TABS), ["conversation", "board"]);
+	it("la barra ha sempre le tre viste principali dichiarate", () => {
+		assert.deepEqual(Array.from(TABS), ["conversation", "board", "documentation"]);
 		for (const state of STATES) {
 			const layout = resolveLayout(state);
 			for (const switcher of layout.switchers) {
@@ -281,7 +281,7 @@ describe("nulla di irraggiungibile", () => {
 				);
 			}
 			// Le voci disegnate sono i commutatori più, quando c'è, la linguetta
-			// corrente: mai una terza voce, in nessuno stato.
+			// corrente: sempre le tre viste principali, in ogni stato.
 			const drawn = layout.switchers.length + (layout.currentTab ? 1 : 0);
 			assert.equal(
 				drawn,
@@ -468,7 +468,7 @@ describe("la scelta richiude la sovrapposizione", () => {
 	it("nessuna selezione ammessa lascia due sovrapposizioni contemporanee", () => {
 		// AC-6.
 		for (const state of STATES) {
-			for (const selection of ["conversation", "board", "spec"]) {
+			for (const selection of VIEWS) {
 				const layout = resolveLayout(nextViewAfterSelection(state, selection));
 				assert.ok(
 					overlaidPanes(layout).length <= 1,
@@ -497,3 +497,15 @@ describe("punto di rottura", () => {
 		);
 	});
 });
+
+ it("la documentazione è una vista alla pari e preserva il dettaglio aperto", () => {
+  for (const narrow of [false, true]) {
+   const next = nextViewAfterSelection({view: "spec", specOpen: true, narrow}, "documentation");
+   assert.equal(next.view, "documentation");
+   assert.equal(next.specOpen, true);
+   const layout = resolveLayout(next);
+   assert.equal(layout.currentTab, "documentation");
+   assert.equal(layout.panes.documentation.visible, true);
+   assert.equal(layout.rail.visible, false);
+  }
+ });

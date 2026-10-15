@@ -262,6 +262,7 @@ h4 {
 
 /* ---- Topbar ------------------------------------------------------------ */
 .topbar {
+	flex-shrink: 0;
 	display: grid;
 	/* Three cells: the identity of the workspace on the left, the view
 	   switcher in the middle — the cell US-061 left empty when the counters
@@ -6724,6 +6725,7 @@ body.no-workspace [data-workspace-scoped] {
 /* Every view of the column occupies the same single cell. */
 .workspace-primary > .shell-pane-conversation,
 .workspace-primary > .shell-pane-board,
+.workspace-primary > .shell-pane-documentation,
 .workspace-primary > .shell-pane-spec {
 	grid-area: 1 / 1;
 	min-width: 0;
@@ -6762,9 +6764,9 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 /* ---- View switcher ------------------------------------------------------ */
-/* Permanente, in entrambe le larghezze, con due sole linguette: Conversazione ·
-   Board. La board è a un comando dalla casa del workspace, e la vista corrente
-   è quella marcata is-current — nessuna delle due lo è mentre in colonna c'è il
+/* Permanente, in entrambe le larghezze, con tre linguette: Conversazione ·
+   Board · Documentazione. La board è a un comando dalla casa del workspace, e la vista corrente
+   è quella marcata is-current — nessuna lo è mentre in colonna c'è il
    dettaglio spec, che linguetta non ne ha. La riempie il chiamante dalla lista
    di commutatori che restituisce workspace-layout.js; il markup qui non prende
    nessuna decisione.
@@ -7301,6 +7303,7 @@ body.no-workspace [data-workspace-scoped] {
 	   conversation below keeps its size and its scroll position, and comes
 	   back untouched when the overlay is dismissed. */
 	.workspace-primary > .shell-pane-board.is-overlay,
+	.workspace-primary > .shell-pane-documentation.is-overlay,
 	.workspace-primary > .shell-pane-spec.is-overlay {
 		z-index: 2;
 		background: var(--bg);
@@ -8043,3 +8046,42 @@ body.no-workspace [data-workspace-scoped] {
 
 .conv-activity-selection p { margin: 4px 0; color: var(--text-muted); }
 .conv-activity-selection small { color: var(--text-muted); }
+
+/* Documentation shares the shell cell; its own index never replaces the thread rail. */
+.workspace-primary > .shell-pane-documentation.is-visible {
+ display: grid;
+ grid-template-columns: minmax(230px, 290px) minmax(0, 1fr);
+ overflow: hidden;
+ background: var(--bg);
+}
+.docs-index-toggle { display: none; }
+.docs-sidebar { min-height: 0; overflow-y: auto; border-right: 1px solid var(--border); padding: var(--space-5); background: var(--surface); }
+.docs-sidebar-head { display: flex; align-items: center; gap: var(--space-2); justify-content: space-between; margin-bottom: var(--space-5); }
+.docs-sidebar-head h1 { font-size: 18px; margin: 0; }
+.docs-sidebar label { display: block; font-size: var(--ui-text-sm); color: var(--text-muted); margin-bottom: var(--space-2); }
+#docs-search { width: 100%; min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); background: var(--bg); font: inherit; }
+.docs-collection h2 { font-size: 16px; margin: var(--space-5) 0 var(--space-3); }
+.docs-collection h3 { font-size: var(--ui-text-sm); color: var(--text-muted); margin: var(--space-4) 0 var(--space-2); text-transform: capitalize; }
+.docs-collection ul { list-style: none; margin: 0; padding: 0; }
+.docs-page-link { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3); border-radius: var(--radius-sm); color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.docs-page-link:hover { background: var(--surface-3); }
+.docs-page-link.is-current { background: var(--accent-soft); color: var(--accent); }
+.docs-page-link small, .docs-note { color: var(--text-muted); font-size: var(--ui-text-sm); }
+.docs-content { min-width: 0; overflow-y: auto; padding: var(--space-6) max(var(--space-5), calc((100% - 900px) / 2)); overflow-wrap: anywhere; }
+.docs-page-header h1 { margin: var(--space-2) 0; font-size: clamp(24px, 3vw, 34px); line-height: 1.2; }
+.docs-page-header p { color: var(--text-muted); }
+.docs-eyebrow { font-size: var(--ui-text-sm); text-transform: uppercase; letter-spacing: .08em; }
+.docs-state { display: inline-block; padding: var(--space-1) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-pill); font-size: var(--ui-text-sm); }
+.docs-provenance { margin: var(--space-5) 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--ui-text); }
+.docs-provenance summary { cursor: pointer; }
+.docs-markdown { line-height: 1.75; }
+.docs-markdown pre, .docs-markdown table { max-width: 100%; overflow-x: auto; }
+.docs-markdown table { display: block; }
+@media (max-width: 600px) {
+ .workspace-primary > .shell-pane-documentation.is-visible { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+ .docs-sidebar { padding: var(--space-3); border-right: 0; border-bottom: 1px solid var(--border); max-height: 45vh; }
+ .docs-index-toggle { display: inline-flex; margin-left: auto; }
+ .docs-sidebar:not(.is-expanded) > label, .docs-sidebar:not(.is-expanded) > input, .docs-sidebar:not(.is-expanded) > p, .docs-sidebar:not(.is-expanded) > nav { display: none; }
+ .docs-sidebar-head { margin-bottom: var(--space-2); }
+ .docs-content { padding: var(--space-4); }
+}
