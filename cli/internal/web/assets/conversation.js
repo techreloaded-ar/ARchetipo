@@ -1549,7 +1549,7 @@
 	 *                            questo modulo.
 	 * @returns {string} HTML string.
 	 */
-	function renderIncrement(increment, ui) {
+	function renderIncrement(increment, ui, panel = false) {
 		if (!increment) return "";
 		const revisions = arrayAt(increment, "revisions");
 		const latest = revisions[revisions.length - 1];
@@ -1560,14 +1560,20 @@
 		const parse = body => typeof ui.markedParse === "function" ? ui.markedParse(body) : "<pre>" + escapeHtml(body) + "</pre>";
 		const link = (url, label) => /^https?:\/\//.test(url) ? '<a class="ghost-btn" target="_blank" rel="noopener noreferrer" href="' + escapeHtml(url) + '">' + escapeHtml(label) + '</a>' : "";
 		const section = (key, label, body) => '<details data-increment-section="' + escapeHtml(key) + '"' + (opened[key] ? " open" : "") + '><summary>' + escapeHtml(label) + '</summary>' + body + '</details>';
+		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
+		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
+		const active = stories.filter(story => story.active === true);
+		if (!panel) return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" aria-label="Incremento di prodotto"><header><strong title="' + escapeHtml(textAt(increment, "title")) + '">' + escapeHtml(textAt(increment, "title")) + '</strong><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="' + panelOpen + '">Dettagli incremento</button></header><div class="conv-increment-progress"><span>' + escapeHtml([textAt(increment, "activity_label"), textAt(increment, "progress_label")].filter(Boolean).join(" · ")) + '</span>' + active.map(story => '<button type="button" class="ghost-btn conv-increment-active" data-increment-story="' + escapeHtml(story.code) + '">In lavorazione: ' + escapeHtml(story.code + " · " + story.title) + '</button>').join("") + '</div></section>';
+		if (!panelOpen) return "";
 		const renderRevision = revision => '<div class="markdown-rendered">' + parse(textAt(revision, "intent")) + '</div><ol class="conv-increment-stories">' + arrayAt(revision, "stories").map(story => '<li><strong>' + escapeHtml(textAt(story, "title")) + '</strong>' + section("story-" + revision.number + "-" + story.code, "Leggi la storia", '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
-		let contents = "";
-		if (latest) contents += section("intent", "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare"), renderRevision(latest));
-		if (result) contents += '<div class="conv-increment-result"><p>' + escapeHtml(textAt(result, "summary")) + '</p>' + section("checks", "Verifiche eseguite", '<ul>' + arrayAt(result, "checks").map(check => "<li>" + escapeHtml(check) + "</li>").join("") + "</ul>") + link(textAt(result, "preview_url"), "Apri anteprima ↗") + '</div>';
+		let contents = '<h3>Storie dell’incremento</h3><ol class="conv-increment-stories">' + stories.map(story => '<li' + (story.active ? ' class="is-active"' : '') + '>' + '<span class="conv-increment-story-status">' + escapeHtml(textAt(story, "status_label")) + '</span>' + section("current-story-" + story.code, story.code + " · " + story.title, '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
+		if (!stories.length) contents += '<p>Le storie appariranno quando saranno definite.</p>';
+		if (latest) contents += section("intent", "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare"), '<div class="markdown-rendered">' + parse(textAt(latest, "intent")) + '</div>');
+		if (result) contents += '<div class="conv-increment-result"><h3>Risultato e come provarlo</h3><p>' + escapeHtml(textAt(result, "summary")) + '</p>' + section("checks", "Verifiche eseguite", '<ul>' + arrayAt(result, "checks").map(check => "<li>" + escapeHtml(check) + "</li>").join("") + "</ul>") + link(textAt(result, "preview_url"), "Apri anteprima ↗") + '</div>';
 		if (revisions.length > 1) contents += section("history", "Revisioni precedenti · " + (revisions.length - 1), revisions.slice(0, -1).reverse().map(revision => section("revision-" + revision.number, "Versione " + revision.number, renderRevision(revision) + (revision.feedback ? '<p class="conv-increment-feedback">' + escapeHtml(revision.feedback) + '</p>' : ""))).join(""));
 		if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
 		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
-		return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" tabindex="0" aria-label="Incremento di prodotto"><header><strong>' + escapeHtml(textAt(increment, "title")) + '</strong><span>' + escapeHtml(textAt(increment, "status_label")) + '</span></header><p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>' + contents + '<div class="conv-proposal-controls">' + controls + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></section>';
+		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Dettagli incremento"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi dettagli incremento">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<div class="conv-proposal-controls">' + controls + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
 	}
 
 	function renderConversation(view, draft, ui) {
@@ -1712,11 +1718,12 @@
 		// conversazione conclusa la si rilegge esattamente come una viva.
 		const controls = `${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
 		const drafts = objectAt(value, "spec_drafts");
-		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
+		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}${objectAt(value, "increment") && (objectAt(local, "incrementSections") || {})["panel-" + textAt(value.increment, "id")] ? " has-increment-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
 			<div class="conv-discussion">${renderHead(value, badge, variant, controls)}
 			${renderDraftToolbar(drafts, local)}
 			${blocks.join("")}</div>
 			${renderSpecDrafts(drafts, local)}
+			${renderIncrement(objectAt(value, "increment"), local, true)}
 		</section>`;
 	}
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -16,8 +17,16 @@ type incrementControl struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 }
+type incrementStoryView struct {
+	domain.Spec
+	StatusLabel string `json:"status_label"`
+	Active      bool   `json:"active"`
+}
 type incrementView struct {
-	Note string `json:"note"`
+	Stories       []incrementStoryView `json:"stories"`
+	ProgressLabel string               `json:"progress_label,omitempty"`
+	ActivityLabel string               `json:"activity_label,omitempty"`
+	Note          string               `json:"note"`
 	increment.Record
 	StatusLabel string             `json:"status_label"`
 	Actions     []incrementControl `json:"actions"`
@@ -38,10 +47,54 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		return view
 	}
 	view.StatusLabel = tpl.IncrementStatusLabel(r.Status)
+	view.Stories = []incrementStoryView{}
+	if len(r.Revisions) > 0 {
+		latest := r.Revisions[len(r.Revisions)-1]
+		byCode := map[string]domain.Spec{}
+		if latest.Approved {
+			live, readErr := s.incrementService(ws).Stories(ctx, r)
+			if readErr == nil {
+				for _, story := range live {
+					byCode[story.Code] = story
+				}
+			}
+		}
+		completed, known := 0, 0
+		labels := map[domain.Status]string{domain.StatusTodo: tpl.Statuses.Todo, domain.StatusPlanned: tpl.Statuses.Planned, domain.StatusInProgress: tpl.Statuses.InProgress, domain.StatusReview: tpl.Statuses.Review, domain.StatusDone: tpl.Statuses.Done}
+		for _, proposed := range latest.Stories {
+			story := incrementStoryView{Spec: proposed, StatusLabel: "Stato non disponibile"}
+			if !latest.Approved {
+				story.StatusLabel = "Da approvare"
+			}
+			if current, ok := byCode[proposed.Code]; ok {
+				story.Spec = current
+				story.StatusLabel = labels[current.Status]
+				if story.StatusLabel == "" {
+					story.StatusLabel = string(current.Status)
+				}
+				story.Active = current.Status == domain.StatusInProgress
+				known++
+				if current.Status == domain.StatusDone {
+					completed++
+				}
+			}
+			view.Stories = append(view.Stories, story)
+		}
+		if known > 0 && known == len(view.Stories) {
+			view.ProgressLabel = fmt.Sprintf("%d/%d storie completate", completed, known)
+		}
+	}
+	view.ActivityLabel = "In attesa"
 	view.Note = "Codice e storie lavorano nella sandbox. Pubblicazione nel backlog alla PR; consegna dopo il merge."
 	if r.ConversationID != "" {
 		if record, readErr := ws.conversationStore().GetMetadata(ctx, r.ConversationID); readErr == nil {
 			view.Busy = record.Work != "" && record.Work != execution.SessionIdle
+			switch record.Work {
+			case execution.SessionTurnActive:
+				view.ActivityLabel = "Agente al lavoro"
+			case execution.SessionWaitingInput, execution.SessionWaitingApproval:
+				view.ActivityLabel = "Serve il tuo intervento"
+			}
 		}
 	}
 	for _, action := range tpl.IncrementActions {

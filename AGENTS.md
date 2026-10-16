@@ -307,3 +307,13 @@ The Node shim in `npm/archetipo/bin/archetipo.js` resolves the binary package fo
 - `.archetipo/config.template.yaml` is the **template** rendered into the target project as `.archetipo/config.yaml`, and shipped in the npm package as `runtime/config.yaml`. `.archetipo/config.yaml` in this repository is the **live configuration of this repository's own workspace**: the CLI rewrites it whenever somebody picks a provider here, and it is never installed anywhere.
 - The `file` connector is the default and uses local Markdown files. The `github` connector requires an authenticated `gh` CLI; the `jira` connector requires `jira.base_url` in the config and `JIRA_EMAIL`/`JIRA_API_TOKEN` in the environment (never stored in the config).
 - See the E2E tests section above for local E2E instructions.
+
+The page-load smoke also opens increment details from the active-story shortcut,
+checks story expansion and drawer scroll preservation across polling, verifies
+mobile overlay and desktop side-by-side layout, and closes through both the
+button and Escape. It saves increment desktop/mobile screenshots in the ignored
+run directory. Progress and active story states come from sandbox connector facts;
+unreadable legacy sandboxes keep the saved proposal without inferred progress.
+The increment smoke opens the same drawer for intent approval and publication,
+scrolls long intent on desktop/mobile, and verifies reader focus and position
+across real polling before returning to the composer.

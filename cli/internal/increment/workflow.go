@@ -39,6 +39,17 @@ func (s *Service) local(r Record) (*filefs.Connector, error) {
 	}
 	return filefs.New(cfg), nil
 }
+
+// Stories reads current sandbox facts without changing the accepted revision.
+// Callers keep the proposal readable when an older sandbox is unavailable.
+func (s *Service) Stories(ctx context.Context, r Record) ([]domain.Spec, error) {
+	local, err := s.local(r)
+	if err != nil {
+		return nil, err
+	}
+	return local.FetchBacklogItems(ctx, "")
+}
+
 func frozen(r Record) bool {
 	return r.Status == Publishing || r.Status == Proposed || r.Status == Delivered
 }

@@ -175,7 +175,7 @@ async function main() {
     await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
-    await exerciseLiveConversationPagination(browser, view.url);
+    await exerciseLiveConversationPagination(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
@@ -544,7 +544,7 @@ async function exerciseActivityComposer(browser, url) {
   await page.close();
 }
 
-async function exerciseLiveConversationPagination(browser, url) {
+async function exerciseLiveConversationPagination(browser, url, runDir) {
   const page = await browser.newPage();
   const exceptions = [];
   page.on('Runtime.exceptionThrown', params => exceptions.push(params.exceptionDetails));
@@ -572,7 +572,7 @@ async function exerciseLiveConversationPagination(browser, url) {
         window.historyCursors.push(after);
         const pending = events.filter(event => event.id > after && (after < 1001 ? event.id <= 1001 : true));
         const batch = pending.slice(0,500);
-        const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}]} : undefined;
+        const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',activity_label:'Agente al lavoro',progress_label:'1/2 storie completate',stories:[{code:'US-801',title:'Filtro per mezzo',body:'Criteri della storia attiva. '.repeat(100),status_label:'In lavorazione',active:true},{code:'US-802',title:'Scelta del mezzo',body:'Criteri della storia completata',status_label:'Completata',active:false}],revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}]} : undefined;
         const approvals = window.showIncrement && !window.approvalResponse ? [{id:'scroll-approval',tool_name:'commandExecution',title:'Installare le dipendenze del progetto?',args:{command:'npm ci',context:'Dettaglio del comando da leggere. '.repeat(50)},options:[{id:'once',label:'Consenti una volta',kind:'allow'},{id:'deny',label:'Nega',kind:'deny'}]}] : [];
         return json({available:true,provider_id:'fixture',conversation:{id:'pagination-fixture',state:'ACTIVE'},session:{work:after<1001?'TURN_ACTIVE':'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},events:batch,last_id:batch.at(-1)?.id || after,has_more:pending.length>batch.length,approvals,runs:[],increment});
       }
@@ -592,6 +592,26 @@ async function exerciseLiveConversationPagination(browser, url) {
   await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
   await page.evaluate('window.showIncrement = true');
   await page.waitFor(`!!document.querySelector('[data-run-approval-id="scroll-approval"]')`, 10000, 'la decisione nella conversazione di incremento');
+  const compactIncrement = await page.evaluate(`({height:document.querySelector('.conv-increment').getBoundingClientRect().height,open:!!document.querySelector('.conv-increment-panel'),text:document.querySelector('.conv-increment').textContent})`);
+  if (compactIncrement.open || compactIncrement.height > 150 || !compactIncrement.text.includes('1/2 storie completate')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
+  await page.evaluate(`document.querySelector('[data-increment-story="US-801"]').click()`);
+  await page.waitFor(`document.querySelector('[data-increment-section="current-story-US-801"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
+  const drawer = await page.evaluate(`(() => {const body=document.querySelector('.conv-increment-body');body.scrollTop=120;return {reads:window.historyCursors.length,top:body.scrollTop,width:document.querySelector('.conv-increment-panel').getBoundingClientRect().width};})()`);
+  if (drawer.width > 390 || drawer.width < 250) throw new Error('Laterale mobile fuori schermo: '+JSON.stringify(drawer));
+  await page.waitFor(`window.historyCursors.length > ${drawer.reads}`,10000,'un aggiornamento con il laterale aperto');
+  const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="current-story-US-801"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
+  if (!drawerAfter.open || Math.abs(drawerAfter.top-drawer.top)>2) throw new Error('Il polling perde il laterale: '+JSON.stringify({drawer,drawerAfter}));
+  await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-mobile.png'),Buffer.from(result.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
+  await page.waitFor(`!document.querySelector('.conv-increment-panel')`,10000,'la chiusura del laterale e il ritorno alla chat');
+  await page.send('Emulation.setDeviceMetricsOverride', {width:1600,height:1000,deviceScaleFactor:1,mobile:false});
+  await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click()`);
+  const sideBySide = await page.evaluate(`(() => {const discussion=document.querySelector('.conv-discussion').getBoundingClientRect();const panel=document.querySelector('.conv-increment-panel').getBoundingClientRect();return {discussion:discussion.width,panel:panel.width,beside:panel.left>=discussion.right-1};})()`);
+  if (!sideBySide.beside || sideBySide.discussion<250) throw new Error('Il laterale desktop non affianca la chat: '+JSON.stringify(sideBySide));
+  await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-desktop.png'),Buffer.from(result.data,'base64')));
+  await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  await page.waitFor(`!document.querySelector('.conv-increment-panel')`,10000,'Escape chiude i dettagli');
+  await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
   await page.evaluate(`document.querySelector('[data-run-option-id="once"]').scrollIntoView({block:'center'})`);
   const positioned = await page.evaluate(`(() => {const panel=document.querySelector('.conv-discussion');const button=document.querySelector('[data-run-option-id="once"]');const rect=button.getBoundingClientRect();const bounds=panel.getBoundingClientRect();return {top:panel.scrollTop,reads:window.historyCursors.length,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom&&button.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)),timeline:document.querySelector('.conv-timeline').clientHeight};})()`);
   if (!positioned.reachable || positioned.timeline < 150) throw new Error('Decisione tagliata o chat illeggibile: ' + JSON.stringify(positioned));

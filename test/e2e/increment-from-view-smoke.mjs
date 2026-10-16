@@ -113,11 +113,18 @@ async function main(){
    control.queue.push({kind:"emit",method:"turn/completed",params:{turn:{id:nativeTurn,status:"completed"}}});
    await until(async()=>!(await read()).increment.busy,"idle native turn");
   };
-  const click=async(action)=>{await page.waitFor('!!document.querySelector(\'[data-increment-action="'+action+'"]:not(:disabled)\')',timeout,action);await page.evaluate('document.querySelector(\'[data-increment-action="'+action+'"]\').click()');};
+  const openDetails=async()=>{
+   await page.waitFor('!!document.querySelector("[data-increment-panel=open]")',timeout,"increment details entry");
+   if(!await page.evaluate('!!document.querySelector(".conv-increment-panel")')) await page.evaluate('document.querySelector("[data-increment-panel=open]").click()');
+   await page.waitFor('!!document.querySelector(".conv-increment-panel")',timeout,"increment details panel");
+  };
+  const closeDetails=async()=>{await page.evaluate('document.querySelector("[data-increment-panel=close]")?.click()');};
+  const click=async(action)=>{await openDetails();await page.waitFor('!!document.querySelector(\'[data-increment-action="'+action+'"]:not(:disabled)\')',timeout,action);await page.evaluate('document.querySelector(\'[data-increment-action="'+action+'"]\').click()');await closeDetails();};
   const propose=async(format,n)=>{
    await cliJSON(["increment","propose",inc.id],{intent:"Preparare la revisione commerciale con un file "+format+".\n\n"+Array.from({length:24},(_,i)=>"### Punto "+(i+1)+"\nDescrizione concordata: esportare i clienti selezionati e verificare il contenuto del file prima della revisione commerciale.").join("\n\n")+"\n\nFine dell’intento da leggere.",stories:[story(format)]});
    await finish(n,"Ho preparato l’intento e una storia. Leggili prima di approvare.\n\n"+Array.from({length:80},(_,i)=>"Passaggio "+(i+1)+": abbiamo chiarito il risultato e le verifiche da eseguire prima dell’approvazione.").join("\n\n"));
-   await page.waitFor('document.querySelector(".conv-increment")?.textContent.includes("'+format+'")',timeout,"persisted intent");
+   await openDetails();
+   await page.waitFor('document.querySelector(".conv-increment-panel")?.textContent.includes("'+format+'")',timeout,"persisted intent");
   };
   let recoveredTransport=false;
   const develop=async(format,n)=>{
@@ -146,38 +153,42 @@ async function main(){
    await cliJSON(["increment","ready",inc.id],{summary:"Apri hello.txt: il risultato concordato è Clienti in "+format+".",checks:["Contenuto del file verificato: Clienti in "+format]});
    await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:workflow.state});
    await finish(n,"Il risultato è pronto. Provalo e dimmi cosa cambiare.");
+   await openDetails();
    await page.waitFor('!!document.querySelector(\'[data-increment-action="publish"]:not(:disabled)\')',timeout,"business review");
+   await closeDetails();
   };
   await propose("CSV",1);
-  const collapsedIntent=await page.evaluate('(()=>{const summary=document.querySelector(\'[data-increment-section="intent"]>summary\'),r=summary.getBoundingClientRect(),card=summary.closest(".conv-increment");const button=card.querySelector(\'[data-increment-action="approve-intent"]\'),b=button.getBoundingClientRect();return {visible:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)===summary&&document.elementFromPoint(b.left+b.width/2,b.top+b.height/2)===button,cardHeight:card.clientHeight,content:card.scrollHeight};})()');
+  const collapsedIntent=await page.evaluate('(()=>{const summary=document.querySelector(\'[data-increment-section="intent"]>summary\'),r=summary.getBoundingClientRect(),card=summary.closest(".conv-increment-panel");const button=card.querySelector(\'[data-increment-action="approve-intent"]\'),b=button.getBoundingClientRect();return {visible:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)===summary&&document.elementFromPoint(b.left+b.width/2,b.top+b.height/2)===button,cardHeight:card.clientHeight,content:card.scrollHeight};})()');
   assert.equal(collapsedIntent.visible,true,"intent revision remains visible beside a long conversation: "+JSON.stringify(collapsedIntent));
   const verifyIntentScroll=async(width,height)=>{
    await page.send("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:false});
    await page.evaluate('(()=>{const section=document.querySelector(\'[data-increment-section="intent"]\');if(!section.open)section.querySelector("summary").click();})()');
    await page.waitFor('document.querySelector(\'[data-increment-section="intent"]\')?.open',timeout,"expanded long intent");
-   const geometry=await page.evaluate('(()=>{const card=document.querySelector(".conv-increment"),r=card.getBoundingClientRect();return {height:card.clientHeight,content:card.scrollHeight,overflow:getComputedStyle(card).overflowY,x:r.left+r.width/2,y:r.top+Math.min(100,r.height/2)};})()');
+   const geometry=await page.evaluate('(()=>{const card=document.querySelector(".conv-increment-body"),r=card.getBoundingClientRect();return {height:card.clientHeight,content:card.scrollHeight,overflow:getComputedStyle(card).overflowY,x:r.left+r.width/2,y:r.top+Math.min(100,r.height/2)};})()');
    assert.ok(["auto","scroll"].includes(geometry.overflow)&&geometry.content>geometry.height,"long increment needs a bounded scrolling area: "+JSON.stringify(geometry));
    // Hit testing must see the expanded panel, not the compositor frame
    // from before the viewport/details changed. Wait for paint, not a timer.
    await page.send("Input.dispatchMouseEvent",{type:"mouseMoved",x:geometry.x,y:geometry.y});
    await page.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
    await page.send("Input.dispatchMouseEvent",{type:"mouseWheel",x:geometry.x,y:geometry.y,deltaX:0,deltaY:100000});
-   await page.waitFor('document.querySelector(".conv-increment")?.scrollTop>100',timeout,"wheel scroll through the long intent");
-   await page.waitFor('(()=>{const card=document.querySelector(".conv-increment");return card.scrollHeight-card.clientHeight-card.scrollTop<2;})()',timeout,"end of increment content");
+   await page.waitFor('document.querySelector(".conv-increment-body")?.scrollTop>100',timeout,"wheel scroll through the long intent");
+   await page.waitFor('(()=>{const card=document.querySelector(".conv-increment-body");return card.scrollHeight-card.clientHeight-card.scrollTop<2;})()',timeout,"end of increment content");
    const reachable=await page.evaluate('(()=>{const button=document.querySelector(\'[data-increment-action="approve-intent"]\'),composer=document.querySelector(".conv-composer-input"),r=button.getBoundingClientRect(),c=composer.getBoundingClientRect();return {button:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.closest("[data-increment-action]")===button,composer:c.top>=0&&c.bottom<=innerHeight};})()');
-   assert.deepEqual(reachable,{button:true,composer:true},"approval and composer remain reachable after scrolling");
-   await page.send("Input.dispatchMouseEvent",{type:"mouseWheel",x:geometry.x,y:geometry.y,deltaX:0,deltaY:-300});
-   await page.waitFor('(()=>{const c=document.querySelector(".conv-increment");return c.scrollHeight-c.clientHeight-c.scrollTop>100;})()',timeout,"reading inside the intent");
-   const previousTop=await page.evaluate('(()=>{const c=document.querySelector(".conv-increment");c.focus({preventScroll:true});return c.scrollTop;})()');
-   await page.evaluate('document.querySelector("[data-conversation-technical-all]").click()');
-   assert.ok(Math.abs(await page.evaluate('document.querySelector(".conv-increment").scrollTop')-previousTop)<2,"redrawing the conversation preserves the reading position: "+JSON.stringify({width,previousTop,current:await page.evaluate('(()=>{const c=document.querySelector(".conv-increment");return {top:c.scrollTop,height:c.clientHeight,content:c.scrollHeight,open:document.querySelector("[data-increment-section=intent]").open};})()')}));
-   assert.equal(await page.evaluate('document.activeElement===document.querySelector(".conv-increment")'),true,"keyboard focus survives redraw");
+   assert.equal(reachable.button,true,"approval remains reachable after scrolling");
+   if(width>1100) assert.equal(reachable.composer,true,"desktop composer remains reachable");
+   await page.evaluate('document.querySelector(".conv-increment-body").scrollTop -= 300');
+   await page.waitFor('(()=>{const c=document.querySelector(".conv-increment-body");return c.scrollHeight-c.clientHeight-c.scrollTop>100;})()',timeout,"reading inside the intent");
+   const previousTop=await page.evaluate('(()=>{const c=document.querySelector(".conv-increment-body");c.focus({preventScroll:true});window.incrementReadingBody=c;return c.scrollTop;})()');
+   await page.waitFor('window.incrementReadingBody && !window.incrementReadingBody.isConnected',timeout,"polling with increment details open");
+   assert.ok(Math.abs(await page.evaluate('document.querySelector(".conv-increment-body").scrollTop')-previousTop)<2,"redrawing the conversation preserves the reading position: "+JSON.stringify({width,previousTop,current:await page.evaluate('(()=>{const c=document.querySelector(".conv-increment-body");return {top:c.scrollTop,height:c.clientHeight,content:c.scrollHeight,open:document.querySelector("[data-increment-section=intent]").open};})()')}));
+   assert.equal(await page.evaluate('document.activeElement===document.querySelector(".conv-increment-body")'),true,"keyboard focus survives redraw");
    await fs.writeFile(path.join(runDir,"long-intent-"+width+".png"),Buffer.from((await page.send("Page.captureScreenshot",{format:"png"})).data,"base64"));
   };
   await verifyIntentScroll(1280,800);
   await verifyIntentScroll(390,844);
+  await closeDetails();
   await page.send("Emulation.clearDeviceMetricsOverride");
-  ok("Intento lungo scorre su desktop e mobile; approvazione e compositore sono raggiungibili e la lettura resiste al ridisegno.");
+  ok("Il laterale scorre su desktop e mobile, conserva lettura e focus al polling e lascia spazio al compositore quando chiuso.");
   const parentBefore=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(parentBefore.items.length,0);
   await click("approve-intent");
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=2,"development turn");
@@ -199,14 +210,16 @@ async function main(){
   assert.equal(await git(["rev-parse","HEAD"]),baseline);
   ok("Intento approvato e sviluppo restano nel worktree e nel backlog interno.");
   const reviewedSHA=(await read()).increment.ready_sha;
+  const beforeQuestion=(await read()).session.current_turn.native_id;
   await page.evaluate('(()=>{const input=document.querySelector(".conv-composer-input");input.value="Come posso verificare il risultato?";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()');
-  await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=3,"question about the result");
+  await until(async()=>{const v=await read();return v.session.current_turn?.native_id!==beforeQuestion&&v.session.work==="TURN_ACTIVE";},"question about the result");
   await finish(3,"Apri il file descritto nelle istruzioni di prova.");
   assert.equal((await read()).increment.status,"REVIEW");
   assert.equal((await read()).increment.ready_sha,reviewedSHA);
   ok("Una domanda sul risultato non diventa una richiesta di modifica.");
+  const beforeFeedback=(await read()).session.current_turn.native_id;
   await page.evaluate('(()=>{const input=document.querySelector(".conv-composer-input");input.value="Preferisco Excel al CSV";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()');
-  await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=4,"feedback interview");
+  await until(async()=>{const v=await read();return v.session.current_turn?.native_id!==beforeFeedback&&v.session.work==="TURN_ACTIVE";},"feedback interview");
   await cliJSON(["increment","feedback",inc.id],{feedback:"Preferisco Excel al CSV"});
   await propose("Excel",4);
   await stopProcess(view.child,run);
@@ -228,6 +241,7 @@ async function main(){
   current=await read();assert.equal(current.session.session.native.id,native);assert.equal(current.increment.id,inc.id);assert.equal(current.increment.revisions.length,2);
   const localStories=await cliJSON(["spec","list"]);assert.equal(localStories.items.length,1);assert.equal(localStories.items[0].code,"US-001");
   ok("Il feedback aggiorna la stessa storia e conserva sessione, sandbox e revisioni.");
+  await openDetails();
   await page.evaluate('document.querySelector(\'[data-increment-section="intent"]\').open=true');
   await page.send("Page.reload");await page.once("Page.loadEventFired",timeout,"reload");
   await page.waitFor('!!document.querySelector(".conv-increment")',timeout,"increment after reload");

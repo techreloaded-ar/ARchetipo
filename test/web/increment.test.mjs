@@ -9,7 +9,7 @@ const base = { available: true, conversation: { id: "conv-1", state: "ACTIVE" },
 const revision = { number: 2, intent: "Un risultato concordato", approved: false, stories: [{code:"US-001",title:"Esportare i clienti",body:"Criteri leggibili"}] };
 
 test("l’incremento usa le azioni e lo stato del server, preservando il compositore libero", () => {
- const html = renderConversation({...base, increment:{id:"inc-1",title:"Esportazione",request:"La richiesta",status_label:"Etichetta fornita",note:"Nota fornita",revisions:[revision],actions:[{id:"azione-mai-vista",label:"Comando fornito"}]}}, "la mia bozza", {});
+ const html = renderConversation({...base, increment:{id:"inc-1",title:"Esportazione",request:"La richiesta",status_label:"Etichetta fornita",note:"Nota fornita",revisions:[revision],actions:[{id:"azione-mai-vista",label:"Comando fornito"}]}}, "la mia bozza", {incrementSections:{"panel-inc-1":true}});
  assert.match(html,/Etichetta fornita/);
  assert.match(html,/data-increment-action="azione-mai-vista"/);
  assert.match(html,/Comando fornito/);
@@ -25,18 +25,33 @@ test("la conversazione ordinaria non acquisisce pannelli o approvazioni di incre
  assert.match(html,/posso sviluppare liberamente/);
 });
 test("cronologia ed evidenze sono leggibili e le sezioni aperte resistono al polling", () => {
- const html = renderConversation({...base,increment:{revisions:[{...revision,number:1},revision],result:{summary:"Prova il risultato",checks:["18 verifiche passate"],preview_url:"http://127.0.0.1:3000"},actions:[]}}, "", {incrementSections:{history:true,checks:true}});
+ const html = renderConversation({...base,increment:{revisions:[{...revision,number:1},revision],result:{summary:"Prova il risultato",checks:["18 verifiche passate"],preview_url:"http://127.0.0.1:3000"},actions:[]}}, "", {incrementSections:{"panel-":true,history:true,checks:true}});
  assert.match(html,/data-increment-section="history" open/);
  assert.match(html,/data-increment-section="checks" open/);
  assert.match(html,/18 verifiche passate/);
  assert.match(html,/Apri anteprima/);
 });
 test("un turno attivo disabilita i comandi e i contenuti ricevuti non diventano HTML attivo", () => {
- const html = renderConversation({...base,increment:{title:'<img src=x onerror=alert(1)>',revisions:[],busy:true,actions:[{id:'"><img src=x>',label:"Approva"}],result:{summary:"<script>bad()</script>",preview_url:"javascript:bad()"}}}, "", {});
+ const html = renderConversation({...base,increment:{title:'<img src=x onerror=alert(1)>',revisions:[],busy:true,actions:[{id:'"><img src=x>',label:"Approva"}],result:{summary:"<script>bad()</script>",preview_url:"javascript:bad()"}}}, "", {incrementSections:{"panel-":true}});
  assert.doesNotMatch(html,/<img |<script>|href="javascript:/);
  assert.match(html,/data-increment-action="[^"]*" disabled/);
 });
 test("il renderer non contiene gli stati o i comandi del processo", () => {
  const source=readFileSync(new URL("../../cli/internal/web/assets/conversation.js",import.meta.url),"utf8");
  for(const token of ["DISCOVERY","DEVELOPING","PUBLISHING","DELIVERED","approve-intent","increment publish","archetipo-increment"]) assert.ok(!source.includes(token),token);
+});
+
+test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
+ const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",progress_label:"1/2 storie completate",activity_label:"Agente al lavoro",revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
+ const compact = renderConversation(view,"bozza",{});
+ assert.match(compact,/Fase fornita/);
+ assert.match(compact,/1\/2 storie completate/);
+ assert.match(compact,/data-increment-story="US-002"/);
+ assert.doesNotMatch(compact,/Risultato molto lungo|Criteri completi|<aside id="increment-details"/);
+ const open = renderConversation(view,"bozza",{incrementSections:{"panel-compact":true,"current-story-US-002":true}});
+ assert.match(open,/has-increment-open/);
+ assert.match(open,/data-increment-section="current-story-US-002" open/);
+ assert.match(open,/Stato fornito/);
+ assert.match(open,/Criteri completi/);
+ assert.match(open,/Risultato molto lungo/);
 });

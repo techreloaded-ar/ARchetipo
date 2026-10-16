@@ -8,7 +8,7 @@ continuano a funzionare come prima.
 
 1. Scegli **Sviluppa un incremento** e racconta il risultato desiderato.
 2. L'agente chiarisce l'intento e propone storie piccole e verificabili.
-3. Leggi **Intento e storie** e premi **Approva intento e avvia sviluppo**.
+3. Apri **Dettagli incremento**, leggi **Intento e storie** e premi **Approva intento e avvia sviluppo**.
 4. Pianificazione, implementazione e verifica usano le skill esistenti dentro
    la sandbox. Il risultato comprende istruzioni di prova, verifiche eseguite
    e, quando il progetto la prevede, un'anteprima HTTP locale.
@@ -25,6 +25,23 @@ continuano a funzionare come prima.
 
 L'interfaccia riusa il pannello di conversazione e le sue approvazioni native.
 Non introduce una seconda board, una chat diversa o nuovi stati delle storie.
+
+## Seguire il lavoro nella chat
+
+Una barra compatta mostra titolo, fase dell’incremento, attività della sessione
+ed eventuale conteggio delle storie completate. Le storie segnate in lavorazione
+nel backlog della sandbox sono apribili direttamente dalla barra; non si presume
+che la prima storia incompleta sia quella attiva.
+
+**Dettagli incremento** apre un pannello laterale con tutte le storie, i loro
+stati e criteri espandibili, intento, risultato da provare, verifiche e comandi.
+La chat conserva lo spazio quando il pannello è chiuso. Su schermi piccoli il
+pannello occupa la vista; **Chiudi** o Escape riportano alla chat. Apertura,
+sezioni espanse e posizione di lettura si conservano durante gli aggiornamenti.
+
+Lo stesso pannello serve gli incrementi già esistenti, senza migrare i dati.
+Se la sandbox non è leggibile, intento, storie e risultati salvati restano
+consultabili, mentre gli stati non verificabili sono dichiarati non disponibili.
 
 ## Isolamento e persistenza
 

@@ -9,20 +9,26 @@
    rami, log, YAML, diff. La gerarchia la fanno peso e dimensione.
    ========================================================================= */
 
-.conv-increment{flex:0 0 auto;min-height:0;max-height:50%;overflow-y:auto;overscroll-behavior:contain;margin:16px 0;padding:18px 20px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
-.conv-increment>header{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:15px}
-.conv-increment>header>span{font-size:12px;color:var(--text-muted)}
+.conv-increment{flex:0 0 auto;min-width:0;margin:8px 0;padding:8px 14px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
+.conv-increment>header{display:flex;align-items:center;gap:10px;font-size:14px;min-width:0}
+.conv-increment>header>strong{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv-increment-phase{font-size:12px;color:var(--accent);font-weight:700}
+.conv-increment-progress{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted)}
+.conv-increment-progress:empty{display:none}
+.conv-increment-active{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
-.conv-increment details{margin:10px 0}
-.conv-increment summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--accent)}
-.conv-increment .markdown-rendered{margin-top:14px}
-.conv-increment-stories{padding-left:22px}
-.conv-increment-stories>li{margin:12px 0;font-size:14px}
-.conv-increment-note{font-size:12px;line-height:1.65;color:var(--text-muted);margin:12px 0 0}
-.conv-increment .conv-proposal-controls{flex-wrap:wrap;margin-top:14px}
+.conv-increment-panel details{margin:10px 0}
+.conv-increment-panel summary{cursor:pointer;font-size:14px;font-weight:700;color:var(--accent);overflow-wrap:anywhere}
+.conv-increment-panel .markdown-rendered{margin-top:14px;overflow-wrap:anywhere}
+.conv-increment-panel pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.conv-increment-stories{list-style:none;padding:0}
+.conv-increment-stories>li{margin:12px 0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-size:14px}
+.conv-increment-stories>li.is-active{border-left:3px solid var(--accent)}
+.conv-increment-story-status,.conv-increment-note{font-size:12px;line-height:1.65;color:var(--text-muted)}
+.conv-increment-panel .conv-proposal-controls{flex-wrap:wrap;margin-top:14px}
 .conv-increment-result{padding:12px 0;border-top:1px solid var(--border)}
 .conv-increment-result li,.conv-increment-feedback{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
-@media(max-width:640px){.conv-increment{padding:14px}.conv-increment>header{align-items:start;flex-direction:column;gap:6px}.conv-increment .approval-btn{white-space:normal;text-align:left}}
+@media(max-width:640px){.conv-increment>header{flex-wrap:wrap;gap:4px 8px}.conv-increment>header>strong{flex-basis:60%}.conv-increment>header>button{padding:3px 0;font-size:12px}.conv-increment-phase{font-size:11px}}
 
 /* Increment details and pending decisions can exceed a short conversation
    frame. Keep a readable timeline and allow the whole frame to scroll, so
@@ -8138,4 +8144,15 @@ body.no-workspace [data-workspace-scoped] {
  .docs-sidebar:not(.is-expanded) > label, .docs-sidebar:not(.is-expanded) > input, .docs-sidebar:not(.is-expanded) > p, .docs-sidebar:not(.is-expanded) > nav { display: none; }
  .docs-sidebar-head { margin-bottom: var(--space-2); }
  .docs-content { padding: var(--space-4); }
+}
+
+/* Increment context stays compact; full stories share one reading panel. */
+.conv-panel.has-increment-open { flex-direction:row; position:relative; }
+.conv-increment-panel { display:flex; flex-direction:column; flex:0 0 min(560px,48%); min-width:0; min-height:0; border-left:1px solid var(--border); background:var(--surface); }
+.conv-increment-panel>header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 18px; border-bottom:1px solid var(--border); }
+.conv-increment-panel h2 { font-size:16px; margin:0; overflow-wrap:anywhere; }
+.conv-increment-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:16px 18px; }
+@media(max-width:1100px) {
+ .conv-panel.has-increment-open .conv-increment-panel { position:absolute; inset:0; z-index:6; width:100%; border-left:0; }
+ .conv-panel.has-increment-open>.conv-discussion { visibility:hidden; }
 }

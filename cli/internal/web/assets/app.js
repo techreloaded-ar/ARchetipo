@@ -6338,6 +6338,18 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			const incrementPanel = e.target.closest("[data-increment-panel]");
+			const incrementStory = e.target.closest("[data-increment-story]");
+			if ((incrementPanel || incrementStory) && conversationView?.increment) {
+				const open = !!incrementStory || incrementPanel.getAttribute("data-increment-panel") === "open";
+				conversationIncrementSections["panel-" + conversationView.increment.id] = open;
+				if (incrementStory) conversationIncrementSections["current-story-" + incrementStory.getAttribute("data-increment-story")] = true;
+				renderConversationPanel();
+				const target = open ? conversationEl.querySelector(incrementStory ? '[data-increment-section="current-story-' + cssEscape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
+				target?.focus({preventScroll:true});
+				if (incrementStory) target?.scrollIntoView({block:"nearest"});
+				return;
+			}
 			const incrementAction = e.target.closest("[data-increment-action]");
 			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
@@ -6630,6 +6642,13 @@
 		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
 		// scrivendo.
 		container.addEventListener("keydown", (e) => {
+			if (e.key === "Escape" && conversationView?.increment && conversationIncrementSections["panel-" + conversationView.increment.id] && !conversationModelChoiceOpen && !topModal()) {
+				e.preventDefault();
+				conversationIncrementSections["panel-" + conversationView.increment.id] = false;
+				renderConversationPanel();
+				conversationEl.querySelector('[data-increment-panel="open"]')?.focus({preventScroll:true});
+				return;
+			}
 			if (e.key === "Escape" && conversationProposalsOpen && !conversationModelChoiceOpen && !topModal()) {
 				e.preventDefault();
 				e.stopPropagation();
@@ -8236,8 +8255,17 @@
 		if (!conversationEl) return;
 		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
 		const proposalScroll = conversationEl.querySelector(".conv-story-proposals")?.scrollTop || 0;
-		const increment = conversationEl.querySelector(".conv-increment");
-		const incrementScroll = increment && { id: increment.getAttribute("data-increment-id"), top: increment.scrollTop, focused: increment === document.activeElement };
+		const increment = conversationEl.querySelector(".conv-increment-body");
+		const incrementScroll = increment && { id: conversationView?.increment?.id, top: increment.scrollTop, focused: increment === document.activeElement };
+		const incrementFocused = document.activeElement;
+		let incrementFocusSelector = "";
+		if (incrementFocused?.closest(".conv-increment-panel")) {
+			const section = incrementFocused.closest("[data-increment-section]");
+			if (incrementFocused.tagName === "SUMMARY" && section) incrementFocusSelector = '[data-increment-section="' + cssEscape(section.getAttribute("data-increment-section")) + '"] > summary';
+			else if (incrementFocused.hasAttribute("data-increment-action")) incrementFocusSelector = '[data-increment-action="' + cssEscape(incrementFocused.getAttribute("data-increment-action")) + '"]';
+			else if (incrementFocused.hasAttribute("data-increment-panel")) incrementFocusSelector = '[data-increment-panel="close"]';
+			else if (incrementFocused.classList.contains("conv-increment-panel")) incrementFocusSelector = '.conv-increment-panel';
+		}
 		const proposalFocused = document.activeElement;
 		const proposalFocusKey = proposalFocused && proposalFocused.getAttribute("data-conversation-draft-destination");
 		const versionHadFocus = proposalFocused && proposalFocused.hasAttribute("data-conversation-proposal-version");
@@ -8349,11 +8377,12 @@
 
 		const proposals = conversationEl.querySelector(".conv-story-proposals");
 		if (proposals) proposals.scrollTop = proposalScroll;
-		const nextIncrement = conversationEl.querySelector(".conv-increment");
-		if (incrementScroll && nextIncrement?.getAttribute("data-increment-id") === incrementScroll.id) {
+		const nextIncrement = conversationEl.querySelector(".conv-increment-body");
+		if (incrementScroll && nextIncrement && conversationView?.increment?.id === incrementScroll.id) {
 			nextIncrement.scrollTop = incrementScroll.top;
 			if (incrementScroll.focused) nextIncrement.focus({ preventScroll: true });
 		}
+		if (incrementFocusSelector) conversationEl.querySelector(incrementFocusSelector)?.focus({preventScroll:true});
 		if (versionHadFocus) conversationEl.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
 		if (proposalFocusKey) {
 			Array.from(conversationEl.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
