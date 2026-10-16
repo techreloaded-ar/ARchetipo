@@ -696,7 +696,7 @@ async function exercisePermissionComposer(browser, url, runDir) {
   // Geometry must be checked in the browser: pure renderer tests cannot
   // detect a prompt squeezed by its toolbar or a menu outside the viewport.
   await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
-  await page.waitFor(`!!document.querySelector('.has-proposals-open')`, 10000, "le proposte accanto al compositore");
+  await page.waitFor(`!!document.querySelector('#workspace-inspector:not([hidden]) #inspector-details .conv-proposals-panel')`, 10000, "le proposte accanto al compositore");
   if (await page.evaluate(`!!document.querySelector('.conv-run-head')`)) throw new Error("Il riepilogo tecnico occupa ancora la chat");
   await page.evaluate(`document.querySelector('[data-conversation-technical-all]').click()`);
   await page.waitFor(`!!document.querySelector('.conv-run-head')`, 10000, "il riepilogo nel dettaglio tecnico");
@@ -720,7 +720,7 @@ async function exercisePermissionComposer(browser, url, runDir) {
   const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
   await fs.writeFile(path.join(runDir, 'composer-proposals-permissions.png'), Buffer.from(screenshot.data, 'base64'));
   await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape'});
-  if (await page.evaluate(`!document.querySelector('.has-proposals-open')`)) throw new Error('Escape ha chiuso le proposte prima del menu');
+  if (await page.evaluate(`!document.querySelector('#workspace-inspector:not([hidden]) #inspector-details .conv-proposals-panel')`)) throw new Error('Escape ha chiuso le proposte prima del menu');
   await page.evaluate(`document.querySelector('[data-conversation-proposals-close]').click()`);
   // Chrome acknowledges viewport emulation before dispatching resize. The
   // app intentionally closes menus on resize, so open only after that event.

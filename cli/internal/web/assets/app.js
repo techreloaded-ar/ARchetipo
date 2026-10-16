@@ -6343,9 +6343,11 @@
 			if ((incrementPanel || incrementStory) && conversationView?.increment) {
 				const open = !!incrementStory || incrementPanel.getAttribute("data-increment-panel") === "open";
 				conversationIncrementSections["panel-" + conversationView.increment.id] = open;
+				if (open) window.WorkspacePanels?.open("details");
+				else window.WorkspacePanels?.close();
 				if (incrementStory) conversationIncrementSections["current-story-" + incrementStory.getAttribute("data-increment-story")] = true;
 				renderConversationPanel();
-				const target = open ? conversationEl.querySelector(incrementStory ? '[data-increment-section="current-story-' + cssEscape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
+				const target = open ? conversationEl.parentElement.querySelector(incrementStory ? '[data-increment-section="current-story-' + cssEscape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
 				target?.focus({preventScroll:true});
 				if (incrementStory) target?.scrollIntoView({block:"nearest"});
 				return;
@@ -6356,9 +6358,10 @@
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
 			if (showProposals) {
 				conversationProposalsOpen = true;
+				window.WorkspacePanels?.open("details");
 				conversationProposalVersion = showProposals.getAttribute("data-conversation-proposals-show");
 				renderConversationPanel();
-				conversationEl.querySelector(".conv-proposals-panel")?.focus({preventScroll:true});
+				conversationEl.parentElement.querySelector(".conv-proposals-panel")?.focus({preventScroll:true});
 				return;
 			}
 			if (e.target.closest("[data-conversation-proposals-close]")) {
@@ -6545,6 +6548,7 @@
 						if (!input.value.trim()) input.value = `Vorrei modificare ${code ? code + " " : "la proposta "}«${selected.draft.title}»: `;
 						input.dispatchEvent(new Event("input", { bubbles: true }));
 						conversationProposalsOpen = false;
+						window.WorkspacePanels?.close();
 						renderConversationPanel();
 						const composer = conversationEl.querySelector(".conv-composer-input");
 						composer.focus();
@@ -6646,6 +6650,7 @@
 			if (e.key === "Escape" && conversationView?.increment && conversationIncrementSections["panel-" + conversationView.increment.id] && !conversationModelChoiceOpen && !topModal()) {
 				e.preventDefault();
 				conversationIncrementSections["panel-" + conversationView.increment.id] = false;
+				window.WorkspacePanels?.close();
 				renderConversationPanel();
 				conversationEl.querySelector('[data-increment-panel="open"]')?.focus({preventScroll:true});
 				return;
@@ -6698,6 +6703,17 @@
 	}
 
 	bindConversationPanel(conversationEl);
+	bindConversationPanel(document.getElementById("inspector-details"));
+	window.addEventListener("archetipo:details-open", () => {
+		if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
+		else if (conversationView?.spec_drafts) conversationProposalsOpen = true;
+		renderConversationPanel();
+	});
+	window.addEventListener("archetipo:details-close", () => {
+		if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = false;
+		conversationProposalsOpen = false;
+		renderConversationPanel();
+	});
 
 	choicePopoverClosers.push(() => {
 		if (!conversationModelChoiceOpen) return;
@@ -7427,6 +7443,7 @@
 	// already described, without letting a second place assign the current id.
 	async function switchToConversation(id, preloaded) {
 		if (!id) return;
+		window.WorkspacePanels?.reset();
 		stopConversationPolling();
 		conversationsCurrentId = id;
 		conversationProposalsOpen = false;
@@ -8265,6 +8282,16 @@
 	// it preserves the two things a re-render would otherwise steal: the text
 	// being typed and the reading position in the timeline.
 	function renderConversationPanel() {
+		const currentConversation = conversationView?.conversation;
+		window.WorkspacePanels?.configure({
+			key: currentConversation ? currentConversation.working_dir + ":" + currentConversation.id : "",
+			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
+			detailsLabel: conversationView?.increment ? "Incremento" : "Storie",
+		});
+		if (window.WorkspacePanels?.detailsSelected()) {
+			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
+			else conversationProposalsOpen = true;
+		}
 		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsActive() && !conversationBusy} : null);
 		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
 		if (newConversation) {
@@ -8273,8 +8300,8 @@
 		}
 		if (!conversationEl) return;
 		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
-		const proposalScroll = conversationEl.querySelector(".conv-story-proposals")?.scrollTop || 0;
-		const increment = conversationEl.querySelector(".conv-increment-body");
+		const proposalScroll = conversationEl.parentElement.querySelector(".conv-story-proposals")?.scrollTop || 0;
+		const increment = conversationEl.parentElement.querySelector(".conv-increment-body");
 		const incrementScroll = increment && { id: conversationView?.increment?.id, top: increment.scrollTop, focused: increment === document.activeElement };
 		const incrementFocused = document.activeElement;
 		let incrementFocusSelector = "";
@@ -8390,21 +8417,27 @@
 			},
 		);
 
+		// Delivery details share the work panel with the persistent preview.
+		// Move only these nodes; the discussion keeps its original render path.
+		const detailNodes = Array.from(conversationEl.querySelectorAll(".conv-increment-panel, .conv-proposals-panel"));
+		window.WorkspacePanels?.attach(detailNodes);
+		conversationEl.querySelector(".conv-panel")?.classList.remove("has-increment-open", "has-proposals-open");
+
 		// Il contatore vive quanto la riga che aggiorna, non un istante di piu'.
 		if (conversationWorkingSince) startConversationWorkingTicker();
 		else stopConversationWorkingTicker();
 
-		const proposals = conversationEl.querySelector(".conv-story-proposals");
+		const proposals = conversationEl.parentElement.querySelector(".conv-story-proposals");
 		if (proposals) proposals.scrollTop = proposalScroll;
-		const nextIncrement = conversationEl.querySelector(".conv-increment-body");
+		const nextIncrement = conversationEl.parentElement.querySelector(".conv-increment-body");
 		if (incrementScroll && nextIncrement && conversationView?.increment?.id === incrementScroll.id) {
 			nextIncrement.scrollTop = incrementScroll.top;
 			if (incrementScroll.focused) nextIncrement.focus({ preventScroll: true });
 		}
-		if (incrementFocusSelector) conversationEl.querySelector(incrementFocusSelector)?.focus({preventScroll:true});
-		if (versionHadFocus) conversationEl.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
+		if (incrementFocusSelector) conversationEl.parentElement.querySelector(incrementFocusSelector)?.focus({preventScroll:true});
+		if (versionHadFocus) conversationEl.parentElement.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
 		if (proposalFocusKey) {
-			Array.from(conversationEl.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
+			Array.from(conversationEl.parentElement.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
 		}
 		const nextTimeline = conversationEl.querySelector(".conv-timeline");
 		if (nextTimeline) {
@@ -8753,6 +8786,7 @@
 	}
 
 	function closeConversationProposals() {
+		window.WorkspacePanels?.close();
 		conversationProposalsOpen = false;
 		renderConversationPanel();
 		conversationEl.querySelector(".conv-proposals-toolbar [data-conversation-proposals-show]")?.focus({preventScroll:true});

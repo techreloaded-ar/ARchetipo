@@ -189,6 +189,8 @@
              workspace-layout.js and arrives here as is-visible / is-hidden. -->
         <aside id="workspace-conversations" class="conversation-rail" aria-label="Conversazioni"></aside>
 
+        <button id="rail-toggle" class="rail-toggle" type="button" aria-controls="workspace-conversations" aria-expanded="true" aria-label="Riduci elenco conversazioni" title="Riduci elenco conversazioni"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M9 4H4v16h5M15 7l-5 5 5 5M10 12h10"/></svg></button>
+        <div id="rail-splitter" class="column-splitter rail-splitter" role="separator" tabindex="0" aria-label="Larghezza elenco conversazioni" aria-orientation="vertical" aria-valuemin="190" aria-valuemax="420" aria-valuenow="264"></div>
         <div id="workspace-primary" class="workspace-primary">
             <!-- The conversation of the open workspace (US-053), mounted once
                  and in one place only: a workspace holds a single conversation.
@@ -197,7 +199,12 @@
                  visibility belongs to the layout module alone. Everything it
                  draws comes from /api/workspace/conversations/{id}, through the pure
                  renderer in conversation.js. -->
-            <aside id="browser-preview" class="browser-preview" aria-label="Preview del lavoro" hidden></aside>
+            <div id="inspector-splitter" class="column-splitter inspector-splitter" role="separator" tabindex="0" aria-label="Larghezza pannello destro" aria-orientation="vertical" aria-valuemin="300" aria-valuemax="1000" aria-valuenow="480" hidden></div>
+            <aside id="workspace-inspector" class="workspace-inspector" aria-label="Pannello del lavoro" hidden>
+                <header class="inspector-head"><div role="tablist" aria-label="Contenuto del pannello"><button id="inspector-preview-tab" type="button" role="tab" aria-selected="true" aria-controls="browser-preview" data-inspector-tab="preview">Preview</button><button id="inspector-details-tab" type="button" role="tab" aria-selected="false" aria-controls="inspector-details" data-inspector-tab="details" tabindex="-1">Incremento</button></div><button type="button" class="inspector-close" data-inspector-close data-preview="close" aria-label="Chiudi pannello" title="Chiudi pannello"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header>
+                <section id="browser-preview" class="browser-preview" role="tabpanel" aria-labelledby="inspector-preview-tab" hidden></section>
+                <section id="inspector-details" class="inspector-details" role="tabpanel" aria-labelledby="inspector-details-tab" hidden></section>
+            </aside>
             <section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" data-workspace-scoped></section>
 
             <main id="board" class="board shell-pane-board is-hidden"></main>
@@ -888,6 +895,8 @@
     <script src="/vendor/easymde.min.js"></script>
     <script src="/task-markdown.js"></script>
     <script src="/workspace-status.js"></script>
+    <script src="/workspace-columns.js"></script>
+    <script src="/workspace-panels.js"></script>
     <script src="/preview.js"></script>
     <script src="/preview-panel.js"></script>
     <script src="/conversation.js"></script>

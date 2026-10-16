@@ -52,6 +52,19 @@ async function main(){
   const exceptions=[];page.on('Runtime.exceptionThrown',event=>exceptions.push(event.exceptionDetails));
   await page.send('Runtime.enable');await page.send('Page.enable');
   const contexts=new Map();page.on('Runtime.executionContextCreated',event=>{if(event.context.auxData?.isDefault)contexts.set(event.context.auxData.frameId,event.context.id);});
+  // Keep delivery and session operations real. Add only a read-only increment
+  // presentation to the conversation GET, to exercise its shared work panel.
+  await page.send('Page.addScriptToEvaluateOnNewDocument',{source:`
+   const originalFetch=window.fetch.bind(window);
+   window.fetch=async(input,options={})=>{
+    const response=await originalFetch(input,options);
+    if(new URL(typeof input==='string'?input:input.url,location.href).pathname===${JSON.stringify('/api/workspace/conversations/'+conversationID)} && (options.method||'GET')==='GET' && response.ok){
+     const value=await response.json();value.increment={id:'layout-fixture',title:'Risultato della lavorazione',status_label:'Da provare',request:'Una pagina da verificare.',stories:[{code:'US-001',title:'Consultare il risultato',status_label:'Completata',body:'Il risultato è navigabile nel browser.'}],actions:[]};
+     return new Response(JSON.stringify(value),{status:response.status,headers:response.headers});
+    }
+    return response;
+   };
+  `});
   await page.send('Page.navigate',{url:viewer.url});
   await page.waitFor(`!!document.querySelector('[data-conversation-id="${conversationID}"]')`,timeout,'conversation in rail');
   await page.evaluate(`document.querySelector('[data-conversation-id="${conversationID}"]').click()`);
@@ -84,6 +97,29 @@ async function main(){
   await until(()=>polls>0,'conversation poll with preview mounted');
   assert.equal(await evaluateFrame('window.mountId'),mount,'chat polling reloaded the preview');
   ok('Avvio esplicito del server, selezione HTML senza azionare il pulsante e iframe stabile durante il polling.');
+  await page.evaluate(`document.querySelector('[data-inspector-tab="details"]').click()`);
+  await page.waitFor('!document.querySelector("#inspector-details").hidden && !!document.querySelector(".conv-increment-panel")',timeout,'increment in shared inspector');
+  await page.evaluate(`document.querySelector('[data-inspector-tab="preview"]').click()`);
+  await page.waitFor('!document.querySelector("#browser-preview").hidden',timeout,'return to mounted preview');
+  assert.equal(await evaluateFrame('window.mountId'),mount,'changing inspector tabs remounted preview');
+  assert.equal(await page.evaluate('document.querySelectorAll(".preview-comment textarea").length'),2);
+  const drag=async(id,dx)=>{
+   const before=await page.evaluate(`(()=>{const r=document.getElementById('${id}').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+Math.min(80,r.height/2)};})()`);
+   await page.send('Input.dispatchMouseEvent',{type:'mousePressed',x:before.x,y:before.y,button:'left',clickCount:1});
+   await page.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:before.x+dx,y:before.y,button:'left',buttons:1});
+   await page.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:before.x+dx,y:before.y,button:'left',clickCount:1});
+  };
+  const dimensions=()=>page.evaluate('({rail:document.getElementById("workspace-conversations").getBoundingClientRect().width,right:document.getElementById("workspace-inspector").getBoundingClientRect().width})');
+  const initialColumns=await dimensions();await drag('rail-splitter',50);const afterRail=await dimensions();assert.ok(afterRail.rail>initialColumns.rail+40);
+  await drag('inspector-splitter',-70);const afterRight=await dimensions();assert.ok(afterRight.right>afterRail.right+50);
+  await page.evaluate('document.getElementById("rail-toggle").click()');
+  assert.equal(await page.evaluate('document.getElementById("workspace-shell").classList.contains("rail-collapsed")'),true);
+  assert.equal(await page.evaluate('document.getElementById("rail-toggle").getAttribute("aria-expanded")'),'false');
+  await page.evaluate('document.getElementById("rail-toggle").click()');
+  assert.ok(Math.abs((await dimensions()).rail-afterRail.rail)<2);
+  const desktopImage=await page.send('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(dir,'preview-desktop.png'),Buffer.from(desktopImage.data,'base64'));
+  ok('Colonne ridimensionate con trascinamento, elenco richiudibile e schede Preview/Incremento senza perdita di pagina o commenti.');
+
   await page.evaluate('document.querySelector("[data-preview=close]").click();document.querySelector("[data-conversation-preview]").click()');
   assert.equal(await page.evaluate('document.querySelectorAll(".preview-comment textarea").length'),2);
   await page.evaluate('document.querySelector("[data-preview=send]").click()');
@@ -106,7 +142,8 @@ async function main(){
   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
   await page.waitFor('document.querySelector(".preview-comment textarea")?.value === "Commento da conservare"',timeout,'draft restored after page reload');
   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'picker after page reload');
-  ok('La riapertura della pagina conserva i commenti non inviati.');
+  const restoredColumns=await dimensions();assert.ok(Math.abs(restoredColumns.rail-afterRail.rail)<2);assert.ok(Math.abs(restoredColumns.right-afterRight.right)<2);
+  ok('La riapertura della pagina conserva i commenti non inviati e le larghezze scelte.');
   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await page.waitFor('document.querySelector("#browser-preview").getBoundingClientRect().width < 400',timeout,'mobile preview');
   assert.equal(await page.evaluate('document.documentElement.scrollWidth > innerWidth'),false);

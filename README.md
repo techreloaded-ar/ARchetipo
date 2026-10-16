@@ -232,9 +232,17 @@ Two limits are worth knowing. A development server the agent starts may or may n
 ### Browser previews and comments
 
 Every conversation can show the work from its own working directory. Open
-**Preview**, ask **Prepara con l’agente** to identify the project's launch command,
+**Preview**, ask **Prepara preview** to identify the project's launch command,
 then press **Avvia preview**. ARchetipo does not infer a framework or automatically
 start commands when a conversation opens.
+
+The conversation rail can be collapsed with its arrow. Drag the separators to
+resize the rail and the work panel; keyboard arrows work on focused separators,
+and double-click restores the default width. Widths and the collapsed preference
+are remembered in this browser. The right panel switches between **Preview** and
+**Incremento** (or **Storie** for story proposals), preserving the running page and
+comment drafts. On narrow screens the work panel overlays the conversation.
+Server stop and reconfiguration live in the preview's options menu.
 
 The agent saves an explicit recipe through the CLI, from the conversation's
 working directory:

@@ -325,5 +325,7 @@ across real polling before returning to the composer.
   elements without triggering their actions, retain the iframe across chat
   polling, deliver cumulative comments to the same native thread, preserve drafts
   on delivery failure, verify a 390px viewport and stop the actual server process.
-  No AI credentials or non-local services; missing Chrome fails explicitly.
+  It also drags both column separators, collapses/restores the conversation rail,
+  switches Preview/Increment tabs without remounting the frame, and checks width
+  preferences after reload. No AI credentials or non-local services; missing Chrome fails explicitly.
   Reports and screenshots are written under ignored `test/workspaces/` paths.

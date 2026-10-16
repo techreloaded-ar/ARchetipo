@@ -4,12 +4,20 @@
  "use strict";
  const host=document.getElementById("browser-preview");
  if(!host || !window.Preview) return;
- host.innerHTML=`<header class="preview-head"><strong>Preview</strong><button type="button" data-preview="close" aria-label="Chiudi preview">Chiudi</button></header>
- <div class="preview-tools"><button type="button" data-preview="start">Avvia preview</button><button type="button" data-preview="setup">Prepara con l’agente</button><button type="button" data-preview="stop">Arresta</button><button type="button" data-preview="reload">Ricarica</button><a data-preview="external" target="_blank" rel="noopener noreferrer">Apri fuori ↗</a><label>Schermo <select data-preview="width"><option value="100%">Desktop</option><option value="820px">Tablet</option><option value="390px">Mobile</option></select></label><button type="button" data-preview="pick">Commenta un elemento</button></div>
+ const icon=(path)=>`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+ const play=icon('<path d="m9 5 11 7-11 7Z"/>');
+ const refreshIcon=icon('<path d="M20 7v5h-5M4 17a8 8 0 0 0 14 1M20 12A8 8 0 0 0 6 6L4 9"/>');
+ const pointer=icon('<path d="m5 3 14 10-7 1-3 7Z"/>');
+ const external=icon('<path d="M14 3h7v7M21 3 10 14M10 3H4v17h17v-6"/>');
+ const monitor=icon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>');
+ host.innerHTML=`<div class="preview-toolbar">
+  <div class="preview-location"><span class="preview-state-dot"></span><span class="preview-location-text">Anteprima locale</span></div>
+  <div class="preview-toolbar-actions"><button type="button" class="preview-launch" data-preview="setup">${play}<span>Prepara preview</span></button><button type="button" class="preview-launch" data-preview="start">${play}<span>Avvia preview</span></button><button type="button" class="preview-icon" data-preview="reload" aria-label="Ricarica preview" title="Ricarica">${refreshIcon}</button><a class="preview-icon" data-preview="external" target="_blank" rel="noopener noreferrer" aria-label="Apri preview nel browser" title="Apri nel browser">${external}</a><details class="preview-menu"><summary class="preview-icon" aria-label="Altre opzioni preview" title="Altre opzioni">···</summary><div><button type="button" data-preview="reconfigure">Prepara di nuovo con l’agente</button><button type="button" class="preview-stop" data-preview="stop">Arresta server</button></div></details></div>
+ </div>
+ <div class="preview-tools"><label class="preview-viewport">${monitor}<span class="sr-only">Dimensioni schermo</span><select data-preview="width" aria-label="Dimensioni schermo"><option value="100%">Adatta</option><option value="820px">Tablet · 820</option><option value="390px">Mobile · 390</option></select></label><button type="button" class="preview-pick" data-preview="pick">${pointer}<span>Commenta un elemento</span></button></div>
+ <div class="preview-stage"><div class="preview-placeholder"><svg width="64" height="54" viewBox="0 0 64 54" fill="none" aria-hidden="true"><rect x="5" y="5" width="54" height="43" rx="7" stroke="currentColor" stroke-width="1.4"/><path d="M5 17h54M13 11h1m4 0h1m4 0h1M25 27l-5 5 5 5m14-10 5 5-5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><h3>Il tuo lavoro, qui.</h3><p>Avvia l’applicazione per esplorare il risultato e indicare cosa cambiare.</p></div></div>
  <p class="preview-status" role="status" aria-live="polite"></p><details class="preview-log"><summary>Output del server</summary><pre></pre></details>
- <div class="preview-stage"></div><section class="preview-comments" aria-label="Commenti da inviare"><div class="preview-comment-list"></div><button type="button" data-preview="send">Invia modifiche</button></section>`;
- host.querySelectorAll("button").forEach(button=>button.classList.add("ghost-btn"));
- host.querySelector("[data-preview=send]").className="primary-btn";
+ <section class="preview-comments" aria-label="Commenti da inviare"><div class="preview-comments-head"><strong>Modifiche da chiedere</strong><span class="preview-comments-count"></span></div><div class="preview-comment-list"></div><div class="preview-comments-footer"><button type="button" class="preview-launch" data-preview="send">Invia modifiche</button></div></section>`;
  const find=k=>host.querySelector(`[data-preview="${k}"]`);
  const stage=host.querySelector(".preview-stage"), status=host.querySelector(".preview-status"), list=host.querySelector(".preview-comment-list");
  let current=null, key="", open=false, frame=null, view=null, ready=false, picking=false, busy=false, poll=null, request=0;
@@ -46,12 +54,26 @@
   find("send").disabled=busy || !current?.writable || !comments.length || comments.some(c=>!c.note.trim());
   find("send").textContent=`Invia modifiche${comments.length ? " ("+comments.length+")" : ""}`;
   find("pick").disabled=!ready || busy || comments.length>=30;
-  find("pick").textContent=picking?"Seleziona un elemento · Esc per annullare":"Commenta un elemento";
+  find("pick").querySelector("span").textContent=picking?"Selezione attiva · Esc":"Commenta un elemento";
   find("pick").setAttribute("aria-pressed",String(picking));
   find("setup").disabled=busy || !current?.writable;
   find("start").disabled=busy || !view?.configured || ["starting","ready"].includes(view?.state);
   find("stop").disabled=busy || !["starting","ready","error"].includes(view?.state);
   find("reload").disabled=!frame;
+  const state=view?.state || "unconfigured";
+  host.dataset.state=state;
+  find("setup").hidden=state!=="unconfigured";
+  find("start").hidden=["unconfigured","ready"].includes(state);
+  find("start").querySelector("span").textContent=state==="starting"?"Avvio in corso…":"Avvia preview";
+  find("pick").hidden=state!=="ready";
+  find("reload").hidden=state!=="ready";
+  find("external").hidden=state!=="ready";
+  host.querySelector(".preview-tools").hidden=state!=="ready";
+  host.querySelector(".preview-comments").hidden=!comments.length;
+  host.querySelector(".preview-comments-count").textContent=String(comments.length);
+  host.querySelector(".preview-placeholder").hidden=!!frame;
+  host.querySelector(".preview-location-text").textContent=view?.recipe?.url || "Anteprima locale";
+  host.querySelector(".preview-location-text").title=view?.recipe?.url || "";
  }
  function apply(value){
   view=value;
@@ -79,7 +101,7 @@
  }
  function visibility(){
   host.hidden=!open || !current;
-  document.querySelector(".workspace-primary")?.classList.toggle("has-browser-preview",open && !!current);
+
   clearInterval(poll);poll=null;
   if(open && current){void refresh();poll=setInterval(refresh,1500);}
  }
@@ -90,13 +112,15 @@
    persist();request++;clearFrame();current=value;key=next;view=null;ready=false;busy=false;notice="";
    let saved=states.get(key);
    if(!saved){let drafts=[];try{drafts=JSON.parse(localStorage.getItem(key)||"[]");}catch{/* Invalid drafts are ignored. */}saved={open:false,comments:Array.isArray(drafts)?drafts.filter(c=>window.Preview.cleanElement(c?.element) && typeof c.note==="string").slice(0,30):[]};}
-   open=saved.open;comments=saved.comments;drawComments();visibility();
+   open=window.WorkspacePanels?.isPreviewActive() || false;comments=saved.comments;drawComments();visibility();
   },
-  toggle(){if(!current)return;open=!open;persist();visibility();}
+  setActive(active){if(open===active)return;open=active;persist();visibility();},
+  toggle(){if(!current)return;if(window.WorkspacePanels){window.WorkspacePanels.toggle("preview");return;}open=!open;persist();visibility();}
  };
  host.addEventListener("click",async event=>{
   const button=event.target.closest("[data-preview]");if(!button || button.disabled)return;
-  const action=button.dataset.preview;
+  const action=button.dataset.preview==="reconfigure"?"setup":button.dataset.preview;
+  host.querySelector(".preview-menu").open=false;
   if(action==="close"){open=false;persist();visibility();return;}
   if(action==="pick"){picking=!picking;post("archetipo-picker-toggle",{active:picking});updateButtons();return;}
   if(action==="reload"){if(frame){ready=false;frame.src=frame.src;}return;}
