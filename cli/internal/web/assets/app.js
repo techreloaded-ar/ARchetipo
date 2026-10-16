@@ -6350,6 +6350,7 @@
 				if (incrementStory) target?.scrollIntoView({block:"nearest"});
 				return;
 			}
+			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
 			const incrementAction = e.target.closest("[data-increment-action]");
 			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
@@ -7988,6 +7989,23 @@
 			return true;
 		} catch (err) { conversationRefusal = err.message || String(err); return false; }
 	}
+	// Preview feedback uses this same native conversation; it never starts an
+	// action selected in the composer or consumes the person's draft.
+	window.addEventListener("archetipo:preview-send", async (event) => {
+		const {id, message, resolve, reject} = event.detail;
+		if (id !== conversationsCurrentId || conversationBusy || !conversationIsActive()) { reject(new Error("Attendi che la conversazione possa ricevere un messaggio.")); return; }
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			await conversationNextTurnSaves.get(id);
+			if (id !== conversationsCurrentId) throw new Error("La conversazione è cambiata; i commenti sono conservati.");
+			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`, {message});
+			if (id === conversationsCurrentId) { applyConversationView(view); startConversationPolling(); }
+			resolve();
+		} catch (error) { reject(error); }
+		finally { conversationBusy = false; renderConversationPanel(); }
+	});
+
 	async function sendConversationMessage() {
 		if (conversationBusy) return;
 		const proposal = conversationDraft.trim();
@@ -8247,6 +8265,7 @@
 	// it preserves the two things a re-render would otherwise steal: the text
 	// being typed and the reading position in the timeline.
 	function renderConversationPanel() {
+		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsActive() && !conversationBusy} : null);
 		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
 		if (newConversation) {
 			newConversation.disabled = conversationBusy;

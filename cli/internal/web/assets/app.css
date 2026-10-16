@@ -8156,3 +8156,26 @@ body.no-workspace [data-workspace-scoped] {
  .conv-panel.has-increment-open .conv-increment-panel { position:absolute; inset:0; z-index:6; width:100%; border-left:0; }
  .conv-panel.has-increment-open>.conv-discussion { visibility:hidden; }
 }
+
+/* The preview frame is mounted once, beside the chat, outside its poll renderer. */
+.browser-preview[hidden] { display:none !important; }
+.browser-preview { min-width:0; min-height:0; overflow:auto; border-left:1px solid var(--border, #ddd); background:var(--bg,#fff); display:flex; flex-direction:column; gap:8px; padding:12px; grid-area:1 / 2; }
+.workspace-primary.has-browser-preview { grid-template-columns:minmax(320px, 1fr) minmax(400px, 1.3fr); }
+#workspace-shell:not([data-view="conversation"]) .browser-preview { display:none; }
+#workspace-shell:not([data-view="conversation"]) .workspace-primary.has-browser-preview { grid-template-columns:minmax(0,1fr); }
+.preview-head { display:flex; justify-content:space-between; align-items:center; }
+.preview-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.preview-tools button, .preview-head button, .preview-comments button { font:inherit; cursor:pointer; padding:6px 10px; }
+.preview-tools button:disabled, .preview-comments button:disabled { cursor:default; opacity:.5; }
+.preview-status { font-size:.85rem; margin:0; overflow-wrap:anywhere; }
+.preview-stage { flex:1 0 320px; min-height:320px; overflow:auto; background:#eee; }
+.preview-stage iframe { display:block; height:100%; min-height:400px; border:0; background:white; }
+.preview-log pre { max-height:140px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.75rem; }
+.preview-comments { max-height:40vh; overflow:auto; }
+.preview-comment { border-top:1px solid #ddd; padding:8px 0; }
+.preview-comment label { display:block; font-size:.85rem; overflow-wrap:anywhere; }
+.preview-comment textarea { display:block; width:100%; box-sizing:border-box; font:inherit; margin:6px 0; }
+@media (max-width: 1000px) {
+ .workspace-primary.has-browser-preview { grid-template-columns:minmax(0,1fr); }
+ .browser-preview { grid-area:1 / 1; z-index:35; border:0; }
+}

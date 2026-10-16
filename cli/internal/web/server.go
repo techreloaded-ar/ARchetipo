@@ -126,7 +126,7 @@ func newServer(session *workspaceSession, registry *execution.Registry, addr str
 	s.registerRoutes()
 	s.httpSrv = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           viewerOriginGuard(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return s
@@ -282,6 +282,9 @@ func (s *Server) registerRoutes() {
 	// this process is holding and for one that ended and lives on disk, with the
 	// same payload. Two routes would leave the client to choose between them
 	// from an id alone, which is a choice an id does not carry.
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/preview", s.handleConversationPreview)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview", s.handleStartConversationPreview)
+	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/preview", s.handleStopConversationPreview)
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)

@@ -197,6 +197,7 @@
                  visibility belongs to the layout module alone. Everything it
                  draws comes from /api/workspace/conversations/{id}, through the pure
                  renderer in conversation.js. -->
+            <aside id="browser-preview" class="browser-preview" aria-label="Preview del lavoro" hidden></aside>
             <section id="workspace-conversation" class="workspace-conversation shell-pane-conversation is-visible" data-workspace-scoped></section>
 
             <main id="board" class="board shell-pane-board is-hidden"></main>
@@ -887,6 +888,8 @@
     <script src="/vendor/easymde.min.js"></script>
     <script src="/task-markdown.js"></script>
     <script src="/workspace-status.js"></script>
+    <script src="/preview.js"></script>
+    <script src="/preview-panel.js"></script>
     <script src="/conversation.js"></script>
 <script src="/conversation-index.js"></script>
     <script src="/workspace-home.js"></script>

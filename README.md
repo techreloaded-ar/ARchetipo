@@ -229,6 +229,56 @@ What that means in practice:
 
 Two limits are worth knowing. A development server the agent starts may or may not outlive the turn that started it — that is the harness's behaviour, not ARchetipo's, and the two differ; what is promised is that the conversation comes back and that from inside it you can check, stop or restart the service. And conversations are a local-runtime feature: the `arcipelago` remote provider still runs `spec.plan` and `spec.implement` as batch runs and holds no native session.
 
+### Browser previews and comments
+
+Every conversation can show the work from its own working directory. Open
+**Preview**, ask **Prepara con l’agente** to identify the project's launch command,
+then press **Avvia preview**. ARchetipo does not infer a framework or automatically
+start commands when a conversation opens.
+
+The agent saves an explicit recipe through the CLI, from the conversation's
+working directory:
+
+```bash
+archetipo execution preview configure --file preview-recipe.json
+archetipo execution preview show
+```
+
+```json
+{
+  "version": 1,
+  "directory": ".",
+  "argv": ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"],
+  "url": "http://127.0.0.1:5173/"
+}
+```
+
+The CLI persists `.archetipo/preview.json`. `directory` is relative to that
+checkout; `argv` is an explicit argument array, executed without an implicit
+shell. Choose a dedicated port per working directory. Omit `argv` to use a server
+managed elsewhere. Missing dependencies or external services must be prepared
+before the preview can run. The same recipe is available standalone through
+`archetipo execution preview run`, which prints its ready URL and runs until
+interrupted.
+
+ARchetipo waits for an HTTP response, provides the server's output on failure,
+and serves the application through a separate loopback origin, including
+WebSocket updates. **Arresta** terminates an owned command tree; it never kills a
+server borrowed from another process. Closing the panel keeps the server running;
+workspace switch, viewer exit and deleting the conversation stop owned previews.
+A viewer restart retains the recipe and requires an explicit start again.
+
+**Commenta un elemento** highlights the HTML element you select without activating
+it. Write several comments and press **Invia modifiche** to send one request to
+the same conversation, with page, URL, visible text and element identifiers.
+Draft comments stay in this browser until sent or removed, including after a
+failed send. The application source is not changed by the selector and there is
+no visual editing. The selector is added only to HTML responses in the local
+preview. Pages that forbid framing or injected scripts, nested cross-origin
+frames, canvas internals and non-HTML applications may not support selection;
+use the external link or a normal conversation message in those cases. Preview
+servers currently use loopback HTTP URLs and the local viewer browser.
+
 ### Remote execution on an ARcipelago fleet
 
 The `arcipelago` provider dispatches `spec.plan` and `spec.implement` to a remote fleet, so planning and implementation run on someone else's machines while the backlog stays here.

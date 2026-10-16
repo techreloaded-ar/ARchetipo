@@ -317,3 +317,13 @@ unreadable legacy sandboxes keep the saved proposal without inferred progress.
 The increment smoke opens the same drawer for intent approval and publication,
 scrolls long intent on desktop/mobile, and verifies reader focus and position
 across real polling before returning to the composer.
+
+
+- `npm run test:view-preview-smoke`: builds the real CLI, configures an explicit
+  preview recipe, opens a free native conversation with the deterministic Codex
+  fixture, and uses headless Chrome to start an owned HTTP app, select HTML
+  elements without triggering their actions, retain the iframe across chat
+  polling, deliver cumulative comments to the same native thread, preserve drafts
+  on delivery failure, verify a 390px viewport and stop the actual server process.
+  No AI credentials or non-local services; missing Chrome fails explicitly.
+  Reports and screenshots are written under ignored `test/workspaces/` paths.

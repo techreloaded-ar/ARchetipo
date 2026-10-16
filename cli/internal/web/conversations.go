@@ -294,6 +294,7 @@ func (s *Server) handleDeleteWorkspaceConversation(w http.ResponseWriter, r *htt
 		writeError(w, iox.NewInternal("deleting the conversation "+id, err))
 		return
 	}
+	ws.previews.Stop(id)
 	// The whole record travels back, and not just the id it was asked about.
 	// It is what makes the undo possible at all: the index the rail holds is a
 	// summary — no events, no provider, no model — so a page that had only that
