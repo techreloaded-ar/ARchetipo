@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workflowrun"
 )
@@ -150,6 +151,45 @@ func TestWorkflowRecoveryRespectsHumanInterruptAndUncertainDelivery(t *testing.T
 			defer p.store.mu.Unlock()
 			if p.store.starts != 0 || p.store.resumes != 0 {
 				t.Fatal("runtime was touched")
+			}
+		})
+	}
+}
+
+func TestIncrementOmitsGenericWorkflowNoticeButKeepsInterruptions(t *testing.T) {
+	for _, tc := range []struct {
+		name, incrementID string
+		failed, stopped   bool
+		want              string
+	}{
+		{name: "increment running", incrementID: "inc-test"},
+		{name: "ordinary workflow", want: "Lavoro in corso"},
+		{name: "increment failed", incrementID: "inc-test", failed: true, want: "Il lavoro si è interrotto"},
+		{name: "increment stopped", incrementID: "inc-test", stopped: true, want: "Lavoro interrotto dalla persona"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := workflowrun.New(root).Start(context.Background(), workflowrun.Start{Skill: "archetipo-example", Invocation: "/archetipo-example", Scope: "ALL", ConversationID: "conv-test", State: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := conversationlog.Record{ID: "conv-test", WorkingDir: root, IncrementID: tc.incrementID, CurrentTurn: &execution.SessionTurn{ID: "turn-test", State: execution.TurnActive}}
+			if tc.failed {
+				record.CurrentTurn.State = execution.TurnFailed
+			}
+			if tc.stopped {
+				record.StopRequestedTurnID = "turn-test"
+			}
+			var view conversationView
+			(&workspaceSession{}).attachWorkflow(record, &view)
+			if tc.want == "" {
+				if view.Workflow != nil {
+					t.Fatalf("redundant increment notice: %+v", view.Workflow)
+				}
+				return
+			}
+			if view.Workflow == nil || view.Workflow.Label != tc.want {
+				t.Fatalf("missing notice %q: %+v", tc.want, view.Workflow)
 			}
 		})
 	}

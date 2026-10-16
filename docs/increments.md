@@ -29,7 +29,9 @@ Non introduce una seconda board, una chat diversa o nuovi stati delle storie.
 ## Seguire il lavoro nella chat
 
 Una barra compatta mostra titolo, fase dell’incremento, attività della sessione
-ed eventuale conteggio delle storie completate. Le storie segnate in lavorazione
+ed eventuale conteggio delle storie completate. L’avviso generico «Lavoro in
+corso» non viene duplicato sopra la chat dell’incremento; restano visibili
+gli avvisi di recupero, blocco o interruzione. Le storie segnate in lavorazione
 nel backlog della sandbox sono apribili direttamente dalla barra; non si presume
 che la prima storia incompleta sia quella attiva.
 
