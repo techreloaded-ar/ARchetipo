@@ -37,13 +37,10 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 		if s.Config.Increment != nil {
 			return record, iox.NewConflict("cannot create an increment inside another increment", "open the original workspace", nil)
 		}
-		base, err := git(ctx, s.Config.ProjectRoot, "symbolic-ref", "--quiet", "--short", "HEAD")
+		const base = "main"
+		sha, err := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
 		if err != nil {
-			return record, err
-		}
-		sha, err := git(ctx, s.Config.ProjectRoot, "rev-parse", "HEAD")
-		if err != nil {
-			return record, err
+			return record, iox.NewPrecondition("increment base branch main is unavailable", "create or fetch the local main branch before starting an increment", err)
 		}
 		var entropy [8]byte
 		if _, err = rand.Read(entropy[:]); err != nil {

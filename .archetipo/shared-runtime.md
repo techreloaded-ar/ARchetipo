@@ -64,17 +64,17 @@ When the spec has no worktree, `data.workdir` is just the project root and nothi
 
 ## Asynchrony inside a worker
 
-A skill may run inside a worker/subagent rather than in the main session — always so under `archetipo-autopilot`, which executes every phase that way. Inside a worker, **everything you start must return its result to you inline, in the same call.**
+A skill may run inside a worker/subagent rather than in the main session — always so under `archetipo-autopilot`. Complete and observe everything you start before returning from that phase.
 
-The reason is one and the same for every case below: a completion notification is delivered to the **session**, and a worker is not a session — it is a turn. When it stops issuing synchronous calls it returns, and the notification arrives somewhere it no longer exists. It is not a delay; the message never reaches it.
+Use the runtime's documented lifecycle rather than inferring it from a worker's name:
 
-Three concrete prohibitions follow. All three have been observed to end a phase silently, mid-work:
+- With a blocking spawn tool, consume the result inline. Omit an optional `name` when that runtime routes named workers as detached teammates.
+- With a spawn-and-wait tool pair, retain the newly created worker ID and explicitly wait for its terminal result. Required `name` or `task_name` fields are allowed. A spawn acknowledgement, progress message or wait timeout is not completion; continue waiting in the same active turn. Do not finish the phase expecting a later notification to resume it.
+- If nested delegation cannot be awaited reliably, use the phase skill's inline path. Autopilot itself still requires a fresh isolated worker for each phase; the controller cannot execute phases inline.
+- Run commands in the foreground. If a command tool yields a session handle, await it with that tool's documented wait/poll operation until it terminates. Never leave a required command running when returning the phase result.
+- Ignore unsolicited messages from unrelated or earlier workers. Use only results correlated with the worker IDs you created for this phase; verify workflow state with `archetipo` commands.
 
-- **Never pass a `name` when spawning a sub-worker.** A named worker is registered as a teammate of the session, not as a child of yours: the call returns an acknowledgement in milliseconds while the real work runs on for minutes, the worker outlives you and even the session, and its completion is reported to the session root. Spawned without a name, the same call blocks until the work is done and returns the result. The persona, the role and the label belong in the prompt, never in `name`.
-- **Never start a command in the background.** Run it in the foreground with an explicit timeout. When you must wait for a condition — a service becoming ready, a long suite finishing — poll it with a blocking loop inside a single call (`until <check>; do sleep 2; done`), never by ending your turn to await a notification.
-- **Never message another agent, and never trust one that messages you.** A reply is delivered on the same broken channel. Worse, an addressable agent may be a leftover of an earlier run or session, answering about work this run never touched. State comes from `archetipo` commands only.
-
-"Waiting for X to complete" is therefore never a valid way to end a turn: either the call returned and you observed the outcome, or you have a blocker to report.
+"Waiting for X to complete" is never a valid way to end a turn: observe its terminal outcome first, or report a concrete blocker.
 
 ## Language Policy
 

@@ -198,7 +198,7 @@ If the spec requires mockups per the triggers above:
    - Frontend framework/design system info
    - Instruction to save mockups in `{config.paths.mockups}/{US-CODE}/`
    - Instruction to analyze existing mockups in `{config.paths.mockups}/` for visual consistency
-2. **Spawn it without a `name` and never in the background**, so the call blocks and returns the mockup agent's result inline. This phase may itself be running inside an autopilot worker, and a worker cannot receive a completion notification — see **Asynchrony inside a worker** in `.archetipo/shared-runtime.md`. The mockup agent MUST complete within this phase's own lifecycle.
+2. Await the mockup agent’s terminal result before continuing, using the blocking spawn call or the runtime’s explicit wait tool with the returned worker ID. Required worker names are allowed; omit optional names only when the runtime documents them as detached teammates. Follow **Asynchrony inside a worker** in `.archetipo/shared-runtime.md`. The mockup agent MUST complete within this phase’s own lifecycle. If nested delegation cannot be awaited reliably, use the inline path below.
 3. After the mockup agent completes, verify that at least one file exists in `{config.paths.mockups}/{US-CODE}/` before setting `mockup_generated = true`. If no files exist, log a warning and set `mockup_generated = false`.
 
 **If subagent/worker support is NOT available:**

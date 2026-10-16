@@ -1197,7 +1197,6 @@
 				<textarea class="conv-composer-input" rows="1" aria-label="Messaggio all’agente" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
 				<div class="conv-composer-row">
-					${renderActivityMenu(ui)}
 					${typeof agentRow === "string" ? agentRow : ""}
 					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 				</div>
@@ -1209,8 +1208,8 @@
 
 	// Presentazione pura del catalogo di attività fornito dal server. Il modulo
 	// non interpreta identificatori, stati, skill o regole del processo.
-	function renderActivities(view, ui, menu) {
-		const items = arrayAt(view, "items").filter((item) => item && textAt(item, "id") && (menu || item.primary === true));
+	function renderActivities(view, ui) {
+		const items = arrayAt(view, "items").filter((item) => item && textAt(item, "id") && item.primary === true);
 		if (!items.length) return "";
 		const rows = items.map((item) => {
 			const disabled = item.runnable !== true || ui.busy ? " disabled" : "";
@@ -1224,18 +1223,12 @@
 				${item.runnable === true ? `<span class="conv-activity-gesture">${gesture}</span>` : ""}
 			</button>`;
 		});
-		return `<div class="conv-activities${menu ? " is-menu" : ""}">${menu ? "" : '<p class="conv-activities-intro">Scegli un’attività oppure apri una conversazione.</p>'}<div class="conv-activity-grid">${rows.join("")}</div></div>`;
+		return `<div class="conv-activities"><p class="conv-activities-intro">Scegli un’attività oppure apri una conversazione.</p><div class="conv-activity-grid">${rows.join("")}</div></div>`;
 	}
 
 	function renderActivitySelection(selection) {
 		if (!selection || !textAt(selection, "label")) return "";
 		return `<div class="conv-activity-selection"><div><strong>${escapeHtml(textAt(selection, "label"))}</strong><p>${escapeHtml(textAt(selection, "description"))}</p>${textAt(selection, "result") ? `<small>Risultato: ${escapeHtml(selection.result)}</small>` : ""}</div><button type="button" class="ghost-btn" data-conversation-activity-clear aria-label="Rimuovi attività">×</button></div>`;
-	}
-
-	function renderActivityMenu(ui) {
-		const view = objectAt(ui, "activities");
-		if (!view || !arrayAt(view, "items").length) return "";
-		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""} aria-label="Scegli attività" title="Scegli attività">+</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
 	}
 
 	function renderInputQuestion(question, index, draft, busy) {
@@ -1613,7 +1606,7 @@
 				${renderHead(value, TEXT.badgeNotOffered, "conv-off")}
 				${dismissed["not-offered"] === true ? "" : renderNotice("refused", TEXT.markNotOffered, refusal, "not-offered")}
 				${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
-				${!local.openingSpecCode ? renderActivities(objectAt(local, "activities"), local, false) : ""}
+				${!local.openingSpecCode ? renderActivities(objectAt(local, "activities"), local) : ""}
 			</section>`;
 		}
 
@@ -1621,7 +1614,7 @@
 			if (local.activitySelection) {
 				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}${renderComposer(false, typed, Object.assign({}, local, { writable: offered }), offered, false, renderConversationModelChoice(value, local, false))}</section>`;
 			}
-			const activities = renderActivities(objectAt(local, "activities"), local, false);
+			const activities = renderActivities(objectAt(local, "activities"), local);
 			if (activities && !local.openingSpecCode) {
 				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}<div class="conv-empty conv-empty-activities">${activities}<div class="conv-empty-command">${renderConversationModelChoice(value, local, false)}</div></div></section>`;
 			}
@@ -1681,7 +1674,7 @@
 		const delivered = objectAt(local, "deliveredDraft");
 		if (delivered && !objectAt(value, "spec_drafts")) blocks.push(renderDeliveredDraft(delivered, local));
 		const starter = active && !arrayAt(value, "events").length && !local.pendingMessage && !local.activitySelection
-			? renderActivities(objectAt(local, "activities"), local, false) : "";
+			? renderActivities(objectAt(local, "activities"), local) : "";
 		blocks.push(starter || renderTimeline(value, active, local));
 		// A decision the agent is waiting on sits right after the history and
 		// before what to do next: it is the reason nothing more is happening,

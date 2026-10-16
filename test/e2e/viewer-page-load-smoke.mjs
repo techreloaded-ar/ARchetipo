@@ -513,6 +513,7 @@ async function exerciseActivityComposer(browser, url) {
   await page.evaluate(`document.querySelector('[data-conversation-activity="story"]').click()`);
   await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua proposta…'`, 10000, "il campo della proposta prima della skill");
   if (await page.evaluate(`window.smokeStarts.length`) !== 0) throw new Error("La scelta di Nuova storia ha avviato un agente prima della proposta");
+  if (await page.evaluate(`!!document.querySelector("[data-conversation-activities-toggle]")`)) throw new Error("Il compositore mostra ancora il tasto Attività");
   const proposal = "Voglio cercare le storie per titolo";
   await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = ${JSON.stringify(proposal)}; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-shell-view="documentation"]').click(); })()`);
   await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'Wiki dalla bozza');
@@ -527,11 +528,7 @@ async function exerciseActivityComposer(browser, url) {
   await page.evaluate(`document.querySelector('[data-conversation-activity-clear]').click(); document.querySelector('[data-conversation-activity="product"]').click()`);
   await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua idea…'`, 10000, "il campo specifico dell’inception");
   if (await page.evaluate(`window.smokeStarts.length`) !== 1) throw new Error("La scelta dell’inception è partita prima dell’invio");
-  await page.evaluate(`document.querySelector('[data-conversation-activities-toggle]').click()`);
-  await page.waitFor(`!!document.querySelector('.conv-activities.is-menu')`, 10000, "le attività nel menu +");
-  const activityMenu = await page.evaluate(`(() => {const r = document.querySelector('.conv-activities.is-menu').getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight};})()`);
-  if (activityMenu.left < 0 || activityMenu.right > activityMenu.width || activityMenu.top < 0 || activityMenu.bottom > activityMenu.height) throw new Error('Il menu + esce dalla finestra: ' + JSON.stringify(activityMenu));
-  await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape'});
+  if (await page.evaluate(`!!document.querySelector('[data-conversation-activities-toggle]')`)) throw new Error("Il compositore dell’inception mostra ancora il tasto Attività");
   ok(CLAIMS[9], "storia e inception chiedono la proposta; l’invio la consegna una volta e un rifiuto conserva il testo");
   await page.waitFor(`!!document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’esecuzione da fermare");
   await page.evaluate(`document.querySelector('.ws-runs-panel').open = true`);

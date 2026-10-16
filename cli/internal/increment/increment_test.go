@@ -233,14 +233,18 @@ func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 }
 
 type fakeHosting struct {
-	pr      *PullRequest
-	creates int
+	pr         *PullRequest
+	creates    int
+	findBase   string
+	createBase string
 }
 
-func (f *fakeHosting) Find(context.Context, string, string, string) (*PullRequest, error) {
+func (f *fakeHosting) Find(_ context.Context, _, _, base string) (*PullRequest, error) {
+	f.findBase = base
 	return f.pr, nil
 }
-func (f *fakeHosting) Create(_ context.Context, dir, _, _, _, _ string) (*PullRequest, error) {
+func (f *fakeHosting) Create(_ context.Context, dir, _, base, _, _ string) (*PullRequest, error) {
+	f.createBase = base
 	sha, err := git(context.Background(), dir, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err
@@ -465,5 +469,54 @@ func TestTechnicalReworkNotesDoNotChangeTheApprovedProductIntent(t *testing.T) {
 	r = ready(t, s, r)
 	if r.Status != Review || len(r.Revisions) != 1 {
 		t.Fatal("technical fix required another business-intent revision")
+	}
+}
+
+func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
+	s := fixture(t)
+	remote(t, s)
+	root := s.Config.ProjectRoot
+	mainSHA := runGit(t, root, "rev-parse", "main")
+	runGit(t, root, "checkout", "-b", "feature/unrelated")
+	if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("other work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "unrelated.txt")
+	runGit(t, root, "commit", "-m", "unrelated work")
+	parentSHA := runGit(t, root, "rev-parse", "HEAD")
+	r := create(t, s)
+	if r.BaseBranch != "main" || r.BaseSHA != mainSHA || runGit(t, r.Workdir, "rev-parse", "HEAD") != mainSHA {
+		t.Fatalf("increment did not fork main: %+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(r.Workdir, "unrelated.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unrelated branch content leaked into increment: %v", err)
+	}
+	r = ready(t, s, proposeApprove(t, s, r, story("US-001", "Export")))
+	hosting := &fakeHosting{}
+	s.Hosting = hosting
+	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
+		t.Fatal(err)
+	}
+	if hosting.findBase != "main" || hosting.createBase != "main" {
+		t.Fatalf("PR targets wrong branch: find=%q create=%q", hosting.findBase, hosting.createBase)
+	}
+	if runGit(t, root, "branch", "--show-current") != "feature/unrelated" || runGit(t, root, "rev-parse", "HEAD") != parentSHA {
+		t.Fatal("parent checkout changed")
+	}
+}
+
+func TestIncrementWithoutMainDoesNotCreateWorktree(t *testing.T) {
+	s := fixture(t)
+	root := s.Config.ProjectRoot
+	runGit(t, root, "branch", "-m", "other")
+	before := runGit(t, root, "worktree", "list", "--porcelain")
+	if _, err := s.Create(context.Background(), "Export", "Prepare export", ""); err == nil {
+		t.Fatal("increment silently used a branch other than main")
+	}
+	if after := runGit(t, root, "worktree", "list", "--porcelain"); after != before {
+		t.Fatal("failed creation changed worktrees")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".archetipo", "increments")); !os.IsNotExist(err) {
+		t.Fatalf("failed creation persisted increment state: %v", err)
 	}
 }

@@ -17,7 +17,7 @@ continuano a funzionare come prima.
    una nuova proposta da approvare. Codici locali, conversazione nativa e
    worktree restano gli stessi.
 6. **Approva risultato e apri PR** congela la versione provata, pubblica il
-   branch e apre una sola PR. Le storie finali entrano nel backlog ufficiale
+   branch e apre una sola PR verso `main`. Le storie finali entrano nel backlog ufficiale
    come proposte, in TODO e con il collegamento alla PR.
 7. **Aggiorna stato PR** riconcilia lo stato effettivo di GitHub. Solo un merge
    confermato del codice approvato porta le storie a DONE e l'incremento a
@@ -33,8 +33,9 @@ lock restano nel worktree, sotto `.archetipo/increment-local/increment.json` e
 `.archetipo/conversations/`. I record precedenti vengono letti senza modifiche
 e migrano nello stesso worktree al primo aggiornamento. Il worktree dedicato sta in
 `.archetipo/increments/worktrees/<id>`, sul branch
-`archetipo/increments/<id>`. La base è il commit del branch corrente:
-modifiche non committate nel workspace di origine non vengono copiate.
+`archetipo/increments/<id>`. La base è il commit del branch locale `main`,
+che deve essere disponibile prima della creazione. Il branch corrente del
+workspace di origine e le sue modifiche non committate non vengono copiati.
 
 Il worktree contiene il normale codice e la configurazione versionata.
 Un piccolo riferimento runtime, `.archetipo/increment-workspace.json`,
@@ -52,7 +53,8 @@ L'installazione copia soltanto gli asset del workflow, senza file .env.
 Il worktree isola codice e processo, non costituisce una barriera di sicurezza
 del sistema operativo. L'agente conserva la politica di permessi del provider.
 L'anteprima deve usare dati e servizi di prova separati, seguendo il comando di
-avvio già documentato dal progetto. Non vengono creati container o macchine.
+avvio già documentato dal progetto. Le skill predispongono il necessario
+ambiente di prova locale usando gli strumenti del progetto.
 
 L'incremento mantiene tutte le revisioni dell'intento e le evidenze dei
 risultati precedenti. All'approvazione di una revisione:

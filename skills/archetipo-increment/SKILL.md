@@ -27,6 +27,8 @@ missing configuration from the absence of that file.
 Without an ID, discover the idea in conversation first. When the person asks
 to begin an isolated increment, use `increment create --file -` with
 `{"title":"…","request":"…"}`, then continue in its returned workdir.
+The CLI creates a dedicated branch and worktree from local `main`. If `main`
+is unavailable, report the prerequisite instead of using another branch.
 This does not approve the intent or authorize publication.
 
 Never retarget an existing native session to another directory. A standalone
@@ -65,6 +67,21 @@ It never updates the parent backlog.
 
 ## Develop and prepare the result
 
+### Local environment for the increment
+
+Apply [the increment local environment policy](references/local-runtime.md)
+when preparing tests and the preview. The increment's branch and worktree provide
+code isolation. Develop and verify the result in that worktree using the
+project’s available local tools and services.
+
+When invoking Autopilot, explicitly require it to pass this policy to every
+planning and implementation worker, including resumed work and rework. Autopilot
+uses `data.increment` from `config show` to retain this context across fresh
+workers and resumed runs; never add prose or unsupported flags to its story-code
+arguments. These responsibilities apply only inside the increment.
+
+### Delivery workflow
+
 When `status` is `DEVELOPING`, use the existing skills rather than a
 second implementation of their process. Invoke
 `/archetipo-autopilot <current local story codes>` in the sandbox to
@@ -82,9 +99,9 @@ Removing a story does not remove its implementation automatically: remove or
 adapt obsolete code, tests and docs, then verify the combined result.
 
 Run relevant checks and prepare a concrete demonstration. Use the project's
-documented preview command when it exists; otherwise ask for missing startup
-information when necessary. Never invent a preview URL, a passing check, or
-a deployment. A preview uses separate test data and local services; never copy
+documented preview command when it exists; otherwise inspect the project and
+attempt the permitted local setup before reporting missing startup information.
+Never invent a preview URL, a passing check, or a deployment. A preview uses separate test data and local services; never copy
 production credentials or point it at production resources.
 
 Commit the verified product changes on the existing increment branch. Keep
@@ -115,7 +132,7 @@ execution call `increment publish <id> --file -` with
 `{"head_sha":"ready_sha from the displayed record","revision":N}`.
 View performs this operation deterministically from its approval button.
 Never create a PR yourself with another command, publish early, or merge it.
-The CLI opens/reuses one GitHub PR using gh and publishes the current stories
+The CLI opens/reuses one GitHub PR targeting `main` using gh and publishes the current stories
 through the original connector as proposals. Retrying the same publication
 must use the same increment.
 

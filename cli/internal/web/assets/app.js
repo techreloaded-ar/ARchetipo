@@ -989,17 +989,6 @@
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && isTopModal(prdModal)) closePRD();
 	});
-	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && conversationActivitiesOpen) {
-			conversationActivitiesOpen = false;
-			renderConversationPanel();
-		}
-	});
-	document.addEventListener("click", (e) => {
-		if (!conversationActivitiesOpen || e.target.closest(".conv-activity-picker")) return;
-		conversationActivitiesOpen = false;
-		renderConversationPanel();
-	});
 
 	metricsBtn.addEventListener("click", openMetrics);
 	metricsModalClose.addEventListener("click", closeMetrics);
@@ -6088,7 +6077,6 @@
 	let conversationSkillHighlight = 0;
 	let conversationActivitiesView = null;
 	let conversationActivitiesLoadToken = 0;
-	let conversationActivitiesOpen = false;
 	let conversationActivitySelection = null;
 	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
@@ -6362,12 +6350,6 @@
 			}
 			if (e.target.closest("[data-conversation-proposals-close]")) {
 				closeConversationProposals();
-				return;
-			}
-			if (e.target.closest("[data-conversation-activities-toggle]")) {
-				conversationActivitiesOpen = !conversationActivitiesOpen;
-				renderConversationPanel();
-				if (conversationActivitiesOpen) loadConversationActivities();
 				return;
 			}
 			if (e.target.closest("[data-conversation-activity-clear]")) {
@@ -6648,7 +6630,7 @@
 		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
 		// scrivendo.
 		container.addEventListener("keydown", (e) => {
-			if (e.key === "Escape" && conversationProposalsOpen && !conversationModelChoiceOpen && !conversationActivitiesOpen && !topModal()) {
+			if (e.key === "Escape" && conversationProposalsOpen && !conversationModelChoiceOpen && !topModal()) {
 				e.preventDefault();
 				e.stopPropagation();
 				closeConversationProposals();
@@ -6658,13 +6640,6 @@
 			// pastiglia; dentro di esso le frecce percorrono le voci e i
 			// segmenti come un controllo solo, e Invio è il clic che il
 			// `<button>` fa da sé.
-			if (e.key === "Escape" && conversationActivitiesOpen) {
-				e.preventDefault();
-				conversationActivitiesOpen = false;
-				renderConversationPanel();
-				conversationEl.querySelector("[data-conversation-activities-toggle]")?.focus();
-				return;
-			}
 			if (e.key === "Escape" && conversationModelChoiceOpen) {
 				e.preventDefault();
 				closeConversationChoicePopover();
@@ -6710,11 +6685,6 @@
 		renderConversationPanel();
 	});
 	choicePopoverClosers.push(() => {
-		if (!conversationActivitiesOpen) return;
-		conversationActivitiesOpen = false;
-		renderConversationPanel();
-	});
-	choicePopoverClosers.push(() => {
 		if (!modelChoiceOpen) return;
 		modelChoiceOpen = "";
 		renderModelChoicePanel();
@@ -6725,7 +6695,7 @@
 	// il pannello finisce; il fuoco non viene spostato, perché chi ha cliccato
 	// altrove ha già deciso dove guardare.
 	document.addEventListener("click", (e) => {
-		if (e.target.closest && e.target.closest(".conv-agent-row, .conv-activity-picker")) return;
+		if (e.target.closest && e.target.closest(".conv-agent-row")) return;
 		closeChoicePopovers();
 	});
 
@@ -7182,7 +7152,6 @@
 	function resetConversationActivities() {
 		conversationActivitiesLoadToken += 1;
 		conversationActivitiesView = null;
-		conversationActivitiesOpen = false;
 		conversationActivitySelection = null;
 	}
 
@@ -7211,7 +7180,6 @@
 	async function chooseConversationActivity(id) {
 		const item = conversationActivityItems().find((entry) => entry.id === id);
 		if (!item || !item.runnable || conversationBusy) return;
-		conversationActivitiesOpen = false;
 		conversationActivitySelection = null;
 		if (item.kind === "action" || item.kind === "increment") {
 			conversationActivitySelection = Object.assign({}, item);
@@ -8342,7 +8310,6 @@
 				modelChoiceHtml: conversationModelChoiceMarkup(),
 				skillChoiceHtml: conversationSkillMenuMarkup(view),
 				activities: conversationActivitiesView,
-				activitiesOpen: conversationActivitiesOpen,
 				activitySelection: conversationActivitySelection,
 				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",
