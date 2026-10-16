@@ -54,6 +54,29 @@ func fixture(t *testing.T) *Service {
 func story(code, title string) domain.Spec {
 	return domain.Spec{Code: code, Title: title, Epic: domain.Epic{Code: "EP-001", Title: "Product"}, Priority: domain.Priority("MEDIUM"), Points: 3, Scope: domain.Scope("MVP"), Status: domain.StatusTodo, Body: "## User story\nA business result.\n## Demonstrates\nObserve the result.\n## Acceptance\n- [ ] It works.\n"}
 }
+
+func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
+	s := fixture(t)
+	recipe := []byte(`{"version":1,"probe":[{"name":"ready","argv":["node","--version"],"timeout_seconds":5}]}`)
+	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, ".archetipo", "environment.json"), recipe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(s.Config.ProjectRoot, ".archetipo", "environment")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(`{"preparation_id":"parent-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := create(t, s)
+	got, err := os.ReadFile(filepath.Join(r.Workdir, ".archetipo", "environment.json"))
+	if err != nil || string(got) != string(recipe) {
+		t.Fatal("project recipe unavailable in sandbox", err)
+	}
+	if _, err := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json")); !os.IsNotExist(err) {
+		t.Fatal("parent resource ownership checkpoint copied")
+	}
+}
 func create(t *testing.T, s *Service) Record {
 	t.Helper()
 	r, err := s.Create(context.Background(), "Customer export", "Prepare the sales review", "")

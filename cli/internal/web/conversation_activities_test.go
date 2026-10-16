@@ -95,7 +95,7 @@ func TestConversationAutopilotUsesTemplatePresentationAndNativeInvocation(t *tes
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("selected autopilot = %d: %s", w.Code, w.Body.String())
 	}
-	if provider.lastStart.Message != "Completa US-001" || len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != "archetipo-autopilot" || provider.lastStart.Session.ConversationID != id {
+	if provider.lastStart.Display != "Completa US-001" || !strings.Contains(provider.lastStart.Message, "Workflow conversation: "+id) || len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != "archetipo-autopilot" || provider.lastStart.Session.ConversationID != id {
 		t.Fatalf("autopilot changed message, invocation or session: %+v", provider.lastStart)
 	}
 	closeConversation(t, srv, id)
@@ -160,7 +160,7 @@ func TestConversationActivitiesUseTheNativeSessionAndLeaveTheMessageUntouched(t 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("selected activity = %d: %s", w.Code, w.Body.String())
 	}
-	if provider.lastStart.Message != "Rappresenta la schermata clienti" || len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != design.Skill || provider.lastStart.Session.ConversationID != id {
+	if provider.lastStart.Display != "Rappresenta la schermata clienti" || !strings.Contains(provider.lastStart.Message, "Workflow conversation: "+id) || len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != design.Skill || provider.lastStart.Session.ConversationID != id {
 		t.Fatalf("activity changed message or session: %+v", provider.lastStart)
 	}
 	busy := readActivityCatalog(t, srv, id)

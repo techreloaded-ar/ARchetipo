@@ -75,7 +75,7 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	view.Increment = &current
 }
 func incrementPrompt(r increment.Record, message string) string {
-	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork only in the dedicated sandbox %s. Read the persisted increment before acting. Never modify the parent backlog or open a PR before the business approval.", r.ID, message, r.Workdir)
+	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork only in the dedicated sandbox %s. Read the persisted increment before acting. Never modify the parent backlog or open a PR before the business approval.\nWorkflow conversation: %s", r.ID, message, r.Workdir, r.ConversationID)
 }
 func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()

@@ -424,6 +424,21 @@ func TestIntegrate_RealGit_MissingCommitterIdentityIsNotReportedAsConflict(t *te
 func TestDiffAndCommitIgnoreRuntimeArtifacts(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(root, ".archetipo", "environment"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".archetipo", "environment", "state.json"), []byte(`{"private_run":"runtime-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".archetipo", "environment.json"), []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".archetipo", "workflow-runs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".archetipo", "workflow-runs", "flow-1.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := os.MkdirAll(filepath.Join(root, ".archetipo", "conversations"), 0o755); err != nil {
 		t.Fatal(err)
@@ -432,6 +447,9 @@ func TestDiffAndCommitIgnoreRuntimeArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGit(ctx, root, "add", ".archetipo/environment.json"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -444,8 +462,13 @@ func TestDiffAndCommitIgnoreRuntimeArtifacts(t *testing.T) {
 			t.Fatalf("il diff mostra un artefatto di runtime: %s", f.NewPath)
 		}
 	}
-	if len(files) != 1 || files[0].NewPath != "a.txt" {
-		t.Fatalf("atteso il solo a.txt nel diff, got %+v", files)
+	if len(files) != 2 {
+		t.Fatalf("expected source and project recipe, got %+v", files)
+	}
+	for _, file := range files {
+		if file.NewPath != "a.txt" && file.NewPath != ".archetipo/environment.json" {
+			t.Fatalf("runtime data entered the diff: %+v", file)
+		}
 	}
 
 	if err := CommitSpecChanges(ctx, root, "", "US-001", "Greeting", CommitMessageOptions{}); err != nil {
@@ -455,15 +478,15 @@ func TestDiffAndCommitIgnoreRuntimeArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(tracked) != "" {
-		t.Fatalf("il commit automatico ha versionato artefatti di runtime: %q", tracked)
+	if strings.TrimSpace(tracked) != ".archetipo/environment.json" {
+		t.Fatalf("expected the recipe without runtime evidence, got %q", tracked)
 	}
 	committed, err := runGit(ctx, root, "show", "--name-only", "--format=", "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(committed) != "a.txt" {
-		t.Fatalf("il commit contiene %q, atteso il solo a.txt", strings.TrimSpace(committed))
+	if strings.TrimSpace(committed) != ".archetipo/environment.json\na.txt" {
+		t.Fatalf("unexpected committed paths: %q", strings.TrimSpace(committed))
 	}
 }
 

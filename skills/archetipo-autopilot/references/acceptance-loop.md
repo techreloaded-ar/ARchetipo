@@ -14,9 +14,11 @@ Spawn one fresh worker whose prompt contains only:
 
 ```text
 Working directory: {data.project_root}
+Communication language: {detected human language}
 Spec: {US-CODE}
 Phase skill: archetipo-review
-Autonomous acceptance mode: enabled by archetipo-autopilot
+Skill file: {resolved installed archetipo-review SKILL.md path}
+Acceptance mode: autonomous
 Iteration: {n} of 3
 Request-changes allowed: {yes|no}
 Expected terminal state: {config.workflow.statuses.done} (accepted),
@@ -42,14 +44,14 @@ The verdict block is telemetry. After the worker terminates, run
 
 | Observed `data.spec.status` | Controller conclusion | Additional requirement |
 |---|---|---|
-| configured `DONE` | accepted; spec outcome `done` | When `data.spec.branch` was set in the pre-worker observation, also require `branch`, `worktree`, and `fork_base` to be empty now. A residual value is a failed integration: hard stop. |
+| configured `DONE` | accepted; spec outcome `done` | When `data.spec.branch` was set in the pre-worker observation, also require `branch`, `worktree`, and `fork_base` to be empty now. A residual value is an incomplete integration: reconcile through a fresh acceptance worker. |
 | configured `TODO` | changes requested; a rework cycle starts | Increment `review_iterations` (see below), then re-dispatch the same spec from its observed state. |
-| configured `REVIEW` | left in review **only** when the worker declared `verdict: LEFT_IN_REVIEW`, or the budget was already exhausted for this attempt (`Request-changes allowed: no`) | Otherwise this is a worker failure: hard stop. |
-| any other status | worker failure | Hard stop. |
+| configured `REVIEW` | left in review **only** when the worker declared `verdict: LEFT_IN_REVIEW`, or the budget was already exhausted for this attempt (`Request-changes allowed: no`) | Otherwise this is a worker failure: apply the bounded recovery policy. |
+| any other status | worker failure | Apply the bounded recovery policy. |
 
 A missing, truncated, or unparsable verdict block never overrides the observed state:
 the CLI status wins, and the one case that needs the block — `REVIEW` with budget
-still available — resolves to a hard stop precisely because the block is absent.
+still available — requires phase recovery rather than an inferred verdict.
 
 Record `unresolved` from the block when the outcome is `left_in_review`; when the
 block is missing, record the observed state instead and note that the worker returned
@@ -70,8 +72,8 @@ no verdict.
 
 ## Per-spec bookkeeping and resume
 
-The controller keeps one entry per selected spec under `autopilot.specs` (full state
-file shape in `SKILL.md`):
+The controller keeps one entry per selected spec under `data.state.specs` (full controller state
+shape in `SKILL.md`):
 
 ```yaml
 US-002: { outcome: pending, review_iterations: 2 }
@@ -80,7 +82,7 @@ US-002: { outcome: pending, review_iterations: 2 }
 - `outcome` is autopilot bookkeeping, never a mirror of workflow state. Terminal values
   are `done`, `left_in_review`, and `skipped_blocked`; `left_in_review` also carries
   `unresolved: ["..."]`, and `skipped_blocked` carries the blocking chain.
-- Write `review_iterations` to the state file immediately after observing the `TODO`
+- Write `review_iterations` through the checkpoint CLI immediately after observing the `TODO`
   transition, before dispatching the re-plan, so an interruption cannot lose the count.
 
 On resume, the authoritative state is always `archetipo spec show`. Two mid-rework

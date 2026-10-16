@@ -32,8 +32,24 @@ This section has priority over every other section in the skill.
 3. **In-context execution is valid for simple work.** Select it when the plan is small and tightly coupled enough that handoffs would cost more than they add. Make this decision from the criteria below, not from a generic preference for one mode.
 4. **Concurrency is conditional.** Run multiple workers concurrently only when tasks in the same wave are truly independent.
 5. **Stop only for explicit blockers.** Do not invent new reasons to ask the user.
-6. **Nothing asynchronous inside this phase.** No `name` on a sub-worker, no background commands, no messages to other agents. See **Asynchrony inside a worker** in `.archetipo/shared-runtime.md` for why all three fail the same way, and **Spawning a sub-worker** below for the form that works.
+6. **Observe every delegated result.** Follow **Asynchrony inside a worker** in `.archetipo/shared-runtime.md`: retain worker IDs and await terminal results. Required names are valid. A progress message or wait timeout does not finish a phase.
 7. **Connector operations are exposed by the CLI.** Every operation is a sub-command of `archetipo`. This skill uses `init`, `spec show`, `spec start`, `task done`, and `spec review`, plus connector-independent `wiki affected`, `wiki reset`, `wiki validate`, `wiki catalog`, and `wiki status` — the five `wiki` operations only when `data.wiki.enabled` is `true`. Parse stdout/stderr as the shared JSON envelopes and branch on `error.code` per `archetipo-wiki/references/wiki-contract.md`. Never branch on connector type or message text. Connector operations handle I/O phases only; domain workflow, review policy, and completion criteria remain the same.
+
+## Environment CLI operations
+
+   - `archetipo -C {data.workdir} execution environment show`
+   - `archetipo -C {data.workdir} execution environment configure --file <recipe.json>` (stdin `-` accepts the same version 1 recipe JSON: `version`, `inputs`, `outputs`, `env_keys`, `prepare`, `probe`, `cleanup`, `checks`; commands have `name`, `argv`, `timeout_seconds`; checks also have `inputs`, `cache`)
+   - `archetipo -C {data.workdir} execution environment prepare`
+   - `archetipo -C {data.workdir} execution environment check <name> --spec {US-CODE} [--fresh]`
+
+   These return `archetipo/v1`, `kind: verification_result`. Show/configure return the recipe; prepare/check return `data.passed`, `data.stable`, `data.reused`, `data.report_path`, `data.reused_report` when reused, and per-step full log paths/exit codes. Require `passed && stable`; read the linked original report on reuse. `E_PRECONDITION` means absent/corrupt recipe or checkpoint: create the missing recipe once or repair the specific record. `E_INVALID_INPUT` means repair the recipe/name/path before retrying. `E_CONFLICT` means another live operation owns the environment: inspect and await that operation instead of starting a duplicate. `E_INTERNAL` or a persistence error prevents a completed handoff. A normal envelope with `passed: false` means a failed setup/probe/test whose retained evidence must be inspected, not a successful verification.
+
+Every required verification, including a legacy plan's raw final-suite command,
+must be mapped to a named recipe check before execution. Extend the recipe through
+`configure` when the command adds coverage. If the existing named check already
+runs that suite, use its report; do not run `npm test`, another alias or the same
+runner again merely to call it “the full suite”. Raw diagnostics do not satisfy
+completion evidence. Preserve all required coverage and project instructions.
 
 ## Autonomy Policy
 
@@ -41,7 +57,7 @@ Stop and ask the user only when one of these is true:
 
 - The implementation plan conflicts with the current codebase in a way that cannot be adapted locally without changing the intended solution
 - The spec depends on another unimplemented spec or prerequisite outside the current spec scope
-- Existing tests must be changed **semantically** because the intended behavior or contract changes
+- Changing existing tests would redefine behavior beyond the approved spec (updating assertions for behavior explicitly changed by the approved spec is authorized)
 - A meaningful infrastructure choice is required and the repo plus plan do not provide enough signals to make it safely
 - Completing the task would change scope, acceptance criteria, or the user-facing contract of the spec
 
@@ -89,13 +105,12 @@ State the concise reason for the selected execution context in the wave executio
 
 ### Spawning a sub-worker
 
-A sub-worker is an ordinary blocking call: it runs while you wait and hands back its result inline. Three choices decide whether that holds.
-
-| | | |
-|---|---|---|
-| `name` | **never pass it** | It is an addressing handle, not a label. Passing it registers the worker as a teammate of the session instead of a child of yours, and the call returns an acknowledgement rather than a result. See `.archetipo/shared-runtime.md`. |
-| background execution | **never** | Same delivery problem, same silent ending. |
-| persona | **in the prompt** | Ugo, Mina and Cesare are prompt content and are unaffected by the above. Put the readable label in `description` (`🔧 Ugo — TASK-01`). |
+Use the runtime's blocking spawn or spawn-and-wait tools. Retain the returned ID,
+await the terminal result and correlate it with the delegated task. Required
+`name`/`task_name` fields are allowed; persona and task labels belong in the prompt.
+If reliable nested delegation is unavailable, execute the phase inline. Keep test
+services under an owned process handle with readiness and cleanup; await required
+commands before returning.
 
 Spawn every sub-worker with a bounded prompt that declares **both** roots explicitly:
 
@@ -106,18 +121,20 @@ Backlog root (connector commands only): {data.project_root}
 Spec: {US-CODE}
 Tasks: {TASK-IDs}
 
-Load the installed archetipo-implement skill. Read the plan, the task bodies,
-and the repository state yourself. Do not assume knowledge from the orchestrator.
-Execute your own tasks: do not spawn further sub-workers.
+Communication language: {detected human language}
+Read the named task contracts and relevant code yourself. The caller owns the
+workflow: do not reload or restart its full implementation orchestration. Apply
+the shared verification/ownership contract and reuse its recipe and reports.
+Execute only these tasks and their checks: do not spawn further sub-workers.
 ```
 
 Both roots are mandatory because they are two different things (see **Worktree Working Directory** in `.archetipo/shared-runtime.md`): files are touched under `data.workdir`, while connector commands — including the `archetipo task done` the sub-worker runs itself in PHASE 2 step 6 — resolve from `data.project_root`. A sub-worker given neither resolves its own root from cwd.
 
-**A sub-worker never delegates further.** It loads this same skill, which authorizes worker-backed execution; without this rule the third level would spawn a fourth. One task per sub-worker, executed by that sub-worker.
+**A sub-worker never delegates further or restarts this skill.** The controller passes a bounded role/task contract and the paths to the shared rules, recipe and evidence. Use one worker for tightly coupled code and tests; keep an independent reviewer for a non-trivial diff. Do not add a coordinator whose only job would be delegating the same task again.
 
 **Verify the outcome from CLI state, not from the sub-worker's prose.** `archetipo spec show {US-CODE}` from `data.project_root` is what says a task is `DONE`; the returned text is a report about the work, not the work.
 
-When a sub-worker returns and its tasks are still not `DONE`, the work genuinely ended without completing — a synchronous call that has returned is over. Execute that piece in-context, declare the degradation in the `Execution context rationale` field of the "Wave Execution Plan" template, and do not respawn the same sub-worker.
+When a sub-worker is confirmed terminal and its tasks are still not `DONE`, inspect the partial changes and the exact remaining checks. Complete that piece in-context and record the execution-context change; preserve verified work. An acknowledgement or wait timeout is not a terminal result. If termination is uncertain, establish ownership before starting another writer.
 
 **Important:** Worker-backed execution and concurrent execution are separate decisions.
 **Important:** Lack of worker/subagent support is not a blocker. Continue in `in-context fallback`.
@@ -156,8 +173,9 @@ Do not treat the absence of an explicit user request as a reason for in-context 
 
    - **Rework cycle:** when a spec returns from review via *request changes* it goes back to TODO with the feedback recorded in its body; after archetipo-plan re-plans it, its branch and worktree already exist. `spec start` is idempotent and reuses the existing worktree — it does not recreate anything. Resume implementation under the post-start `data.workdir` so the new Fix tasks build on the changes already committed there.
 5. Load the relevant project context under the post-start `data.workdir`: agent instructions (CLAUDE.md, AGENTS.md), project config, conventions, and existing patterns in the touched area.
-6. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` from `data.project_root` for matching files. Treat explicitly referenced mockups as the source of truth, then apply them while implementing under `data.workdir`.
-7. Announce the session briefly using the template from `./references/output-templates.md` ("Session Announcement").
+6. Before changing behavior, read `execution environment show` and run `prepare` under the post-start `data.workdir`. If the recipe is absent, register one bounded setup through `configure`, using established project scripts and scoped resource ownership. Obtain any pending baseline here. Keep this single setup and its evidence for all tasks and the final gate.
+7. If the plan contains UI work, scan it for mockups or design references and search `{config.paths.mockups}` from `data.project_root` for matching files. Treat explicitly referenced mockups as the source of truth, then apply them while implementing under `data.workdir`.
+8. Announce the session briefly using the template from `./references/output-templates.md` ("Session Announcement").
 
 ### Validation policy for task parsing
 
@@ -173,7 +191,7 @@ When loading tasks via `archetipo spec show`, apply these validation rules to th
 
 ### PHASE 1 - Task Analysis & Execution Strategy
 
-1. Build the dependency graph from the implementation plan.
+1. Reload `spec show` and build the dependency graph from the implementation plan. Exclude tasks already `DONE` from execution waves, while retaining their satisfied dependency edges. On resume, preserve their work and inspect partial edits for remaining tasks. Re-run affected verification when later edits invalidate earlier evidence.
 2. Form execution waves by grouping tasks whose dependencies are already satisfied.
 3. Choose the execution context:
    - use `worker-backed preferred` when the plan meets one or more worker-value criteria
@@ -195,7 +213,7 @@ For each task:
 2. Treat the task `body` execution contract as the primary instruction for that task. If it contains Objective, Read, Change, Steps, Verify, Done, and Blockers, follow those sections literally.
 3. Do not make new architectural decisions during implementation. If the task contract is missing a decision that changes the user-facing contract, data model, security model, or integration boundary, stop and report the blocker.
 4. Follow mockups when UI work is involved.
-5. Run the task-specific verification from the task contract when present. If the contract has no verification command, run the smallest relevant project check that proves the task.
+5. Use the registered named `check --spec` for the task's verification, reading its actual envelope and retained output. Reuse valid evidence when inputs have not changed; do not repeat setup for every task. If no exact task command exists, add the smallest relevant project check to the same recipe. A sandbox denial requires a one-time permission for that same CLI check, not a raw-runner fallback. Record concrete setup and evidence without changing approved scope.
 6. Mark the task as done only after verification passes: run `archetipo task done {US-CODE} {TASK-ID}` from `data.project_root`.
 7. Announce completion briefly.
 
@@ -249,10 +267,12 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 - E2E coverage and demo video are independent decisions: author the e2e tests the plan requires; keep them fast and unrecorded. Recording happens later, in review.
 
 **Run and artifacts**
-- Run the functional e2e suite with `archetipo e2e run` (Playwright) or the project's e2e command. It runs headless with **no video** — recording is a review concern.
+- Apply the shared environment ownership/handoff contract. Read the setup recipe in the plan and project tests before creating services; preserve it for later phases.
+- For Playwright, run `archetipo -C {data.workdir} e2e run --spec {US-CODE}` with optional `--grep <pattern>`. Success returns the standard envelope, `kind: e2e_run`, with `data.passed`, `data.report_path` and `data.output_path`. The CLI retains complete output and command/result/source metadata under `{config.paths.test_results}/{US-CODE}/`, including failed attempts; it preserves older attempts. Check `data.passed`, not just envelope `ok`. `E_PRECONDITION`: complete framework setup; `E_INVALID_INPUT`: repair the selector; `E_INTERNAL`: repair report persistence before delivery.
+- A project's other e2e runner may be used with its native reporter configured to retain equivalent results in that spec directory. Debugging commands and console-only runs do not replace the final retained evidence. Functional execution is headless with **no video** — recording is a review concern.
 - Run the suite in the foreground with an explicit timeout sized for it. If it genuinely exceeds the runtime's per-call limit, split it — never move it to the background, because you will not be there when the notification arrives.
 - Start background services only when needed, and wait for readiness with a blocking check inside the same call (`until curl -sf localhost:3000 >/dev/null; do sleep 2; done`), never by ending your turn.
-- Verify the expected (non-video) artifacts, such as test reports, are produced.
+- Read back the actual non-video report and full output files; verify their command, result and source cover the final code and planned acceptance paths. Keep replay, readiness and scoped cleanup instructions with the project's test tooling. A video-disabled configuration does not waive functional reports.
 - Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient.
 
 #### Progress reporting
@@ -278,7 +298,7 @@ After all implementation waves:
 
 1. Run the project's unit and integration tests
 2. Run e2e tests if this spec required or introduced them
-3. If tests fail, determine whether the failure is new or pre-existing, fix local issues autonomously, and escalate only if an explicit blocker appears
+3. If tests fail, determine whether the failure is new or pre-existing, fix local issues autonomously, and escalate only if an explicit blocker appears. Compare actual diagnostics with the recorded baseline, not line counts; classify every new diagnostic. A passing build does not prove a separate typecheck passed. Record each command, exit status, verified Git HEAD/diff and report path. Repeat affected checks after subsequent edits; never weaken a required gate.
 4. Perform a plan adherence drift check: compare the final diff against the spec acceptance criteria, the plan body, and every task execution contract. Fix missing planned work before review; report any deliberate deviation in the completion summary.
 
 ### PHASE 3 - Code Review
@@ -323,7 +343,8 @@ If Cesare found no issues, or all critical issues are fixed, proceed to completi
 Proceed to Phase 5 only when all of the following are true:
 
 - no `🔴 CRITICAL` findings remain open
-- the full required final test suite passes
+- the full required verification contract is satisfied: checks pass, or an explicitly planned baseline comparison proves no new regressions; each raw failing command remains reported as failing
+- required verification reports and full outputs exist in the configured spec directory, describe the final tested code, and the local setup can be reproduced from the persisted plan/project tooling without prior worker context
 - the Wiki impact contract is complete, `wiki validate --profile bootstrap` passes, and `wiki status --require-generated <required-id>...` returns `ok: true` for every required page, when a Wiki exists and `data.wiki.enabled` is `true` (with the gate off this criterion does not apply)
 - the spec can be moved to `{config.workflow.statuses.review}` via `archetipo spec review`
 
@@ -333,7 +354,7 @@ Do not end with the spec still in `{config.workflow.statuses.in_progress}`, and 
 
 ### PHASE 5 - Completion & Backlog Update
 
-1. Run the full required test suite one final time. If it fails, return to the fix loop and do not transition the spec.
+1. Reload `spec show` and require every planned task to be `DONE`. Satisfy the required final verification contract against the final code (reuse exact valid CLI evidence instead of rerunning unchanged checks), including exact baseline comparisons explicitly allowed by the plan, and read back the retained reports and replay instructions. Report raw failing commands truthfully. A new regression, failed comparison or missing required report returns to the fix loop; no transition is allowed. Do not send a missing-evidence problem to the next phase after already reporting verification complete.
 2. Choose a Conventional Commit type that describes the completed work:
    - `feat`: new user-facing capability or behavior
    - `fix`: bug fix

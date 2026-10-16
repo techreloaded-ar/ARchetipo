@@ -134,7 +134,7 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	patterns := []string{"/.archetipo/increments/", "/.archetipo/increment-local/", "/.archetipo/increment-workspace.json", "/.archetipo/conversations/", "/.archetipo/executions/", "/.archetipo/tmp/", "/.archetipo/shared-runtime.md"}
+	patterns := []string{"/.archetipo/increments/", "/.archetipo/increment-local/", "/.archetipo/increment-workspace.json", "/.archetipo/conversations/", "/.archetipo/executions/", "/.archetipo/workflow-runs/", "/.archetipo/environment/", "/.archetipo/tmp/", "/.archetipo/shared-runtime.md"}
 	for _, tool := range workspace.Tools() {
 		patterns = append(patterns, "/"+tool.SkillsDir+"/archetipo-*/")
 	}
@@ -152,6 +152,17 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 
 func (s *Service) installRuntime(target string) error {
 	// Copy only workflow assets, never environment files or credentials.
+	// A project recipe declares commands and variable names. Never copy its
+	// resource checkpoint: every checkout prepares and owns its own environment.
+	sourceRecipe := filepath.Join(s.Config.ProjectRoot, ".archetipo", "environment.json")
+	targetRecipe := filepath.Join(target, ".archetipo", "environment.json")
+	if _, err := os.Stat(sourceRecipe); err == nil {
+		if _, err = os.Stat(targetRecipe); os.IsNotExist(err) {
+			if err = workspace.CopyFile(sourceRecipe, targetRecipe); err != nil {
+				return err
+			}
+		}
+	}
 	dataDir, _ := workspace.DiscoverDataDir()
 	runtimeSource := filepath.Join(s.Config.ProjectRoot, ".archetipo", "shared-runtime.md")
 	if _, err := os.Stat(runtimeSource); os.IsNotExist(err) && dataDir != "" {

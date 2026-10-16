@@ -10,9 +10,10 @@ import (
 
 // fakeRunner records invocations instead of executing them.
 type fakeRunner struct {
-	calls [][]string
-	err   error
-	onRun func() // optional side effect, e.g. simulate artifact creation
+	calls  [][]string
+	err    error
+	output string
+	onRun  func() // optional side effect, e.g. simulate artifact creation
 }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
@@ -20,7 +21,7 @@ func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...strin
 	if f.onRun != nil {
 		f.onRun()
 	}
-	return "", f.err
+	return f.output, f.err
 }
 
 func (f *fakeRunner) called(substr string) bool {
@@ -140,6 +141,9 @@ func TestRunFunctional_PassAndFail(t *testing.T) {
 	}
 	if !res.Passed {
 		t.Fatalf("expected passed, got %+v", res)
+	}
+	if res.ReportPath != "" || res.OutputPath != "" {
+		t.Fatalf("legacy invocation unexpectedly persists reports: %+v", res)
 	}
 
 	failing := &fakeRunner{err: context.DeadlineExceeded}

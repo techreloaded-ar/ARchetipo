@@ -3281,7 +3281,7 @@
 			}
 			parts.push(`${el.name}:${el.value}`);
 		});
-		return parts.join(" ");
+		return parts.join("\u0000");
 	}
 
 	// ---- Review (diff + inline comments) -----------------------------------
@@ -6788,6 +6788,7 @@
 			notice +
 			window.ConversationIndex.renderConversationIndex(conversationsIndex, {
 				currentId: conversationsCurrentId,
+				busy: conversationBusy,
 				undo: conversationsUndo,
 				unread: conversationsUnread(),
 			});
@@ -7848,9 +7849,10 @@
 				return;
 			}
 			if (conversationPollBusy) return;
-			// Older pages are loaded only by the explicit history control. Polling
-			// resumes once the client has reached the durable tail.
-			if (conversationView && conversationView.has_more === true) return;
+			// A live conversation may have more than one durable page to read.
+			// Keep following its cursor until the tail, including after an action
+			// reopens a long timeline. Waiting for the history button here hides
+			// current work and questions behind the first page indefinitely.
 			conversationPollBusy = true;
 			let view;
 			try {
@@ -8226,7 +8228,13 @@
 	// it preserves the two things a re-render would otherwise steal: the text
 	// being typed and the reading position in the timeline.
 	function renderConversationPanel() {
+		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
+		if (newConversation) {
+			newConversation.disabled = conversationBusy;
+			newConversation.setAttribute("aria-busy", String(conversationBusy));
+		}
 		if (!conversationEl) return;
+		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
 		const proposalScroll = conversationEl.querySelector(".conv-story-proposals")?.scrollTop || 0;
 		const increment = conversationEl.querySelector(".conv-increment");
 		const incrementScroll = increment && { id: increment.getAttribute("data-increment-id"), top: increment.scrollTop, focused: increment === document.activeElement };
@@ -8376,6 +8384,8 @@
 				if (typeof answerFocus.start === "number" && typeof field.setSelectionRange === "function") field.setSelectionRange(answerFocus.start, answerFocus.end);
 			}
 		}
+		const nextDiscussion = conversationEl.querySelector(".conv-discussion");
+		if (nextDiscussion) nextDiscussion.scrollTop = discussionScroll;
 		placeChoicePopover(conversationEl, "conversation");
 		placeFloatingMenu(conversationEl.querySelector(".conv-activities.is-menu"),
 			conversationEl.querySelector("[data-conversation-activities-toggle]"));

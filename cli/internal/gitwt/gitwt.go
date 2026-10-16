@@ -110,6 +110,8 @@ var RuntimeArtifactPathspecs = []string{
 	":(exclude).archetipo/increment-workspace.json",
 	":(exclude).archetipo/conversations",
 	":(exclude).archetipo/executions",
+	":(exclude).archetipo/workflow-runs",
+	":(exclude).archetipo/environment",
 	":(exclude).archetipo/tmp",
 }
 

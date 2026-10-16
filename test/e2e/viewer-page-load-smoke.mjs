@@ -104,6 +104,9 @@ const CLAIMS = [
   "Documentazione legge la Wiki, cerca nel contenuto e naviga tra pagine con cronologia e link diretti",
   "Documentazione conserva la bozza di conversazione e rende il Markdown senza contenuti attivi",
   "Documentazione è leggibile su schermi stretti e distingue Wiki assente e pagina mancante",
+  "una conversazione attiva raggiunge automaticamente gli ultimi messaggi oltre più pagine di eventi senza richiedere click sulla cronologia",
+  "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
+  "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
 ];
 
 // One entry per proved statement, for the report.
@@ -172,6 +175,7 @@ async function main() {
     await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
+    await exerciseLiveConversationPagination(browser, view.url);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
@@ -537,6 +541,84 @@ async function exerciseActivityComposer(browser, url) {
   await page.waitFor(`window.smokeStopped && !document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’arresto dall’elenco delle esecuzioni");
   if (exceptions.length) throw new Error(`Eccezioni nel flusso delle attività: ${JSON.stringify(exceptions)}`);
   ok(CLAIMS[10], "Ferma cancella l’esecuzione dall’elenco anche nella vista Conversazione");
+  await page.close();
+}
+
+async function exerciseLiveConversationPagination(browser, url) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on('Runtime.exceptionThrown', params => exceptions.push(params.exceptionDetails));
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.addScriptToEvaluateOnNewDocument', {source: `
+    const originalFetch = window.fetch.bind(window);
+    const at = '2026-10-16T09:00:00Z';
+    const events = Array.from({length:1000}, (_, index) => ({id:index+1,seq:index+1,at,kind:index===0?'user_message':'text',message_id:'history',text:index===0?'DOMANDA INIZIALE PAGINATA':'x'}));
+    events.push({id:1001,seq:1001,at,kind:'text',message_id:'recent',text:'DOMANDA RECENTE OLTRE DUE PAGINE'});
+    events.push({id:1002,seq:1002,at,kind:'text',message_id:'latest',text:'ULTIMO AGGIORNAMENTO DOPO IL RECUPERO'});
+    window.historyCursors = [];
+    window.fetch = async (input, options = {}) => {
+      const parsed = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const path = parsed.pathname;
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && (!options.method || options.method === 'GET')) return json({available:true,conversations:[{id:'pagination-fixture',title:'Conversazione lunga in corso',live:true,message_count:events.length}],closed_limit:20});
+      if (path === '/api/workspace/conversations/pagination-fixture/archive') {
+        await new Promise(resolve => { window.finishArchive = resolve; });
+        return json({available:true,conversation:{id:'pagination-fixture',state:'SEALED'},session:{work:'IDLE',archive:'ARCHIVED',connection:'DISCONNECTED'},events:[],approvals:[],runs:[]});
+      }
+      if (path === '/api/workspace/conversations/pagination-fixture/approvals/scroll-approval') {window.approvalResponse=JSON.parse(options.body);return json({ok:true});}
+      if (path === '/api/workspace/conversations/pagination-fixture') {
+        const after = Number(parsed.searchParams.get('after_id') || 0);
+        window.historyCursors.push(after);
+        const pending = events.filter(event => event.id > after && (after < 1001 ? event.id <= 1001 : true));
+        const batch = pending.slice(0,500);
+        const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}]} : undefined;
+        const approvals = window.showIncrement && !window.approvalResponse ? [{id:'scroll-approval',tool_name:'commandExecution',title:'Installare le dipendenze del progetto?',args:{command:'npm ci',context:'Dettaglio del comando da leggere. '.repeat(50)},options:[{id:'once',label:'Consenti una volta',kind:'allow'},{id:'deny',label:'Nega',kind:'deny'}]}] : [];
+        return json({available:true,provider_id:'fixture',conversation:{id:'pagination-fixture',state:'ACTIVE'},session:{work:after<1001?'TURN_ACTIVE':'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},events:batch,last_id:batch.at(-1)?.id || after,has_more:pending.length>batch.length,approvals,runs:[],increment});
+      }
+      if (path === '/api/workspace/conversations/pagination-fixture/model-choice') return json({available:true,models:[],capabilities:[]});
+      if (path === '/api/workspace/activities') return json({items:[]});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input,options);
+    };
+  `});
+  await page.send('Page.navigate', {url});
+  await page.once('Page.loadEventFired', 30000, 'la conversazione attiva con più pagine');
+  await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('ULTIMO AGGIORNAMENTO DOPO IL RECUPERO')`, 15000, 'gli ultimi messaggi raggiunti senza premere Carica altri messaggi', () => page.evaluate(`JSON.stringify({cursors:window.historyCursors,text:document.querySelector('.conv-timeline')?.textContent.slice(-500)})`));
+  const result = await page.evaluate(`({cursors:window.historyCursors,initial:document.querySelector('.conv-timeline').textContent.includes('DOMANDA INIZIALE PAGINATA'),recent:document.querySelector('.conv-timeline').textContent.split('DOMANDA RECENTE OLTRE DUE PAGINE').length-1,more:!!document.querySelector('[data-conversation-history-more]')})`);
+  if (!result.initial || result.recent !== 1 || result.more || ![0,500,1000,1001].every(cursor => result.cursors.includes(cursor))) throw new Error('Cronologia incompleta o duplicata: ' + JSON.stringify(result));
+  if (exceptions.length) throw new Error('Eccezioni durante il recupero della cronologia: ' + JSON.stringify(exceptions));
+  ok(CLAIMS[18], 'la chat attiva legge automaticamente tre pagine, conserva il passato e continua a ricevere messaggi senza duplicati');
+  await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await page.evaluate('window.showIncrement = true');
+  await page.waitFor(`!!document.querySelector('[data-run-approval-id="scroll-approval"]')`, 10000, 'la decisione nella conversazione di incremento');
+  await page.evaluate(`document.querySelector('[data-run-option-id="once"]').scrollIntoView({block:'center'})`);
+  const positioned = await page.evaluate(`(() => {const panel=document.querySelector('.conv-discussion');const button=document.querySelector('[data-run-option-id="once"]');const rect=button.getBoundingClientRect();const bounds=panel.getBoundingClientRect();return {top:panel.scrollTop,reads:window.historyCursors.length,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom&&button.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)),timeline:document.querySelector('.conv-timeline').clientHeight};})()`);
+  if (!positioned.reachable || positioned.timeline < 150) throw new Error('Decisione tagliata o chat illeggibile: ' + JSON.stringify(positioned));
+  await page.waitFor(`window.historyCursors.length > ${positioned.reads}`, 10000, 'un aggiornamento mentre la persona legge la decisione');
+  const restored = await page.evaluate(`document.querySelector('.conv-discussion').scrollTop`);
+  if (Math.abs(restored-positioned.top)>2) throw new Error('Il polling ha perso la posizione della decisione: ' + JSON.stringify({positioned,restored}));
+  await page.evaluate(`document.querySelector('[data-run-option-id="once"]').click()`);
+  await page.waitFor(`window.approvalResponse?.option_id === 'once' && !document.querySelector('[data-run-approval-id="scroll-approval"]')`,10000,'la decisione inviata dal controllo raggiungibile');
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.scrollIntoView({block:'center'});input.focus();input.value='Risposta dalla vista stretta';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  const reads = await page.evaluate('window.historyCursors.length');
+  await page.waitFor(`window.historyCursors.length > ${reads}`,10000,'un aggiornamento durante la scrittura');
+  const composer = await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');const rect=input.getBoundingClientRect();const bounds=document.querySelector('.conv-discussion').getBoundingClientRect();return {draft:input.value,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom};})()`);
+  if (composer.draft !== 'Risposta dalla vista stretta' || !composer.reachable) throw new Error('Compositore tagliato o bozza persa: ' + JSON.stringify(composer));
+  if (exceptions.length) throw new Error('Eccezioni nel layout dell’incremento: ' + JSON.stringify(exceptions));
+  ok(CLAIMS[19], 'a 390px la chat è leggibile, i permessi e il compositore sono raggiungibili e il polling conserva posizione e bozza');
+  await page.evaluate(`document.querySelector('[data-conversation-close-open]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-close-confirm]')`,10000,'la conferma di archiviazione');
+  await page.evaluate(`document.querySelector('[data-conversation-close-confirm]').click()`);
+  await page.waitFor(`!!window.finishArchive`,10000,'la richiesta di archiviazione sospesa');
+  const duringArchive = await page.evaluate(`(() => {const button=document.querySelector('[data-conversation-new]');button.click();return {disabled:button.disabled,busy:button.getAttribute('aria-busy'),draft:document.querySelector('.conv-composer-input')?.value};})()`);
+  if (!duringArchive.disabled || duringArchive.busy !== 'true' || duringArchive.draft !== 'Risposta dalla vista stretta') throw new Error('Nuova conversazione non dichiara l’operazione in corso: '+JSON.stringify(duringArchive));
+  await page.evaluate('window.finishArchive()');
+  await page.waitFor(`document.querySelector('[data-conversation-new]')?.disabled === false`,10000,'Nuova conversazione dopo l’archiviazione');
+  await page.evaluate(`document.querySelector('[data-conversation-new]').click()`);
+  await page.waitFor(`!document.querySelector('.conv-timeline')?.textContent.includes('DOMANDA INIZIALE PAGINATA')`,10000,'il nuovo spazio di conversazione');
+  if (exceptions.length) throw new Error('Eccezioni durante archiviazione e nuova conversazione: '+JSON.stringify(exceptions));
+  ok(CLAIMS[20], 'il controllo è disabilitato durante l’archiviazione e il primo click successivo apre una nuova conversazione');
   await page.close();
 }
 

@@ -37,6 +37,16 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 
 > **Language:** Use the detected language from `.archetipo/shared-runtime.md` throughout the planning document and all communication.
 
+### Verification prerequisites
+
+Apply the shared local verification environment policy. Missing app startup,
+services, synthetic accounts/data or browser tooling become concrete setup tasks
+with readiness, verification and cleanup commands; they are not unexplained
+external prerequisites. Each task must state what can be reused after interruption
+and what must be rechecked. List required commands separately (including build and
+typecheck when applicable), record actual baseline diagnostics and define how new
+regressions are detected. Do not promise a clean check when its baseline is failing.
+
 ### STAGE 0 — Setup & Spec Selection
 
 #### Step 0 — Config Loading & Connector Dispatch
@@ -45,6 +55,12 @@ Agents appear only in the **Team Brief** output. Each agent speaks **1-3 sentenc
 2. On failure, parse stderr as the JSON error envelope and branch on `error.code`.
 3. This skill uses only these CLI operations:
    - `archetipo config show`
+   - `archetipo -C {data.workdir} execution environment show`
+   - `archetipo -C {data.workdir} execution environment configure --file <recipe.json>` (stdin `-` accepts the same version 1 recipe JSON: `version`, `inputs`, `outputs`, `env_keys`, `prepare`, `probe`, `cleanup`, `checks`; commands have `name`, `argv`, `timeout_seconds`; checks also have `inputs`, `cache`)
+   - `archetipo -C {data.workdir} execution environment prepare`
+   - `archetipo -C {data.workdir} execution environment check <name> --spec {US-CODE} [--fresh]`
+
+   These return `archetipo/v1`, `kind: verification_result`. Show/configure return the recipe; prepare/check return `data.passed`, `data.stable`, `data.reused`, `data.report_path`, `data.reused_report` when reused, and per-step full log paths/exit codes. Require `passed && stable`; read the linked original report on reuse. Run each CLI operation separately. If the runtime denies a local listener or network operation, request one-time permission for the identical CLI check and rerun it intact; never substitute its raw runner or a console-only result. `E_PRECONDITION` means absent/corrupt recipe or checkpoint: create the missing recipe once or repair the specific record. `E_INVALID_INPUT` means repair the recipe/name/path before retrying. `E_CONFLICT` means another live operation owns the environment: inspect and await that operation instead of starting a duplicate. `E_INTERNAL` or a persistence error prevents a completed handoff. A normal envelope with `passed: false` means a failed setup/probe/test whose retained evidence must be inspected, not a successful verification.
    - `archetipo spec show {US-CODE}`
    - `archetipo spec next --status {config.workflow.statuses.todo}`
    - `archetipo validate plan {US-CODE} --file <path>`
@@ -87,11 +103,14 @@ After selecting the spec, read ALL context in a **single turn with parallel tool
 
 #### Baseline and verification discovery
 
-Before designing tasks, discover the checks the repository actually trusts from agent instructions, CI configuration, and project scripts. Run the smallest relevant baseline commands under `data.workdir` and record the command plus result in `plan_body` under a `Baseline` section.
+Before designing tasks, discover the checks the repository actually trusts from agent instructions, CI configuration, project scripts and `execution environment show`. If a recipe exists, call `prepare` before any baseline command, then use its relevant named checks with `--spec`. Reuse verified evidence for identical declared inputs. If no recipe exists, plan one bounded setup task and record the baseline as pending until that setup succeeds; do not run a build or generator through inherited dependencies to manufacture a baseline.
 
-- Include the focused tests for the behavior being changed and the compiler/type-checker, linter, build, or schema check that can catch defects in the files likely to be touched.
+Run the smallest relevant baseline under `data.workdir` and record its command, result and durable report in `plan_body`. A full production build is a final gate, not an unconditional planning prerequisite unless project instructions demand it at this point. Declare the full required final verification without executing it repeatedly during discovery.
+
+- Include focused behavior tests and the smallest compiler/type/lint/schema baseline needed to distinguish regressions. Retain all mandatory build and CI checks in the final gate; do not rerun checks whose declared inputs and valid evidence are unchanged.
 - Never write `Expect: passes` for a command that already fails. If a baseline command fails, record the exact pre-existing failure boundary and design verification that proves the task adds no failures.
 - A file changed by the plan must not be left with compiler or linter diagnostics. If that file already has local diagnostics, either include their bounded cleanup in the task or choose a different seam; do not silently add more diagnostics to a degraded file.
+- Map every required verification to an exact named recipe check. Prefer the repository's full required script over an equivalent one-file alias when the script covers the same current behavior and future test files. If one named check covers focused and final regression gates, reference that single evidence producer in both places; do not schedule duplicate raw runs. Register a distinct check only when it adds required coverage.
 - Detect environment prerequisites separately from code failures. Name deterministic setup commands when available, but do not make the implementer rediscover package-manager, generated-client, database, or service requirements.
 
 #### Step 3 — Announce
@@ -110,6 +129,24 @@ Output a compact announcement:
 ### STAGE 1 — Analysis, Design & Plan
 
 This is the core stage. Perform ALL analysis internally, then produce TWO outputs in a single turn: the Team Brief (shown to user) and the planning document (written to file).
+
+#### Match the plan size to the change
+
+Use a compact plan when one bounded change follows an established pattern in one
+component/endpoint, its verification recipe already exists, and it introduces no
+new persistence, security or deployment decision. Keep the technical plan around
+200–400 words: reference the persisted story and AC IDs instead of copying their
+full text. Retain the baseline report, every AC's observable evidence, exact
+verification commands and any real risk. A routine “no ADR/mockup needed” is one
+sentence, not an alternatives essay.
+
+For that compact case, prefer one `Impl` task containing both the behavior change
+and its regression tests, followed by the mandatory final `Test` gate. Do not
+split tightly coupled code and tests just to assign separate personas. Keep each
+seven-heading task contract concise (usually 100–200 words), with concrete paths
+and oracles. Use more tasks or detail when dependencies or risk require them.
+Keep staged part-file assembly, validation and every acceptance gate unchanged;
+compact means less duplicated narration, never less evidence or scrutiny.
 
 #### Internal Analysis (no output)
 
@@ -137,11 +174,13 @@ Silently perform all of the following — this is your chain of thought, not vis
 - Break down into concrete tasks ordered by dependency, adapting the sequence to the project's architecture (tests interleaved, not all at end)
 - For every task, write `body` as an execution contract for smaller implementation models. Use the exact canonical headings defined under **Task execution contract**; do not substitute the older `Descrizione` / `File Coinvolti` / `Criteri di Completamento` shape.
 - Add one final `Test` gate task that depends on every implementation and acceptance-test task. It runs the exact focused checks plus the relevant regression/build/type/lint checks discovered in the baseline; the implementer must not infer the final suite from project conventions. Its `Done` section must also require a post-completion `archetipo spec show {US-CODE}` check from `data.project_root` proving every task is `DONE` before `archetipo spec review` is allowed.
+- When verification needs local services, name the reusable project setup command or plan its implementation, following the shared environment ownership and handoff contract. Put readiness, synthetic configuration and scoped cleanup in the task's done criteria. The final gate must also verify the actual report/output files under `{config.paths.test_results}/{US-CODE}/`; a successful console run alone does not complete it.
 
 **As Mina (Testing):**
 
 - Define test strategy: what to test, test type (unit/integration/e2e), coverage focus
 - Build an acceptance evidence map before creating tasks. For every `AC-N`, name the test layer, exact observable oracle/assertion, fixture or starting state, and task that will produce the evidence. Include this map in `plan_body`; it is an acceptance map, not a duplicate task summary.
+- Include the evidence destination and repeatable verification command in that map. Functional browser evidence remains required when demo video recording is disabled.
 - Test the specified outcome, not a proxy. Absence of cards does not prove that an empty-state message is visible; a successful mock call does not prove the returned user contract. If a test double hides the component or boundary responsible for an acceptance outcome, either remove that mock for the scenario or add a direct test of the real responsible component.
 - **If the spec involves UI or user interaction**, classify browser e2e risk explicitly:
   - Browser e2e is required when the acceptance path crosses a route/server boundary, authentication or authorization, persistence, external integration, navigation across screens, or browser-only behavior; also use it when lower layers cannot prove the observable outcome.

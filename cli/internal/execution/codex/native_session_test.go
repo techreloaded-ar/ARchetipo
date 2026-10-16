@@ -163,6 +163,84 @@ func TestNativeCodexSessionDoesNotTreatProcessDeathAsTurnCompletion(t *testing.T
 	})
 }
 
+func TestNativeCodexReconnectsAfterTransportLossWithoutReplayingWork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, next := newFakeCodex(), newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &sequenceStarter{processes: []*fakeCodex{first, next}}})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "recover", Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}) }()
+	startNativeCodexTurn(t, ctx, provider, created.Session, first, "work", "original", "implement", "low", nil)
+	first.request(99, "item/commandExecution/requestApproval", `{"reason":"test"}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingApprovals) == 1 })
+	stream := make(chan error, 1)
+	go func() {
+		stream <- provider.StreamSessionEvents(ctx, execution.SessionRequest{Session: created.Session}, 0, func(execution.RunEvent) error { return nil })
+	}()
+	first.end()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool {
+		return s.Connection == execution.ConnectionDisconnected && s.CurrentTurn.State == execution.TurnFailed && len(s.PendingApprovals) == 0
+	})
+	select {
+	case err := <-stream:
+		if err == nil {
+			t.Fatal("lost stream reported success")
+		}
+	case <-ctx.Done():
+		t.Fatal("stream did not report transport loss")
+	}
+	// This is the skills/list path that previously kept using the dead client.
+	_, err = provider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{Native: &created.Session.Native, WorkingDir: created.Session.Environment.WorkingDir, ProviderConfig: created.Session.Environment.ProviderConfig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countMethod(next.methodsCalled(), methodThreadResume) != 1 || countMethod(next.methodsCalled(), methodThreadStart) != 0 || countMethod(next.methodsCalled(), methodTurnStart) != 0 {
+		t.Fatalf("reconnect replayed work or replaced the thread: %v", next.methodsCalled())
+	}
+	startNativeCodexTurn(t, ctx, provider, created.Session, next, "continuation", "new", "reconcile remaining tasks", "low", nil)
+	next.completeTurn()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+}
+
+func TestNativeCodexIdleDisconnectPreservesCompletedTurn(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "done", "done", "work", "low", nil)
+	fake.completeTurn()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+	fake.end()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool {
+		return s.Connection == execution.ConnectionDisconnected && s.CurrentTurn.State == execution.TurnCompleted
+	})
+}
+
+func TestNativeCodexInterruptIntentSurvivesLostTerminalFrame(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeCodex()
+	p := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := p.CreateSession(ctx, execution.CreateSessionRequest{Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startNativeCodexTurn(t, ctx, p, created.Session, fake, "stop-me", "work", "work", "low", nil)
+	delivery, err := p.InterruptTurn(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "stop-me", SubmissionID: "interrupt"})
+	if err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("interrupt: %+v %v", delivery, err)
+	}
+	fake.end() // No turn/completed notification reaches the client.
+	waitForCodexSession(t, p, created.Session, func(s execution.SessionSnapshot) bool {
+		return s.Connection == execution.ConnectionDisconnected && s.CurrentTurn.State == execution.TurnInterrupted
+	})
+}
+
 func startNativeCodexTurn(t *testing.T, ctx context.Context, provider *Provider, session execution.SessionMetadata, fake *fakeCodex, turnID, submissionID, message, effort string, skills []execution.SessionSkill) execution.SessionTurnStarted {
 	t.Helper()
 	started, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: session, TurnID: turnID, SubmissionID: submissionID, Message: message, Model: "gpt-native", Options: map[string]string{"effort": effort}, Skills: skills})

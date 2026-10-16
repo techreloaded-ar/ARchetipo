@@ -184,7 +184,7 @@
 			<div class="ws-run-head">${head.filter(Boolean).join("")}</div>
 			${renderAwaiting(entry, opts)}
 			${renderNotice(entry)}
-			<button type="button" class="ghost-btn" data-run-stop="${escapeHtml(id)}">${escapeHtml(textOption(opts, "stop"))}</button>
+			${entry.can_stop === false ? "" : `<button type="button" class="ghost-btn" data-run-stop="${escapeHtml(id)}">${escapeHtml(textOption(opts, "stop"))}</button>`}
 		</li>`;
 	}
 

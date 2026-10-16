@@ -26,7 +26,7 @@ async function controlServer(){
  const queue=[],received=[];
  const server=http.createServer(async(req,res)=>{
   res.setHeader("Content-Type","application/json");
-  if(req.url==="/next"){res.end(JSON.stringify(queue.shift()||{kind:"none"}));return;}
+  if(new URL(req.url,"http://localhost").pathname==="/next"){res.end(JSON.stringify(queue.shift()||{kind:"none"}));return;}
   if(req.url==="/received"){received.push(JSON.parse(await readBody(req)));res.end("{}");return;}
   res.writeHead(404);res.end("{}");
  });
@@ -119,14 +119,32 @@ async function main(){
    await finish(n,"Ho preparato l’intento e una storia. Leggili prima di approvare.\n\n"+Array.from({length:80},(_,i)=>"Passaggio "+(i+1)+": abbiamo chiarito il risultato e le verifiche da eseguire prima dell’approvazione.").join("\n\n"));
    await page.waitFor('document.querySelector(".conv-increment")?.textContent.includes("'+format+'")',timeout,"persisted intent");
   };
+  let recoveredTransport=false;
   const develop=async(format,n)=>{
+   let workflow=await cliJSON(["execution","workflow","start"],{skill:"archetipo-increment",invocation:"/archetipo-increment "+inc.id,scope:inc.id,conversation_id:id,state:{phase:"autopilot",revision:n}});
    await cliJSON(["spec","plan","US-001"],{plan_body:"## Baseline\nhello.txt contains the previous result.\n## Solution\nChange the output and verify it.",tasks:[{id:"TASK-01",title:"Implement",type:"Impl",status:"TODO",dependencies:[],body:taskBody},{id:"TASK-02",title:"Verify",type:"Test",status:"TODO",dependencies:["TASK-01"],body:taskBody}]});
    await cliJSON(["spec","start","US-001"]);
    await fs.writeFile(path.join(inc.workdir,"hello.txt"),"Clienti in "+format+"\n");
-   await cliJSON(["task","done","US-001","TASK-01"]);await cliJSON(["task","done","US-001","TASK-02"]);
+   await cliJSON(["task","done","US-001","TASK-01"]);
+   if(!recoveredTransport){
+    control.queue.push({kind:"exit",code:17});
+    await until(()=>control.received.some(entry=>entry.kind==="turn/start"&&(entry.params?.input||[]).some(input=>input.text?.includes("Resume workflow run "+workflow.id))),"automatic same-session workflow continuation");
+    const resumed=await read();
+    assert.equal(resumed.session.session.native.id,native);
+    assert.equal(resumed.increment.id,inc.id);
+    const persisted=await cliJSON(["spec","show","US-001"]);
+    assert.equal(persisted.tasks.find(task=>task.id==="TASK-01").status,"DONE");
+    assert.equal(persisted.tasks.find(task=>task.id==="TASK-02").status,"TODO");
+    workflow=await cliJSON(["execution","workflow","show",workflow.id]);
+    assert.equal(workflow.recovery_attempts,1);
+    recoveredTransport=true;
+    ok("Una caduta del processo agente riprende automaticamente la stessa sessione, conservando task e approvazione.");
+   }
+   await cliJSON(["task","done","US-001","TASK-02"]);
    await cliJSON(["spec","review","US-001"]);
    await cliJSON(["spec","move","US-001","--to","done"]);
    await cliJSON(["increment","ready",inc.id],{summary:"Apri hello.txt: il risultato concordato è Clienti in "+format+".",checks:["Contenuto del file verificato: Clienti in "+format]});
+   await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:workflow.state});
    await finish(n,"Il risultato è pronto. Provalo e dimmi cosa cambiare.");
    await page.waitFor('!!document.querySelector(\'[data-increment-action="publish"]:not(:disabled)\')',timeout,"business review");
   };

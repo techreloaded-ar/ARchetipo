@@ -7,6 +7,25 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
+func TestE2ERunRejectsUnsafeReportScope(t *testing.T) {
+	newProject(t)
+	r := runCLI(t, "", "e2e", "run", "--spec", "../outside")
+	if r.exit == iox.ExitOK {
+		t.Fatal("unsafe report scope succeeded")
+	}
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(r.stderr.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Error.Code != iox.CodeInvalidInput {
+		t.Fatalf("wrong error: %s", r.stderr.String())
+	}
+}
+
 func TestE2EDetect_EmptyProject(t *testing.T) {
 	newProject(t)
 	r := runCLI(t, "", "e2e", "detect")

@@ -24,6 +24,20 @@
 .conv-increment-result li,.conv-increment-feedback{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
 @media(max-width:640px){.conv-increment{padding:14px}.conv-increment>header{align-items:start;flex-direction:column;gap:6px}.conv-increment .approval-btn{white-space:normal;text-align:left}}
 
+/* Increment details and pending decisions can exceed a short conversation
+   frame. Keep a readable timeline and allow the whole frame to scroll, so
+   the composer and consent buttons remain reachable instead of being clipped. */
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > .conv-timeline {
+	flex: 1 0 min(220px, 30vh);
+}
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > :not(.conv-timeline) {
+	flex-shrink: 0;
+}
+
 :root {
 	--font-sans:
 		"Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",

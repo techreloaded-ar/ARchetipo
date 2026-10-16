@@ -118,3 +118,9 @@ la stessa sessione nativa, assenza di modifiche al prodotto principale,
 pubblicazione ripetuta senza duplicati, consegna solo dopo merge e accesso
 alla conversazione libera. Controlla anche il layout a 390 px e conserva
 screenshot e report sotto `test/workspaces/`, ignorato da Git.
+
+## Composizione e recupero
+
+Increment compone spec e Autopilot; le skill di base e Autopilot non dipendono
+dall’incremento. Checkpoint, recuperi della sessione e verifiche sono descritti
+in [Esecuzioni riprendibili](execution-recovery.md).

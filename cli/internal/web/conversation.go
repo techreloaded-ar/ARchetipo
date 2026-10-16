@@ -77,8 +77,9 @@ type conversationSnapshotView struct {
 // Events is never nil, so a client always receives an array and never has to
 // test for null before iterating.
 type conversationView struct {
-	Increment *incrementView `json:"increment,omitempty"`
-	Available bool           `json:"available"`
+	Workflow  *workflowProgress `json:"workflow,omitempty"`
+	Increment *incrementView    `json:"increment,omitempty"`
+	Available bool              `json:"available"`
 	// UnavailableReason is omitted when a conversation can be opened, so a
 	// client can never render a reason next to an offer that has none.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
@@ -1143,7 +1144,8 @@ type sendConversationMessageReq struct {
 	// starts an action — and not words the person wrote. Not a JSON field for
 	// the same reason executionID is not: what the browser sends is what the
 	// person said, and it is shown as it is.
-	display string
+	display           string
+	recoveryForTurnID string
 }
 
 // handleSendWorkspaceConversationMessage delivers a message to the open

@@ -15,6 +15,7 @@
     "test:e2e:unit": "node --test ./test/e2e/config.test.mjs ./test/e2e/baseline.test.mjs",
     "test:wiki-benchmark": "node ./test/benchmark/wiki/run.mjs",
     "test:wiki-benchmark:unit": "node --test ./test/benchmark/wiki/run.test.mjs",
+    "test:harness-benchmark": "node ./test/benchmark/harness/run.mjs",
     "test:view-create-smoke": "node ./test/e2e/create-spec-view-smoke.mjs",
     "test:view-workspace-smoke": "node ./test/e2e/create-workspace-view-smoke.mjs",
     "test:view-workspaces-smoke": "node ./test/e2e/known-workspaces-view-smoke.mjs",

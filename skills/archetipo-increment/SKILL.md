@@ -39,8 +39,10 @@ native session by copying a transcript.
 ## Discovery and feedback
 
 When `status` is `DISCOVERY`, interview the person briefly, using the
-discovery method of archetipo-spec: clarify benefit, users, scope, exclusions
-and a concrete demonstration. Ask one focused question at a time. For a
+installed archetipo-spec skill in its proposal-only mode: clarify benefit, users, scope, exclusions
+and a concrete demonstration. That skill receives the request and project context,
+produces a proposal without persisting it, and needs no knowledge of this controller.
+Ask one focused question at a time. For a
 feedback round, concentrate on the requested delta and show its consequences.
 Do not write product code before the latest intent is approved.
 
@@ -67,18 +69,48 @@ It never updates the parent backlog.
 
 ## Develop and prepare the result
 
-### Local environment for the increment
+### Execution ownership and checkpoints
 
-Apply [the increment local environment policy](references/local-runtime.md)
-when preparing tests and the preview. The increment's branch and worktree provide
-code isolation. Develop and verify the result in that worktree using the
-project’s available local tools and services.
+After the intent is approved, own delivery until `increment ready` has frozen the
+verified result. A child phase finishing is not the end of this invocation. Keep
+human product decisions at discovery/intent approval and verified-result review.
+Local setup, failed checks and recoverable worker failures belong to delivery.
 
-When invoking Autopilot, explicitly require it to pass this policy to every
-planning and implementation worker, including resumed work and rework. Autopilot
-uses `data.increment` from `config show` to retain this context across fresh
-workers and resumed runs; never add prose or unsupported flags to its story-code
-arguments. These responsibilities apply only inside the increment.
+Use the shared checkpoint protocol, with `skill: archetipo-increment`, `scope: <id>`,
+`invocation: /archetipo-increment <id>` and the supplied `Workflow conversation`
+binding when present. This skill uses
+`execution workflow start --file -`, `list`, `show <run-id>` and
+`checkpoint <run-id> --file -`.
+
+Start payload:
+
+```json
+{"skill":"archetipo-increment","invocation":"/archetipo-increment <id>","scope":"<id>","conversation_id":"optional supplied Workflow conversation","state":{"revision":1,"stories":["US-001"],"phase":"autopilot"}}
+```
+
+Omit the binding when not supplied. Checkpoint with the last observed `revision`,
+`status` (`running`, `blocked` or `complete`), `phase`, `worker_id`, the full `state`
+and `last_error` for a blocker. All four operations return `archetipo/v1`,
+`kind: workflow_run`, with the record in `data` (an array for list).
+`E_INVALID_INPUT`: repair input; `E_NOT_FOUND`: resolve the run; `E_CONFLICT`:
+reread/reconcile the revision or conflicting scope/binding; `E_INTERNAL`: preserve
+state and report the failure. Never edit checkpoint files directly.
+Its `state` holds only the approved revision, current story codes and delivery
+phase (`spec`, `autopilot`, `verify`, `ready`). Store delegated worker IDs before
+waiting, reconcile existing workers and partial changes on resume, and preserve
+intent approval. Mark the run `complete` only after `increment ready` succeeds.
+A concrete non-recoverable blocker is recorded as `blocked`, never success.
+
+If an interruption occurred after `increment ready` persisted but before this
+checkpoint closed, reread the increment. A frozen result already in `REVIEW`
+settles this delivery run as complete before waiting for the business verdict;
+do not rerun development or publication to repair bookkeeping.
+
+Apply the shared local verification environment policy when preparing tests and
+preview. The called skills receive ordinary project/spec context and generic
+execution constraints. They do not receive an increment-specific policy or need
+to recognize this controller. Preserve the model and options explicitly requested
+by the person across delegation, resume and recovery.
 
 ### Delivery workflow
 
@@ -90,7 +122,31 @@ the approved local stories are eligible. The sandbox disables per-spec
 worktrees, so acceptance stays on the increment branch and cannot integrate
 into the original branch.
 
-Read the existing skills' own contracts. Keep human product acceptance here:
+Read the existing skills' own contracts. Invoke Autopilot as a nested skill in
+this same coordinator context; do not create another coordinator whose only work
+would be relaying the same queue. Keep its separate generic CLI checkpoint and
+its fresh planning, implementation and acceptance workers unchanged. Supply only
+the absolute sandbox root, local story selectors, detected human language, generic
+execution binding and explicitly requested model/options. Autopilot needs no
+increment ID, business state or special environment policy.
+
+Autopilot's completion is an internal handoff, not the end of this invocation.
+Continue here through verification and `increment ready`; only a verified result
+or concrete blocker returns control. Reuse its just-observed authoritative CLI
+states when no intervening write occurred. If a separate controller was required
+by runtime/context constraints, await its terminal result and reread CLI state;
+never trust its prose alone. `increment ready` itself enforces complete accepted
+stories/tasks and the clean frozen snapshot; do not duplicate its validations by
+rediscovering the whole project.
+
+If Autopilot leaves any story incomplete, do not call `increment ready`: preserve
+its run. A terminal `left_in_review` has already exhausted the allowed technical
+path or names a non-reworkable blocker: record it as `blocked` here with remaining
+findings and the minimum intervention. Do not create a new technical run to reset
+its review budget. Recover only incomplete phases under the existing run’s budget.
+Never silently treat technical `left_in_review` as a business-ready result.
+
+Keep human product acceptance here:
 technical acceptance of a local story is not delivery into the product.
 When wiki.enabled is false, perform no automatic Wiki work.
 
@@ -98,13 +154,22 @@ For a revised intent, reconcile the whole code diff with the current outcome.
 Removing a story does not remove its implementation automatically: remove or
 adapt obsolete code, tests and docs, then verify the combined result.
 
-Run relevant checks and prepare a concrete demonstration. Use the project's
+Use the existing verified reports and prepare a demonstration appropriate to the
+changed surface. A UI change needs an interactive preview when runnable. For an
+API/CLI-only change, reproducible real request/response or command traces already
+produced by the accepted tests are a valid demonstration. Do not invent an ad-hoc
+persistent preview or rerun those same requests solely to duplicate that evidence,
+unless the person requested a running endpoint or the project already provides
+its documented preview command. Re-run
+checks only when inputs changed, evidence is missing, or a specific concern needs
+reproduction. Batch independent final state/diff/report reads instead of serial
+rediscovery. Use the project's
 documented preview command when it exists; otherwise inspect the project and
 attempt the permitted local setup before reporting missing startup information.
 Never invent a preview URL, a passing check, or a deployment. A preview uses separate test data and local services; never copy
 production credentials or point it at production resources.
 
-Commit the verified product changes on the existing increment branch. Keep
+Commit any remaining verified product changes on the existing increment branch; do not create another commit when the accepted branch is already clean. Keep
 runtime journals and sandbox process files out of commits. Then call:
 
 `archetipo -C <workdir> increment ready <id> --file -`

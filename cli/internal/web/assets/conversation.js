@@ -1575,6 +1575,8 @@
 		const local = ui && typeof ui === "object" ? ui : {};
 		const typed = typeof draft === "string" ? draft : "";
 		const blocks = [];
+		const workflow = objectAt(value, "workflow");
+		if (workflow && textAt(workflow, "label")) blocks.push(renderNotice("info", textAt(workflow, "label"), textAt(workflow, "detail")));
 		if (objectAt(value, "increment")) blocks.push(renderIncrement(objectAt(value, "increment"), local));
 
 		const conversation = objectAt(value, "conversation");

@@ -35,6 +35,8 @@ func newExecutionCmd(s streams, deps executionDependencies) *cobra.Command {
 		newExecutionShowCmd(s, deps),
 		newExecutionProviderCmd(s, deps),
 		newExecutionSetupCmd(s, deps),
+		newWorkflowCmd(s),
+		newEnvironmentCmd(s),
 	)
 	return root
 }

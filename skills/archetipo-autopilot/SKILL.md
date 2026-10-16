@@ -1,11 +1,11 @@
 ---
 name: archetipo-autopilot
-description: Runs the ARchetipo pipeline autonomously end to end, from planning through implementation to autonomous acceptance, until the selected backlog specs reach DONE. Applies a bounded fix loop of at most three rework cycles per spec; a spec that is still not acceptable stays in REVIEW for a human while the run continues with the remaining specs. Accepts no argument for every eligible spec, or any combination of EP-XXX and US-XXX selectors whose eligible specs are unioned, plus an optional --max-specs N flag that caps how many specs the run freezes and completes. Requires a fresh isolated worker for every planning, implementation, and acceptance phase. Use when the user asks to run everything, implement the backlog, process an epic autonomously, or autopilot one or more specs end to end.
+description: Runs the ARchetipo pipeline autonomously end to end, from planning through implementation to autonomous acceptance, until the selected backlog specs reach DONE. Applies a bounded fix loop of at most three rework cycles per spec; a spec that is still not acceptable stays in REVIEW for a human while the run continues with the remaining specs. Accepts no argument for every eligible spec, or any combination of EP-XXX and US-XXX selectors whose eligible specs are unioned, plus an optional --max-specs N flag that caps how many specs the run freezes and completes. Uses a compact in-context path for one bounded local spec and fresh phase workers for larger work; acceptance always runs in a fresh independent worker. Use when the user asks to run everything, implement the backlog, process an epic autonomously, or autopilot one or more specs end to end.
 ---
 
 # ARchetipo Autopilot
 
-Act as a lightweight controller. Reconcile each selected spec from its current workflow state to `{config.workflow.statuses.done}` by running `archetipo-plan`, `archetipo-implement`, and `archetipo-review` in separate fresh workers. Never read source code, plans, PRDs, or Wiki pages in the controller context.
+Act as a lightweight controller. Reconcile each selected spec from its current workflow state to `{config.workflow.statuses.done}` by invoking the existing planning, implementation and acceptance skills. Choose the compact or isolated context below. Between phases read only CLI control state; source/plan/PRD/Wiki work belongs to the active phase skill, whether it runs inline or in a worker. Acceptance always remains independent.
 
 ## Shared runtime
 
@@ -15,11 +15,11 @@ Read `./references/acceptance-loop.md` exactly once at activation time as well. 
 
 ## Execution contract
 
-1. Require a worker/subagent mechanism that creates a fresh isolated context for every invocation and lets the controller await its terminal result, either in the spawn call or through an explicit wait tool.
+1. Require a worker/subagent mechanism that creates a fresh independent acceptance context and lets the controller await its terminal result. In isolated mode use it for planning and implementation as well.
 2. Stop before creating state or mutating the project when that capability is unavailable or cannot be established. Do not execute any phase in the controller context.
 3. Run one phase at a time. Never run two spec-writing workers concurrently.
 4. Treat CLI state as authoritative. A worker summary — including an acceptance verdict block — is telemetry, never proof of success.
-5. **Failure policy is asymmetric, by design.** Stop the whole run at the first failed worker, CLI error, unresolved dependency, invalid transition, or failed verification. Do not skip and do not retry automatically. There are exactly two exceptions, both narrow and both defined in *Failure handling*: the `left_in_review` acceptance outcome, which is an expected semantic result rather than a malfunction; and a **planning** worker killed by a transport failure that provably persisted nothing, which is retried once.
+5. **Recover bounded failures without weakening acceptance.** Apply *Failure handling* to a terminal worker that did not finish its phase. Preserve completed work and approvals; stop for an unresolved external dependency, changed product scope, uncertain ownership or exhausted recovery budget.
 6. Target `{config.workflow.statuses.done}` through autonomous acceptance. A spec that is still not acceptable after `max_review_iterations` rework cycles stays in `{config.workflow.statuses.review}` for human review through `/archetipo-review`.
 7. Do not start, detect, or depend on a vendor-native goal, loop, or autopilot mode.
 
@@ -43,19 +43,19 @@ Interpret selectors as follows:
 - a `US-[0-9]{3}` selector: select that exact spec;
 - several selectors: select the **union** of what each one contributes. A spec named explicitly and also reached through its epic collapses into a single entry.
 
-Interpret `--max-specs N` as the maximum number of specs this run freezes and completes. `N` is an integer `>= 1`. The cap truncates the ordered queue in Phase 0, so the announced queue is already the definitive one; excluded specs never enter the state file and are never touched. A spec already in configured `{config.workflow.statuses.done}` at freeze time does not consume the cap, because it needs no worker.
+Interpret `--max-specs N` as the maximum number of specs this run freezes and completes. `N` is an integer `>= 1`. The cap truncates the ordered queue in Phase 0, so the announced queue is already the definitive one; excluded specs never enter the CLI checkpoint and are never touched. A spec already in configured `{config.workflow.statuses.done}` at freeze time does not consume the cap, because it needs no worker.
 
 Reject unknown flags, free-form conditions, malformed identifiers, and a malformed `--max-specs` value — missing, non-integer, `<= 0`, or the flag repeated — before any mutation. Do not normalize lowercase or infer a partial code.
 
 ## Direct CLI operations
 
-Invoke only these CLI operations in the controller — the read-only surface is unchanged by autonomous acceptance:
+Use these read-only workflow operations plus the checkpoint operations below:
 
 - `archetipo config show`
 - `archetipo spec list`
 - `archetipo spec show <US-CODE>`
 
-Run them from `data.project_root`, parse stdout and stderr as the shared JSON envelopes, and branch on `error.code`. Every mutation — planning, implementation, and everything acceptance performs, including rework feedback, Wiki acceptance, demo recording, and the final transition — belongs to a phase worker and is declared by that worker's own skill. The controller never runs one.
+Run them from `data.project_root`, parse stdout and stderr as the shared JSON envelopes, and branch on `error.code`. Artifact mutations belong to the invoked phase skill and are declared by its own contract. In isolated mode only the phase worker performs them; in compact mode perform them only while executing that base skill inline. Do not reimplement any phase inside this controller.
 
 ## Isolated worker contract
 
@@ -73,6 +73,36 @@ Choose the invocation from the runtime's documented tool schema, not from the wo
 - With a blocking spawn tool, use its foreground mode and consume the returned result. Omit an optional name when that runtime documents named workers as detached teammates.
 - With a spawn-and-wait tool pair, spawn a fresh worker, retain its returned ID, and explicitly wait on that ID until it completes or reports a failure. A required `name` or `task_name` is valid; it does not itself imply detachment. For example, with `spawn_agent` and a wait tool, use a unique task name and `fork_turns: "none"` when supported, then wait for that worker's terminal result. A running acknowledgement or a wait timeout is not completion: keep waiting within the controller's active turn.
 
+Resolve each phase's exact skill file once from this skill's current installation
+root (or the runtime's authoritative catalog), verify that the file exists, and
+pass that path in the handoff. Do not ask each worker to search unrelated plugin
+caches or other projects for the skill. A missing phase installation is a concrete
+setup error, not permission to substitute another project's version.
+
+### Compact execution context
+
+After freezing the queue, choose `execution_context: compact` only for one bounded
+local spec following an established component/endpoint pattern, with an existing
+verification recipe and no new persistence, authorization, deployment or
+concurrency policy. If uncertain, choose `isolated`. Persist the choice in the
+controller checkpoint; it is execution strategy, not a different acceptance bar.
+
+In compact mode invoke `archetipo-plan` and `archetipo-implement` inline in this
+coordinator, by reading and following their own exact installed skill files.
+Their completion is an internal phase return: do not end the native turn or give
+control back before the selected queue reaches its terminal outcome. Apply the
+same CLI status/task cross-checks and recovery/rework budgets below. If planning
+uncovers a larger seam or context pressure, switch the remaining phases to
+`isolated` before implementation and checkpoint that decision. Never inline
+acceptance: it always uses the fresh review worker and its explicit activation.
+
+In isolated mode use the fresh planning and implementation workers below. This
+mode remains the default for multiple specs, cross-cutting work or uncertain
+scope. A compact phase has no child worker ID; the coordinator is its known sole
+writer. On an inline phase failure, reconcile persisted effects and apply the
+same bounded recovery policy, switching to a fresh worker when needed. No phase
+may skip evidence, independent acceptance or a required check to save time.
+
 Always pass the bounded phase prompt and absolute root explicitly. Do not inherit the controller's transcript, resume an earlier worker, start another phase while this one runs, or end the controller turn merely to await a notification. Follow **Asynchrony inside a worker** in the shared runtime for nested delegation.
 
 Nested workers are not required. The phase worker may complete its entire phase itself when its skill provides an inline execution path.
@@ -83,80 +113,78 @@ If the contract is unavailable, stop with a message equivalent to:
 
 ```text
 ARchetipo Autopilot is unavailable because this runtime cannot create a fresh
-isolated worker for every planning, implementation, and acceptance phase. Run
+independent worker for acceptance. Run
 each phase in a separate agent session or use a compatible runtime.
 ```
 
-## Increment environment context
-
-After `archetipo config show`, retain `data.increment` along with the project root.
-When it is non-null, resolve the installed `archetipo-increment` skill's
-`references/local-runtime.md` to an absolute path. Append the following bounded
-block to every planning and implementation prompt below, including resumed phases,
-planning transport retries and rework:
-
-```text
-Product increment: {data.increment.id}
-Environment policy: {absolute path to archetipo-increment/references/local-runtime.md}
-Read and apply this policy as part of this phase. Preparing the local environment
-needed for the increment's tests and preview belongs to delivery.
-Pass the policy path to any nested worker responsible for setup or tests.
-```
-
-A resumed run re-derives this context from the current CLI configuration; it does
-not depend on a previous conversation or worker summary. When `data.increment`
-is absent or null, append no block and preserve the ordinary phase prompts.
-This is context propagation only: the controller does not set up services,
-inspect application code or execute phase tasks. Acceptance rules are unchanged.
-
 ## Run state
 
-Persist an active run in:
+Use the shared resumable execution checkpoint protocol, never direct state-file
+writes. In this controller the additional CLI operations are:
 
-```text
-.archetipo/autopilot-state-{UTC_TIMESTAMP}-{SHORT_SUFFIX}.yaml
+- `archetipo execution workflow list`
+- `archetipo execution workflow start --file -`
+- `archetipo execution workflow show <run-id>`
+- `archetipo execution workflow checkpoint <run-id> --file -`
+
+`start` accepts:
+
+```json
+{"skill":"archetipo-autopilot","invocation":"/archetipo-autopilot US-001","scope":"US-001","conversation_id":"optional supplied Workflow conversation","state":{}}
 ```
 
-Use this minimal shape:
+Use normalized scope and actual executable arguments separately: without selectors,
+scope is `ALL` and invocation is `/archetipo-autopilot`. Omit `conversation_id` when
+not supplied; otherwise retain it and pass the generic binding to phase prompts.
+`state` is the frozen controller object below, not an empty object in a real run.
 
-```yaml
-autopilot:
-  id: "20260722T103000Z-a1b2"
-  scope: "EP-002 US-011 US-030"   # ALL, or the normalized selector list
-  max_specs: 3                    # null when --max-specs was not passed
-  selected_specs: [US-001, US-002, US-003]
-  excluded_by_max_specs: [US-009, US-012]   # [] when the cap did not truncate
-  current_spec: US-002
-  status: running  # running | error
-  started_at: "2026-07-22T10:30:00Z"
-  updated_at: "2026-07-22T10:35:00Z"
-  last_error: null
-  max_review_iterations: 3   # frozen at run creation
-  specs:
-    US-001: { outcome: done, review_iterations: 0 }
-    US-002: { outcome: pending, review_iterations: 2, planning_transport_retries: 1 }
-    US-003: { outcome: pending, review_iterations: 0 }
+`checkpoint` accepts the last observed revision and full controller state:
+
+```json
+{"revision":1,"status":"running","phase":"implement","worker_id":"fresh worker id","state":{},"last_error":""}
 ```
 
-`scope` is the **normalized selector list**: the literal `ALL` when the invocation carried no selector, otherwise the deduplicated selectors sorted `EP` codes first, then `US` codes, each group by code, joined by single spaces. Resume matching compares this normalized string, so `EP-002 US-011` and `US-011 EP-002` are the same scope.
+Use `blocked` for a concrete blocker and `complete` after final reconciliation.
+Every command returns `archetipo/v1`, `kind: workflow_run`, with the record in
+`data` (an array for list). `E_INVALID_INPUT`: fix the payload; `E_NOT_FOUND`:
+resolve the right run; `E_CONFLICT`: reread and reconcile revision/scope/binding,
+never overwrite blindly; `E_INTERNAL`: preserve progress and report the failure.
 
-`outcome` is autopilot bookkeeping, not a mirror of workflow state — the authoritative status always comes from `archetipo spec show`. Terminal values are `done`, `left_in_review`, and `skipped_blocked`; a `left_in_review` entry also records `unresolved: ["..."]` and a `skipped_blocked` entry records the blocking chain. Freeze `max_review_iterations` at `3` and `max_specs` at the requested value when the file is created, and never change either during the run.
+The controller-owned `state` is:
 
-`planning_transport_retries` counts the planning retries described in *Failure handling*. It is absent until the first one, is capped at `1` per spec for the whole run — a resumed run inherits the count and does not get a fresh allowance — and is entirely separate from `review_iterations`: a transport failure never consumes rework budget, because no review happened.
+```json
+{"scope":"US-001","max_specs":null,"selected_specs":["US-001"],"excluded_by_max_specs":[],"current_spec":"US-001","max_review_iterations":3,"max_phase_recoveries":3,"specs":{"US-001":{"outcome":"pending","review_iterations":0,"phase_recoveries":{}}}}
+```
 
-Write state updates atomically through a sibling temporary file followed by replacement when the available file tools support it. Never store phase summaries, duplicated workflow states, plans, task bodies, or source-code observations.
+`scope` is `ALL` without selectors; otherwise deduplicate and sort selectors with
+EP codes first, then US codes, joined with spaces. Freeze selection, caps and
+budgets at creation. `outcome` is bookkeeping: terminal values are `done`,
+`left_in_review` and `skipped_blocked`. The latter two retain unresolved findings
+or their blocking chain. Resuming preserves counters, including interrupted rework.
 
-Before creating a run:
+Before creating a run, list unfinished runs for this skill. Resume exactly one
+matching scope and binding, and use its frozen state; a different `--max-specs`
+does not widen it. Conflicting scopes or multiple unfinished runs are blockers.
+A run marked `blocked` resumes only on an explicit user request. Store a fresh
+worker's ID and phase before waiting; clear the ID only after terminal completion.
+Never start another writer until prior worker ownership has been resolved.
 
-1. Find active `autopilot-state-*.yaml` files with `status: running` or `status: error`.
-2. If exactly one file exists and its `scope` equals the requested normalized scope, resume it automatically from its frozen `selected_specs`, `specs` bookkeeping, `max_review_iterations`, and `max_specs`; set `status: running` and clear `last_error`.
-3. A resume inherits the frozen `max_specs`. When the invocation passed a `--max-specs` value different from the frozen one, ignore it, keep the frozen queue, and say so explicitly in the opening message. The cap is never renegotiated mid-run: widening it would require re-freezing a selection the run has already been reporting against.
-4. If an active file has a different scope, or multiple active files exist, stop without mutation and report the conflicting paths.
-5. Never silently discard an active run.
+For compatibility, when no CLI run exists, read any legacy
+`.archetipo/autopilot-state-*.yaml` without editing it. Import the single matching
+run's frozen queue, outcomes and rework counters into the initial `state`; retain
+its previous `planning_transport_retries` as consumed planning recoveries. Refuse
+conflicting legacy scopes. Once imported, only the CLI run is authoritative.
 
-Resume mid-rework as described in `./references/acceptance-loop.md`: a spec in configured `TODO` with `review_iterations > 0` is inside a fix cycle and continues plan → implement → acceptance with the recorded budget, never as fresh work.
+Checkpoint after each dispatch observation, completed rework cycle or recovery.
+Before dispatching acceptance, checkpoint `pending_acceptance` with the spec,
+pre-dispatch status and `review_iterations`. On resume, reconcile that marker
+before another dispatch: observed TODO with `spec.rework: true` increments the
+recorded pre-dispatch count exactly once; DONE records acceptance; REVIEW retries
+the incomplete acceptance. Clear the marker in the same checkpoint as the reconciled
+count/outcome. Other states require explicit reconciliation, not a guessed verdict.
 
-Delete the state file only after every selected spec holds a terminal `outcome` verified against the CLI: `done` requires configured `DONE`, `left_in_review` requires configured `REVIEW`, and `skipped_blocked` accepts any status because no worker ever ran for it. Retain the file after errors or interruption so a later invocation with the same scope can resume.
+At successful queue completion mark the run `complete`; retain it as history.
+Never delete an unfinished run. Never store source code or phase summaries.
 
 ## Workflow
 
@@ -164,7 +192,7 @@ Delete the state file only after every selected spec holds a terminal `outcome` 
 
 1. Validate the input and compute the normalized scope.
 2. Verify the isolated worker contract.
-3. Run `archetipo config show` and retain `data.project_root`, configured workflow labels, paths and the optional `data.increment` context as described in **Increment environment context**.
+3. Run `archetipo config show` and retain `data.project_root`, configured workflow labels and paths.
 4. Detect and resume a matching active run when present.
 5. Otherwise run `archetipo spec list` and build the selection as the union of what every selector contributes:
    - no selector (`ALL`): specs in configured `TODO`, `PLANNED`, `IN PROGRESS`, or `REVIEW` states — a spec waiting in review is remaining work now that the target is `{config.workflow.statuses.done}`;
@@ -177,7 +205,7 @@ Delete the state file only after every selected spec holds a terminal `outcome` 
 8. Order the union as described below. A dependency cycle or a missing blocker is a blocking error here, because it leaves the order undefined.
 9. When `max_specs` is set, walk the ordered queue and retain: every spec already in configured `DONE`, which consumes no budget because it needs no worker, plus the first `N` specs below `DONE`. Drop the rest, preserving the order of what stays, and record the dropped codes in `excluded_by_max_specs`.
 10. **Only now** validate external blockers, and only for the retained specs: a dependency outside the frozen selection counts as satisfied solely when its current status is configured `DONE`. Running this check after truncation is deliberate — checking it before would fail the run over a blocker of a spec the cap excluded anyway.
-11. Create the state file with one `specs` entry per retained code (`outcome: pending`, `review_iterations: 0`) and announce the frozen queue, including how many eligible specs the cap left out.
+11. Create the CLI run with one `specs` entry per retained code (`outcome: pending`, `review_iterations: 0`) and announce the frozen queue, including how many eligible specs the cap left out.
 
 ### Dependency ordering
 
@@ -194,9 +222,9 @@ Because every selected blocker precedes its dependent, any prefix of this order 
 
 For each frozen spec code:
 
-1. Skip the code when its recorded `outcome` is already terminal — a resumed run does not redo settled specs. Otherwise set `current_spec` and update `updated_at` in the state file.
+1. Skip the code when its recorded `outcome` is already terminal — a resumed run does not redo settled specs. Otherwise set `current_spec` and update `updated_at` in the CLI checkpoint.
 2. **Pre-dispatch blocker check.** Walk the `blocked_by` chain inside the frozen selection, transitively. If any blocker already holds outcome `left_in_review` or `skipped_blocked`, set this spec's outcome to `skipped_blocked` with the recorded chain, spawn no worker, and advance to the next code.
-3. Run `archetipo spec show <US-CODE>`. Retain this observation as the **pre-dispatch fingerprint** of the phase you are about to run: `data.spec.status`, `data.spec.rework`, `data.spec.branch`, `data.spec.worktree`, `data.spec.fork_base`, and the ordered list of `data.tasks[].id` with each `status`. It is what makes the planning retry in *Failure handling* decidable; keep it in the controller context only, never in the state file.
+3. Run `archetipo spec show <US-CODE>`. Retain this observation as the **pre-dispatch fingerprint** of the phase you are about to run: `data.spec.status`, `data.spec.rework`, `data.spec.branch`, `data.spec.worktree`, `data.spec.fork_base`, and the ordered list of `data.tasks[].id` with each `status`. It is the observation used to reconcile phase effects in *Failure handling*; keep it in the controller context only, never in the CLI checkpoint.
 4. Choose exactly one action from the observed state:
    - configured `TODO`: run the planning phase;
    - configured `PLANNED` or `IN PROGRESS`: run the implementation phase;
@@ -207,12 +235,14 @@ For each frozen spec code:
 
 #### Planning phase
 
-Spawn one fresh worker with the following prompt, plus the **Increment environment context** block only when applicable:
+In compact mode execute the installed planning skill inline, then apply the same CLI cross-check below. Otherwise spawn one fresh worker with the following prompt:
 
 ```text
 Working directory: {data.project_root}
+Communication language: {detected human language}
 Spec: {US-CODE}
 Phase skill: archetipo-plan
+Skill file: {resolved installed archetipo-plan SKILL.md path}
 Expected terminal state: {config.workflow.statuses.planned}
 
 Load the installed archetipo-plan skill and execute it for {US-CODE}. Read the
@@ -221,25 +251,27 @@ knowledge from earlier Autopilot phases. Complete the whole planning phase in
 this worker and return a concise outcome.
 ```
 
-After the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result. Accept the phase only when:
+After the inline phase returns or the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result. Accept the phase only when:
 
 - `data.spec.status` equals configured `PLANNED`; and
 - `data.tasks` is non-empty.
 
 This is deliberately blind to how the worker ended: a worker killed right after `archetipo spec plan` succeeded produced a correct phase, and CLI state says so.
 
-Otherwise, when the observation does not accept the phase, apply the **planning transport retry** of *Failure handling* before failing. Fail the run with the observed status and task count whenever that check does not authorize a retry.
+Otherwise apply *Failure handling*, recording the observed status and task count.
 
 The same phase handles a spec that came back from acceptance: `archetipo-plan` turns the persisted rework feedback into Fix tasks. The controller needs no variant prompt for it.
 
 #### Implementation phase
 
-Spawn a different fresh worker with the following prompt, plus the **Increment environment context** block only when applicable:
+In compact mode execute the installed implementation skill inline, then apply the same CLI cross-check below. Otherwise spawn a different fresh worker with the following prompt:
 
 ```text
 Working directory: {data.project_root}
+Communication language: {detected human language}
 Spec: {US-CODE}
 Phase skill: archetipo-implement
+Skill file: {resolved installed archetipo-implement SKILL.md path}
 Expected terminal state: {config.workflow.statuses.review}
 
 Load the installed archetipo-implement skill and execute it for {US-CODE}.
@@ -248,24 +280,24 @@ yourself. Do not assume any knowledge from planning or earlier specs. Complete
 the whole implementation phase in this worker and return a concise outcome.
 ```
 
-After the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result. Accept the phase only when:
+After the inline phase returns or the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result. Accept the phase only when:
 
 - `data.spec.status` equals configured `REVIEW`; and
 - `data.tasks` is non-empty; and
 - every `data.tasks[].status` is canonical `DONE`.
 
-Otherwise fail the run with the observed status and remaining task IDs.
+Otherwise apply *Failure handling* with the observed status and remaining task IDs.
 
 #### Acceptance phase
 
-Read the spec's `review_iterations` from the state file before spawning, and set `Request-changes allowed` to `yes` while it is below `max_review_iterations`, otherwise to `no`. Spawn a fresh worker using the acceptance prompt template in `./references/acceptance-loop.md` verbatim, including its three literal activation lines — `archetipo-review` refuses to enter Autonomous acceptance mode without them.
+Read the spec's `review_iterations` from the CLI checkpoint before spawning, and set `Request-changes allowed` to `yes` while it is below `max_review_iterations`, otherwise to `no`. Spawn a fresh worker using the acceptance prompt template in `./references/acceptance-loop.md` verbatim, including its three literal activation lines — `archetipo-review` refuses to enter Autonomous acceptance mode without them.
 
 After the worker terminates, run `archetipo spec show <US-CODE>` regardless of its textual result and apply the CLI-authoritative cross-check table of `./references/acceptance-loop.md` exactly:
 
-- configured `DONE` → outcome `done`. When `data.spec.branch` was set in the pre-worker observation, also require `branch`, `worktree`, and `fork_base` to be empty now; a residual value is a failed integration and fails the run.
+- configured `DONE` → outcome `done`. When `data.spec.branch` was set in the pre-worker observation, also require `branch`, `worktree`, and `fork_base` to be empty now; a residual value is a failed integration: apply phase recovery.
 - configured `TODO` → the acceptance worker requested changes. Increment `review_iterations`, persist it before anything else, and continue reconciling the same spec from its observed state.
-- configured `REVIEW` → outcome `left_in_review` **only** when the worker declared `verdict: LEFT_IN_REVIEW` or the attempt already ran with `Request-changes allowed: no`. Record its `unresolved` items and advance to the next spec. `REVIEW` with budget still available and no `LEFT_IN_REVIEW` verdict is a worker failure and fails the run.
-- any other status → fail the run.
+- configured `REVIEW` → outcome `left_in_review` **only** when the worker declared `verdict: LEFT_IN_REVIEW` or the attempt already ran with `Request-changes allowed: no`. Record its `unresolved` items and advance to the next spec. `REVIEW` with budget still available and no `LEFT_IN_REVIEW` verdict is a worker failure: apply phase recovery.
+- any other status → reconcile the observation and apply *Failure handling*.
 
 The verdict block is telemetry. When it is missing, truncated, or unparsable, the observed CLI status decides; record that the worker returned no verdict.
 
@@ -277,43 +309,43 @@ After the queue is exhausted:
 
 1. Run `archetipo spec show` once more for every frozen code.
 2. Require each observed status to match the recorded outcome: `done` ⇒ configured `DONE`, `left_in_review` ⇒ configured `REVIEW`. A `skipped_blocked` spec was never touched, so any status is acceptable. A mismatch fails the run.
-3. Delete the state file.
+3. Mark the CLI run `complete` through `execution workflow checkpoint`.
 4. Report the normalized scope and, per spec, its outcome, final status, and the rework iterations consumed. For every `left_in_review` spec add the unresolved findings and the suggested action `/archetipo-review US-XXX`; for every `skipped_blocked` spec add the blocking chain that stopped it.
 5. When `excluded_by_max_specs` is non-empty, state how many eligible specs `--max-specs` left out, list their codes, and suggest re-running Autopilot with the same selectors to continue. Never let a capped run read as an exhausted backlog.
 
 ## Failure handling
 
-Three outcomes look similar and must not be confused.
+A phase succeeds from observed CLI effects even if its worker died after the final
+write. Never infer success from prose, a receipt or a running acknowledgement.
 
-**Hard stop** — any worker failure, CLI error, unresolved dependency, unexpected state, or verification failure, in any phase including acceptance, once the planning transport retry below has been ruled out. Continuing past broken infrastructure would burn every remaining spec:
+For a phase that did not finish:
 
-1. Re-read the current spec with `archetipo spec show` when possible.
-2. When the state file already exists, set `status: error`, update `updated_at`, and record a concise `last_error` containing the spec, phase, observed state, and stable `error.code` when available. Failures detected before state creation remain mutation-free.
-3. Stop immediately. Do not retry, skip, start another worker, delete the state file, or continue to another spec.
-4. If state was created, report its retained path and explain that invoking Autopilot again with the same scope resumes from authoritative CLI state. Otherwise report that no run state was created.
+1. Classify the failure. A missing local test environment or a correctable defect
+   within the approved spec belongs to the phase. A transport failure requires
+   ownership reconciliation; never infer that an old writer stopped from a timeout.
+2. Re-read `spec show`. Confirm that the worker is terminal, inspect its correlated
+   result and retain remaining task IDs/statuses. In isolated mode the controller reads no code: the fresh phase worker reconciles partial edits and reruns affected checks. In compact mode invoke the relevant base skill inline for that repair; the control layer still owns no alternative implementation.
+3. If repair is local and authorized, and `phase_recoveries[phase] < 3`, increment
+   and checkpoint that counter before re-entering the same inline phase or spawning one fresh worker of the same isolated phase. Acceptance remains isolated in both modes.
+   Append: `Resume from persisted state. Preserve completed tasks and partial edits;
+   establish ownership of prior workers, repair remaining work and run the required
+   checks. Do not change product scope or weaken acceptance.` Use the same spec,
+   root, execution binding, model constraints and phase contract.
+4. Recovery counters survive resume and never consume/reset `review_iterations`.
+   Verification failures stay failures until the actual checks pass. Acceptance
+   rework remains governed solely by `archetipo-review` and its bounded loop.
+5. For uncertain ownership/delivery, external prerequisites that cannot be restored,
+   `E_INTERNAL`, invalid dependencies, a required scope decision or exhausted phase
+   recoveries, checkpoint `status: blocked` with spec, phase, stable error code,
+   attempts, observed state and the minimum action needed. Return that concrete
+   blocker and the run ID. Do not claim the queue is finished or skip broken work.
 
-**Planning transport retry** — a planning worker that was killed by its infrastructure and provably persisted nothing. A transport failure is not a malfunction of the work: the phase never ran to completion, and CLI state proves it left no trace. Retry it exactly once, and only when **all** of these hold:
+`left_in_review` is an expected technical verdict, not a transport failure: retain
+its findings and skip dependent specs as the normal reconciliation loop prescribes.
+A completed selected queue containing that outcome is not a fully delivered scope.
 
-1. The phase was **planning**. Implementation and acceptance are excluded on purpose: their workers mutate the worktree continuously, so an unchanged CLI fingerprint does not prove an unchanged working tree, and re-running one over half-finished edits is not equivalent to running it fresh. Planning writes nothing but temporary files until a single atomic `archetipo spec plan`, so for it the proof holds.
-2. The worker did **not** return its own outcome: the worker mechanism reports that it was terminated by an infrastructure or transport failure — a connection or API error, a truncated response, or no result at all. A worker that ran to completion and reported a problem is a real failure; do not retry it.
-3. The post-worker observation is **identical to the pre-dispatch fingerprint** taken in Phase 1, field by field: same status, same rework marker, same branch/worktree/fork_base, same task ids in the same order with the same statuses. Any difference means the worker got somewhere, and the run stops.
-4. `planning_transport_retries` for this spec is absent or `0`.
+## User-facing updates
 
-Then: set `planning_transport_retries: 1`, update `updated_at`, keep `status: running`, report the retry to the user in one line, and spawn a fresh planning worker with the **same prompt**, unchanged. A second transport failure on the same spec is a hard stop — at that point the failure is systematic, not incidental.
-
-Do not carry any knowledge of the dead attempt into the new prompt. The planning skill finds and validates the leftover staging directory itself; the controller stays out of it.
-
-**Continue past** — the `left_in_review` acceptance outcome only. Non-acceptance is the review gate working, not a malfunction, so the run keeps going: the spec stays in `{config.workflow.statuses.review}` with its branch and worktree preserved, its outcome and unresolved findings are recorded, and the queue advances. The tradeoff is deliberate: its dependents inside the selection are then marked `skipped_blocked` and never started, because building acceptance on unaccepted work would either fail at `spec integrate` with `E_CONFLICT` or produce incoherent acceptance without worktrees. That cost is preferred to blocking every unrelated spec behind one unacceptable increment.
-
-## User-facing progress
-
-Keep controller output compact:
-
-- opening: normalized scope, frozen queue, and — when `--max-specs` truncated it — the number of eligible specs left out;
-- after each verified phase: spec, phase, observed transition;
-- after each acceptance phase additionally: the verdict and the iterations used out of `max_review_iterations`;
-- on a planning transport retry: one line stating the spec, that the worker died without persisting anything, and that this is the single retry allowed;
-- after each spec reaching a terminal outcome: that outcome and the progress count;
-- closure: per-spec outcomes and final states plus the specs the cap excluded, or the first blocking error.
-
-Render all messages in the language selected by the shared runtime.
+Announce the frozen selection, phase transitions, recoveries and concrete blockers
+concisely. Keep waiting within the active turn while a worker is running; a wait
+timeout is not completion. Render output in the shared-runtime language.
