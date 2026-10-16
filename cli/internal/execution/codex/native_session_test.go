@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -137,7 +138,9 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 			return nil
 		})
 	}()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream cancellation: %v", err)
+	}
 	if len(events) != 3 || events[0].TurnID != "turn-core-1" || events[0].SubmissionID != "submission-1" || events[1].TurnID != "turn-core-1" || events[2].TurnID != "turn-core-2" {
 		t.Fatalf("correlated events = %#v", events)
 	}

@@ -52,10 +52,10 @@ func (SupervisorRunner) Run(ctx context.Context, root string, env []string, comm
 	case <-ctx.Done():
 		_ = control.Close()
 		select {
-		case <-ended:
+		case <-ended: //nolint:errcheck // Cancellation below takes precedence over the child exit status.
 		case <-time.After(4 * time.Second):
 			_ = cmd.Process.Kill()
-			<-ended
+			<-ended //nolint:errcheck // The killed child is reaped; the caller receives ctx.Err().
 		}
 		return ctx.Err()
 	}
