@@ -1716,7 +1716,7 @@
 		// conversazione — con o senza il dettaglio tecnico — e, finche' e'
 		// viva, lasciarla andare. Il primo c'e' sempre, perche' una
 		// conversazione conclusa la si rilegge esattamente come una viva.
-		const controls = `${textAt(objectAt(value, "conversation"), "id") ? '<button type="button" class="conv-close-btn" data-conversation-preview>Preview</button>' : ""}${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
+		const controls = `${textAt(objectAt(value, "conversation"), "id") ? '<button type="button" class="conv-close-btn" data-conversation-preview>Preview</button><button type="button" class="conv-close-btn conv-panel-toggle" data-work-panel-toggle aria-controls="workspace-inspector" aria-expanded="false" aria-label="Apri pannello" title="Apri pannello"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>' : ""}${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
 		const drafts = objectAt(value, "spec_drafts");
 		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}${objectAt(value, "increment") && (objectAt(local, "incrementSections") || {})["panel-" + textAt(value.increment, "id")] ? " has-increment-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
 			<div class="conv-discussion">${renderHead(value, badge, variant, controls)}

@@ -329,3 +329,10 @@ across real polling before returning to the composer.
   switches Preview/Increment tabs without remounting the frame, and checks width
   preferences after reload. No AI credentials or non-local services; missing Chrome fails explicitly.
   Reports and screenshots are written under ignored `test/workspaces/` paths.
+
+The page-load smoke also verifies the shared work panel toggle, reopening the
+last selected tab, expansion of increment details across the primary area,
+retained expansion across tab changes and polling, Escape restoring before
+closing, and Ctrl+Alt+B toggling visibility. It saves an expanded increment
+screenshot. The preview smoke verifies that shared expansion and hide/reopen
+preserve the live iframe across Preview/Increment tab changes.

@@ -181,11 +181,22 @@ async function main(){
   await until(()=>polls>0,'conversation poll with preview mounted');
   assert.equal(await evaluateFrame('window.mountId'),mount,'chat polling reloaded the preview');
   ok('Avvio esplicito del server, selezione HTML senza azionare il pulsante e iframe stabile durante il polling.');
+  await clickControl('[data-inspector-expand]');
+  assert.equal(await page.evaluate('document.getElementById("workspace-primary").classList.contains("inspector-expanded")'),true);
+  assert.equal(await evaluateFrame('window.mountId'),mount,'expansion remounted preview');
   await page.evaluate(`document.querySelector('[data-inspector-tab="details"]').click()`);
   await page.waitFor('!document.querySelector("#inspector-details").hidden && !!document.querySelector(".conv-increment-panel")',timeout,'increment in shared inspector');
   await page.evaluate(`document.querySelector('[data-inspector-tab="preview"]').click()`);
   await page.waitFor('!document.querySelector("#browser-preview").hidden',timeout,'return to mounted preview');
   assert.equal(await evaluateFrame('window.mountId'),mount,'changing inspector tabs remounted preview');
+  assert.equal(await page.evaluate('document.getElementById("workspace-primary").classList.contains("inspector-expanded")'),true,'changing tabs lost expansion');
+  await clickControl('[data-inspector-expand]');
+  await clickControl('[data-work-panel-toggle]');
+  await page.waitFor('document.getElementById("workspace-inspector").hidden',timeout,'hide shared preview panel');
+  await clickControl('[data-work-panel-toggle]');
+  await page.waitFor('!document.getElementById("browser-preview").hidden',timeout,'reopen last preview tab');
+  assert.equal(await evaluateFrame('window.mountId'),mount,'closing and reopening panel remounted preview');
+
   assert.equal(await page.evaluate('document.querySelectorAll(".preview-comment textarea").length'),3);
   const drag=async(id,dx)=>{
    const before=await page.evaluate(`(()=>{const r=document.getElementById('${id}').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+Math.min(80,r.height/2)};})()`);

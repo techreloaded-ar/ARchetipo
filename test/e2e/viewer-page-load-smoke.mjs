@@ -107,6 +107,7 @@ const CLAIMS = [
   "una conversazione attiva raggiunge automaticamente gli ultimi messaggi oltre più pagine di eventi senza richiedere click sulla cronologia",
   "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
   "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
+  "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
 ];
 
 // One entry per proved statement, for the report.
@@ -609,8 +610,32 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   const sideBySide = await page.evaluate(`(() => {const discussion=document.querySelector('.conv-discussion').getBoundingClientRect();const panel=document.querySelector('.conv-increment-panel').getBoundingClientRect();return {discussion:discussion.width,panel:panel.width,beside:panel.left>=discussion.right-1};})()`);
   if (!sideBySide.beside || sideBySide.discussion<250) throw new Error('Il laterale desktop non affianca la chat: '+JSON.stringify(sideBySide));
   await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-desktop.png'),Buffer.from(result.data,'base64')));
+  // The shared panel can always be reopened, independently of chat links.
+  await page.evaluate(`document.querySelector('[data-work-panel-toggle]').click()`);
+  await page.waitFor(`document.getElementById('workspace-inspector').hidden`,10000,'il pulsante persistente chiude il pannello');
+  await page.evaluate(`document.querySelector('[data-work-panel-toggle]').click()`);
+  await page.waitFor(`!document.getElementById('inspector-details').hidden && !!document.querySelector('.conv-increment-panel')`,10000,'riapertura sull’ultimo incremento');
+  await page.evaluate(`document.querySelector('[data-inspector-expand]').click()`);
+  const expandedPanel = await page.evaluate(`(() => {const panel=document.getElementById('workspace-inspector').getBoundingClientRect(),area=document.getElementById('workspace-primary').getBoundingClientRect();return {width:panel.width,area:area.width,inert:document.getElementById('workspace-conversation').inert,pressed:document.querySelector('[data-inspector-expand]').getAttribute('aria-pressed')};})()`);
+  if(Math.abs(expandedPanel.width-expandedPanel.area)>2 || !expandedPanel.inert || expandedPanel.pressed!=='true') throw new Error('Incremento non espanso nell’area di lavoro: '+JSON.stringify(expandedPanel));
+  await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-expanded.png'),Buffer.from(result.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-inspector-tab="preview"]').click()`);
+  if(!await page.evaluate(`document.getElementById('workspace-primary').classList.contains('inspector-expanded') && !document.getElementById('browser-preview').hidden`)) throw new Error('Cambiare scheda perde l’espansione');
+  await page.evaluate(`document.querySelector('[data-inspector-tab="details"]').click()`);
+  const expandedReads = await page.evaluate('window.historyCursors.length');
+  await page.waitFor(`window.historyCursors.length > ${expandedReads}`,10000,'polling con il pannello espanso');
+  if(!await page.evaluate(`document.getElementById('workspace-primary').classList.contains('inspector-expanded') && document.querySelector('[data-work-panel-toggle]').getAttribute('aria-expanded')==='true'`)) throw new Error('Il polling perde espansione o stato del pulsante');
+  await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  if(!await page.evaluate(`!document.getElementById('workspace-primary').classList.contains('inspector-expanded') && !document.getElementById('workspace-inspector').hidden && !document.getElementById('workspace-conversation').inert`)) throw new Error('Il primo Escape deve ripristinare il pannello');
+
   await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
   await page.waitFor(`!document.querySelector('.conv-increment-panel')`,10000,'Escape chiude i dettagli');
+  await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'b',code:'KeyB',modifiers:3});
+  await page.waitFor(`!document.getElementById('workspace-inspector').hidden && !document.getElementById('inspector-details').hidden`,10000,'Ctrl+Alt+B riapre l’ultima scheda');
+  await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'b',code:'KeyB',modifiers:3});
+  await page.waitFor(`document.getElementById('workspace-inspector').hidden`,10000,'Ctrl+Alt+B richiude il pannello');
+  ok(CLAIMS.at(-1),'pulsante persistente e scorciatoia riaprono l’ultima scheda; espansione stabile tra schede e polling, Escape ripristina prima di chiudere');
+
   await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
   await page.evaluate(`document.querySelector('[data-run-option-id="once"]').scrollIntoView({block:'center'})`);
   const positioned = await page.evaluate(`(() => {const panel=document.querySelector('.conv-discussion');const button=document.querySelector('[data-run-option-id="once"]');const rect=button.getBoundingClientRect();const bounds=panel.getBoundingClientRect();return {top:panel.scrollTop,reads:window.historyCursors.length,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom&&button.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)),timeline:document.querySelector('.conv-timeline').clientHeight};})()`);
