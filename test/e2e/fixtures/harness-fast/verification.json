@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "inputs": [
+    "package.json"
+  ],
+  "outputs": [],
+  "prepare": [],
+  "probe": [
+    {
+      "name": "node-ready",
+      "argv": [
+        "node",
+        "--version"
+      ],
+      "timeout_seconds": 5
+    }
+  ],
+  "checks": {
+    "functional": {
+      "name": "http-contracts",
+      "argv": [
+        "npm",
+        "test"
+      ],
+      "timeout_seconds": 20,
+      "inputs": [
+        "src",
+        "test",
+        "package.json"
+      ],
+      "cache": true
+    }
+  }
+}

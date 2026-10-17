@@ -15,6 +15,7 @@
     "test:e2e:unit": "node --test ./test/e2e/config.test.mjs ./test/e2e/baseline.test.mjs",
     "test:wiki-benchmark": "node ./test/benchmark/wiki/run.mjs",
     "test:wiki-benchmark:unit": "node --test ./test/benchmark/wiki/run.test.mjs",
+    "test:harness-benchmark": "node ./test/benchmark/harness/run.mjs",
     "test:view-create-smoke": "node ./test/e2e/create-spec-view-smoke.mjs",
     "test:view-workspace-smoke": "node ./test/e2e/create-workspace-view-smoke.mjs",
     "test:view-workspaces-smoke": "node ./test/e2e/known-workspaces-view-smoke.mjs",
@@ -41,7 +42,9 @@
     "test:view-next-step-smoke": "node ./test/e2e/next-step-view-smoke.mjs",
     "test:view-spec-draft-smoke": "node ./test/e2e/spec-draft-from-view-smoke.mjs",
     "test:view-workspace-runs-smoke": "node ./test/e2e/workspace-runs-view-smoke.mjs",
-    "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs"
+    "test:wiki-smoke": "node ./test/e2e/wiki-smoke.mjs",
+    "test:view-increment-smoke": "node ./test/e2e/increment-from-view-smoke.mjs",
+    "test:view-preview-smoke": "node ./test/e2e/preview-from-view-smoke.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.0"

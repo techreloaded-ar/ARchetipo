@@ -989,17 +989,6 @@
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && isTopModal(prdModal)) closePRD();
 	});
-	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape" && conversationActivitiesOpen) {
-			conversationActivitiesOpen = false;
-			renderConversationPanel();
-		}
-	});
-	document.addEventListener("click", (e) => {
-		if (!conversationActivitiesOpen || e.target.closest(".conv-activity-picker")) return;
-		conversationActivitiesOpen = false;
-		renderConversationPanel();
-	});
 
 	metricsBtn.addEventListener("click", openMetrics);
 	metricsModalClose.addEventListener("click", closeMetrics);
@@ -3292,7 +3281,7 @@
 			}
 			parts.push(`${el.name}:${el.value}`);
 		});
-		return parts.join(" ");
+		return parts.join("\u0000");
 	}
 
 	// ---- Review (diff + inline comments) -----------------------------------
@@ -6088,7 +6077,6 @@
 	let conversationSkillHighlight = 0;
 	let conversationActivitiesView = null;
 	let conversationActivitiesLoadToken = 0;
-	let conversationActivitiesOpen = false;
 	let conversationActivitySelection = null;
 	let conversationInputDrafts = {};
 	let conversationOpeningSpecCode = "";
@@ -6096,6 +6084,7 @@
 	let conversationProposalVersion = "";
 	let conversationDraftDestinations = {};
 	let conversationProposalPreviousOpen = {};
+	let conversationIncrementSections = {};
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -6349,22 +6338,34 @@
 	function bindConversationPanel(container) {
 		if (!container) return;
 		container.addEventListener("click", (e) => {
+			const incrementPanel = e.target.closest("[data-increment-panel]");
+			const incrementStory = e.target.closest("[data-increment-story]");
+			if ((incrementPanel || incrementStory) && conversationView?.increment) {
+				const open = !!incrementStory || incrementPanel.getAttribute("data-increment-panel") === "open";
+				conversationIncrementSections["panel-" + conversationView.increment.id] = open;
+				if (open) window.WorkspacePanels?.open("details");
+				else window.WorkspacePanels?.close();
+				if (incrementStory) conversationIncrementSections["current-story-" + incrementStory.getAttribute("data-increment-story")] = true;
+				renderConversationPanel();
+				const target = open ? conversationEl.parentElement.querySelector(incrementStory ? '[data-increment-section="current-story-' + cssEscape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
+				target?.focus({preventScroll:true});
+				if (incrementStory) target?.scrollIntoView({block:"nearest"});
+				return;
+			}
+			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
+			const incrementAction = e.target.closest("[data-increment-action]");
+			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
 			if (showProposals) {
 				conversationProposalsOpen = true;
+				window.WorkspacePanels?.open("details");
 				conversationProposalVersion = showProposals.getAttribute("data-conversation-proposals-show");
 				renderConversationPanel();
-				conversationEl.querySelector(".conv-proposals-panel")?.focus({preventScroll:true});
+				conversationEl.parentElement.querySelector(".conv-proposals-panel")?.focus({preventScroll:true});
 				return;
 			}
 			if (e.target.closest("[data-conversation-proposals-close]")) {
 				closeConversationProposals();
-				return;
-			}
-			if (e.target.closest("[data-conversation-activities-toggle]")) {
-				conversationActivitiesOpen = !conversationActivitiesOpen;
-				renderConversationPanel();
-				if (conversationActivitiesOpen) loadConversationActivities();
 				return;
 			}
 			if (e.target.closest("[data-conversation-activity-clear]")) {
@@ -6547,6 +6548,7 @@
 						if (!input.value.trim()) input.value = `Vorrei modificare ${code ? code + " " : "la proposta "}«${selected.draft.title}»: `;
 						input.dispatchEvent(new Event("input", { bubbles: true }));
 						conversationProposalsOpen = false;
+						window.WorkspacePanels?.close();
 						renderConversationPanel();
 						const composer = conversationEl.querySelector(".conv-composer-input");
 						composer.focus();
@@ -6591,6 +6593,7 @@
 			}
 		});
 		container.addEventListener("toggle", (e) => {
+			if (e.target.matches("[data-increment-section]")) conversationIncrementSections[e.target.getAttribute("data-increment-section")] = e.target.open;
 			if (e.target.matches("[data-proposal-previous]")) conversationProposalPreviousOpen[e.target.getAttribute("data-proposal-previous")] = e.target.open;
 		}, true);
 		container.addEventListener("submit", (e) => {
@@ -6644,7 +6647,15 @@
 		// scelta dei caratteri e non deve mandare a metà ciò che si sta ancora
 		// scrivendo.
 		container.addEventListener("keydown", (e) => {
-			if (e.key === "Escape" && conversationProposalsOpen && !conversationModelChoiceOpen && !conversationActivitiesOpen && !topModal()) {
+			if (e.key === "Escape" && conversationView?.increment && conversationIncrementSections["panel-" + conversationView.increment.id] && !conversationModelChoiceOpen && !topModal()) {
+				e.preventDefault();
+				conversationIncrementSections["panel-" + conversationView.increment.id] = false;
+				window.WorkspacePanels?.close();
+				renderConversationPanel();
+				conversationEl.querySelector('[data-increment-panel="open"]')?.focus({preventScroll:true});
+				return;
+			}
+			if (e.key === "Escape" && conversationProposalsOpen && !conversationModelChoiceOpen && !topModal()) {
 				e.preventDefault();
 				e.stopPropagation();
 				closeConversationProposals();
@@ -6654,13 +6665,6 @@
 			// pastiglia; dentro di esso le frecce percorrono le voci e i
 			// segmenti come un controllo solo, e Invio è il clic che il
 			// `<button>` fa da sé.
-			if (e.key === "Escape" && conversationActivitiesOpen) {
-				e.preventDefault();
-				conversationActivitiesOpen = false;
-				renderConversationPanel();
-				conversationEl.querySelector("[data-conversation-activities-toggle]")?.focus();
-				return;
-			}
 			if (e.key === "Escape" && conversationModelChoiceOpen) {
 				e.preventDefault();
 				closeConversationChoicePopover();
@@ -6699,15 +6703,21 @@
 	}
 
 	bindConversationPanel(conversationEl);
+	bindConversationPanel(document.getElementById("inspector-details"));
+	window.addEventListener("archetipo:details-open", () => {
+		if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
+		else if (conversationView?.spec_drafts) conversationProposalsOpen = true;
+		renderConversationPanel();
+	});
+	window.addEventListener("archetipo:details-close", () => {
+		if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = false;
+		conversationProposalsOpen = false;
+		renderConversationPanel();
+	});
 
 	choicePopoverClosers.push(() => {
 		if (!conversationModelChoiceOpen) return;
 		conversationModelChoiceOpen = "";
-		renderConversationPanel();
-	});
-	choicePopoverClosers.push(() => {
-		if (!conversationActivitiesOpen) return;
-		conversationActivitiesOpen = false;
 		renderConversationPanel();
 	});
 	choicePopoverClosers.push(() => {
@@ -6721,7 +6731,7 @@
 	// il pannello finisce; il fuoco non viene spostato, perché chi ha cliccato
 	// altrove ha già deciso dove guardare.
 	document.addEventListener("click", (e) => {
-		if (e.target.closest && e.target.closest(".conv-agent-row, .conv-activity-picker")) return;
+		if (e.target.closest && e.target.closest(".conv-agent-row")) return;
 		closeChoicePopovers();
 	});
 
@@ -6814,6 +6824,7 @@
 			notice +
 			window.ConversationIndex.renderConversationIndex(conversationsIndex, {
 				currentId: conversationsCurrentId,
+				busy: conversationBusy,
 				undo: conversationsUndo,
 				unread: conversationsUnread(),
 			});
@@ -7178,7 +7189,6 @@
 	function resetConversationActivities() {
 		conversationActivitiesLoadToken += 1;
 		conversationActivitiesView = null;
-		conversationActivitiesOpen = false;
 		conversationActivitySelection = null;
 	}
 
@@ -7207,9 +7217,8 @@
 	async function chooseConversationActivity(id) {
 		const item = conversationActivityItems().find((entry) => entry.id === id);
 		if (!item || !item.runnable || conversationBusy) return;
-		conversationActivitiesOpen = false;
 		conversationActivitySelection = null;
-		if (item.kind === "action") {
+		if (item.kind === "action" || item.kind === "increment") {
 			conversationActivitySelection = Object.assign({}, item);
 		} else if (item.kind === "conversation") {
 			if (!conversationIsActive()) await openConversation();
@@ -7434,12 +7443,14 @@
 	// already described, without letting a second place assign the current id.
 	async function switchToConversation(id, preloaded) {
 		if (!id) return;
+		window.WorkspacePanels?.reset();
 		stopConversationPolling();
 		conversationsCurrentId = id;
 		conversationProposalsOpen = false;
 		conversationProposalVersion = "";
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
+		conversationIncrementSections = {};
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
@@ -7686,6 +7697,7 @@
 		conversationProposalVersion = "";
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
+		conversationIncrementSections = {};
 		conversationView = null;
 		conversationAfterID = 0;
 		conversationEvents = [];
@@ -7874,9 +7886,10 @@
 				return;
 			}
 			if (conversationPollBusy) return;
-			// Older pages are loaded only by the explicit history control. Polling
-			// resumes once the client has reached the durable tail.
-			if (conversationView && conversationView.has_more === true) return;
+			// A live conversation may have more than one durable page to read.
+			// Keep following its cursor until the tail, including after an action
+			// reopens a long timeline. Waiting for the history button here hides
+			// current work and questions behind the first page indefinitely.
 			conversationPollBusy = true;
 			let view;
 			try {
@@ -7964,17 +7977,66 @@
 		}
 	}
 
+
+	async function runIncrementAction(action) {
+		const current = conversationView && conversationView.increment;
+		if (!current || conversationBusy) return;
+		const revision = (current.revisions || []).at(-1);
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			const value = await apiPost('/api/increments/' + encodeURIComponent(current.id) + '/' + encodeURIComponent(action), {revision: revision ? revision.number : 0, head_sha: current.ready_sha || ''});
+			if (conversationView) conversationView.increment = value;
+			conversationRefusal = '';
+			await switchToConversation(conversationsCurrentId);
+			await loadConversationsIndex();
+			loadBoard();
+		} catch (err) { conversationRefusal = err.message || String(err); }
+		finally { conversationBusy = false; renderConversationPanel(); }
+	}
+
+	async function startIncrementFromConversation(proposal) {
+		const body = {request: proposal, origin_conversation_id: conversationsCurrentId || ""};
+		const override = conversationModelOverride();
+		if (override) Object.assign(body, override);
+		try {
+			const view = await apiPost("/api/increments", body);
+			await switchToConversation(conversationIdOf(view), view);
+			await loadConversationsIndex();
+			return true;
+		} catch (err) { conversationRefusal = err.message || String(err); return false; }
+	}
+	// Preview feedback uses this same native conversation; it never starts an
+	// action selected in the composer or consumes the person's draft.
+	window.addEventListener("archetipo:preview-send", async (event) => {
+		const {id, message, resolve, reject} = event.detail;
+		if (id !== conversationsCurrentId || conversationBusy || !conversationIsActive()) { reject(new Error("Attendi che la conversazione possa ricevere un messaggio.")); return; }
+		conversationBusy = true;
+		renderConversationPanel();
+		try {
+			await conversationNextTurnSaves.get(id);
+			if (id !== conversationsCurrentId) throw new Error("La conversazione è cambiata; i commenti sono conservati.");
+			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`, {message});
+			if (id === conversationsCurrentId) { applyConversationView(view); startConversationPolling(); }
+			resolve();
+		} catch (error) { reject(error); }
+		finally { conversationBusy = false; renderConversationPanel(); }
+	});
+
 	async function sendConversationMessage() {
 		if (conversationBusy) return;
 		const proposal = conversationDraft.trim();
-		if (conversationActivitySelection && conversationActivitySelection.kind === "action") {
+
+		if (conversationActivitySelection && ["action", "increment"].includes(conversationActivitySelection.kind)) {
 			if (!proposal) return;
 			const typed = proposal;
 			const activity = conversationActivitySelection;
 			conversationBusy = true;
 			renderConversationPanel();
 			try {
-				const started = await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
+				const started = activity.kind === "increment"
+					? await startIncrementFromConversation(typed)
+					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
 				if (started) {
 					conversationDraft = "";
 					conversationActivitySelection = null;
@@ -8220,8 +8282,36 @@
 	// it preserves the two things a re-render would otherwise steal: the text
 	// being typed and the reading position in the timeline.
 	function renderConversationPanel() {
+		const currentConversation = conversationView?.conversation;
+		window.WorkspacePanels?.configure({
+			key: currentConversation ? currentConversation.working_dir + ":" + currentConversation.id : "",
+			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
+			detailsLabel: conversationView?.increment ? "Incremento" : "Storie",
+		});
+		if (window.WorkspacePanels?.detailsSelected()) {
+			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
+			else conversationProposalsOpen = true;
+		}
+		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsActive() && !conversationBusy} : null);
+		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
+		if (newConversation) {
+			newConversation.disabled = conversationBusy;
+			newConversation.setAttribute("aria-busy", String(conversationBusy));
+		}
 		if (!conversationEl) return;
-		const proposalScroll = conversationEl.querySelector(".conv-story-proposals")?.scrollTop || 0;
+		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
+		const proposalScroll = conversationEl.parentElement.querySelector(".conv-story-proposals")?.scrollTop || 0;
+		const increment = conversationEl.parentElement.querySelector(".conv-increment-body");
+		const incrementScroll = increment && { id: conversationView?.increment?.id, top: increment.scrollTop, focused: increment === document.activeElement };
+		const incrementFocused = document.activeElement;
+		let incrementFocusSelector = "";
+		if (incrementFocused?.closest(".conv-increment-panel")) {
+			const section = incrementFocused.closest("[data-increment-section]");
+			if (incrementFocused.tagName === "SUMMARY" && section) incrementFocusSelector = '[data-increment-section="' + cssEscape(section.getAttribute("data-increment-section")) + '"] > summary';
+			else if (incrementFocused.hasAttribute("data-increment-action")) incrementFocusSelector = '[data-increment-action="' + cssEscape(incrementFocused.getAttribute("data-increment-action")) + '"]';
+			else if (incrementFocused.hasAttribute("data-increment-panel")) incrementFocusSelector = '[data-increment-panel="close"]';
+			else if (incrementFocused.classList.contains("conv-increment-panel")) incrementFocusSelector = '.conv-increment-panel';
+		}
 		const proposalFocused = document.activeElement;
 		const proposalFocusKey = proposalFocused && proposalFocused.getAttribute("data-conversation-draft-destination");
 		const versionHadFocus = proposalFocused && proposalFocused.hasAttribute("data-conversation-proposal-version");
@@ -8302,7 +8392,6 @@
 				modelChoiceHtml: conversationModelChoiceMarkup(),
 				skillChoiceHtml: conversationSkillMenuMarkup(view),
 				activities: conversationActivitiesView,
-				activitiesOpen: conversationActivitiesOpen,
 				activitySelection: conversationActivitySelection,
 				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",
@@ -8316,6 +8405,7 @@
 				proposalVersion: conversationProposalVersion,
 				draftDestinations: conversationDraftDestinations,
 				proposalPreviousOpen: conversationProposalPreviousOpen,
+				incrementSections: conversationIncrementSections,
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:
@@ -8327,15 +8417,27 @@
 			},
 		);
 
+		// Delivery details share the work panel with the persistent preview.
+		// Move only these nodes; the discussion keeps its original render path.
+		const detailNodes = Array.from(conversationEl.querySelectorAll(".conv-increment-panel, .conv-proposals-panel"));
+		window.WorkspacePanels?.attach(detailNodes);
+		conversationEl.querySelector(".conv-panel")?.classList.remove("has-increment-open", "has-proposals-open");
+
 		// Il contatore vive quanto la riga che aggiorna, non un istante di piu'.
 		if (conversationWorkingSince) startConversationWorkingTicker();
 		else stopConversationWorkingTicker();
 
-		const proposals = conversationEl.querySelector(".conv-story-proposals");
+		const proposals = conversationEl.parentElement.querySelector(".conv-story-proposals");
 		if (proposals) proposals.scrollTop = proposalScroll;
-		if (versionHadFocus) conversationEl.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
+		const nextIncrement = conversationEl.parentElement.querySelector(".conv-increment-body");
+		if (incrementScroll && nextIncrement && conversationView?.increment?.id === incrementScroll.id) {
+			nextIncrement.scrollTop = incrementScroll.top;
+			if (incrementScroll.focused) nextIncrement.focus({ preventScroll: true });
+		}
+		if (incrementFocusSelector) conversationEl.parentElement.querySelector(incrementFocusSelector)?.focus({preventScroll:true});
+		if (versionHadFocus) conversationEl.parentElement.querySelector("[data-conversation-proposal-version]")?.focus({preventScroll:true});
 		if (proposalFocusKey) {
-			Array.from(conversationEl.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
+			Array.from(conversationEl.parentElement.querySelectorAll("[data-conversation-draft-destination]")).find(field => field.getAttribute("data-conversation-draft-destination") === proposalFocusKey)?.focus({preventScroll:true});
 		}
 		const nextTimeline = conversationEl.querySelector(".conv-timeline");
 		if (nextTimeline) {
@@ -8363,6 +8465,8 @@
 				if (typeof answerFocus.start === "number" && typeof field.setSelectionRange === "function") field.setSelectionRange(answerFocus.start, answerFocus.end);
 			}
 		}
+		const nextDiscussion = conversationEl.querySelector(".conv-discussion");
+		if (nextDiscussion) nextDiscussion.scrollTop = discussionScroll;
 		placeChoicePopover(conversationEl, "conversation");
 		placeFloatingMenu(conversationEl.querySelector(".conv-activities.is-menu"),
 			conversationEl.querySelector("[data-conversation-activities-toggle]"));
@@ -8682,6 +8786,7 @@
 	}
 
 	function closeConversationProposals() {
+		window.WorkspacePanels?.close();
 		conversationProposalsOpen = false;
 		renderConversationPanel();
 		conversationEl.querySelector(".conv-proposals-toolbar [data-conversation-proposals-show]")?.focus({preventScroll:true});

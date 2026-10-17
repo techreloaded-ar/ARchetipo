@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -184,18 +185,22 @@ func Ensure(ctx context.Context, opts EnsureOptions) (EnsureResult, error) {
 
 // RunOptions configures RunFunctional.
 type RunOptions struct {
-	ProjectRoot string
-	Grep        string
-	Runner      Runner
+	ProjectRoot    string
+	Grep           string
+	Runner         Runner
+	Spec           string
+	TestResultsDir string
 }
 
 // RunResult is the JSON payload returned by `archetipo e2e run`. A failing test
 // suite is a result (Passed=false), not a command error: the command still
 // exits 0 so the caller branches on data.passed.
 type RunResult struct {
-	Framework string `json:"framework"`
-	Passed    bool   `json:"passed"`
-	Output    string `json:"output,omitempty"`
+	Framework  string `json:"framework"`
+	Passed     bool   `json:"passed"`
+	Output     string `json:"output,omitempty"`
+	ReportPath string `json:"report_path,omitempty"`
+	OutputPath string `json:"output_path,omitempty"`
 }
 
 // RunFunctional runs the Playwright suite headless (no video, no slowMo —
@@ -204,6 +209,9 @@ func RunFunctional(ctx context.Context, opts RunOptions) (RunResult, error) {
 	root := opts.ProjectRoot
 	if root == "" {
 		return RunResult{}, iox.NewInvalidInput("project root is empty", "run inside a project directory", nil)
+	}
+	if opts.Spec != "" && !reportSpecPattern.MatchString(opts.Spec) {
+		return RunResult{}, iox.NewInvalidInput("invalid report spec code", "use a code such as US-001", nil)
 	}
 	run := opts.Runner
 	if run == nil {
@@ -222,8 +230,21 @@ func RunFunctional(ctx context.Context, opts RunOptions) (RunResult, error) {
 	if opts.Grep != "" {
 		args = append(args, "--grep", opts.Grep)
 	}
+	started := time.Now().UTC()
+	var source reportSource
+	if opts.Spec != "" {
+		source = captureReportSource(ctx, root)
+	}
 	out, runErr := run.Run(ctx, root, "npx", args...)
-	return RunResult{Framework: FrameworkPlaywright, Passed: runErr == nil, Output: tail(out)}, nil
+	result := RunResult{Framework: FrameworkPlaywright, Passed: runErr == nil, Output: tail(out)}
+	if opts.Spec != "" {
+		report, output, err := saveFunctionalReport(opts, args, started, time.Now().UTC(), source, out, runErr)
+		if err != nil {
+			return RunResult{}, iox.NewInternal("persisting functional test evidence", err)
+		}
+		result.ReportPath, result.OutputPath = report, output
+	}
+	return result, nil
 }
 
 // Demo defaults keep the recorded video watchable by a non-technical reviewer.

@@ -45,6 +45,7 @@ func (s *Server) stopNativeConversationWork(ctx context.Context, ws *workspaceSe
 		return conversationNotFound(id, err)
 	}
 	if record.CurrentTurn != nil && !terminalTurn(record.CurrentTurn.State) && record.Work != execution.SessionIdle {
+		record.StopRequestedTurnID = record.CurrentTurn.ID
 		submissionID, idErr := nativeOperationID("submission-")
 		if idErr != nil {
 			return iox.NewInternal("generating the interrupt correlation", idErr)

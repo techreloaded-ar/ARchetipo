@@ -33,7 +33,8 @@ type nativeSessionFollowers struct {
 	mu      sync.Mutex
 	ctx     context.Context
 	cancel  context.CancelFunc
-	running map[string]context.CancelFunc
+	running map[string]*nativeFollowerHandle
+	closed  bool
 	// wg is what makes closeAll a real end and not only a cancellation. A
 	// follower writes into this workspace's journal, so one still running after
 	// the workspace has been left would write the timeline of a project the
@@ -41,8 +42,10 @@ type nativeSessionFollowers struct {
 	wg sync.WaitGroup
 }
 
+type nativeFollowerHandle struct{ cancel context.CancelFunc }
+
 func newNativeSessionFollowers() *nativeSessionFollowers {
-	return &nativeSessionFollowers{running: map[string]context.CancelFunc{}}
+	return &nativeSessionFollowers{running: map[string]*nativeFollowerHandle{}}
 }
 
 func (f *nativeSessionFollowers) bind(parent context.Context) {
@@ -56,6 +59,10 @@ func (f *nativeSessionFollowers) bind(parent context.Context) {
 
 func (f *nativeSessionFollowers) start(id string, follow func(context.Context)) {
 	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return
+	}
 	if _, exists := f.running[id]; exists {
 		f.mu.Unlock()
 		return
@@ -65,14 +72,17 @@ func (f *nativeSessionFollowers) start(id string, follow func(context.Context)) 
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	f.running[id] = cancel
+	handle := &nativeFollowerHandle{cancel: cancel}
+	f.running[id] = handle
 	f.wg.Add(1)
 	f.mu.Unlock()
 	go func() {
 		defer f.wg.Done()
 		defer func() {
 			f.mu.Lock()
-			delete(f.running, id)
+			if f.running[id] == handle {
+				delete(f.running, id)
+			}
 			f.mu.Unlock()
 		}()
 		follow(ctx)
@@ -81,23 +91,24 @@ func (f *nativeSessionFollowers) start(id string, follow func(context.Context)) 
 
 func (f *nativeSessionFollowers) stop(id string) {
 	f.mu.Lock()
-	cancel := f.running[id]
+	handle := f.running[id]
 	delete(f.running, id)
 	f.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if handle != nil {
+		handle.cancel()
 	}
 }
 
 func (f *nativeSessionFollowers) closeAll() {
 	f.mu.Lock()
+	f.closed = true
 	if f.cancel != nil {
 		f.cancel()
 	}
-	for _, cancel := range f.running {
-		cancel()
+	for _, handle := range f.running {
+		handle.cancel()
 	}
-	f.running = map[string]context.CancelFunc{}
+	f.running = map[string]*nativeFollowerHandle{}
 	f.mu.Unlock()
 	// Waited on outside the lock: a follower on its way out takes the same
 	// mutex to unregister itself, so waiting under it would deadlock.
@@ -311,7 +322,10 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 				return
 			}
 			if err != nil {
-				_ = ws.markNativeDisconnected(context.Background(), snapshot.id)
+				ws.observeNativeDisconnect(ctx, snapshot)
+				if ws.recoverWorkflow(ctx, snapshot) {
+					continue
+				}
 				// A stream that ended mid-turn fails that turn, and an action
 				// running in it has therefore ended too.
 				ws.settleSessionActions(context.Background(), snapshot.id)
@@ -467,6 +481,15 @@ func (ws *workspaceSession) markNativeDisconnected(ctx context.Context, id strin
 	return ws.conversationStore().Save(ctx, record)
 }
 
+func (ws *workspaceSession) observeNativeDisconnect(ctx context.Context, snapshot conversationSnapshot) {
+	// Terminal provider facts can precede durable metadata. An idle EOF must
+	// not turn completed work, an input wait or an interrupt into failure.
+	if observed, err := snapshot.sessionProvider.ReadSession(ctx, execution.SessionRequest{Session: snapshot.session}); err == nil {
+		_ = ws.persistNativeSnapshot(ctx, snapshot.id, observed)
+	}
+	_ = ws.markNativeDisconnected(context.WithoutCancel(ctx), snapshot.id)
+}
+
 func terminalTurn(state execution.TurnState) bool {
 	return state == execution.TurnCompleted || state == execution.TurnInterrupted || state == execution.TurnFailed
 }
@@ -518,6 +541,10 @@ func (s *Server) ensureNativeSession(ctx context.Context, ws *workspaceSession, 
 }
 
 func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, body sendConversationMessageReq) error {
+	return ws.sendNativeConversationMessage(ctx, snapshot, body)
+}
+
+func (ws *workspaceSession) sendNativeConversationMessage(ctx context.Context, snapshot conversationSnapshot, body sendConversationMessageReq) error {
 	lock, err := ws.conversationStore().Lock(ctx, snapshot.id)
 	if err != nil {
 		return err
@@ -529,6 +556,12 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	}
 	if record.Archive == execution.ArchiveArchived {
 		return iox.NewConflict("the conversation "+snapshot.id+" is archived", "reopen it before sending another turn", nil)
+	}
+	if body.recoveryForTurnID != "" {
+		state, known := recordedTurnState(record, body.recoveryForTurnID)
+		if record.StopRequestedTurnID == body.recoveryForTurnID || !known || state != execution.TurnFailed || (record.CurrentTurn != nil && record.CurrentTurn.ID != body.recoveryForTurnID) {
+			return iox.NewConflict("the recovery was superseded or stopped", "preserve the current conversation state", nil)
+		}
 	}
 	// Before the provider is asked anything: resuming a session whose directory
 	// has gone fails inside the harness, as a chdir error that names neither
@@ -671,6 +704,12 @@ func (s *Server) sendNativeConversationMessage(ctx context.Context, ws *workspac
 	record.Deliveries = upsertDelivery(record.Deliveries, delivery)
 	if err := ws.conversationStore().Save(ctx, record); err != nil {
 		return err
+	}
+	if (len(selectedSkills) > 0 || strings.HasPrefix(strings.TrimSpace(body.Message), "/archetipo-")) && !strings.Contains(body.Message, "\nWorkflow conversation:") {
+		if body.display == "" {
+			body.display = body.Message
+		}
+		body.Message += "\n\nWorkflow conversation: " + snapshot.id
 	}
 	started, startErr := snapshot.sessionProvider.StartTurn(ctx, execution.StartTurnRequest{
 		Session: snapshot.session, TurnID: turnID, SubmissionID: submissionID, ExecutionID: executionID,
@@ -838,6 +877,8 @@ func (s *Server) nativeConversationView(ctx context.Context, ws *workspaceSessio
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
 	view.Runs = s.nativeConversationRuns(ctx, ws, record)
 	view.SpecDrafts = ws.specDraftsView(ctx, record.ID, history.Events)
+	s.attachIncrement(ctx, ws, record, &view)
+	ws.attachWorkflow(record, &view)
 	// A conversation may declare a step it would take, and offering it is the
 	// same act here as it was for a legacy run: read the process, resolve the
 	// declaration against it, write nothing. What has changed is only where the
@@ -891,6 +932,8 @@ func (s *Server) pastNativeConversationView(ws *workspaceSession, record convers
 	view.NextTurn = record.NextTurn
 	if history, readErr := ws.conversationStore().ReadEvents(context.Background(), record.ID, 0, 0); readErr == nil {
 		view.SpecDrafts = ws.specDraftsView(context.Background(), record.ID, history.Events)
+		s.attachIncrement(context.Background(), ws, record, &view)
+		ws.attachWorkflow(record, &view)
 	}
 	view.Runs = s.nativeConversationRuns(context.Background(), ws, record)
 	view.Deliveries = append([]execution.SessionDelivery(nil), record.Deliveries...)
@@ -1077,6 +1120,9 @@ func (s *Server) respondNativeConversationApproval(ctx context.Context, ws *work
 		return saveErr
 	}
 	if commandErr != nil {
+		if delivery.State == execution.DeliveryUnsent {
+			return iox.NewConflict("l’autorizzazione non è stata inviata", "ricarica la conversazione e rispondi alla richiesta corrente", commandErr)
+		}
 		return iox.NewConflict("the approval delivery was not confirmed", "reconcile the native session before retrying", commandErr)
 	}
 	return nil

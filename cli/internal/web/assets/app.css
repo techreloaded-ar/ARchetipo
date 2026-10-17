@@ -9,6 +9,41 @@
    rami, log, YAML, diff. La gerarchia la fanno peso e dimensione.
    ========================================================================= */
 
+.conv-increment{flex:0 0 auto;min-width:0;margin:8px 0;padding:8px 14px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
+.conv-increment>header{display:flex;align-items:center;gap:10px;font-size:14px;min-width:0}
+.conv-increment>header>strong{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv-increment-phase{font-size:12px;color:var(--accent);font-weight:700}
+.conv-increment-progress{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted)}
+.conv-increment-progress:empty{display:none}
+.conv-increment-active{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.conv-increment-panel details{margin:10px 0}
+.conv-increment-panel summary{cursor:pointer;font-size:14px;font-weight:700;color:var(--accent);overflow-wrap:anywhere}
+.conv-increment-panel .markdown-rendered{margin-top:14px;overflow-wrap:anywhere}
+.conv-increment-panel pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.conv-increment-stories{list-style:none;padding:0}
+.conv-increment-stories>li{margin:12px 0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-size:14px}
+.conv-increment-stories>li.is-active{border-left:3px solid var(--accent)}
+.conv-increment-story-status,.conv-increment-note{font-size:12px;line-height:1.65;color:var(--text-muted)}
+.conv-increment-panel .conv-proposal-controls{flex-wrap:wrap;margin-top:14px}
+.conv-increment-result{padding:12px 0;border-top:1px solid var(--border)}
+.conv-increment-result li,.conv-increment-feedback{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+@media(max-width:640px){.conv-increment>header{flex-wrap:wrap;gap:4px 8px}.conv-increment>header>strong{flex-basis:60%}.conv-increment>header>button{padding:3px 0;font-size:12px}.conv-increment-phase{font-size:11px}}
+
+/* Increment details and pending decisions can exceed a short conversation
+   frame. Keep a readable timeline and allow the whole frame to scroll, so
+   the composer and consent buttons remain reachable instead of being clipped. */
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > .conv-timeline {
+	flex: 1 0 min(220px, 30vh);
+}
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > :not(.conv-timeline) {
+	flex-shrink: 0;
+}
+
 :root {
 	--font-sans:
 		"Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -8017,12 +8052,6 @@ body.no-workspace [data-workspace-scoped] {
 .conv-activity-reason { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .conv-activity-gesture { color: var(--accent); font-size: 12px; }
 .conv-activity-selection { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); background: var(--accent-soft); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); font-size: 13px; }
-.conv-activity-picker { position: relative; flex: 0 0 auto; }
-.conv-activity-picker > button { width: 32px; min-height: 32px; padding: 0; font-size: 22px; }
-.conv-activities.is-menu { position: fixed; box-sizing: border-box; left: 0; top: 0; width: min(380px, calc(100vw - 48px)); max-height: 340px; overflow: auto; margin: 0; padding: var(--space-2); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); z-index: 60; }
-.conv-activities.is-menu .conv-activity-grid { grid-template-columns: 1fr; gap: var(--space-1); }
-.conv-activities.is-menu .conv-activity-card { padding: var(--space-3); border-color: transparent; }
-.conv-activities.is-menu .conv-activity-result { display: none; }
 .card-actions { display: flex; gap: var(--space-1); flex-wrap: wrap; padding-top: var(--space-2); margin-top: var(--space-3); border-top: 1px solid var(--border); }
 .card-actions > .ghost-btn { font-size: 12px; min-height: 30px; }
 .card-action-choices { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: var(--space-2); color: var(--text-muted); font-size: 12px; }
@@ -8116,3 +8145,123 @@ body.no-workspace [data-workspace-scoped] {
  .docs-sidebar-head { margin-bottom: var(--space-2); }
  .docs-content { padding: var(--space-4); }
 }
+
+/* Increment context stays compact; full stories share one reading panel. */
+.conv-panel.has-increment-open { flex-direction:row; position:relative; }
+.conv-increment-panel { display:flex; flex-direction:column; flex:0 0 min(560px,48%); min-width:0; min-height:0; border-left:1px solid var(--border); background:var(--surface); }
+.conv-increment-panel>header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 18px; border-bottom:1px solid var(--border); }
+.conv-increment-panel h2 { font-size:16px; margin:0; overflow-wrap:anywhere; }
+.conv-increment-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:16px 18px; }
+@media(max-width:1100px) {
+ .conv-panel.has-increment-open .conv-increment-panel { position:absolute; inset:0; z-index:6; width:100%; border-left:0; }
+ .conv-panel.has-increment-open>.conv-discussion { visibility:hidden; }
+}
+
+
+/* Adjustable workspace columns. The rail and work panel keep their widths
+   outside the renderers; drag handles remain stable while the chat polls. */
+#workspace-shell[data-view="conversation"] { grid-template-columns:var(--rail-width,264px) minmax(0,1fr); }
+#workspace-shell[data-view="conversation"] > .conversation-rail { width:100%; min-width:0; }
+#workspace-shell[data-view="conversation"] .rail-top { padding-right:42px; }
+.rail-toggle { grid-area:2 / 1; align-self:start; justify-self:end; z-index:8; display:grid; place-items:center; width:30px; height:30px; padding:0; margin:12px 8px 0 0; border:0; border-radius:8px; background:transparent; color:var(--text-muted); cursor:pointer; }
+.rail-toggle:hover { background:var(--surface-3); color:var(--accent); }
+.rail-collapsed > .conversation-rail { visibility:hidden; pointer-events:none; }
+.column-splitter { z-index:15; width:8px; touch-action:none; cursor:col-resize; position:relative; outline:none; }
+.column-splitter::after { content:""; position:absolute; top:0; bottom:0; left:3px; width:2px; background:transparent; border-radius:2px; transition:background .15s; }
+.column-splitter:hover::after,.column-splitter:focus-visible::after { background:var(--accent); }
+.rail-splitter { grid-area:2 / 1; justify-self:end; margin-right:-4px; }
+.rail-collapsed .rail-splitter { display:none; }
+#workspace-shell:not([data-view="conversation"]) > .rail-toggle,
+#workspace-shell:not([data-view="conversation"]) > .rail-splitter { display:none; }
+.resizing-columns,.resizing-columns * { cursor:col-resize !important; user-select:none !important; }
+.resizing-columns iframe { pointer-events:none; }
+
+/* One work panel: Preview and delivery details are tabs of the same column. */
+.workspace-inspector[hidden],.column-splitter[hidden],.browser-preview[hidden],.inspector-details[hidden] { display:none !important; }
+.workspace-primary.has-inspector { grid-template-columns:minmax(280px,1fr) minmax(300px,var(--inspector-width,48%)); position:relative; }
+.workspace-inspector { grid-area:1 / 2; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:var(--surface); border-left:1px solid var(--border); }
+.inspector-splitter { grid-area:1 / 2; justify-self:start; margin-left:-4px; }
+.inspector-head { flex:0 0 49px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 12px 0 16px; border-bottom:1px solid var(--border); }
+.inspector-head [role="tablist"] { display:flex; align-items:stretch; align-self:stretch; gap:20px; }
+.inspector-head [role="tab"] { border:0; border-bottom:2px solid transparent; padding:0 2px; background:transparent; color:var(--text-muted); font:600 13px var(--font-sans); cursor:pointer; }
+.inspector-head [role="tab"][aria-selected="true"] { border-bottom-color:var(--accent); color:var(--accent); }
+.inspector-head [role="tab"]:disabled { opacity:.4; cursor:default; }
+.inspector-close,.preview-icon { width:30px; height:30px; border:0; border-radius:7px; display:inline-flex; align-items:center; justify-content:center; padding:0; background:transparent; color:var(--text-muted); cursor:pointer; text-decoration:none; flex-shrink:0; }
+.inspector-close:hover,.preview-icon:hover { background:var(--surface-3); color:var(--text); }
+.inspector-close:focus-visible,.preview-icon:focus-visible,.rail-toggle:focus-visible,.inspector-head [role="tab"]:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.inspector-details { flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.inspector-details > .conv-increment-panel,.inspector-details > .conv-proposals-panel { flex:1; width:100%; max-width:none; min-height:0; border:0; position:static; }
+.inspector-details > aside > header { padding:18px 20px 12px; border-bottom:0; }
+.inspector-details > aside > header > button { display:none; }
+.inspector-details .conv-increment-body,.inspector-details .conv-story-proposals { padding:8px 20px 20px; }
+.inspector-details .conv-increment-stories>li { margin:10px 0; background:var(--surface-2); }
+#workspace-shell:not([data-view="conversation"]) .workspace-inspector,
+#workspace-shell:not([data-view="conversation"]) .inspector-splitter { display:none; }
+#workspace-shell:not([data-view="conversation"]) .workspace-primary.has-inspector { grid-template-columns:minmax(0,1fr); }
+
+/* Browser chrome: one launch action, small navigation tools, lifecycle actions
+   tucked into a menu. The page and comment draft always get the space first. */
+.browser-preview { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:auto; background:var(--surface); }
+.preview-toolbar { flex-shrink:0; display:flex; align-items:center; gap:10px; padding:10px 12px; border-bottom:1px solid var(--border); }
+.preview-location { flex:1; min-width:0; display:flex; align-items:center; gap:7px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); color:var(--text-muted); font:11px var(--font-mono); }
+.preview-location-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.preview-state-dot { width:6px; height:6px; border-radius:50%; background:var(--text-muted); flex-shrink:0; opacity:.5; }
+.browser-preview[data-state="ready"] .preview-state-dot { background:#4c967b; opacity:1; }
+.browser-preview[data-state="starting"] .preview-state-dot { background:var(--accent); opacity:1; animation:preview-pulse 1s infinite alternate; }
+.browser-preview[data-state="error"] .preview-state-dot { background:#ba5b55; opacity:1; }
+@keyframes preview-pulse { to { opacity:.25; } }
+@media(prefers-reduced-motion:reduce) { .browser-preview .preview-state-dot { animation:none !important; } }
+.preview-toolbar-actions { display:flex; align-items:center; gap:3px; }
+.preview-launch { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:32px; padding:0 11px; border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:var(--surface); font:700 12px var(--font-sans); cursor:pointer; white-space:nowrap; }
+.preview-launch:hover:not(:disabled) { filter:brightness(1.1); }
+.preview-launch:disabled,.preview-pick:disabled { opacity:.45; cursor:default; }
+.preview-launch[hidden],.preview-icon[hidden],.preview-pick[hidden],.preview-tools[hidden],.preview-comments[hidden],.preview-placeholder[hidden] { display:none !important; }
+.preview-menu { position:relative; }
+.preview-menu summary { font-size:20px; font-weight:700; list-style:none; }
+.preview-menu summary::-webkit-details-marker { display:none; }
+.preview-menu > div { position:absolute; right:0; top:36px; z-index:30; min-width:220px; padding:5px; border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 28px #0002; background:var(--surface); }
+.preview-menu button { display:block; width:100%; border:0; padding:10px 12px; background:transparent; color:var(--text); text-align:left; font:12px var(--font-sans); border-radius:6px; cursor:pointer; }
+.preview-menu button:hover { background:var(--surface-3); }
+.preview-menu button:disabled { opacity:.35; cursor:default; }
+.preview-menu .preview-stop { color:#a74e4b; }
+.preview-tools { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.preview-viewport { display:flex; align-items:center; gap:6px; color:var(--text-muted); }
+.preview-viewport select { padding:3px 20px 3px 2px; min-height:26px; background:transparent; color:var(--text-muted); border:0; font:12px var(--font-sans); }
+.preview-pick { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--text); padding:6px 9px; font:600 12px var(--font-sans); cursor:pointer; }
+.preview-pick[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); background:var(--surface-3); }
+.preview-stage { flex:1 0 220px; min-height:220px; overflow:auto; background:var(--surface-2); position:relative; }
+.preview-stage iframe { display:block; height:100%; min-height:300px; border:0; background:white; }
+.preview-placeholder { min-height:260px; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:32px; box-sizing:border-box; text-align:center; color:var(--text-muted); }
+.preview-placeholder svg { opacity:.6; margin-bottom:14px; }
+.preview-placeholder h3 { font:700 16px var(--font-sans); color:var(--text); margin:0 0 8px; }
+.preview-placeholder p { font-size:13px; line-height:1.7; max-width:32ch; margin:0; }
+.preview-status { flex-shrink:0; margin:0; padding:9px 14px; font-size:11px; line-height:1.6; color:var(--text-muted); border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.preview-log { flex-shrink:0; margin:0 14px 10px; font-size:11px; color:var(--text-muted); }
+.preview-log pre { max-height:140px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; }
+.preview-comments { flex:0 1 auto; min-height:140px; max-height:45%; overflow:auto; border-top:1px solid var(--border); padding:12px 14px 0; }
+.preview-comments-head { display:flex; justify-content:space-between; align-items:center; font-size:12px; }
+.preview-comments-count { border-radius:5px; padding:1px 6px; background:var(--surface-3); color:var(--accent); }
+.preview-comment { padding:10px 0; border-bottom:1px solid var(--border); }
+.preview-comment label { display:block; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
+.preview-comment textarea { display:block; width:100%; box-sizing:border-box; font:13px var(--font-sans); margin:7px 0; border:1px solid var(--border); border-radius:7px; padding:8px 10px; background:var(--surface); color:var(--text); resize:vertical; }
+.preview-comment .ghost-btn { min-height:24px; padding:0; border:0; background:transparent; font-size:11px; color:var(--text-muted); }
+.preview-comments-footer { position:sticky; bottom:0; background:var(--surface); display:flex; justify-content:flex-end; padding:10px 0; }
+@media(max-width:1000px) {
+ .workspace-primary.has-inspector { grid-template-columns:minmax(0,1fr); }
+ .workspace-inspector { position:absolute; inset:0; grid-area:1 / 1; width:100%; z-index:35; border:0; }
+ .inspector-splitter { display:none; }
+}
+@media(max-width:900px) {
+ #workspace-shell[data-view="conversation"] { grid-template-columns:minmax(0,1fr); }
+ #workspace-shell[data-view="conversation"] > .conversation-rail { width:auto; padding-left:35px; }
+ #workspace-shell[data-view="conversation"] .rail-top { padding-right:8px; }
+ .rail-toggle { grid-area:2 / 1; justify-self:start; margin:10px 0 0 4px; }
+ .rail-splitter { display:none; }
+ #workspace-shell.rail-collapsed > .conversation-rail { display:none; }
+ .rail-collapsed .rail-toggle { position:absolute; top:6px; left:0; margin:0; background:var(--surface); }
+ .preview-toolbar { gap:6px; padding:8px; }
+ .preview-location { padding:7px; }
+ .preview-launch { padding:0 8px; font-size:11px; }
+}
+
+.preview-viewport .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }

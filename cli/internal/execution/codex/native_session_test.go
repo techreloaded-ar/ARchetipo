@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -137,7 +138,9 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 			return nil
 		})
 	}()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream cancellation: %v", err)
+	}
 	if len(events) != 3 || events[0].TurnID != "turn-core-1" || events[0].SubmissionID != "submission-1" || events[1].TurnID != "turn-core-1" || events[2].TurnID != "turn-core-2" {
 		t.Fatalf("correlated events = %#v", events)
 	}
@@ -160,6 +163,84 @@ func TestNativeCodexSessionDoesNotTreatProcessDeathAsTurnCompletion(t *testing.T
 	fake.end()
 	waitForCodexSession(t, provider, created.Session, func(snapshot execution.SessionSnapshot) bool {
 		return snapshot.CurrentTurn != nil && snapshot.CurrentTurn.State == execution.TurnFailed
+	})
+}
+
+func TestNativeCodexReconnectsAfterTransportLossWithoutReplayingWork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, next := newFakeCodex(), newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &sequenceStarter{processes: []*fakeCodex{first, next}}})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "recover", Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}) }()
+	startNativeCodexTurn(t, ctx, provider, created.Session, first, "work", "original", "implement", "low", nil)
+	first.request(99, "item/commandExecution/requestApproval", `{"reason":"test"}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingApprovals) == 1 })
+	stream := make(chan error, 1)
+	go func() {
+		stream <- provider.StreamSessionEvents(ctx, execution.SessionRequest{Session: created.Session}, 0, func(execution.RunEvent) error { return nil })
+	}()
+	first.end()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool {
+		return s.Connection == execution.ConnectionDisconnected && s.CurrentTurn.State == execution.TurnFailed && len(s.PendingApprovals) == 0
+	})
+	select {
+	case err := <-stream:
+		if err == nil {
+			t.Fatal("lost stream reported success")
+		}
+	case <-ctx.Done():
+		t.Fatal("stream did not report transport loss")
+	}
+	// This is the skills/list path that previously kept using the dead client.
+	_, err = provider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{Native: &created.Session.Native, WorkingDir: created.Session.Environment.WorkingDir, ProviderConfig: created.Session.Environment.ProviderConfig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countMethod(next.methodsCalled(), methodThreadResume) != 1 || countMethod(next.methodsCalled(), methodThreadStart) != 0 || countMethod(next.methodsCalled(), methodTurnStart) != 0 {
+		t.Fatalf("reconnect replayed work or replaced the thread: %v", next.methodsCalled())
+	}
+	startNativeCodexTurn(t, ctx, provider, created.Session, next, "continuation", "new", "reconcile remaining tasks", "low", nil)
+	next.completeTurn()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+}
+
+func TestNativeCodexIdleDisconnectPreservesCompletedTurn(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "done", "done", "work", "low", nil)
+	fake.completeTurn()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+	fake.end()
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool {
+		return s.Connection == execution.ConnectionDisconnected && s.CurrentTurn.State == execution.TurnCompleted
+	})
+}
+
+func TestNativeCodexInterruptIntentSurvivesLostTerminalFrame(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeCodex()
+	p := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := p.CreateSession(ctx, execution.CreateSessionRequest{Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startNativeCodexTurn(t, ctx, p, created.Session, fake, "stop-me", "work", "work", "low", nil)
+	delivery, err := p.InterruptTurn(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "stop-me", SubmissionID: "interrupt"})
+	if err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("interrupt: %+v %v", delivery, err)
+	}
+	fake.end() // No turn/completed notification reaches the client.
+	waitForCodexSession(t, p, created.Session, func(s execution.SessionSnapshot) bool {
+		return s.Connection == execution.ConnectionDisconnected && s.CurrentTurn.State == execution.TurnInterrupted
 	})
 }
 
@@ -210,4 +291,66 @@ func assertFakeResponse(t *testing.T, fake *fakeCodex, id, wanted string) {
 		}
 	}
 	t.Fatalf("fake did not receive response id=%s result=%s", id, wanted)
+}
+
+func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fake := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "delegated", Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}) }()
+	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "parent-turn", "parent-submission", "develop", "low", nil)
+	fake.emit("item/agentMessage/delta", `{"threadId":"thread-1","turnId":"turn-1","itemId":"parent-message","delta":"Parent result"}`)
+	fake.emit("turn/started", `{"threadId":"child-plan","turn":{"id":"child-plan-turn"}}`)
+	fake.emit("item/completed", `{"threadId":"child-plan","turnId":"child-plan-turn","item":{"id":"child-message","type":"agentMessage","text":"Child receipt"}}`)
+	fake.emit("turn/completed", `{"threadId":"child-plan","turn":{"id":"child-plan-turn","rootTurnId":"turn-1","status":"completed"}}`)
+	fake.request(71, "item/commandExecution/requestApproval", `{"threadId":"child-implement","turnId":"child-implement-turn","reason":"Check isolated Docker runtime","availableDecisions":["accept","cancel"]}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingApprovals) == 1 })
+	observed, err := provider.ReadSession(ctx, execution.SessionRequest{Session: created.Session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.CurrentTurn.State != execution.TurnActive || observed.Work != execution.SessionWaitingApproval {
+		t.Fatalf("child completion ended the parent: %#v", observed)
+	}
+	client := provider.nativeSession(created.Session.Native.ID).client
+	if client.Completed() || client.FinalMessage() != "Parent result" {
+		t.Fatalf("child changed parent outcome: completed=%v final=%q", client.Completed(), client.FinalMessage())
+	}
+	request := execution.SessionCommandRequest{Session: created.Session, TurnID: "parent-turn", SubmissionID: "approve-child", InteractionID: "71", OptionID: localrun.ApprovalAllow}
+	delivery, err := provider.RespondSessionApproval(ctx, request)
+	if err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("child approval = %#v, %v", delivery, err)
+	}
+	assertFakeResponse(t, fake, "71", `{"decision":"accept"}`)
+	if repeat, err := provider.RespondSessionApproval(ctx, request); err == nil || repeat.State != execution.DeliveryUnsent {
+		t.Fatal("duplicate approval was delivered")
+	}
+	fake.emit("turn/completed", `{"threadId":"child-implement","turn":{"id":"child-implement-turn","status":"completed"}}`)
+	fake.emit("item/completed", `{"threadId":"thread-1","turnId":"turn-1","item":{"id":"parent-message","type":"agentMessage","text":"Parent result"}}`)
+	fake.emit("turn/completed", `{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+	session := provider.nativeSession(created.Session.Native.ID)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	ends := 0
+	children := 0
+	for _, event := range session.events {
+		if event.Kind == localrun.KindTurnEnd {
+			ends++
+			if event.FinalMessage != "Parent result" {
+				t.Fatalf("wrong final message: %#v", event)
+			}
+		}
+		if event.Kind == "turn/completed" {
+			children++
+		}
+	}
+	if ends != 1 || children != 2 {
+		t.Fatalf("end events: parent=%d children=%d", ends, children)
+	}
 }

@@ -1255,13 +1255,12 @@ describe("conversazione senza comandi duplicati del backlog", () => {
 			assert.ok(!visibleText(html).includes("Passo suggerito"));
 		}
 	});
-	it("mantiene il compositore e un unico menu Attività", () => {
+	it("mantiene il compositore senza il menu Attività", () => {
 		const html = renderConversation(LIVE, "Bozza da preservare", {
 			activities: { items: [{ id: "test", label: "Attività del server", primary: true, runnable: true }] },
-			activitiesOpen: true,
 		});
-		assert.match(html, /data-conversation-activities-toggle/);
-		assert.match(html, /aria-label="Scegli attività"[^>]*>\+<\/button>/);
+		assert.doesNotMatch(html, /data-conversation-activities-toggle/);
+		assert.doesNotMatch(html, />Attività<\/button>/);
 		assert.match(html, />Bozza da preservare<\/textarea>/);
 		assert.ok(!html.includes("data-conversation-actions-toggle"));
 	});

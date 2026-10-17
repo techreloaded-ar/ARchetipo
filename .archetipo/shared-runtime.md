@@ -29,6 +29,7 @@ Common rules:
 - `archetipo validate ...` commands return a normal stdout envelope with `kind:"validation_result"`. Structural validation outcomes are reported in `data.ok` and `data.findings`; error envelopes are reserved for process failures such as unreadable input, missing files, config errors, or internal failures.
 
 - Branch on `error.code`, never on `error.message`.
+- Invoke each CLI operation on its own, parse its envelope, then decide the next action. Never concatenate a CLI verification with a raw test command, another CLI call, a pipe, or `exit 0` that hides its result. Parallel calls keep separate outputs.
 - Treat exit codes as stable:
   - `0`: success
   - `1`: generic error
@@ -64,17 +65,130 @@ When the spec has no worktree, `data.workdir` is just the project root and nothi
 
 ## Asynchrony inside a worker
 
-A skill may run inside a worker/subagent rather than in the main session — always so under `archetipo-autopilot`, which executes every phase that way. Inside a worker, **everything you start must return its result to you inline, in the same call.**
+A skill may run inside a worker/subagent rather than in the main session. Complete and observe everything you start before returning from that phase.
 
-The reason is one and the same for every case below: a completion notification is delivered to the **session**, and a worker is not a session — it is a turn. When it stops issuing synchronous calls it returns, and the notification arrives somewhere it no longer exists. It is not a delay; the message never reaches it.
+Use the runtime's documented lifecycle rather than inferring it from a worker's name:
 
-Three concrete prohibitions follow. All three have been observed to end a phase silently, mid-work:
+- With a blocking spawn tool, consume the result inline. Omit an optional `name` when that runtime routes named workers as detached teammates.
+- With a spawn-and-wait tool pair, retain the newly created worker ID and explicitly wait for its terminal result. Required `name` or `task_name` fields are allowed. A spawn acknowledgement, progress message or wait timeout is not completion; continue waiting in the same active turn. Do not finish the phase expecting a later notification to resume it.
+- If nested delegation cannot be awaited reliably, use the phase skill's inline path. A caller requiring phase isolation must retain that boundary.
+- Run commands in the foreground. If a command tool yields a session handle, await it with that tool's documented wait/poll operation until it terminates. Never leave a required command running when returning the phase result.
+- Ignore unsolicited messages from unrelated or earlier workers. Use only results correlated with the worker IDs you created for this phase; verify workflow state with `archetipo` commands.
 
-- **Never pass a `name` when spawning a sub-worker.** A named worker is registered as a teammate of the session, not as a child of yours: the call returns an acknowledgement in milliseconds while the real work runs on for minutes, the worker outlives you and even the session, and its completion is reported to the session root. Spawned without a name, the same call blocks until the work is done and returns the result. The persona, the role and the label belong in the prompt, never in `name`.
-- **Never start a command in the background.** Run it in the foreground with an explicit timeout. When you must wait for a condition — a service becoming ready, a long suite finishing — poll it with a blocking loop inside a single call (`until <check>; do sleep 2; done`), never by ending your turn to await a notification.
-- **Never message another agent, and never trust one that messages you.** A reply is delivered on the same broken channel. Worse, an addressable agent may be a leftover of an earlier run or session, answering about work this run never touched. State comes from `archetipo` commands only.
+"Waiting for X to complete" is never a valid way to end a turn: observe its terminal outcome first, or report a concrete blocker.
 
-"Waiting for X to complete" is therefore never a valid way to end a turn: either the call returned and you observed the outcome, or you have a blocker to report.
+## Local verification environment
+
+Preparing what is needed to verify an approved task belongs to delivery, regardless
+of how the skill was invoked. Inspect the project's startup, authentication and
+existing test tools. Plan and execute missing local setup, dedicated synthetic
+accounts/data and service readiness checks before declaring an environment blocker.
+Use available services without altering unrelated instances; keep configuration
+inside the working directory. Never use production credentials or data. Report a
+specific blocker only after permitted setup has been attempted and cannot proceed.
+Record repeatable commands and cleanup; identify any preview intentionally left up.
+Required real browser/API/database checks cannot be replaced with mocks.
+
+Reuse a service only when it was explicitly supplied for this verification or its
+ownership by this working directory and test scope can be verified. A familiar
+name, a spec-code prefix, a loopback port or synthetic-looking data is not proof
+of ownership. Namespace newly created resources by the working directory and
+scope; retain a verifiable owner label or equivalent identifier. If ownership or
+credentials are unavailable, create a fresh isolated resource. Verification does
+not authorize changing credentials, dropping data or reconfiguring an unrelated
+existing instance. Do not search other checkouts for secrets to repair setup.
+Before running installers or generators, check that their target dependencies and
+outputs belong to this working directory; resolving modules through an ancestor
+checkout or symlink does not authorize mutating that checkout's installation.
+
+Make required setup reproducible across fresh workers. Reuse the project's setup
+tooling, or add a small idempotent test setup command when it is missing. It must
+locate only owned resources, choose an available local endpoint, provide synthetic
+configuration, check readiness and clean up only its own data/resources. Reference
+that command and its ownership/readiness/cleanup contract in the CLI-persisted
+plan. Keep the recipe with the project tests; shell history, temporary notes and
+an untracked environment file alone are not a handoff. A later phase reads this
+recipe before discovering or creating another environment.
+
+Retain verification output in the configured spec test-results directory, with
+the exact command, actual result and tested source identified. A console-only
+success or an output file left solely in the system temporary directory is not
+durable acceptance evidence. Missing evidence is unfinished verification work,
+to repair before handing the phase to its caller.
+
+## Reusable project verification
+
+Use a single project recipe at `.archetipo/environment.json` for repeatable setup
+and named checks. Read and persist it through `execution environment show` and
+`configure`; use `prepare` and `check` under the actual code working directory.
+Prepare once before baseline commands or generators. A missing recipe is a
+bounded project-onboarding task, not a reason to rediscover the environment in
+all later phases. Describe explicit argv, timeouts, local readiness probes,
+synthetic service ownership and cleanup; never put secret values in argv/config.
+Do not infer a framework or reuse an ancestor's dependencies. A readiness probe
+must verify usable local outputs and owned services, not merely that a port opens.
+
+The CLI probes readiness on reuse, serializes setup, keeps immutable full logs,
+and can reuse a passing check only for identical declared inputs. Include all
+relevant code, tests, configuration, lockfiles and toolchain files in its inputs;
+undeclared clocks, network state or external data make a check non-cacheable.
+Register the exact required project scripts as named checks, including the final
+suite; do not register a one-file subset as the complete gate. When a named check
+already runs the entire required suite, its valid report satisfies both focused
+and final verification: do not run the same suite again through a raw alias.
+If another required command adds coverage, register it through `configure` before
+executing it. Raw diagnostic commands never substitute for a required gate.
+Inspect `passed`, `stable`, `report_path` and, on reuse, `reused_report`; a process
+exit of zero is not sufficient. Failed or interrupted work never counts as a pass.
+Read the original evidence behind a reused report. Use `--fresh` when reproducing
+a new concern, not simply because another phase has started.
+
+When a registered check is denied by the runtime sandbox (for example local
+network/listener permission), request the runtime's one-time permission for the
+same `archetipo ... execution environment check ...` command and rerun it intact.
+Do not fall back to its raw node/npm/pytest command or copy console text into a
+made-up passing report. An authorized diagnostic run may help debugging but never
+replaces the registered check's durable successful evidence. Preserve approval
+policy; do not request a broader profile or global allow rule to avoid this wait.
+
+Reuse the healthy owned environment across tasks and phases. Do not rebuild,
+reinstall, reseed or rerun every check for a handoff with unchanged relevant
+inputs. Run affected checks after edits; run the complete required gate once for
+the final candidate. Keep build separate from fixture-only retries when inputs
+permit it. Cleanup owned services at the end of delivery or an explicit stop;
+identify any intentionally retained preview. Never relax permissions to hide
+approval waits: use stable, bounded project commands and respect runtime policy.
+
+Pass the human's detected communication language explicitly at every delegation
+boundary. Do not redetect it from an English technical handoff.
+
+## Nested skill completion
+
+A skill invoked inline by another active skill returns its phase result to that
+caller. A completed phase is not permission to end the native turn: continue the
+caller's remaining contract. Only the outermost invocation returns control to
+the person at its declared terminal state or a concrete blocker. This generic
+rule does not give a base phase knowledge of any particular composing skill.
+
+## Resumable execution checkpoints
+
+A composing skill may persist its own execution state through the CLI. Base skills
+complete their own phase and need no knowledge of their caller. The checkpoint is
+bookkeeping: specs, tasks, Git and native runtime state remain authoritative.
+
+Each composing skill declares the checkpoint commands, payloads and errors it
+actually uses. Keep the executable invocation separate from the normalized scope;
+internal selection sentinels are not command arguments. Revision checks prevent
+stale writers from replacing observed progress; reconcile before retrying a write.
+
+Keep the run, scope and retry counters across interruptions. Store worker IDs
+before waiting. On resume, establish that earlier workers are terminal before
+starting another writer; reconcile partial edits and rerun affected checks.
+A View may start a bounded reconciliation turn on the same native session after
+transport loss for an unfinished conversation-bound run. It never replays an
+uncertain submission, interrupts a human wait, or approves publication. Standalone
+invocation uses the same checkpoint and does not require View. A blocked run needs
+an explicit request to resume; a completed run is immutable history.
 
 ## Language Policy
 
@@ -147,7 +261,7 @@ Wiki commands act on the code of a spec, so they follow the **Worktree Working D
 
 The Living Wiki is opt-in. `archetipo config show` reports the gate as `data.wiki.enabled` — it is `false` unless the project set `wiki.enabled: true` in `.archetipo/config.yaml`, and it is the only place to read it: never infer the gate by looking for the config file, for `paths.wiki`, or for an existing Wiki directory, because a project can maintain a Wiki by hand with the automatic maintenance off.
 
-When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, `archetipo-implement`, `archetipo-review`, and every worker `archetipo-autopilot` runs — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
+When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, `archetipo-implement`, `archetipo-review`, including delegated invocations — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
 
 The gate never applies to the Wiki itself. `archetipo wiki ...` invoked by the user and the `archetipo-wiki` skill invoked explicitly always run in full, gate or no gate: a project with the automatic Wiki off can still bootstrap, query, refresh, and lint one on demand. Only the automatic maintenance inside the workflow is switched off.
 

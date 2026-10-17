@@ -27,6 +27,9 @@ import (
 // archive, connection, recovery and work separately; a restart can reconnect
 // their native reference without inventing a new conversation.
 type Record struct {
+	// Interrupt intent survives a lost acknowledgement or terminal frame.
+	StopRequestedTurnID string `json:"stop_requested_turn_id,omitempty"`
+	IncrementID         string `json:"increment_id,omitempty"`
 	// Version 0 identifies the legacy single-file shape. Version 2 stores the
 	// durable session metadata here and its timeline in the sibling JSONL
 	// journal. Version 1 was never emitted, so 2 cannot be mistaken for an

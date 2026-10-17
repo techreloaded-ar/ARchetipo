@@ -80,6 +80,22 @@ The viewer uses the same connector layer in-process, so a board read in the view
 
 Skills must explicitly include only the CLI subcommands they actually use, together with their payloads, expected envelopes, and relevant `error.code` values. There is no separate file describing the entire protocol.
 
+## Project verification recipes
+
+`cli/internal/verification/` executes the explicit `.archetipo/environment.json`
+project recipe through `archetipo execution environment`. The skills own setup
+choices and coverage; the CLI owns setup/check fingerprints, readiness, command
+ownership, timeouts and durable evidence. View must use this same standalone
+contract. It must not gain a separate provisioner or automatic approval policy.
+
+For changes to this layer run `npm run test:harness-benchmark` as well as the Go
+checks. The benchmark uses the real CLI, an owned HTTP service and subprocesses
+without AI credentials, and covers warm reuse, invalidation, failures, concurrency,
+timeout and hard process death. Preserve its timing reports under the ignored
+run directory. Do not present these timings as end-to-end LLM/application speed.
+A cached check is valid only for its complete declared inputs and retained original
+evidence; a fresh failure revokes an older pass of the same candidate.
+
 ## Native harness sessions (`archetipo view`)
 
 A conversation of the viewer is a **durable native session of the harness**, not a batch invocation dressed up as a chat. Four identities are distinct and must stay distinct:
@@ -227,6 +243,8 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 
 ### Standalone smoke tests
 
+- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome, with only the agent and GitHub simulated. It exercises intent approval, isolated development, feedback, result approval, one PR and merge reconciliation. During development it terminates the fake agent process after one task is persisted DONE, then requires automatic continuation in the same native session and increment with that task preserved and the remaining task still TODO. The checkpoint must record one recovery; publication still requires the explicit business approval. Reports and screenshots remain in the ignored run directory.
+
 - `npm run test:view-wiki-smoke`: drives the real Documentation page in headless Chrome against the real viewer and native Codex adapter, with only the agent binary simulated. It presses Create, Refresh, Check and Ask about this page; validates the generated bootstrap through the CLI; verifies persisted changed-page lists, exact selected-page context, separate native conversations, hidden technical receipts, history after reload and a 390px viewport. It uses no credentials or non-local traffic, reports missing Chrome as failure, skips Windows explicitly because the fake uses a POSIX shebang, and writes screenshots plus HTML/JSON reports into the ignored run directory.
 
 - `npm run test:e2e:unit`: credential-free Node tests for the known-field/unknown-extension manifest contract and the two-commit focused Wiki baseline, including exact commit paths and pre-prompt freshness.
@@ -261,6 +279,15 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 
 When adding or modifying E2E tests, prefer explicit fixtures with a complete `.archetipo/config.yaml`, use `env_required` for external credentials, keep generated reports out of commits, and update this section whenever runner semantics change.
 
+The page-load smoke also follows a live conversation across three 500-event
+pages without clicking the history control. It verifies that old messages remain,
+the current question appears exactly once, and subsequent updates still arrive.
+This covers the recovery path after an increment action reopens a long timeline;
+the deterministic provider fixture uses no agent or credentials. At 390px it also
+adds a long increment and a pending permission, verifies that the decision and
+composer are reachable, and checks scroll position and draft preservation after
+polling before submitting the decision.
+
 ## Installation for end users
 
 Primary path for any system with Node.js:
@@ -280,3 +307,25 @@ The Node shim in `npm/archetipo/bin/archetipo.js` resolves the binary package fo
 - `.archetipo/config.template.yaml` is the **template** rendered into the target project as `.archetipo/config.yaml`, and shipped in the npm package as `runtime/config.yaml`. `.archetipo/config.yaml` in this repository is the **live configuration of this repository's own workspace**: the CLI rewrites it whenever somebody picks a provider here, and it is never installed anywhere.
 - The `file` connector is the default and uses local Markdown files. The `github` connector requires an authenticated `gh` CLI; the `jira` connector requires `jira.base_url` in the config and `JIRA_EMAIL`/`JIRA_API_TOKEN` in the environment (never stored in the config).
 - See the E2E tests section above for local E2E instructions.
+
+The page-load smoke also opens increment details from the active-story shortcut,
+checks story expansion and drawer scroll preservation across polling, verifies
+mobile overlay and desktop side-by-side layout, and closes through both the
+button and Escape. It saves increment desktop/mobile screenshots in the ignored
+run directory. Progress and active story states come from sandbox connector facts;
+unreadable legacy sandboxes keep the saved proposal without inferred progress.
+The increment smoke opens the same drawer for intent approval and publication,
+scrolls long intent on desktop/mobile, and verifies reader focus and position
+across real polling before returning to the composer.
+
+
+- `npm run test:view-preview-smoke`: builds the real CLI, configures an explicit
+  preview recipe, opens a free native conversation with the deterministic Codex
+  fixture, and uses headless Chrome to start an owned HTTP app, select HTML
+  elements without triggering their actions, retain the iframe across chat
+  polling, deliver cumulative comments to the same native thread, preserve drafts
+  on delivery failure, verify a 390px viewport and stop the actual server process.
+  It also drags both column separators, collapses/restores the conversation rail,
+  switches Preview/Increment tabs without remounting the frame, and checks width
+  preferences after reload. No AI credentials or non-local services; missing Chrome fails explicitly.
+  Reports and screenshots are written under ignored `test/workspaces/` paths.

@@ -15,20 +15,24 @@ import (
 )
 
 type nativeSession struct {
-	mu             sync.Mutex
-	metadata       execution.SessionMetadata
-	cfg            settings
-	connected      bool
-	current        *execution.SessionTurn
-	process        localrun.Process
-	client         *appServer
-	events         []execution.RunEvent
-	nextEventID    int64
-	nextSubscriber int
-	subscribers    map[int]chan execution.RunEvent
-	approvals      map[string]execution.PendingApproval
-	inputs         map[string]execution.PendingInput
-	requests       map[string]rpcMessage
+	resumeMu        sync.Mutex
+	mu              sync.Mutex
+	metadata        execution.SessionMetadata
+	cfg             settings
+	connected       bool
+	current         *execution.SessionTurn
+	process         localrun.Process
+	client          *appServer
+	stopProcess     func() (int, string, error)
+	connectionDone  chan struct{}
+	interruptTurnID string
+	events          []execution.RunEvent
+	nextEventID     int64
+	nextSubscriber  int
+	subscribers     map[int]chan execution.RunEvent
+	approvals       map[string]execution.PendingApproval
+	inputs          map[string]execution.PendingInput
+	requests        map[string]rpcMessage
 }
 
 func (p *Provider) DiscoverSession(ctx context.Context, request execution.SessionDiscoveryRequest) (execution.SessionDiscovery, error) {
@@ -50,6 +54,14 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			session.mu.Lock()
 			client = session.client
 			session.mu.Unlock()
+			if client != nil && client.disconnected() {
+				if _, err := p.ResumeSession(ctx, execution.ResumeSessionRequest{Session: session.metadata}); err != nil {
+					return execution.SessionDiscovery{}, err
+				}
+				session.mu.Lock()
+				client = session.client
+				session.mu.Unlock()
+			}
 		}
 	}
 	if client == nil {
@@ -111,8 +123,7 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 		Native:      execution.NativeSessionReference{Kind: "codex.thread", ID: thread.ID},
 	}
 	session := newCodexNativeSession(metadata, cfg)
-	session.process, session.client = process, client
-	session.bindClient()
+	p.attachNativeClient(session, cfg, process, client)
 	p.storeNativeSession(session)
 	return session.snapshot(), nil
 }
@@ -121,13 +132,28 @@ func (p *Provider) ResumeSession(ctx context.Context, request execution.ResumeSe
 	if request.Session.ProviderID != ProviderID || request.Session.Native.Kind != "codex.thread" || strings.TrimSpace(request.Session.Native.ID) == "" {
 		return execution.SessionSnapshot{}, fmt.Errorf("invalid codex native session reference")
 	}
+	// Browser reads and the recovery follower can arrive together. Only one
+	// connection may attach to a native thread, including during reconnection.
+	p.nativeSessionsMu.Lock()
+	session := p.nativeSessions[request.Session.Native.ID]
+	if session == nil {
+		session = newCodexNativeSession(request.Session, settings{})
+		session.connected = false
+		p.nativeSessions[request.Session.Native.ID] = session
+	}
+	p.nativeSessionsMu.Unlock()
+	session.resumeMu.Lock()
+	defer session.resumeMu.Unlock()
 	if session := p.nativeSession(request.Session.Native.ID); session != nil {
 		session.mu.Lock()
-		connected := session.connected
+		connected := session.connected && session.client != nil && !session.client.disconnected()
 		session.mu.Unlock()
 		if connected {
 			return session.snapshot(), nil
 		}
+		// The stream may have failed while the process was still alive. Release
+		// that connection before attaching another process to its native thread.
+		p.releaseNativeSession(session)
 	}
 	cfg, err := parseConfig(request.Session.Environment.ProviderConfig)
 	if err != nil {
@@ -158,15 +184,7 @@ func (p *Provider) ResumeSession(ctx context.Context, request execution.ResumeSe
 	if thread.Effort != "" {
 		cfg.ReasoningEffort = thread.Effort
 	}
-	session := p.nativeSession(request.Session.Native.ID)
-	if session == nil {
-		session = newCodexNativeSession(request.Session, cfg)
-		p.storeNativeSession(session)
-	}
-	session.mu.Lock()
-	session.cfg, session.process, session.client, session.connected = cfg, process, client, true
-	session.mu.Unlock()
-	session.bindClient()
+	p.attachNativeClient(session, cfg, process, client)
 	return session.snapshot(), nil
 }
 
@@ -227,24 +245,31 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	session.cfg, session.current = cfg, &turn
 	session.mu.Unlock()
 	delivery.State, delivery.NativeDeliveryID = execution.DeliveryConfirmed, nativeID
-	go p.finishCodexNativeTurn(session, client)
+	go p.finishCodexNativeTurn(session, client, turn.ID, client.TurnDone())
 	return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, nil
 }
 
-func (p *Provider) finishCodexNativeTurn(session *nativeSession, client *appServer) {
-	<-client.TurnDone()
+func (p *Provider) finishCodexNativeTurn(session *nativeSession, client *appServer, turnID string, done <-chan struct{}) {
+	<-done
 	status, turnError := client.turnOutcome()
 	declaredCompletion := client.declaredTurnEnd()
 	now := p.now().UTC()
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if session.client != client || session.current == nil {
+	if session.client != client || session.current == nil || session.current.ID != turnID {
 		return
 	}
 	switch {
 	case !declaredCompletion:
 		session.current.State = execution.TurnFailed
+		session.connected = false
 		turnError = "the Codex app-server connection ended before turn/completed"
+		if reader, ok := session.process.(interface{ ReadError() error }); ok && reader.ReadError() != nil {
+			turnError += ": " + reader.ReadError().Error()
+		}
+		if session.interruptTurnID == turnID {
+			session.current.State = execution.TurnInterrupted
+		}
 	case status == "completed" || status == "":
 		session.current.State = execution.TurnCompleted
 	case status == "interrupted" || status == "cancelled" || status == "canceled":
@@ -275,6 +300,13 @@ func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionComma
 }
 
 func (p *Provider) InterruptTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
+	if session := p.nativeSession(request.Session.Native.ID); session != nil {
+		session.mu.Lock()
+		if session.current != nil && session.current.ID == request.TurnID {
+			session.interruptTurnID = request.TurnID
+		}
+		session.mu.Unlock()
+	}
 	return p.codexNativeCommand(request, func(client *appServer) error { return client.Interrupt(ctx) })
 }
 
@@ -381,18 +413,24 @@ func (p *Provider) ReleaseSession(_ context.Context, request execution.SessionRe
 	if session == nil {
 		return nil
 	}
+	session.resumeMu.Lock()
+	defer session.resumeMu.Unlock()
+	p.releaseNativeSession(session)
+	return nil
+}
+
+func (p *Provider) releaseNativeSession(session *nativeSession) {
 	session.mu.Lock()
-	process := session.process
+	stop := session.stopProcess
 	if session.current != nil && session.current.State == execution.TurnActive {
 		now := p.now().UTC()
 		session.current.State, session.current.Error, session.current.CompletedAt = execution.TurnFailed, "the Codex runtime was released before the turn completed", &now
 	}
-	session.process, session.client, session.connected = nil, nil, false
+	session.process, session.client, session.stopProcess, session.connected = nil, nil, nil, false
 	session.mu.Unlock()
-	if process != nil {
-		_, _, _ = p.shutdown(process)
+	if stop != nil {
+		_, _, _ = stop()
 	}
-	return nil
 }
 
 func (p *Provider) startNativeClient(ctx context.Context, cfg settings, dir string) (localrun.Process, *appServer, error) {
@@ -483,13 +521,55 @@ func newCodexNativeSession(metadata execution.SessionMetadata, cfg settings) *na
 	return &nativeSession{metadata: metadata, cfg: cfg, connected: true, subscribers: make(map[int]chan execution.RunEvent), approvals: make(map[string]execution.PendingApproval), inputs: make(map[string]execution.PendingInput), requests: make(map[string]rpcMessage)}
 }
 
-func (s *nativeSession) bindClient() {
+func (p *Provider) attachNativeClient(s *nativeSession, cfg settings, process localrun.Process, client *appServer) {
+	var once sync.Once
+	var code int
+	var stderr string
+	var exitErr error
+	stop := func() (int, string, error) {
+		once.Do(func() { code, stderr, exitErr = p.shutdown(process) })
+		return code, stderr, exitErr
+	}
+	done := make(chan struct{})
 	s.mu.Lock()
-	client := s.client
+	s.cfg, s.process, s.client, s.stopProcess, s.connected = cfg, process, client, stop, true
+	s.connectionDone = done
 	s.mu.Unlock()
 	client.appendEvent = s.append
 	client.serverRequest = s.handleRequest
 	client.notification = s.handleNotification
+	go func() {
+		defer close(done)
+		<-client.gone
+		message := "the Codex app-server connection ended before turn/completed"
+		if reader, ok := process.(interface{ ReadError() error }); ok && reader.ReadError() != nil {
+			message += ": " + reader.ReadError().Error()
+		}
+		s.mu.Lock()
+		owned := s.client == client
+		if owned {
+			s.connected = false
+			if s.current != nil && (s.current.State == execution.TurnActive || s.current.State == execution.TurnFailed) {
+				now := p.now().UTC()
+				s.current.State, s.current.Error, s.current.CompletedAt = execution.TurnFailed, message, &now
+				if s.interruptTurnID == s.current.ID {
+					s.current.State = execution.TurnInterrupted
+				}
+			}
+			s.approvals = make(map[string]execution.PendingApproval)
+			s.inputs = make(map[string]execution.PendingInput)
+			s.requests = make(map[string]rpcMessage)
+		}
+		s.mu.Unlock()
+		code, stderr, exitErr := stop()
+		if owned {
+			diagnostic := fmt.Sprintf("Codex connection closed (exit %d)%s", code, localrun.DiagnosticSuffix(stderr))
+			if exitErr != nil {
+				diagnostic += ": " + exitErr.Error()
+			}
+			s.append(execution.RunEvent{Kind: localrun.KindError, Text: message + "; " + diagnostic})
+		}
+	}()
 }
 
 func (s *nativeSession) handleRequest(request rpcMessage) {
@@ -547,7 +627,7 @@ func (s *nativeSession) snapshot() execution.SessionSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	connection := execution.ConnectionDisconnected
-	if s.connected {
+	if s.connected && s.client != nil && !s.client.disconnected() {
 		connection = execution.ConnectionConnected
 	}
 	work := execution.SessionIdle
@@ -604,6 +684,12 @@ func (s *nativeSession) stream(ctx context.Context, afterID int64, sink func(exe
 		s.nextEventID = afterID
 	}
 	backlog := append([]execution.RunEvent(nil), s.events...)
+	client := s.client
+	done := s.connectionDone
+	if client == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("the Codex native connection is released; resume the same session")
+	}
 	s.nextSubscriber++
 	id := s.nextSubscriber
 	live := make(chan execution.RunEvent, 4096)
@@ -622,6 +708,20 @@ func (s *nativeSession) stream(ctx context.Context, afterID int64, sink func(exe
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-done:
+			// Include the final diagnostic even if the notification channel was
+			// full. The session journal is authoritative over live delivery.
+			s.mu.Lock()
+			tail := append([]execution.RunEvent(nil), s.events...)
+			s.mu.Unlock()
+			for _, event := range tail {
+				if event.ID > afterID {
+					if err := sink(event); err != nil {
+						return err
+					}
+				}
+			}
+			return fmt.Errorf("the Codex native connection is disconnected; resume the same session")
 		case event := <-live:
 			if event.ID > afterID {
 				if err := sink(event); err != nil {

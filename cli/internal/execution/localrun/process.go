@@ -92,6 +92,8 @@ type execProcess struct {
 
 	writeMu sync.Mutex
 	once    sync.Once
+	readMu  sync.Mutex
+	readErr error
 }
 
 func (p *execProcess) read(stdout io.Reader) {
@@ -102,6 +104,18 @@ func (p *execProcess) read(stdout io.Reader) {
 		line := append([]byte(nil), scanner.Bytes()...)
 		p.lines <- line
 	}
+	p.readMu.Lock()
+	p.readErr = scanner.Err()
+	p.readMu.Unlock()
+}
+
+// ReadError distinguishes a broken output stream (including an oversized RPC
+// frame) from a clean EOF. It is optional on Process so other runners need not
+// implement diagnostics they cannot provide.
+func (p *execProcess) ReadError() error {
+	p.readMu.Lock()
+	defer p.readMu.Unlock()
+	return p.readErr
 }
 
 func (p *execProcess) Send(line []byte) error {

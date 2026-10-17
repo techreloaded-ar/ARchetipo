@@ -418,6 +418,15 @@ func (a *appServer) declaredTurnEnd() bool {
 	return a.turnEnded
 }
 
+func (a *appServer) disconnected() bool {
+	select {
+	case <-a.gone:
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *appServer) ids() (string, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

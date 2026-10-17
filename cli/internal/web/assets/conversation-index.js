@@ -246,8 +246,8 @@
 	// The glyph is decorative and hidden from the accessibility tree: the label
 	// beside it already names the command, and an icon that repeats a visible
 	// word only makes the announcement longer.
-	function renderNewThread() {
-		return `<button type="button" class="new-thread" data-conversation-new>
+	function renderNewThread(busy) {
+		return `<button type="button" class="new-thread" data-conversation-new${busy ? ' disabled aria-busy="true"' : ""}>
 			<svg class="new-thread-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
 			<span>${TEXT.newThread}</span>
 		</button>`;
@@ -347,7 +347,7 @@
 		const undo = renderUndoControl(objectAt(ui, "undo"));
 		const dock = undo ? `<div class="rail-bottom">${undo}</div>` : "";
 
-		const top = `<div class="rail-top">${renderNewThread()}</div>`;
+		const top = `<div class="rail-top">${renderNewThread(ui && ui.busy)}</div>`;
 
 		if (!entries.length) {
 			return `${top}

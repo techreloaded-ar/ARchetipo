@@ -104,6 +104,9 @@ const CLAIMS = [
   "Documentazione legge la Wiki, cerca nel contenuto e naviga tra pagine con cronologia e link diretti",
   "Documentazione conserva la bozza di conversazione e rende il Markdown senza contenuti attivi",
   "Documentazione è leggibile su schermi stretti e distingue Wiki assente e pagina mancante",
+  "una conversazione attiva raggiunge automaticamente gli ultimi messaggi oltre più pagine di eventi senza richiedere click sulla cronologia",
+  "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
+  "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
 ];
 
 // One entry per proved statement, for the report.
@@ -172,6 +175,7 @@ async function main() {
     await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
+    await exerciseLiveConversationPagination(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
     await fs.mkdir(emptyDir, { recursive: true });
@@ -513,6 +517,7 @@ async function exerciseActivityComposer(browser, url) {
   await page.evaluate(`document.querySelector('[data-conversation-activity="story"]').click()`);
   await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua proposta…'`, 10000, "il campo della proposta prima della skill");
   if (await page.evaluate(`window.smokeStarts.length`) !== 0) throw new Error("La scelta di Nuova storia ha avviato un agente prima della proposta");
+  if (await page.evaluate(`!!document.querySelector("[data-conversation-activities-toggle]")`)) throw new Error("Il compositore mostra ancora il tasto Attività");
   const proposal = "Voglio cercare le storie per titolo";
   await page.evaluate(`(() => { const input = document.querySelector('.conv-composer-input'); input.value = ${JSON.stringify(proposal)}; input.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-shell-view="documentation"]').click(); })()`);
   await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'Wiki dalla bozza');
@@ -527,11 +532,7 @@ async function exerciseActivityComposer(browser, url) {
   await page.evaluate(`document.querySelector('[data-conversation-activity-clear]').click(); document.querySelector('[data-conversation-activity="product"]').click()`);
   await page.waitFor(`document.querySelector('.conv-composer-input')?.placeholder === 'Descrivi la tua idea…'`, 10000, "il campo specifico dell’inception");
   if (await page.evaluate(`window.smokeStarts.length`) !== 1) throw new Error("La scelta dell’inception è partita prima dell’invio");
-  await page.evaluate(`document.querySelector('[data-conversation-activities-toggle]').click()`);
-  await page.waitFor(`!!document.querySelector('.conv-activities.is-menu')`, 10000, "le attività nel menu +");
-  const activityMenu = await page.evaluate(`(() => {const r = document.querySelector('.conv-activities.is-menu').getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight};})()`);
-  if (activityMenu.left < 0 || activityMenu.right > activityMenu.width || activityMenu.top < 0 || activityMenu.bottom > activityMenu.height) throw new Error('Il menu + esce dalla finestra: ' + JSON.stringify(activityMenu));
-  await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape'});
+  if (await page.evaluate(`!!document.querySelector('[data-conversation-activities-toggle]')`)) throw new Error("Il compositore dell’inception mostra ancora il tasto Attività");
   ok(CLAIMS[9], "storia e inception chiedono la proposta; l’invio la consegna una volta e un rifiuto conserva il testo");
   await page.waitFor(`!!document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’esecuzione da fermare");
   await page.evaluate(`document.querySelector('.ws-runs-panel').open = true`);
@@ -540,6 +541,104 @@ async function exerciseActivityComposer(browser, url) {
   await page.waitFor(`window.smokeStopped && !document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’arresto dall’elenco delle esecuzioni");
   if (exceptions.length) throw new Error(`Eccezioni nel flusso delle attività: ${JSON.stringify(exceptions)}`);
   ok(CLAIMS[10], "Ferma cancella l’esecuzione dall’elenco anche nella vista Conversazione");
+  await page.close();
+}
+
+async function exerciseLiveConversationPagination(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on('Runtime.exceptionThrown', params => exceptions.push(params.exceptionDetails));
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.addScriptToEvaluateOnNewDocument', {source: `
+    const originalFetch = window.fetch.bind(window);
+    const at = '2026-10-16T09:00:00Z';
+    const events = Array.from({length:1000}, (_, index) => ({id:index+1,seq:index+1,at,kind:index===0?'user_message':'text',message_id:'history',text:index===0?'DOMANDA INIZIALE PAGINATA':'x'}));
+    events.push({id:1001,seq:1001,at,kind:'text',message_id:'recent',text:'DOMANDA RECENTE OLTRE DUE PAGINE'});
+    events.push({id:1002,seq:1002,at,kind:'text',message_id:'latest',text:'ULTIMO AGGIORNAMENTO DOPO IL RECUPERO'});
+    window.historyCursors = [];
+    window.fetch = async (input, options = {}) => {
+      const parsed = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const path = parsed.pathname;
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && (!options.method || options.method === 'GET')) return json({available:true,conversations:[{id:'pagination-fixture',title:'Conversazione lunga in corso',live:true,message_count:events.length}],closed_limit:20});
+      if (path === '/api/workspace/conversations/pagination-fixture/archive') {
+        await new Promise(resolve => { window.finishArchive = resolve; });
+        return json({available:true,conversation:{id:'pagination-fixture',state:'SEALED'},session:{work:'IDLE',archive:'ARCHIVED',connection:'DISCONNECTED'},events:[],approvals:[],runs:[]});
+      }
+      if (path === '/api/workspace/conversations/pagination-fixture/approvals/scroll-approval') {window.approvalResponse=JSON.parse(options.body);return json({ok:true});}
+      if (path === '/api/workspace/conversations/pagination-fixture') {
+        const after = Number(parsed.searchParams.get('after_id') || 0);
+        window.historyCursors.push(after);
+        const pending = events.filter(event => event.id > after && (after < 1001 ? event.id <= 1001 : true));
+        const batch = pending.slice(0,500);
+        const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',activity_label:'Agente al lavoro',progress_label:'1/2 storie completate',stories:[{code:'US-801',title:'Filtro per mezzo',body:'Criteri della storia attiva. '.repeat(100),status_label:'In lavorazione',active:true},{code:'US-802',title:'Scelta del mezzo',body:'Criteri della storia completata',status_label:'Completata',active:false}],revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}]} : undefined;
+        const approvals = window.showIncrement && !window.approvalResponse ? [{id:'scroll-approval',tool_name:'commandExecution',title:'Installare le dipendenze del progetto?',args:{command:'npm ci',context:'Dettaglio del comando da leggere. '.repeat(50)},options:[{id:'once',label:'Consenti una volta',kind:'allow'},{id:'deny',label:'Nega',kind:'deny'}]}] : [];
+        return json({available:true,provider_id:'fixture',conversation:{id:'pagination-fixture',state:'ACTIVE'},session:{work:after<1001?'TURN_ACTIVE':'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},events:batch,last_id:batch.at(-1)?.id || after,has_more:pending.length>batch.length,approvals,runs:[],increment});
+      }
+      if (path === '/api/workspace/conversations/pagination-fixture/model-choice') return json({available:true,models:[],capabilities:[]});
+      if (path === '/api/workspace/activities') return json({items:[]});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input,options);
+    };
+  `});
+  await page.send('Page.navigate', {url});
+  await page.once('Page.loadEventFired', 30000, 'la conversazione attiva con più pagine');
+  await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('ULTIMO AGGIORNAMENTO DOPO IL RECUPERO')`, 15000, 'gli ultimi messaggi raggiunti senza premere Carica altri messaggi', () => page.evaluate(`JSON.stringify({cursors:window.historyCursors,text:document.querySelector('.conv-timeline')?.textContent.slice(-500)})`));
+  const result = await page.evaluate(`({cursors:window.historyCursors,initial:document.querySelector('.conv-timeline').textContent.includes('DOMANDA INIZIALE PAGINATA'),recent:document.querySelector('.conv-timeline').textContent.split('DOMANDA RECENTE OLTRE DUE PAGINE').length-1,more:!!document.querySelector('[data-conversation-history-more]')})`);
+  if (!result.initial || result.recent !== 1 || result.more || ![0,500,1000,1001].every(cursor => result.cursors.includes(cursor))) throw new Error('Cronologia incompleta o duplicata: ' + JSON.stringify(result));
+  if (exceptions.length) throw new Error('Eccezioni durante il recupero della cronologia: ' + JSON.stringify(exceptions));
+  ok(CLAIMS[18], 'la chat attiva legge automaticamente tre pagine, conserva il passato e continua a ricevere messaggi senza duplicati');
+  await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await page.evaluate('window.showIncrement = true');
+  await page.waitFor(`!!document.querySelector('[data-run-approval-id="scroll-approval"]')`, 10000, 'la decisione nella conversazione di incremento');
+  const compactIncrement = await page.evaluate(`({height:document.querySelector('.conv-increment').getBoundingClientRect().height,open:!!document.querySelector('.conv-increment-panel'),text:document.querySelector('.conv-increment').textContent})`);
+  if (compactIncrement.open || compactIncrement.height > 150 || !compactIncrement.text.includes('1/2 storie completate')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
+  await page.evaluate(`document.querySelector('[data-increment-story="US-801"]').click()`);
+  await page.waitFor(`document.querySelector('[data-increment-section="current-story-US-801"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
+  const drawer = await page.evaluate(`(() => {const body=document.querySelector('.conv-increment-body');body.scrollTop=120;return {reads:window.historyCursors.length,top:body.scrollTop,width:document.querySelector('.conv-increment-panel').getBoundingClientRect().width};})()`);
+  if (drawer.width > 390 || drawer.width < 250) throw new Error('Laterale mobile fuori schermo: '+JSON.stringify(drawer));
+  await page.waitFor(`window.historyCursors.length > ${drawer.reads}`,10000,'un aggiornamento con il laterale aperto');
+  const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="current-story-US-801"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
+  if (!drawerAfter.open || Math.abs(drawerAfter.top-drawer.top)>2) throw new Error('Il polling perde il laterale: '+JSON.stringify({drawer,drawerAfter}));
+  await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-mobile.png'),Buffer.from(result.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
+  await page.waitFor(`!document.querySelector('.conv-increment-panel')`,10000,'la chiusura del laterale e il ritorno alla chat');
+  await page.send('Emulation.setDeviceMetricsOverride', {width:1600,height:1000,deviceScaleFactor:1,mobile:false});
+  await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click()`);
+  const sideBySide = await page.evaluate(`(() => {const discussion=document.querySelector('.conv-discussion').getBoundingClientRect();const panel=document.querySelector('.conv-increment-panel').getBoundingClientRect();return {discussion:discussion.width,panel:panel.width,beside:panel.left>=discussion.right-1};})()`);
+  if (!sideBySide.beside || sideBySide.discussion<250) throw new Error('Il laterale desktop non affianca la chat: '+JSON.stringify(sideBySide));
+  await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-desktop.png'),Buffer.from(result.data,'base64')));
+  await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  await page.waitFor(`!document.querySelector('.conv-increment-panel')`,10000,'Escape chiude i dettagli');
+  await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await page.evaluate(`document.querySelector('[data-run-option-id="once"]').scrollIntoView({block:'center'})`);
+  const positioned = await page.evaluate(`(() => {const panel=document.querySelector('.conv-discussion');const button=document.querySelector('[data-run-option-id="once"]');const rect=button.getBoundingClientRect();const bounds=panel.getBoundingClientRect();return {top:panel.scrollTop,reads:window.historyCursors.length,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom&&button.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)),timeline:document.querySelector('.conv-timeline').clientHeight};})()`);
+  if (!positioned.reachable || positioned.timeline < 150) throw new Error('Decisione tagliata o chat illeggibile: ' + JSON.stringify(positioned));
+  await page.waitFor(`window.historyCursors.length > ${positioned.reads}`, 10000, 'un aggiornamento mentre la persona legge la decisione');
+  const restored = await page.evaluate(`document.querySelector('.conv-discussion').scrollTop`);
+  if (Math.abs(restored-positioned.top)>2) throw new Error('Il polling ha perso la posizione della decisione: ' + JSON.stringify({positioned,restored}));
+  await page.evaluate(`document.querySelector('[data-run-option-id="once"]').click()`);
+  await page.waitFor(`window.approvalResponse?.option_id === 'once' && !document.querySelector('[data-run-approval-id="scroll-approval"]')`,10000,'la decisione inviata dal controllo raggiungibile');
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.scrollIntoView({block:'center'});input.focus();input.value='Risposta dalla vista stretta';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  const reads = await page.evaluate('window.historyCursors.length');
+  await page.waitFor(`window.historyCursors.length > ${reads}`,10000,'un aggiornamento durante la scrittura');
+  const composer = await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');const rect=input.getBoundingClientRect();const bounds=document.querySelector('.conv-discussion').getBoundingClientRect();return {draft:input.value,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom};})()`);
+  if (composer.draft !== 'Risposta dalla vista stretta' || !composer.reachable) throw new Error('Compositore tagliato o bozza persa: ' + JSON.stringify(composer));
+  if (exceptions.length) throw new Error('Eccezioni nel layout dell’incremento: ' + JSON.stringify(exceptions));
+  ok(CLAIMS[19], 'a 390px la chat è leggibile, i permessi e il compositore sono raggiungibili e il polling conserva posizione e bozza');
+  await page.evaluate(`document.querySelector('[data-conversation-close-open]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-close-confirm]')`,10000,'la conferma di archiviazione');
+  await page.evaluate(`document.querySelector('[data-conversation-close-confirm]').click()`);
+  await page.waitFor(`!!window.finishArchive`,10000,'la richiesta di archiviazione sospesa');
+  const duringArchive = await page.evaluate(`(() => {const button=document.querySelector('[data-conversation-new]');button.click();return {disabled:button.disabled,busy:button.getAttribute('aria-busy'),draft:document.querySelector('.conv-composer-input')?.value};})()`);
+  if (!duringArchive.disabled || duringArchive.busy !== 'true' || duringArchive.draft !== 'Risposta dalla vista stretta') throw new Error('Nuova conversazione non dichiara l’operazione in corso: '+JSON.stringify(duringArchive));
+  await page.evaluate('window.finishArchive()');
+  await page.waitFor(`document.querySelector('[data-conversation-new]')?.disabled === false`,10000,'Nuova conversazione dopo l’archiviazione');
+  await page.evaluate(`document.querySelector('[data-conversation-new]').click()`);
+  await page.waitFor(`!document.querySelector('.conv-timeline')?.textContent.includes('DOMANDA INIZIALE PAGINATA')`,10000,'il nuovo spazio di conversazione');
+  if (exceptions.length) throw new Error('Eccezioni durante archiviazione e nuova conversazione: '+JSON.stringify(exceptions));
+  ok(CLAIMS[20], 'il controllo è disabilitato durante l’archiviazione e il primo click successivo apre una nuova conversazione');
   await page.close();
 }
 
@@ -597,7 +696,7 @@ async function exercisePermissionComposer(browser, url, runDir) {
   // Geometry must be checked in the browser: pure renderer tests cannot
   // detect a prompt squeezed by its toolbar or a menu outside the viewport.
   await page.evaluate(`document.querySelector('.conv-proposals-toolbar [data-conversation-proposals-show]').click()`);
-  await page.waitFor(`!!document.querySelector('.has-proposals-open')`, 10000, "le proposte accanto al compositore");
+  await page.waitFor(`!!document.querySelector('#workspace-inspector:not([hidden]) #inspector-details .conv-proposals-panel')`, 10000, "le proposte accanto al compositore");
   if (await page.evaluate(`!!document.querySelector('.conv-run-head')`)) throw new Error("Il riepilogo tecnico occupa ancora la chat");
   await page.evaluate(`document.querySelector('[data-conversation-technical-all]').click()`);
   await page.waitFor(`!!document.querySelector('.conv-run-head')`, 10000, "il riepilogo nel dettaglio tecnico");
@@ -621,7 +720,7 @@ async function exercisePermissionComposer(browser, url, runDir) {
   const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
   await fs.writeFile(path.join(runDir, 'composer-proposals-permissions.png'), Buffer.from(screenshot.data, 'base64'));
   await page.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape'});
-  if (await page.evaluate(`!document.querySelector('.has-proposals-open')`)) throw new Error('Escape ha chiuso le proposte prima del menu');
+  if (await page.evaluate(`!document.querySelector('#workspace-inspector:not([hidden]) #inspector-details .conv-proposals-panel')`)) throw new Error('Escape ha chiuso le proposte prima del menu');
   await page.evaluate(`document.querySelector('[data-conversation-proposals-close]').click()`);
   // Chrome acknowledges viewport emulation before dispatching resize. The
   // app intentionally closes menus on resize, so open only after that event.

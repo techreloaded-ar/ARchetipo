@@ -127,7 +127,7 @@ Proceeding.
 **Severity labels:**
 
 - `🔴 CRITICAL` — must fix before completion
-- `🟡 IMPROVEMENT` — should fix, but may be skipped with user approval
+- `🟡 IMPROVEMENT` — non-blocking by default; record it and continue unless it proves critical
 
 ---
 
@@ -144,6 +144,11 @@ Proceeding.
 - Tests written/executed: {N}
 - Code review: passed ✅
 - Review cycles: {N}
+
+**Verification evidence:**
+- [exact command] — [actual result/exit status] — [report and full output paths]
+- Tested source: [HEAD and relevant diff; disclose untracked tested code]
+- Local setup/replay: [project command and location of its ownership/readiness/cleanup instructions, when needed]
 
 **Files created/modified:**
 - `path/to/new-file.ts`

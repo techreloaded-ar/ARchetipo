@@ -119,6 +119,7 @@ func newRootCmdWithExecution(stdin io.Reader, stdout, stderr io.Writer, deps exe
 	s := streams{in: stdin, out: stdout, err: stderr}
 	cmd.AddCommand(
 		newConfigCmd(s),
+		newIncrementCmd(s),
 		newDoctorCmd(s, deps),
 		newInitProjectCmd(s),
 		newUninstallCmd(s),

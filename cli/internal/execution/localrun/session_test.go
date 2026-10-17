@@ -3,6 +3,7 @@ package localrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -117,7 +118,9 @@ func TestSessionStreamResumesWithoutDuplicates(t *testing.T) {
 	}()
 	<-resumed
 	appendText(session, "text", "line-6")
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream cancellation: %v", err)
+	}
 
 	if len(second) != 3 || second[0] != 4 || second[1] != 5 || second[2] != 6 {
 		t.Fatalf("resumed stream saw %v; want 4,5,6", second)
@@ -383,7 +386,9 @@ func TestBoundedSessionFollowerNeverMissesADroppedEvent(t *testing.T) {
 		}
 	}
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stream cancellation: %v", err)
+	}
 
 	for i, id := range received {
 		if id != int64(i+1) {

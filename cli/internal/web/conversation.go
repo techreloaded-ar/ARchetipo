@@ -77,7 +77,9 @@ type conversationSnapshotView struct {
 // Events is never nil, so a client always receives an array and never has to
 // test for null before iterating.
 type conversationView struct {
-	Available bool `json:"available"`
+	Workflow  *workflowProgress `json:"workflow,omitempty"`
+	Increment *incrementView    `json:"increment,omitempty"`
+	Available bool              `json:"available"`
 	// UnavailableReason is omitted when a conversation can be opened, so a
 	// client can never render a reason next to an offer that has none.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
@@ -860,6 +862,8 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 // the adoption of a run that found no thread — differ in exactly these fields
 // and in nothing else.
 type conversationOpenSpec struct {
+	workingDir  string
+	incrementID string
 	// specCode is the spec the conversation is about, empty for a free one.
 	specCode string
 	// resumedFrom is the id of the past conversation this one takes up.
@@ -902,6 +906,10 @@ type openedConversation struct {
 // root — and everything that has to happen in order for a process not to be
 // leaked lives here, once.
 func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, spec conversationOpenSpec) (openedConversation, error) {
+	workingDir := ws.cfg.ProjectRoot
+	if spec.workingDir != "" {
+		workingDir = spec.workingDir
+	}
 	// Asked before the provider is told anything: an open refused only by the
 	// holder would already have started an agent process, and the refusal would
 	// leave it running behind a request that has no reason to hold it.
@@ -954,14 +962,17 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 	if target.sessions != nil {
 		discovery, discoverErr := target.sessions.DiscoverSession(ctx, execution.SessionDiscoveryRequest{
 			ProviderConfig: providerConfig,
-			WorkingDir:     ws.cfg.ProjectRoot,
+			WorkingDir:     workingDir,
 		})
 		if discoverErr != nil {
 			return openedConversation{}, iox.NewInternal("discovering native session support: "+discoverErr.Error(), discoverErr)
 		}
 		environment := discovery.Environment
+		if spec.incrementID != "" && environment.WorkingDir != "" && environment.WorkingDir != workingDir {
+			return openedConversation{}, iox.NewConflict("l’agente ha restituito una directory diversa dalla sandbox", "usa un provider che rispetti il contesto della sessione", nil)
+		}
 		if strings.TrimSpace(environment.WorkingDir) == "" {
-			environment.WorkingDir = ws.cfg.ProjectRoot
+			environment.WorkingDir = workingDir
 		}
 		if environment.ProviderConfig == nil {
 			environment.ProviderConfig = providerConfig
@@ -978,7 +989,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		}
 		openedAt := time.Now().UTC()
 		record := conversationlog.Record{
-			Version: conversationlog.CurrentVersion, ID: id, SpecCode: spec.specCode,
+			Version: conversationlog.CurrentVersion, ID: id, SpecCode: spec.specCode, IncrementID: spec.incrementID,
 			Title: conversationTitleOf(nil, openedAt), WorkingDir: environment.WorkingDir,
 			ProviderID: created.Session.ProviderID, OpenedAt: openedAt, LastMessageAt: openedAt,
 			Session: &created.Session, Archive: created.Archive, Connection: created.Connection,
@@ -1018,7 +1029,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		// The project root of *this* workspace: the provider is shared by every
 		// workspace this process serves, and where the conversation has to run is
 		// a fact of the workspace that opened it.
-		WorkingDir:     ws.cfg.ProjectRoot,
+		WorkingDir:     workingDir,
 		ProviderConfig: providerConfig,
 		Context:        spec.transcript,
 	})
@@ -1043,7 +1054,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		provider:       target.provider,
 		collaborator:   target.collaborator,
 		providerConfig: providerConfig,
-		workingDir:     ws.cfg.ProjectRoot,
+		workingDir:     workingDir,
 		openedAt:       time.Now().UTC(),
 		specCode:       spec.specCode,
 		resumedFrom:    spec.resumedFrom,
@@ -1133,7 +1144,8 @@ type sendConversationMessageReq struct {
 	// starts an action — and not words the person wrote. Not a JSON field for
 	// the same reason executionID is not: what the browser sends is what the
 	// person said, and it is shown as it is.
-	display string
+	display           string
+	recoveryForTurnID string
 }
 
 // handleSendWorkspaceConversationMessage delivers a message to the open
@@ -1187,6 +1199,10 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 	}
 	if snapshot.sessionProvider != nil {
 		ctx := r.Context()
+		if err := s.prepareIncrementMessage(ctx, ws, id, &body); err != nil {
+			writeError(w, err)
+			return
+		}
 		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, body); err != nil {
 			writeError(w, err)
 			return

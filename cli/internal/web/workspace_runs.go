@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -22,6 +23,7 @@ type workspacePendingView struct {
 // to make, because the browser cannot make it: pending approvals exist only
 // while a follower is attached, and attaching it is this route's job.
 type workspaceRunView struct {
+	CanStop  *bool              `json:"can_stop,omitempty"`
 	ID       string             `json:"id"`
 	Scope    execution.Scope    `json:"scope"`
 	SpecCode string             `json:"spec_code"`
@@ -143,6 +145,28 @@ func (s *Server) handleGetWorkspaceRuns(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		views = append(views, view)
+	}
+	threads, listErr := ws.conversationStore().List(ctx)
+	if listErr != nil {
+		writeError(w, iox.NewInternal("listing active conversations", listErr))
+		return
+	}
+	for _, thread := range threads {
+		if !thread.Native() || thread.Archive != execution.ArchiveOpen || thread.Work == "" || thread.Work == execution.SessionIdle {
+			continue
+		}
+		listed := false
+		for _, view := range views {
+			if view.ConversationID == thread.ID {
+				listed = true
+				break
+			}
+		}
+		if listed {
+			continue
+		}
+		canStop := false // The conversation owns its native interrupt control.
+		views = append(views, workspaceRunView{ID: thread.ID, Scope: execution.ScopeWorkspace, Action: "Conversazione", Status: execution.StatusRunning, ConversationID: thread.ID, CreatedAt: thread.OpenedAt.UTC().Format(time.RFC3339), AwaitingResponse: thread.Work != execution.SessionTurnActive, CanStop: &canStop})
 	}
 	writeJSON(w, http.StatusOK, workspaceRunsView{Runs: views})
 }

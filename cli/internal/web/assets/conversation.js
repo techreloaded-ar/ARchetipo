@@ -1197,7 +1197,6 @@
 				<textarea class="conv-composer-input" rows="1" aria-label="Messaggio all’agente" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
 				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
 				<div class="conv-composer-row">
-					${renderActivityMenu(ui)}
 					${typeof agentRow === "string" ? agentRow : ""}
 					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 				</div>
@@ -1209,8 +1208,8 @@
 
 	// Presentazione pura del catalogo di attività fornito dal server. Il modulo
 	// non interpreta identificatori, stati, skill o regole del processo.
-	function renderActivities(view, ui, menu) {
-		const items = arrayAt(view, "items").filter((item) => item && textAt(item, "id") && (menu || item.primary === true));
+	function renderActivities(view, ui) {
+		const items = arrayAt(view, "items").filter((item) => item && textAt(item, "id") && item.primary === true);
 		if (!items.length) return "";
 		const rows = items.map((item) => {
 			const disabled = item.runnable !== true || ui.busy ? " disabled" : "";
@@ -1224,18 +1223,12 @@
 				${item.runnable === true ? `<span class="conv-activity-gesture">${gesture}</span>` : ""}
 			</button>`;
 		});
-		return `<div class="conv-activities${menu ? " is-menu" : ""}">${menu ? "" : '<p class="conv-activities-intro">Scegli un’attività oppure apri una conversazione.</p>'}<div class="conv-activity-grid">${rows.join("")}</div></div>`;
+		return `<div class="conv-activities"><p class="conv-activities-intro">Scegli un’attività oppure apri una conversazione.</p><div class="conv-activity-grid">${rows.join("")}</div></div>`;
 	}
 
 	function renderActivitySelection(selection) {
 		if (!selection || !textAt(selection, "label")) return "";
 		return `<div class="conv-activity-selection"><div><strong>${escapeHtml(textAt(selection, "label"))}</strong><p>${escapeHtml(textAt(selection, "description"))}</p>${textAt(selection, "result") ? `<small>Risultato: ${escapeHtml(selection.result)}</small>` : ""}</div><button type="button" class="ghost-btn" data-conversation-activity-clear aria-label="Rimuovi attività">×</button></div>`;
-	}
-
-	function renderActivityMenu(ui) {
-		const view = objectAt(ui, "activities");
-		if (!view || !arrayAt(view, "items").length) return "";
-		return `<div class="conv-activity-picker"><button type="button" class="ghost-btn" data-conversation-activities-toggle aria-expanded="${ui.activitiesOpen ? "true" : "false"}"${ui.busy ? " disabled" : ""} aria-label="Scegli attività" title="Scegli attività">+</button>${ui.activitiesOpen ? renderActivities(view, ui, true) : ""}</div>`;
 	}
 
 	function renderInputQuestion(question, index, draft, busy) {
@@ -1556,11 +1549,41 @@
 	 *                            questo modulo.
 	 * @returns {string} HTML string.
 	 */
+	function renderIncrement(increment, ui, panel = false) {
+		if (!increment) return "";
+		const revisions = arrayAt(increment, "revisions");
+		const latest = revisions[revisions.length - 1];
+		const result = objectAt(increment, "result");
+		const pr = objectAt(increment, "pull_request");
+		const opened = objectAt(ui, "incrementSections") || {};
+		const disabled = ui.busy || increment.busy ? " disabled" : "";
+		const parse = body => typeof ui.markedParse === "function" ? ui.markedParse(body) : "<pre>" + escapeHtml(body) + "</pre>";
+		const link = (url, label) => /^https?:\/\//.test(url) ? '<a class="ghost-btn" target="_blank" rel="noopener noreferrer" href="' + escapeHtml(url) + '">' + escapeHtml(label) + '</a>' : "";
+		const section = (key, label, body) => '<details data-increment-section="' + escapeHtml(key) + '"' + (opened[key] ? " open" : "") + '><summary>' + escapeHtml(label) + '</summary>' + body + '</details>';
+		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
+		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
+		const active = stories.filter(story => story.active === true);
+		if (!panel) return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" aria-label="Incremento di prodotto"><header><strong title="' + escapeHtml(textAt(increment, "title")) + '">' + escapeHtml(textAt(increment, "title")) + '</strong><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="' + panelOpen + '">Dettagli incremento</button></header><div class="conv-increment-progress"><span>' + escapeHtml([textAt(increment, "activity_label"), textAt(increment, "progress_label")].filter(Boolean).join(" · ")) + '</span>' + active.map(story => '<button type="button" class="ghost-btn conv-increment-active" data-increment-story="' + escapeHtml(story.code) + '">In lavorazione: ' + escapeHtml(story.code + " · " + story.title) + '</button>').join("") + '</div></section>';
+		if (!panelOpen) return "";
+		const renderRevision = revision => '<div class="markdown-rendered">' + parse(textAt(revision, "intent")) + '</div><ol class="conv-increment-stories">' + arrayAt(revision, "stories").map(story => '<li><strong>' + escapeHtml(textAt(story, "title")) + '</strong>' + section("story-" + revision.number + "-" + story.code, "Leggi la storia", '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
+		let contents = '<h3>Storie dell’incremento</h3><ol class="conv-increment-stories">' + stories.map(story => '<li' + (story.active ? ' class="is-active"' : '') + '>' + '<span class="conv-increment-story-status">' + escapeHtml(textAt(story, "status_label")) + '</span>' + section("current-story-" + story.code, story.code + " · " + story.title, '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
+		if (!stories.length) contents += '<p>Le storie appariranno quando saranno definite.</p>';
+		if (latest) contents += section("intent", "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare"), '<div class="markdown-rendered">' + parse(textAt(latest, "intent")) + '</div>');
+		if (result) contents += '<div class="conv-increment-result"><h3>Risultato e come provarlo</h3><p>' + escapeHtml(textAt(result, "summary")) + '</p>' + section("checks", "Verifiche eseguite", '<ul>' + arrayAt(result, "checks").map(check => "<li>" + escapeHtml(check) + "</li>").join("") + "</ul>") + link(textAt(result, "preview_url"), "Apri anteprima ↗") + '</div>';
+		if (revisions.length > 1) contents += section("history", "Revisioni precedenti · " + (revisions.length - 1), revisions.slice(0, -1).reverse().map(revision => section("revision-" + revision.number, "Versione " + revision.number, renderRevision(revision) + (revision.feedback ? '<p class="conv-increment-feedback">' + escapeHtml(revision.feedback) + '</p>' : ""))).join(""));
+		if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
+		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
+		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Dettagli incremento"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi dettagli incremento">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<div class="conv-proposal-controls">' + controls + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
+	}
+
 	function renderConversation(view, draft, ui) {
 		const value = view && typeof view === "object" ? view : {};
 		const local = ui && typeof ui === "object" ? ui : {};
 		const typed = typeof draft === "string" ? draft : "";
 		const blocks = [];
+		const workflow = objectAt(value, "workflow");
+		if (workflow && textAt(workflow, "label")) blocks.push(renderNotice("info", textAt(workflow, "label"), textAt(workflow, "detail")));
+		if (objectAt(value, "increment")) blocks.push(renderIncrement(objectAt(value, "increment"), local));
 
 		const conversation = objectAt(value, "conversation");
 		// Not offered says a conversation cannot be *opened* here; it says nothing
@@ -1591,7 +1614,7 @@
 				${renderHead(value, TEXT.badgeNotOffered, "conv-off")}
 				${dismissed["not-offered"] === true ? "" : renderNotice("refused", TEXT.markNotOffered, refusal, "not-offered")}
 				${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
-				${!local.openingSpecCode ? renderActivities(objectAt(local, "activities"), local, false) : ""}
+				${!local.openingSpecCode ? renderActivities(objectAt(local, "activities"), local) : ""}
 			</section>`;
 		}
 
@@ -1599,7 +1622,7 @@
 			if (local.activitySelection) {
 				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}${renderComposer(false, typed, Object.assign({}, local, { writable: offered }), offered, false, renderConversationModelChoice(value, local, false))}</section>`;
 			}
-			const activities = renderActivities(objectAt(local, "activities"), local, false);
+			const activities = renderActivities(objectAt(local, "activities"), local);
 			if (activities && !local.openingSpecCode) {
 				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}<div class="conv-empty conv-empty-activities">${activities}<div class="conv-empty-command">${renderConversationModelChoice(value, local, false)}</div></div></section>`;
 			}
@@ -1659,7 +1682,7 @@
 		const delivered = objectAt(local, "deliveredDraft");
 		if (delivered && !objectAt(value, "spec_drafts")) blocks.push(renderDeliveredDraft(delivered, local));
 		const starter = active && !arrayAt(value, "events").length && !local.pendingMessage && !local.activitySelection
-			? renderActivities(objectAt(local, "activities"), local, false) : "";
+			? renderActivities(objectAt(local, "activities"), local) : "";
 		blocks.push(starter || renderTimeline(value, active, local));
 		// A decision the agent is waiting on sits right after the history and
 		// before what to do next: it is the reason nothing more is happening,
@@ -1693,13 +1716,14 @@
 		// conversazione — con o senza il dettaglio tecnico — e, finche' e'
 		// viva, lasciarla andare. Il primo c'e' sempre, perche' una
 		// conversazione conclusa la si rilegge esattamente come una viva.
-		const controls = `${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
+		const controls = `${textAt(objectAt(value, "conversation"), "id") ? '<button type="button" class="conv-close-btn" data-conversation-preview>Preview</button>' : ""}${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
 		const drafts = objectAt(value, "spec_drafts");
-		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
+		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}${objectAt(value, "increment") && (objectAt(local, "incrementSections") || {})["panel-" + textAt(value.increment, "id")] ? " has-increment-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
 			<div class="conv-discussion">${renderHead(value, badge, variant, controls)}
 			${renderDraftToolbar(drafts, local)}
 			${blocks.join("")}</div>
 			${renderSpecDrafts(drafts, local)}
+			${renderIncrement(objectAt(value, "increment"), local, true)}
 		</section>`;
 	}
 

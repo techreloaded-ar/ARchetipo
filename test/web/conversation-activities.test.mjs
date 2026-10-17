@@ -75,7 +75,7 @@ describe("attività della conversazione", () => {
 		assert.ok(visible(html).includes("Ferma"));
 	});
 	it("le attività chiedono una descrizione prima di partire", () => {
-		const html = renderConversation(view, "", { activitiesOpen: true, activities: { items: [
+		const html = renderConversation(view, "", { activities: { items: [
 			activity, { ...activity, id: "start", kind: "action" },
 		] } });
 		assert.doesNotMatch(html, /Avvia attività/);
@@ -117,13 +117,12 @@ describe("attività della conversazione", () => {
 		assert.ok(!html.includes("<textarea"));
 	});
 
-	it("il menu include anche attività secondarie senza aggiungerle allo stato iniziale", () => {
+	it("le schede iniziali mantengono le attività principali senza un menu accanto al compositore", () => {
 		const extra = { ...activity, id: "extra", label: "Attività secondaria", primary: false };
-		const closed = renderConversation(view, "", { activities: { items: [activity, extra] } });
-		assert.ok(!closed.includes('data-conversation-activity="extra"'));
-		const open = renderConversation(view, "", { activities: { items: [activity, extra] }, activitiesOpen: true });
-		assert.ok(open.includes('data-conversation-activity="extra"'));
-		assert.match(open, /aria-expanded="true"/);
+		const html = renderConversation(view, "", { activities: { items: [activity, extra] } });
+		assert.ok(html.includes('data-conversation-activity="catalog-entry"'));
+		assert.ok(!html.includes('data-conversation-activity="extra"'));
+		assert.doesNotMatch(html, /data-conversation-activities-toggle|conv-activity-picker/);
 	});
 
 	it("non sostituisce una cronologia esistente con le schede iniziali", () => {

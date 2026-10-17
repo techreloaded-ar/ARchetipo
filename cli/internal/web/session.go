@@ -11,6 +11,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
@@ -78,6 +79,7 @@ type workspaceSession struct {
 	actionConfirmations sync.Map
 	// A manual creation and a proposed story share progressive code assignment.
 	specCreateMu sync.Mutex
+	previews     *preview.Manager
 
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.
@@ -114,6 +116,7 @@ func newWorkspaceSession(cfg config.Config, conn connector.Connector, providers 
 	}
 	ws := &workspaceSession{
 		cfg:        cfg,
+		previews:   preview.NewManager(),
 		conn:       conn,
 		store:      store,
 		mockupsDir: cfg.AbsPath(cfg.Paths.Mockups),
@@ -199,6 +202,7 @@ func (ws *workspaceSession) stop(drain time.Duration) {
 		if ws.cancel != nil {
 			ws.cancel()
 		}
+		ws.previews.Close()
 		ws.dispatch.wait(drain)
 		ws.followers.closeAll()
 		ws.nativeFollowers.closeAll()

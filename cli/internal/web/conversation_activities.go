@@ -7,6 +7,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
@@ -65,6 +66,16 @@ func (s *Server) handleGetConversationActivities(w http.ResponseWriter, r *http.
 			}
 		}
 	}
+	for index := range items {
+		if items[index].Kind != "increment" {
+			continue
+		}
+		target := s.conversationAvailabilityFor(ctx, ws)
+		items[index].Runnable = target.sessions != nil && target.reason == "" && gitwt.IsRepo(ctx, ws.cfg.ProjectRoot)
+		if !items[index].Runnable {
+			items[index].UnavailableReason = "Serve un repository Git e un agente con sessioni native disponibile."
+		}
+	}
 	// A starter can connect the native session to discover this activity. It
 	// cannot invoke it until that session has actually announced its catalog.
 	if id == "" {
@@ -91,8 +102,14 @@ func (s *Server) handleGetConversationActivities(w http.ResponseWriter, r *http.
 func resolveConversationActivities(tpl template.Template, actions []workspaceActionView, record conversationlog.Record, discovery execution.SessionDiscovery, conversationReason string) []conversationActivityView {
 	items := make([]conversationActivityView, 0, len(tpl.ConversationActivities))
 	for _, definition := range tpl.ConversationActivities {
+		if record.IncrementID != "" && definition.Action != "" {
+			continue
+		}
 		item := conversationActivityView{ConversationActivity: definition, Primary: true}
 		switch {
+		case definition.Kind == "increment":
+			item.Kind = "increment"
+			item.Runnable = conversationReason == ""
 		case definition.Action != "":
 			index := slices.IndexFunc(actions, func(action workspaceActionView) bool { return action.ID == definition.Action })
 			if index < 0 || !actions[index].Offered {

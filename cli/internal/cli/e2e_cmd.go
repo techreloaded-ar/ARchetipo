@@ -79,17 +79,17 @@ func newE2EEnsureCmd(s streams) *cobra.Command {
 }
 
 func newE2ERunCmd(s streams) *cobra.Command {
-	var grep string
+	var grep, spec string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run the Playwright functional suite headless (no video)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := projectRoot(cmd)
+			cfg, err := loadConfigFor(cmd)
 			if err != nil {
 				return err
 			}
-			res, err := e2e.RunFunctional(cmd.Context(), e2e.RunOptions{ProjectRoot: root, Grep: grep})
+			res, err := e2e.RunFunctional(cmd.Context(), e2e.RunOptions{ProjectRoot: cfg.ProjectRoot, Grep: grep, Spec: spec, TestResultsDir: cfg.Paths.TestResults})
 			if err != nil {
 				return err
 			}
@@ -97,6 +97,7 @@ func newE2ERunCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&grep, "grep", "", "only run tests matching this pattern")
+	cmd.Flags().StringVar(&spec, "spec", "", "save complete output and a verification report under the configured test-results directory for this spec")
 	return cmd
 }
 

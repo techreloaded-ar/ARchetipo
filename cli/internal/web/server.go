@@ -19,6 +19,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
@@ -31,10 +32,11 @@ import (
 // provider registry, the SSE broker whose clients stay connected, the registry
 // of known workspaces, and the HTTP plumbing itself.
 type Server struct {
-	registry *execution.Registry
-	mux      *http.ServeMux
-	httpSrv  *http.Server
-	broker   *Broker
+	incrementHosting increment.Hosting
+	registry         *execution.Registry
+	mux              *http.ServeMux
+	httpSrv          *http.Server
+	broker           *Broker
 
 	// workspaces is the user-level registry of known workspaces. It is named
 	// apart from `registry` above, which is the execution provider registry of
@@ -124,7 +126,7 @@ func newServer(session *workspaceSession, registry *execution.Registry, addr str
 	s.registerRoutes()
 	s.httpSrv = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           viewerOriginGuard(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return s
@@ -223,6 +225,9 @@ func (s *Server) handleAlways(pattern string, h http.HandlerFunc) {
 }
 
 func (s *Server) registerRoutes() {
+	s.handleWorkspace("POST /api/increments", s.handleCreateIncrement)
+	s.handleWorkspace("GET /api/increments/{id}", s.handleGetIncrement)
+	s.handleWorkspace("POST /api/increments/{id}/{action}", s.handleIncrementAction)
 	s.handleWorkspace("GET /api/board", s.handleGetBoard)
 	s.handleWorkspace("GET /api/board/stream", s.handleStreamBoard)
 	s.handleWorkspace("GET /api/metrics", s.handleGetMetrics)
@@ -277,6 +282,9 @@ func (s *Server) registerRoutes() {
 	// this process is holding and for one that ended and lives on disk, with the
 	// same payload. Two routes would leave the client to choose between them
 	// from an id alone, which is a choice an id does not carry.
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/preview", s.handleConversationPreview)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview", s.handleStartConversationPreview)
+	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/preview", s.handleStopConversationPreview)
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)

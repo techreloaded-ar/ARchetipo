@@ -152,7 +152,7 @@ func (p *persistentFakeNativeProvider) ResumeSession(_ context.Context, request 
 	}
 	session.snapshot.Connection = execution.ConnectionConnected
 	p.store.resumes++
-	return session.snapshot, nil
+	return copyFakeSnapshot(session.snapshot), nil
 }
 func (p *persistentFakeNativeProvider) ReadSession(_ context.Context, request execution.SessionRequest) (execution.SessionSnapshot, error) {
 	p.store.mu.Lock()
@@ -164,7 +164,18 @@ func (p *persistentFakeNativeProvider) ReadSession(_ context.Context, request ex
 	if session.runtimeLost {
 		return execution.SessionSnapshot{}, fmt.Errorf("native session %q is not connected", request.Session.Native.ID)
 	}
-	return session.snapshot, nil
+	return copyFakeSnapshot(session.snapshot), nil
+}
+
+// A provider returns an observation, not a pointer into its mutable live turn.
+// Match the native adapters so the follower can persist it after the store lock
+// has been released while a test concurrently completes the harness turn.
+func copyFakeSnapshot(snapshot execution.SessionSnapshot) execution.SessionSnapshot {
+	if snapshot.CurrentTurn != nil {
+		turn := *snapshot.CurrentTurn
+		snapshot.CurrentTurn = &turn
+	}
+	return snapshot
 }
 func (p *persistentFakeNativeProvider) StartTurn(_ context.Context, request execution.StartTurnRequest) (execution.SessionTurnStarted, error) {
 	p.store.mu.Lock()
