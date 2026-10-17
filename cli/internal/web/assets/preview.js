@@ -16,7 +16,19 @@
   for(const key of ["tag","text","label","testid","role","page","url","path","selector"]) result[key]=typeof value[key]==="string" ? value[key].slice(0,(key==="path" || key==="selector")?2000:1000) : "";
   return result;
  }
- const api={commentMessage,setupMessage,cleanElement};
+ function panelLimits(available) {
+  const max=Math.max(0,Math.floor(Number(available)||0));
+  return {min:Math.min(160,max),max};
+ }
+ function panelHeight(height,limits) {return Math.max(limits.min,Math.min(limits.max,Number(height)||270));}
+ function panelState(previous,action) {
+  const state={tab:"comments",mode:"expanded",height:270,...previous};
+  if(action.tab && ["comments","output"].includes(action.tab)){state.tab=action.tab;state.mode="expanded";}
+  if(["expanded","collapsed","hidden"].includes(action.mode))state.mode=action.mode;
+  if(Number.isFinite(action.height))state.height=action.height;
+  return state;
+ }
+ const api={commentMessage,setupMessage,cleanElement,panelLimits,panelHeight,panelState};
  if(typeof module!=="undefined" && module.exports) module.exports=api;
  else root.Preview=api;
 })(typeof window!=="undefined"?window:globalThis);

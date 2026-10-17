@@ -22,3 +22,24 @@ test('picker payload has a bounded explicit shape',()=>{
 test('preparation asks the agent for an explicit recipe without starting it',()=>{
  const message=preview.setupMessage();assert.match(message,/archetipo execution preview configure/);assert.match(message,/Non avviare il server/);assert.match(message,/directory di lavoro/);
 });
+
+test('panel limits retain the live page at small and large available heights',()=>{
+ assert.deepEqual(preview.panelLimits(500.9),{min:160,max:500});
+ assert.deepEqual(preview.panelLimits(90),{min:90,max:90});
+ assert.deepEqual(preview.panelLimits(-30),{min:0,max:0});
+ assert.equal(preview.panelHeight(20,preview.panelLimits(500)),160);
+ assert.equal(preview.panelHeight(800,preview.panelLimits(500)),500);
+ assert.equal(preview.panelHeight(270,preview.panelLimits(90)),90);
+});
+test('panel transitions restore the chosen height without mutating another conversation',()=>{
+ const first=preview.panelState({}, {height:320});
+ const second=preview.panelState({}, {});
+ const collapsed=preview.panelState(first,{mode:'collapsed'});
+ assert.equal(collapsed.height,320);
+ const output=preview.panelState(collapsed,{tab:'output'});
+ assert.deepEqual(output,{tab:'output',mode:'expanded',height:320});
+ const hidden=preview.panelState(output,{mode:'hidden'});
+ assert.deepEqual(preview.panelState(hidden,{mode:'expanded'}),output);
+ assert.deepEqual(second,{tab:'comments',mode:'expanded',height:270});
+ assert.deepEqual(first,{tab:'comments',mode:'expanded',height:320});
+});

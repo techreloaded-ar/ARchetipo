@@ -1,0 +1,284 @@
+schema: archetipo/plan/v2
+spec_code: US-063
+body: |-
+  # US-063 — Pannello compatto della preview
+
+  ## Soluzione tecnica
+
+  La preview mantiene il controller DOM `cli/internal/web/assets/preview-panel.js` e il modulo puro UMD `preview.js`. Non cambia alcun contratto HTTP, selettore o invio della conversazione. Il singolo iframe e la sua identità restano montati al variare di tab, altezza, commento e fullscreen.
+
+  Il contenitore inferiore usa flex con `min-height:0`, un divisore `role=separator`, orientamento orizzontale e valori ARIA aggiornati. Il divisore usa Pointer Events con pointer capture, uno schermo trasparente temporaneo sopra l’iframe durante il drag e cleanup su pointerup/cancel. La tastiera usa Freccia su/giù, Home e End con valori limitati dall’altezza disponibile; ResizeObserver ricontrolla i limiti su fullscreen/viewport. Non assegnare nuovamente src, innerHTML del contenitore iframe o replaceChildren dello stage per aggiornamenti del pannello.
+
+  Lo stato per conversazione include tab `comments|output`, pannello `expanded|collapsed|hidden`, ultima altezza espansa e commento attivo. Solo i commenti continuano a essere salvati nel formato localStorage esistente; le preferenze del pannello restano nella mappa di sessione. Riduci mantiene la barra tab, Nascondi mostra un comando riapri nella toolbar. Attivare una tab espande all’ultima altezza valida. Conservare la tab durante fullscreen. Tablist con aria-selected, aria-controls e frecce/Home/End; pannelli inattivi hidden e non focalizzabili.
+
+  Ogni commento conserva identità stabile senza dipendere dal numero visualizzato, che si ricalcola dopo rimozioni. Una riga compatta presenta numero, elemento, anteprima del testo e rimozione; un pulsante attivabile anche da tastiera apre l’unico editor. L’editor usa autosave input, il componente attivo resta evidenziato anche se il focus passa alla tab. Hover prevale temporaneamente sull’editor e al mouseleave torna il suo target. Riferimenti su pagine diverse o assenti mantengono i motivi esistenti; la pagina completa è disponibile tramite dettaglio accessibile/title senza riga permanente. Campi vuoti hanno stato riconoscibile e invio disabilitato. Selezione picker apre Comments, espande il pannello e focalizza il nuovo editor.
+
+  Le azioni Aggiungi commento e Invia tutti restano fuori dallo scroll interno. Output riutilizza il log server e la sua proprietà error/state, con scroll separato; un errore accende il badge senza cambiare tab o focus. Nessuna euristica su righe di testo del log e nessun cambiamento lifecycle server. La notifica di stato resta concisa, evitando righe permanenti duplicate. A 390px la barra va a capo ove necessario senza overflow orizzontale.
+
+  Non serve ADR: scelta locale, reversibile, che segue il controller esistente senza cambiare dati persistenti o confini di integrazione. Wiki disabilitata, nessuna attività Wiki. Worktree disabilitati, tutta l’implementazione avviene in `/Users/stefanoleli/Project/ARchetipo`.
+
+  ## Strategia di verifica
+
+  Browser obbligatorio: dimensioni reali, focus, fullscreen, pointer capture e stabilità iframe non sono provati da test testuali. Riutilizzare Chrome/CDP del repository e `test/e2e/preview-from-view-smoke.mjs`, senza Playwright o nuove dipendenze. Agent simulato ammesso perché invio, HTTP, viewer, app locale e iframe rimangono reali. Conservare screenshot desktop/fullscreen/mobile e report nel run ignorato; i report del gate sono in docs/test-results/US-063. Filmabile; la registrazione è responsabilità della review, non di implementazione.
+
+  Prerequisiti pronti: Node >=22 (attuale 25.8.1), Go 1.26.2, yaml risolto dentro node_modules del checkout, Chrome disponibile, golangci-lint sotto ~/go/bin. La ricetta `.archetipo/environment.json` è configurata con probe di readiness; i smoke creano e chiudono solo processi e sandbox propri su endpoint liberi, senza credenziali. Nessun servizio esterno o RideAtlas. Comandi check seriali, perché environment mantiene lock esclusivo. Cache disabilitata per evitare validità implicita rispetto a browser/toolchain esterni. Il setup attuale non richiede installazione; su checkout fresco usare npm ci nel root e go mod download in cli, installare il linter v2 come da AGENTS.md se assente. Non cambiare dipendenze di checkout antenati.
+
+  Mockup di riferimento: `docs/mockups/US-063/` (prototipo verificato: index.html, shared.css, app.js, preview.html e README.md).
+
+  ## Mappa delle evidenze di accettazione
+
+  Fixture comune: viewer reale con sessione fake Codex, app HTML owned con tre componenti e log del server, Chrome/CDP reale.
+
+  | Criterio | Fixture/stato iniziale | Livello | Oracolo osservabile | Attività |
+  |---|---|---|---|---|
+  | AC-1 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Tab Commenti e Output: un solo tabpanel con box visibile e focus consentito | TASK-04 |
+  | AC-2 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Count Commenti (3) leggibile anche quando Output è selezionato | TASK-04 |
+  | AC-3 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Drag CDP cambia altezza, conserva minimi e controlli raggiungibili | TASK-04 |
+  | AC-4 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Frecce/Home/End sul separator cambiano aria-valuenow e altezza reale | TASK-04 |
+  | AC-5 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Riduci elimina contenuto, resta tabbar e aumenta altezza iframe | TASK-04 |
+  | AC-6 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Tab dal ridotto ripristina ultima altezza scelta entro limiti | TASK-04 |
+  | AC-7 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Nascondi elimina tabbar ma riapri resta visibile e funzionante | TASK-04 |
+  | AC-8 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | mountId e nodo iframe invariati dopo resize/tab/stati | TASK-04 |
+  | AC-9 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Tre righe compatte, solo editor attivo visibile, niente Pronto da inviare ripetuto | TASK-04 |
+  | AC-10 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Pagina consultabile nel dettaglio senza riga permanente di pagina per ogni commento | TASK-04 |
+  | AC-11 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Hover riga 2 mostra overlay 2 e non apre editor | TASK-04 |
+  | AC-12 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Click e Enter/Space aprono editor con testo completo | TASK-04 |
+  | AC-13 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Apertura altro editor lascia solo uno visibile e conserva testo precedente | TASK-04 |
+  | AC-14 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Input salva draft senza controlli Save e senza inviare turn/start | TASK-04 |
+  | AC-15 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Tab/riduci/nascondi/fullscreen conservano tutti i testi | TASK-04 |
+  | AC-16 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Overlay editing resta attivo; missing/page reason visibile senza target sbagliato | TASK-04 |
+  | AC-17 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Picker da pannello nascosto apre Comments e focus nuovo editor | TASK-04 |
+  | AC-18 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Azioni restano nel viewport mentre lista scorre | TASK-04 |
+  | AC-19 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Draft vuoto riconoscibile e send disabled, completo riabilita | TASK-04 |
+  | AC-20 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Batch tre note ricevuto dalla stessa sessione; rifiuto mantiene draft | TASK-04 |
+  | AC-21 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Scroll output indipendente dalla lista commenti | TASK-04 |
+  | AC-22 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Errore state/error produce badge Output anche a pannello ridotto | TASK-04 |
+  | AC-23 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Errore durante editing non cambia tab né document.activeElement | TASK-04 |
+  | AC-24 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | Flussi tab/stati disponibili normale e fullscreen; selezione conservata | TASK-04 |
+  | AC-25 | Preview attiva, tre richieste; stato specifico del flusso | Browser E2E | 390px senza scroll orizzontale viewer e controlli dentro viewport | TASK-04 |
+
+  ## Baseline
+
+  Baseline del 17 ottobre 2026, candidato iniziale prima delle modifiche applicative.
+
+  | Comando dal root | Risultato effettivo | Evidenza |
+  |---|---|---|
+  | `archetipo execution environment prepare` | passed=true, stable=true | .archetipo/environment/runs/verification-851890522/report.json |
+  | `archetipo execution environment check preview-unit --spec US-063` | passed=true, stable=true | docs/test-results/US-063/verification-3004302063/report.json |
+  | `archetipo execution environment check web --spec US-063` | passed=true, stable=true | docs/test-results/US-063/verification-529012278/report.json |
+  | `archetipo execution environment check preview-smoke --spec US-063` | passed=true, stable=true | docs/test-results/US-063/verification-1370369992/report.json |
+  | `archetipo execution environment check go-gate --spec US-063` | passed=true, stable=true; format/vet/build/tests/lint verdi | docs/test-results/US-063/verification-2016841614/report.json |
+
+  | `archetipo execution environment check page-load --spec US-063` | passed=true, stable=true | docs/test-results/US-063/verification-522435959/report.json |
+
+  Il primo tentativo preview-smoke (verification-974061785) aveva exit 0 ma stable=false perché test/e2e/.bin era incluso negli input e il test lo ricostruisce. Non è evidenza valida; input corretti ai sorgenti esatti e nuovo report stabile sopra. Le operazioni environment devono restare sequenziali (lock esclusivo). Nessun fallimento applicativo baseline osservato.
+tasks:
+  - id: TASK-01
+    title: Introdurre stato e layout del pannello inferiore a tab
+    type: Impl
+    status: DONE
+    body: |-
+      ## Objective
+      Un unico pannello Commenti/Output regolabile mantiene iframe e bozze stabili.
+
+      ## Read
+      - cli/internal/web/assets/preview-panel.js — host, select/persist, apply, fullscreen, visibility.
+      - cli/internal/web/assets/preview.js — modulo puro UMD.
+      - cli/internal/web/assets/app.css — regole preview da 8200 in poi.
+      - docs/mockups/US-063/ — layout e stati prototipo.
+
+      ## Change
+      - cli/internal/web/assets/preview-panel.js — struttura pannello e stato per conversazione.
+      - cli/internal/web/assets/preview.js — funzioni pure per limiti/transizioni se utili ai test.
+      - cli/internal/web/assets/app.css — flex, resize, tab, toolbar, output responsive.
+      Nessuna modifica al lifecycle server o alle regole processo.
+
+      ## Steps
+      1. Sostituire details log e sezione commenti paralleli con un contenitore tablist e due tabpanel esclusivi; comment count sempre sulla tab.
+      2. Implementare expanded/collapsed/hidden e ultima altezza in memoria per conversazione; riapri visibile nella toolbar, tab nel ridotto riapre all’ultima altezza.
+      3. Divisore focusable role=separator aria-orientation=horizontal con aria-valuenow/min/max e valuetext. Pointer capture e protezione iframe durante drag; ArrowUp/Down, Home/End e resize/fullscreen clamp. Rimuovere listener/overlay dopo cancel e cambio conversazione.
+      4. Aggiornare proprietà e hidden dei soli nodi necessari; non ricreare iframe né assegnarne src. Mantenere tab e bozze su fullscreen e cambio stato.
+      5. Output con scroll indipendente; badge error alimentato da state/error della risposta preview, senza cambiare tab/focus. Rendere tab/azioni raggiungibili a 390px senza overflow.
+
+      ## Verify
+      - Run: `archetipo execution environment check preview-unit --spec US-063` dal root.
+      - Run: `archetipo execution environment check web --spec US-063` dal root.
+      - Expect: passed=true e stable=true; browser completo verrà aggiornato in TASK-04.
+
+      ## Done
+      - [ ] AC-1, AC-2 — tab esclusivi e conteggio sempre visibile.
+      - [ ] AC-3, AC-4 — divisore pointer/tastiera accessibile con limiti reali.
+      - [ ] AC-5, AC-6, AC-7, AC-8 — riduci/nascondi/ripristina senza reload.
+      - [ ] AC-15, AC-21, AC-22, AC-23, AC-24, AC-25 — stato e bozze stabili, scroll e errori senza focus steal, mobile utilizzabile.
+
+      ## Blockers
+      None.
+    ref: TASK-01
+  - id: TASK-02
+    title: Rendere i commenti compatti con un solo editor e highlight coerente
+    type: Impl
+    status: DONE
+    dependencies:
+      - TASK-01
+    body: |-
+      ## Objective
+      Le richieste sono righe compatte con editor unico, autosave e riferimento visuale affidabile.
+
+      ## Read
+      - cli/internal/web/assets/preview-panel.js — drawComments, highlightComment, updateButtons, picker e send.
+      - cli/internal/web/assets/preview.js — cleanElement e commentMessage.
+      - cli/internal/web/assets/app.css — commenti e footer.
+      - docs/mockups/US-063/ — righe, editor e azioni.
+
+      ## Change
+      - cli/internal/web/assets/preview-panel.js — active comment, compact rows e selezione.
+      - cli/internal/web/assets/app.css — riga compatta, editor, stati vuoti e footer.
+      Preservare formato draft esistente e batch message; non introdurre salvataggi espliciti.
+
+      ## Steps
+      1. Associare active comment a oggetto/identità stabile; comporre pulsante riga accessibile con numero, nome e preview troncata, e rimozione separata. Niente textarea visibile sui commenti chiusi o ripetizione Pronto da inviare.
+      2. Aprire un solo editor su click/Enter/Space. Autosave a ogni input senza ricostruire campo attivo; gli altri commenti si richiudono conservando testo.
+      3. Highlight temporaneo hover senza apertura; quando hover finisce ripristinare target del commento attivo. Restano motivi per altra pagina/elemento assente e niente falso highlight.
+      4. Esporre pagina via dettaglio/title accessibile, aggiungendo distinzione breve solo per riferimenti a pagine diverse. Le azioni restano fuori dallo scroll.
+      5. Picker opens Commenti ed editor nuovo anche dal pannello nascosto/ridotto. Nuovo commento vuoto disabilita send e appare riconoscibile.
+      6. Conservare invio batch e bozze su rifiuto; cancellare solo il batch accettato nella conversazione destinataria.
+
+      ## Verify
+      - Run: `archetipo execution environment check preview-unit --spec US-063`.
+      - Run: `archetipo execution environment check web --spec US-063`.
+      - Expect: passato stabile e nessun cambio al contratto cleanElement/commentMessage; acceptance DOM coperta da TASK-04.
+
+      ## Done
+      - [ ] AC-9, AC-10 — righe compatte con contesto pagina consultabile.
+      - [ ] AC-11, AC-12, AC-13, AC-14, AC-16 — hover e editor singolo con testo conservato e highlight corretto.
+      - [ ] AC-15, AC-17, AC-18, AC-19, AC-20 — bozze conservate, picker rivela editor, azioni raggiungibili e batch robusto.
+
+      ## Blockers
+      None.
+    ref: TASK-02
+  - id: TASK-03
+    title: Verificare transizioni pure e integrità del contratto dei commenti
+    type: Test
+    status: DONE
+    dependencies:
+      - TASK-01
+      - TASK-02
+    body: |-
+      ## Objective
+      Le transizioni isolate e i limiti del pannello hanno oracoli deterministici.
+
+      ## Read
+      - cli/internal/web/assets/preview.js — eventuali helper puri introdotti da TASK-01.
+      - test/web/preview.test.mjs — test UMD esistenti.
+
+      ## Change
+      - test/web/preview.test.mjs — casi su funzioni pure effettivamente usate.
+      Non creare test su stringhe sorgente come prova del comportamento DOM.
+
+      ## Steps
+      1. Se gli helper di stato/limiti sono stati estratti, coprire clamp min/max, ripristino ultima altezza, isolamento conversazioni e transizioni tab/pannello; non duplicare implementazione nei test.
+      2. Conservare test batch commentMessage con contesto completo e trimming e cleanElement con shape limitata; aggiungere regressioni solo per contratti nuovi reali.
+      3. Lasciare fullscreen/focus/drag e textarea visibili al browser di TASK-04.
+
+      ## Verify
+      - Run: `archetipo execution environment check preview-unit --spec US-063`.
+      - Run: `archetipo execution environment check web --spec US-063`.
+      - Expect: passed=true e stable=true, tutti i test preesistenti conservati.
+
+      ## Done
+      - [ ] AC-3, AC-4, AC-5, AC-6, AC-7 — limiti e transizioni pure verificate se estratte, integrate dalla prova browser.
+      - [ ] AC-20 — testo e identità dei commenti rimangono completi nel batch.
+
+      ## Blockers
+      None.
+    ref: TASK-03
+  - id: TASK-04
+    title: Provare in Chrome il pannello completo e la conservazione delle richieste
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+    body: |-
+      ## Objective
+      Il vero viewer soddisfa tutti gli AC con layout reale, iframe e invio nativo.
+
+      ## Read
+      - test/e2e/preview-from-view-smoke.mjs — smoke Chrome/CDP corrente e fixture owned.
+      - test/e2e/viewer-page-load-smoke.mjs — primitive browser riutilizzabili.
+      - test/e2e/support/view-smoke-harness.mjs — lifecycle sandbox/processi.
+      - cli/internal/web/assets/preview-panel.js — selettori e stato UI definitivi.
+
+      ## Change
+      - test/e2e/preview-from-view-smoke.mjs — adattare assunzioni vecchie tutte textarea aperte e aggiungere flussi spec.
+      - test/e2e/support/ — eventuali helper soltanto se realmente condivisi.
+      Non simulare controller DOM, iframe, API invio o geometria.
+
+      ## Steps
+      1. Estendere fixture con tre componenti identificabili e creare tre richieste via picker. Contare righe, textarea visibili (una), tab con numero sempre visibile e testo troncato.
+      2. Hover secondo senza aprirlo: overlay iframe numero 2; aprire via tastiera, modificare, aprire altro, verificare testo salvato e solo un editor.
+      3. Trascinare divisore con input CDP reale, verificare variazione geometrica e limiti; focus separator, inviare frecce/Home/End e verificare geometria/aria. Provare collapsed/hidden/restore e ultima altezza.
+      4. Annotare mountId iframe, scroll output e testo draft; cambiare tab, stato e fullscreen attraverso user gesture reale; tutti conservati, unico tabpanel visibile e nessun reload iframe.
+      5. Produrre stato error del server di fixture tramite suo lifecycle owned (non alterare altre app), verificare badge in ridotto e poi errore durante editing con activeElement invariato e Commenti selezionata. Riaprire la fixture per continuare.
+      6. Provare richiesta vuota, rimozione, altra pagina e target assente; invio batch valido arriva alla stessa conversazione e rifiuto conserva bozze. Riapertura preview e cambio conversazione non contaminano draft.
+      7. Viewport 390px: tab/azioni dentro viewport, scrollWidth pagina non eccede clientWidth; screenshot desktop/fullscreen/mobile e zero uncaught exceptions. Cleanup sempre nel finally di soli processi del test.
+
+      ## Verify
+      - Run: `archetipo execution environment check preview-smoke --spec US-063`.
+      - Run: `archetipo execution environment check page-load --spec US-063`.
+      - Expect: passed=true e stable=true; report, screenshot e oracoli reali nel run dello smoke. Timeout descrittivi, nessuno sleep arbitrario o skip implicito Chrome.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8 — tab esclusive, conteggio, geometria pointer/tastiera e iframe stabile.
+      - [ ] AC-9, AC-10, AC-11, AC-12, AC-13, AC-14, AC-15, AC-16, AC-17 — editor compatto, contesto, highlight e bozze conservate.
+      - [ ] AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25 — azioni, invio, output, errore senza furto focus, fullscreen e mobile verificati.
+
+      ## Blockers
+      None.
+    ref: TASK-04
+  - id: TASK-05
+    title: Completare gate finale e confermare tutte le attività DONE prima della review
+    type: Test
+    status: TODO
+    dependencies:
+      - TASK-01
+      - TASK-02
+      - TASK-03
+      - TASK-04
+    body: |-
+      ## Objective
+      Un candidato stabile e verificato è pronto per review con tutte le attività complete.
+
+      ## Read
+      - .archetipo/environment.json — controlli registrati e prerequisiti.
+      - .archetipo/plans/US-063-plan.yaml — baseline e mappa AC.
+      - AGENTS.md — gate CI obbligatorio.
+
+      ## Change
+      - docs/test-results/US-063/ — evidenza durevole prodotta dai checks.
+      - Stato task tramite CLI, nessuna modifica laterale al codice o ai documenti di prodotto.
+
+      ## Steps
+      1. Eseguire dal root `archetipo execution environment prepare`; inspect passed e stable. Non reinstallare ambiente sano.
+      2. Eseguire serialmente i cinque checks sotto sul candidato finale; se una modifica successiva invalida il candidato rieseguire i checks interessati e il gate pertinente. Non confondere exit 0 con passed=true/stable=true.
+      3. Il go-gate esegue in cli gofmt -l . (nessun output), go vet ./..., go build ./..., go test ./... e golangci-lint run --timeout 5m ./.... Non saltare Go perché la modifica principale è frontend.
+      4. Marcare TASK-05 DONE tramite CLI dopo esito positivo. Eseguire `archetipo spec show US-063` dal project_root e confermare TASK-01..TASK-05 tutti DONE e nessun TODO; soltanto allora invocare spec review secondo contratto implement.
+      5. Riportare evidenze e limiti reali. Non fare commit o avviare preview esterne senza richiesta.
+
+      ## Verify
+      - Run: `archetipo execution environment check preview-unit --spec US-063`.
+      - Run: `archetipo execution environment check web --spec US-063`.
+      - Run: `archetipo execution environment check preview-smoke --spec US-063`.
+      - Run: `archetipo execution environment check page-load --spec US-063`.
+      - Run: `archetipo execution environment check go-gate --spec US-063`.
+      - Run: `archetipo spec show US-063` dopo avere marcato il gate DONE.
+      - Expect: ogni check passed=true stable=true con report_path leggibile; zero task TODO prima della review. Il benchmark harness non è richiesto perché non si modifica il layer verification.
+
+      ## Done
+      - [ ] AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-13, AC-14, AC-15, AC-16, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-24, AC-25 — evidenze TASK-04 e regressioni verdi sul candidato finale.
+      - [ ] Dopo gate DONE, spec show prova tutte le task DONE prima di spec review.
+
+      ## Blockers
+      None.
+    ref: TASK-05

@@ -8287,3 +8287,60 @@ body.no-workspace [data-workspace-scoped] {
  .preview-comments-help { display:none; }
  .preview-comment-list { margin-top:6px; }
 }
+
+/* One adjustable workbench below the live page. Its children stay mounted while
+   tabs and compact comment editors change, preserving drafts and scroll. */
+.browser-preview { overflow:hidden; }
+.browser-preview [hidden] { display:none !important; }
+.preview-stage,.browser-preview:fullscreen .preview-stage { flex:1 1 0; min-height:140px; }
+.preview-stage iframe { min-height:0; }
+.preview-separator { flex:0 0 8px; display:grid; place-items:center; cursor:ns-resize; touch-action:none; background:var(--surface-2); }
+.preview-separator span { width:42px; height:2px; border-radius:4px; background:var(--border); }
+.preview-separator:hover,.preview-separator:focus-visible { background:var(--surface-3); outline:2px solid var(--accent); outline-offset:-2px; }
+.preview-drag-cover { position:absolute; inset:0; z-index:20; cursor:ns-resize; }
+.preview-resizing { user-select:none; cursor:ns-resize; }
+.preview-bottom { flex:none; min-height:0; display:flex; flex-direction:column; overflow:hidden; border-top:1px solid var(--border); }
+.preview-tabs { flex:0 0 42px; display:flex; align-items:center; justify-content:space-between; padding:0 8px; border-bottom:1px solid var(--border); box-sizing:border-box; }
+.preview-tabs>div { display:flex; gap:4px; align-items:center; height:100%; }
+.preview-tabs button { height:100%; border:0; border-bottom:2px solid transparent; padding:0 10px; background:transparent; color:var(--text-muted); font:600 12px var(--font-sans); cursor:pointer; }
+.preview-tabs button[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
+.preview-tabs b { font-size:10px; background:var(--surface-3); color:var(--accent); padding:1px 5px; border-radius:4px; margin-left:4px; }
+.preview-tabs .preview-error-badge { color:#a23b27; background:#fbe7df; }
+.preview-tabs button:focus-visible,.preview-comment-open:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.preview-comments { flex:1; min-height:0; max-height:none; border:0; padding:0; background:var(--surface); }
+.preview-comments-footer { margin:0; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--surface); align-items:center; flex-wrap:nowrap; }
+.preview-comments-footer>div { display:flex; gap:6px; }
+.preview-comments-hint { color:var(--text-muted); font-size:11px; }
+.preview-comment-list { padding:0; margin:0; }
+.preview-comment { margin:0; padding:0; border:0; border-bottom:1px solid var(--border); border-radius:0; transition:none; background:var(--surface); }
+.preview-comment:hover,.preview-comment:focus-within { border-color:var(--border); box-shadow:none; background:var(--surface-2); }
+.preview-comment.editing { background:var(--surface-2); box-shadow:inset 3px 0 var(--accent); }
+.preview-comment-head { padding:3px 10px; gap:8px; }
+.preview-comment-open { display:flex; align-items:center; gap:9px; min-width:0; flex:1; padding:7px 0; text-align:left; border:0; background:transparent; color:var(--text); font:12px var(--font-sans); cursor:pointer; }
+.preview-comment-number { width:24px; height:24px; border-radius:5px; font-size:11px; }
+.preview-comment-open strong { max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.preview-comment-excerpt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.preview-comment-excerpt.empty { color:#a23b27; }
+.preview-comment-editor { padding:0 14px 10px 45px; }
+.preview-comment textarea { min-height:76px; margin:0; padding:9px; border-color:var(--border); background:var(--surface); }
+.preview-comment-editor small { display:block; font-size:10px; color:var(--text-muted); overflow-wrap:anywhere; margin-top:4px; }
+.preview-comment-reference:not(:empty) { padding:0 14px 8px 45px; }
+.preview-log { flex:1; min-height:0; margin:0; overflow:auto; background:var(--surface-2); }
+.preview-log pre { max-height:none; overflow:visible; padding:12px 14px; margin:0; font:11px/1.9 var(--font-mono); }
+.preview-status { padding:7px 14px; border-top:0; border-bottom:1px solid var(--border); }
+@media(max-width:600px) {
+ .preview-comments-hint { display:none; }
+ .preview-comments-hint[data-notice="true"] { display:block; width:100%; overflow-wrap:anywhere; }
+ .preview-comments-footer:has(.preview-comments-hint[data-notice="true"]) { flex-wrap:wrap; }
+ .preview-comments-footer { padding:7px 8px; }
+ .preview-comments-footer>div { width:100%; justify-content:space-between; }
+ .preview-comment-open strong { max-width:95px; font-size:11px; }
+ .preview-comment-excerpt { font-size:11px; }
+ .preview-comment-editor { padding-left:14px; }
+ .preview-toolbar { flex-wrap:wrap; }
+ .preview-toolbar-actions { max-width:100%; flex-wrap:wrap; }
+ .preview-location { min-width:80px; }
+ .preview-tools { padding:6px; gap:4px; }
+ .preview-pick { font-size:11px; padding:6px; }
+ .preview-viewport select { max-width:120px; font-size:11px; }
+}

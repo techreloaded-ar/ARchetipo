@@ -1,0 +1,12 @@
+<!doctype html><html lang="it"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>US-063 · Preview e pannello compatto</title><link rel="stylesheet" href="shared.css"><body>
+<header class="shell"><strong>ARchetipo</strong><span>RideAtlas / Preview</span><small>Prototipo US-063</small></header>
+<main id="preview"><header class="toolbar"><span class="location">● &nbsp; 127.0.0.1:3217 / itinerari</span><button id="error">Simula errore</button><button id="reopen" hidden>Apri pannello</button><button id="full" aria-label="Attiva schermo intero">⛶</button></header>
+<div class="stage"><iframe title="Applicazione in anteprima" src="preview.html"></iframe></div>
+<div id="split" role="separator" aria-label="Altezza pannello inferiore" aria-orientation="horizontal" aria-valuemin="160" aria-valuemax="500" aria-valuenow="270" tabindex="0"><span></span></div>
+<section id="panel"><header class="tabs"><div role="tablist" aria-label="Pannello preview"><button id="commentsTab" role="tab" aria-selected="true" aria-controls="comments">Commenti <b id="count">3</b></button><button id="outputTab" role="tab" aria-selected="false" aria-controls="output">Output <b id="badge" hidden>!</b></button></div><div><button id="min" aria-label="Riduci pannello">▁</button><button id="hide" aria-label="Nascondi pannello">×</button></div></header>
+<div id="comments" role="tabpanel" aria-labelledby="commentsTab"><div class="actions"><span id="hint">3 richieste da inviare</span><div><button id="add">＋ Aggiungi commento</button><button id="send" class="primary">Invia tutti (3)</button></div></div><div id="list"></div></div>
+<div id="output" role="tabpanel" aria-labelledby="outputTab" hidden><pre id="log">10:42:01  Avvio server…
+10:42:02  ✓ Ready in 843 ms
+10:42:02  GET /itinerari 200 in 21 ms
+10:42:04  GET /api/routes 200 in 12 ms</pre></div>
+</section></main><script src="app.js"></script></body></html>

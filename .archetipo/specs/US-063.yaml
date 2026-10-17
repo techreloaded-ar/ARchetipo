@@ -1,0 +1,64 @@
+schema: archetipo/spec/v2
+code: US-063
+title: Gestire commenti e output in un pannello compatto della preview
+epic:
+  code: EP-008
+  title: Workspace gestiti dalla UI
+priority: HIGH
+points: 5
+status: IN PROGRESS
+scope: MVP
+body: |-
+  #### US-063: Gestire commenti e output in un pannello compatto della preview
+
+  **Epic:** EP-008 | **Priorità:** HIGH | **Punti:** 5 | **Stato:** TODO
+  **Bloccata da:** -
+
+  **Storia utente**
+  Come persona che verifica il risultato nella preview di ARchetipo,
+  voglio regolare lo spazio dedicato a commenti e output, consultandoli uno alla volta e ampliando solo il commento in modifica,
+  per mantenere l'applicazione visibile mentre raccolgo le richieste da inviare all'agente.
+
+  **Dimostrazione**
+  Partendo da una preview attiva con output del server e tre componenti commentabili, il revisore entra a schermo intero e crea tre commenti. Osserva le richieste in righe compatte numerate nella tab Commenti (3). Passa sul secondo commento e osserva il componente corrispondente evidenziato con il numero 2 senza espandere la riga. Apre il commento, modifica il testo e apre un altro commento: solo quest'ultimo mostra l'editor ampliato. Trascina il separatore per dare più spazio alla preview, passa a Output e osserva soltanto il log. Riduce il pannello alla barra delle tab e poi lo nasconde; riaprendo Commenti ritrova l'ultima altezza scelta e il testo modificato. Ripete ridimensionamento e ripristino tramite tastiera. Esce dallo schermo intero e ritrova pagina e commenti. Con il pannello ridotto provoca un errore del server e osserva l'indicatore su Output. Con un commento in modifica, un nuovo errore non sposta il focus sull'output. Dopo aver completato i commenti, preme Invia tutti (3) e verifica che arrivino insieme alla conversazione.
+
+  **Criteri di accettazione**
+  - [ ] AC-1 — La preview presenta un solo pannello inferiore con le tab Commenti e Output; soltanto il contenuto della tab selezionata è visibile.
+  - [ ] AC-2 — La tab Commenti mostra il numero delle richieste non inviate anche quando è selezionato Output.
+  - [ ] AC-3 — Un separatore orizzontale trascinabile regola lo spazio tra applicazione e pannello inferiore entro limiti che lasciano raggiungibili i rispettivi controlli.
+  - [ ] AC-4 — Il separatore è utilizzabile da tastiera con un'indicazione accessibile della dimensione corrente.
+  - [ ] AC-5 — Il comando Riduci lascia visibile soltanto la barra delle tab e restituisce alla preview lo spazio occupato dal contenuto del pannello.
+  - [ ] AC-6 — Premendo una tab nel pannello ridotto si apre il contenuto selezionato all'ultima altezza scelta.
+  - [ ] AC-7 — Il comando Nascondi elimina anche la barra delle tab; rimane un comando visibile per riaprire il pannello.
+  - [ ] AC-8 — Ridimensionare il pannello o cambiarne tab e stato non ricarica la pagina incorporata nella preview.
+  - [ ] AC-9 — Un commento non in modifica è una riga compatta con numero, nome del componente, anteprima breve della richiesta e comando di rimozione; non mostra una textarea aperta o la dicitura ripetuta Pronto da inviare.
+  - [ ] AC-10 — Il riferimento alla pagina non occupa una riga permanente in ciascun commento; diventa consultabile quando serve a distinguere riferimenti a pagine diverse.
+  - [ ] AC-11 — Passare sopra un commento evidenzia il componente corrispondente con lo stesso numero senza espandere l'editor.
+  - [ ] AC-12 — Attivare un commento tramite click o tastiera apre il suo testo completo in un editor ampliato.
+  - [ ] AC-13 — Aprendo l'editor di un altro commento, quello precedente torna compatto conservando il testo; un solo editor resta ampliato.
+  - [ ] AC-14 — Il testo si salva automaticamente senza pulsanti di salvataggio esplicito.
+  - [ ] AC-15 — Cambiare tab, ridurre o nascondere il pannello oppure uscire dallo schermo intero conserva le richieste non inviate.
+  - [ ] AC-16 — Durante la modifica il componente corrispondente resta evidenziato; un riferimento a un'altra pagina o a un componente assente espone il motivo senza evidenziare un elemento diverso.
+  - [ ] AC-17 — Selezionando un nuovo componente nella preview si apre la tab Commenti con il nuovo editor già attivo, anche se il pannello era ridotto o nascosto.
+  - [ ] AC-18 — Nella tab Commenti, Aggiungi commento e Invia tutti (N) restano raggiungibili senza scorrere l'elenco delle richieste.
+  - [ ] AC-19 — La presenza di una richiesta vuota disabilita l'invio collettivo e rende riconoscibile il commento da completare.
+  - [ ] AC-20 — Invia tutti (N) consegna insieme le richieste alla conversazione corrente; un invio rifiutato conserva le richieste.
+  - [ ] AC-21 — La tab Output permette di scorrere il log indipendentemente dall'elenco dei commenti.
+  - [ ] AC-22 — Un errore rilevato dalla preview rende visibile un indicatore sulla tab Output anche a pannello ridotto.
+  - [ ] AC-23 — Un nuovo errore non seleziona automaticamente Output e non sottrae il focus al commento in modifica.
+  - [ ] AC-24 — Tab, stati del pannello e commenti espandibili sono disponibili sia nella preview normale sia a schermo intero; entrare e uscire dallo schermo intero conserva la tab selezionata.
+  - [ ] AC-25 — A 390 pixel di larghezza, tab e azioni restano raggiungibili senza introdurre scorrimento orizzontale della pagina del viewer.
+
+  **Fuori ambito**
+  Spostamento laterale del pannello, finestre staccabili, più tab visibili contemporaneamente, nuove funzioni di console o terminale, navigazione automatica verso una pagina diversa per trovare un componente, modifiche alle regole del processo o ai permessi dell'agente, gestione del ciclo di vita dei server. Non viene richiesto di ricordare dimensioni o tab tra browser diversi o dopo un riavvio del viewer.
+
+  **Assunzioni approvate**
+  Il pannello rimane in basso. La preview normale adotta gli stessi comandi di quella a schermo intero. L'ultima altezza scelta viene conservata durante l'uso della preview corrente. La selezione di un nuovo componente è una richiesta esplicita di apertura dell'editor; l'arrivo di un errore dell'output non lo è.
+fork_base: 172de1a4ec0dccede6f3fdd551827fb624ee8f31
+history:
+  - status: TODO
+    at: "2026-10-17T09:34:17Z"
+  - status: PLANNED
+    at: "2026-10-17T09:39:58Z"
+  - status: IN PROGRESS
+    at: "2026-10-17T09:40:22Z"
