@@ -14,7 +14,9 @@ test('cumulative comments carry page and element context as ordinary text',()=>{
 test('picker payload has a bounded explicit shape',()=>{
  assert.equal(preview.cleanElement(null),null);
  assert.equal(preview.cleanElement({tag:'button'}),null);
- const element=preview.cleanElement({tag:'button',url:'/page',text:'x'.repeat(2000),evil:'ignored'});
+ const element=preview.cleanElement({tag:'button',url:'/page',text:'x'.repeat(2000),selector:'x'.repeat(3000),evil:'ignored'});
+ assert.equal(element.selector.length,2000);
+ assert.equal(preview.cleanElement({tag:"button",url:"/old"}).selector,"");
  assert.equal(element.text.length,1000);assert.equal(element.evil,undefined);
 });
 test('preparation asks the agent for an explicit recipe without starting it',()=>{

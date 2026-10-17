@@ -50,7 +50,7 @@ async function main(){
   const conversationID=opened.conversation.id;
   browser=await launchChrome(chrome,path.join(dir,'chrome'));page=await browser.newPage();
   const exceptions=[];page.on('Runtime.exceptionThrown',event=>exceptions.push(event.exceptionDetails));
-  await page.send('Runtime.enable');await page.send('Page.enable');
+  await page.send('Runtime.enable');await page.send('Page.enable');await page.send('Page.bringToFront');
   const contexts=new Map();page.on('Runtime.executionContextCreated',event=>{if(event.context.auxData?.isDefault)contexts.set(event.context.auxData.frameId,event.context.id);});
   // Keep delivery and session operations real. Add only a read-only increment
   // presentation to the conversation GET, to exercise its shared work panel.
@@ -76,7 +76,7 @@ async function main(){
   await page.evaluate('document.querySelector("[data-preview=start]").click()');
   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'injected picker handshake',()=>page.evaluate('document.querySelector(".preview-status").textContent'));
   const runtime=await (await fetch(endpoint+'/preview')).json();assert.equal(runtime.state,'ready');assert.equal(runtime.reused,false);
-  const tree=await page.send('Page.getFrameTree');const frameID=tree.frameTree.childFrames[0].frame.id;
+  const tree=await page.send('Page.getFrameTree');let frameID=tree.frameTree.childFrames[0].frame.id;
   await until(()=>contexts.has(frameID),'preview execution context');
   const evaluateFrame=async expression=>{
    const result=await page.send('Runtime.evaluate',{expression,contextId:contexts.get(frameID),returnByValue:true,awaitPromise:true});
@@ -84,14 +84,46 @@ async function main(){
   };
   const mount=await evaluateFrame('window.mountId');
   const choose=async(note)=>{
-   await page.evaluate('document.querySelector("[data-preview=pick]").click()');
-   await evaluateFrame('document.querySelector("button").click()');
+   if(!await page.evaluate('document.querySelector("[data-preview=pick]").getAttribute("aria-pressed") === "true"'))await page.evaluate('document.querySelector("[data-preview=pick]").click()');
+   await evaluateFrame(`document.querySelector(${JSON.stringify(note.selector || 'button')}).click()`);
    await page.waitFor('document.querySelectorAll(".preview-comment textarea").length === '+note.index,timeout,'selected element draft');
    await page.evaluate(`(()=>{const input=Array.from(document.querySelectorAll('.preview-comment textarea')).at(-1);input.value=${JSON.stringify(note.text)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   };
   await choose({index:1,text:'Rinomina in Conferma'});
   assert.equal(await evaluateFrame('document.body.dataset.clicked'),undefined,'picker triggered app action');
-  await choose({index:2,text:'Aumenta lo spazio sopra questo pulsante'});
+  assert.equal(await page.evaluate('document.querySelector("[data-preview=send]").disabled'),false,'nonempty autosaved comment is ready');
+  assert.equal(await page.evaluate('document.querySelectorAll("[data-comment-save],[data-comment-next]").length'),0,'redundant save controls');
+  assert.equal(received.some(e=>e.kind==='turn/start' && JSON.stringify(e.params).includes('Rinomina in Conferma')),false,'autosaving sent feedback');
+  await page.evaluate('document.querySelector("[data-preview=add]").click()');
+  await choose({index:2,text:'Aumenta lo spazio sopra questo pulsante',selector:'h1'});
+  const highlighted=()=>evaluateFrame('(()=>{const overlay=document.querySelector("[data-archetipo-highlight]");const r=overlay.getBoundingClientRect();return {display:overlay.style.display,number:overlay.textContent,x:r.x,y:r.y,width:r.width};})()');
+  await until(async()=>{const value=await highlighted();return value.display==='block' && value.number==='2';},'focused comment highlights heading');
+  const heading=await evaluateFrame('document.querySelector("h1").getBoundingClientRect().width');
+  assert.equal((await highlighted()).width,heading,'focus highlighted wrong element');
+  await page.evaluate('document.querySelector(".preview-comment").dispatchEvent(new MouseEvent("mouseenter"))');
+  await until(async()=>{const value=await highlighted();return value.number==='1' && value.display==='block';},'hover highlights first component');
+  assert.equal((await highlighted()).width,await evaluateFrame('document.querySelector("button").getBoundingClientRect().width'));
+  await page.evaluate('document.querySelector(".preview-comment").dispatchEvent(new MouseEvent("mouseleave"))');
+  await until(async()=>(await highlighted()).number==='2','leaving hover restores focused component');
+  await page.evaluate('document.activeElement.blur()');
+  await until(async()=>(await highlighted()).display==='none','blur clears component highlight');
+  // Enter through a real user gesture: fullscreen requires transient activation.
+  const clickControl=async selector=>{
+   const point=await page.evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+   await page.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});
+   await page.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});
+  };
+  await clickControl('[data-preview=fullscreen]');
+  await page.waitFor('document.fullscreenElement === document.querySelector("#browser-preview")',timeout,'fullscreen preview');
+  assert.equal(await evaluateFrame('window.mountId'),mount,'fullscreen reloaded the iframe');
+  assert.equal(await page.evaluate('document.querySelectorAll(".preview-comment[data-complete=true]").length'),2);
+  const fullscreenImage=await page.send('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(dir,'preview-fullscreen.png'),Buffer.from(fullscreenImage.data,'base64'));
+  await clickControl('[data-preview=fullscreen]');
+  await page.waitFor('!document.fullscreenElement',timeout,'exit fullscreen');
+  await page.evaluate('document.querySelector(".preview-comment textarea").focus()');
+  await until(async()=>(await highlighted()).number==='1','editing highlights matching component');
+  assert.equal(await page.evaluate('document.querySelector("[data-preview=send]").disabled'),false,'editing does not require manual save');
+  ok('Schermo intero senza ricaricare; commenti salvati automaticamente e componenti evidenziati su hover e modifica.');
   // Do not substitute a timer for the poll: wait for an actual HTTP chat read.
   let polls=0;page.on('Network.requestWillBeSent',e=>{if(e.request.url.startsWith(endpoint+'?'))polls++;});await page.send('Network.enable');
   await until(()=>polls>0,'conversation poll with preview mounted');
@@ -142,12 +174,30 @@ async function main(){
   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
   await page.waitFor('document.querySelector(".preview-comment textarea")?.value === "Commento da conservare"',timeout,'draft restored after page reload');
   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'picker after page reload');
+  frameID=(await page.send('Page.getFrameTree')).frameTree.childFrames[0].frame.id;
+  await until(()=>contexts.has(frameID),'restored preview execution context');
+  await page.evaluate('document.querySelector(".preview-comment textarea").focus()');
+  await until(async()=>{const value=await evaluateFrame('document.querySelector("[data-archetipo-highlight]").style.display');return value==='block';},'component association restored after reload');
   const restoredColumns=await dimensions();assert.ok(Math.abs(restoredColumns.rail-afterRail.rail)<2);assert.ok(Math.abs(restoredColumns.right-afterRight.right)<2);
   ok('La riapertura della pagina conserva i commenti non inviati e le larghezze scelte.');
   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await page.waitFor('document.querySelector("#browser-preview").getBoundingClientRect().width < 400',timeout,'mobile preview');
   assert.equal(await page.evaluate('document.documentElement.scrollWidth > innerWidth'),false);
   const image=await page.send('Page.captureScreenshot',{format:'png'});await fs.writeFile(path.join(dir,'preview-mobile.png'),Buffer.from(image.data,'base64'));
+  await evaluateFrame('location.href="/seconda"');
+  await until(async()=>{try{return await evaluateFrame('location.pathname')==='/seconda';}catch{return false;}},'navigate preview to another page');
+  await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'picker on second page');
+  await page.evaluate('document.activeElement.blur();document.querySelector(".preview-comment textarea").focus()');
+  await page.waitFor('document.querySelector(".preview-comment-reference").textContent.includes("altra pagina")',timeout,'reference to another page explained');
+  assert.equal(await evaluateFrame('document.querySelector("[data-archetipo-highlight]").style.display'),'none');
+  await evaluateFrame('location.href="/"');
+  await until(async()=>{try{return await evaluateFrame('location.pathname')==='/';}catch{return false;}},'return to commented page');
+  await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'picker on original page');
+  await evaluateFrame('document.querySelector("button").remove()');
+  await page.evaluate('document.activeElement.blur();document.querySelector(".preview-comment textarea").focus()');
+  await page.waitFor('document.querySelector(".preview-comment-reference").textContent.includes("non è più presente")',timeout,'missing component explained');
+  assert.equal(await evaluateFrame('document.querySelector("[data-archetipo-highlight]").style.display'),'none');
+  ok('Riferimenti ripristinati dopo reload; nessuna evidenziazione errata su altre pagine o componenti rimossi.');
   await page.evaluate('document.querySelector("[data-preview=stop]").click()');
   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'preview stopped');
   const pid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));

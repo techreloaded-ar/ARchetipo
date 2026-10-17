@@ -13,7 +13,7 @@
  function cleanElement(value) {
   if (!value || typeof value!=="object" || typeof value.tag!=="string" || typeof value.url!=="string") return null;
   const result={};
-  for(const key of ["tag","text","label","testid","role","page","url","path"]) result[key]=typeof value[key]==="string" ? value[key].slice(0,key==="path"?2000:1000) : "";
+  for(const key of ["tag","text","label","testid","role","page","url","path","selector"]) result[key]=typeof value[key]==="string" ? value[key].slice(0,(key==="path" || key==="selector")?2000:1000) : "";
   return result;
  }
  const api={commentMessage,setupMessage,cleanElement};
