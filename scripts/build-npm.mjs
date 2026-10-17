@@ -94,10 +94,8 @@ async function syncAssets() {
 
   const runtimeDst = path.join(npmDir, "archetipo", "runtime");
   await emptyDir(runtimeDst);
-  // The template is config.template.yaml here and config.yaml there: in the
-  // repository it sits beside the live configuration of this very workspace,
-  // which the CLI rewrites, while the package has no live configuration to
-  // confuse it with. Copying the live one would ship somebody's own provider.
+  // Ship the product template as config.yaml; workspace configuration is never
+  // a packaging input.
   await fs.copyFile(
     path.join(runtimeSrc, "config.template.yaml"),
     path.join(runtimeDst, "config.yaml"),

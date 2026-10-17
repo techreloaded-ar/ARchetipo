@@ -130,12 +130,10 @@ async function scenarioStartOutsideAnyWorkspace(runDir) {
   const cliEnv = { ...baseEnv, ARCHETIPO_STATE_DIR: stateDir };
 
   await fs.mkdir(targetsDir, { recursive: true });
-  // The neutral directory lives outside the repository, not inside the run
-  // directory, for the reason the whole story is about: the CLI walks *up*
-  // from the launch directory, and this repository is itself an ARchetipo
-  // workspace. A `neutral/` under test/workspaces/ would resolve to it, and
-  // the smoke would silently test the opposite scenario. The run directory
-  // still holds every artifact; only the launch point is elsewhere.
+  // Keep the neutral directory outside the repository so upward config
+  // discovery cannot pick up a workspace someone initialized in the checkout.
+  // The run directory still holds every artifact; only the launch point is
+  // elsewhere.
   const neutralDir = await fs.mkdtemp(path.join(os.tmpdir(), "archetipo-neutral-"));
 
   await buildCLI(cliEnv);

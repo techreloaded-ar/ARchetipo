@@ -55,14 +55,10 @@ func repoFallbackDataDir(repoRoot string) string {
 // ConfigTemplateName is what the configuration template is called in the source
 // repository.
 //
-// It is *not* config.yaml, and that is the whole point. The repository is
-// itself an ARchetipo workspace rooted at its own root, so its live
-// .archetipo/config.yaml is a file the CLI rewrites whenever somebody
-// configures this workspace — choosing a default execution provider, say. When
-// that file was also the shipped template, configuring the repository silently
-// rewrote what `archetipo init` installs everywhere else: comments stripped and
-// a personal provider baked in. A template that can never be a live
-// configuration cannot be edited by accident.
+// It remains separate from the live .archetipo/config.yaml that `archetipo init`
+// may create. Configuring a workspace must never rewrite the template installed
+// in other projects. The source repository contains the product assets without
+// requiring a live workspace of its own.
 const ConfigTemplateName = "config.template.yaml"
 
 // RuntimeAssetsDir returns the directory of the packaged runtime assets inside
@@ -88,7 +84,7 @@ func RuntimeAssetsDir(dataDir string) (string, error) {
 // ConfigTemplate is the path of the configuration template inside a runtime
 // assets directory. The npm package ships it as runtime/config.yaml, because
 // there it is the only configuration there is; the source repository keeps it
-// under ConfigTemplateName, beside the live configuration of its own workspace.
+// under ConfigTemplateName, separate from any live workspace configuration.
 func ConfigTemplate(runtimeDir string) (string, error) {
 	for _, name := range []string{ConfigTemplateName, "config.yaml"} {
 		path := filepath.Join(runtimeDir, name)

@@ -183,9 +183,8 @@ run(
 
 await fs.cp(path.join(repoRoot, "skills"), path.join(outDir, "skills"), { recursive: true });
 await fs.mkdir(path.join(outDir, "runtime"), { recursive: true });
-for (const name of ["config.yaml", "shared-runtime.md"]) {
-	const src = path.join(repoRoot, ".archetipo", name);
-	if (await exists(src)) await fs.copyFile(src, path.join(outDir, "runtime", name));
+for (const [source, target] of [["config.template.yaml", "config.yaml"], ["shared-runtime.md", "shared-runtime.md"]]) {
+	await fs.copyFile(path.join(repoRoot, ".archetipo", source), path.join(outDir, "runtime", target));
 }
 
 console.log(`✓ ${path.relative(repoRoot, outDir)}/ (${args.platform}, ${version})`);

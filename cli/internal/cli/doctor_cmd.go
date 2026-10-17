@@ -18,6 +18,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/wiki"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 // doctorCheck is one diagnostic line. Skipped checks count as neither pass nor
@@ -284,11 +285,12 @@ func checkPackagedSkills(dataDir string) doctorCheck {
 }
 
 func checkRuntimeAssets(dataDir string) doctorCheck {
-	// Mirror installRuntimeAssets: runtime/ (npm layout) or .archetipo/ (repo layout).
-	for _, dir := range []string{filepath.Join(dataDir, "runtime"), filepath.Join(dataDir, ".archetipo")} {
-		if _, err := os.Stat(filepath.Join(dir, "config.yaml")); err == nil {
-			return doctorCheck{name: "runtime assets", ok: true, detail: dir}
-		}
+	dir, err := workspace.RuntimeAssetsDir(dataDir)
+	if err == nil {
+		_, err = workspace.ConfigTemplate(dir)
+	}
+	if err == nil {
+		return doctorCheck{name: "runtime assets", ok: true, detail: dir}
 	}
 	return doctorCheck{
 		name:   "runtime assets",

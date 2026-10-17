@@ -88,11 +88,8 @@ async function main() {
   let home;
   let view;
   let stream;
-  // The neutral directory lives outside the repository, for the reason the
-  // no-workspace story is about: the CLI walks *up* from the launch directory,
-  // and this repository is itself an ARchetipo workspace. A directory under
-  // test/workspaces/ would resolve to it and the scenario would silently test
-  // its opposite.
+  // Keep the neutral directory outside the repository so upward config
+  // discovery cannot pick up a workspace someone initialized in the checkout.
   const neutralDir = await fs.mkdtemp(path.join(os.tmpdir(), "archetipo-next-step-neutral-"));
 
   try {
