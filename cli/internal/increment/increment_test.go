@@ -255,6 +255,83 @@ func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 	}
 }
 
+func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
+	for _, scenario := range []string{"ready", "unfinished story", "unfinished task", "malformed plan", "changed intent", "dirty tree", "no product commit", "missing evidence"} {
+		t.Run(scenario, func(t *testing.T) {
+			s := fixture(t)
+			r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+			local, err := s.local(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "unfinished task" {
+				_, err = local.SavePlan(context.Background(), "US-001", domain.PlanInput{PlanBody: "Verify export", Tasks: []domain.Task{{ID: "TASK-01", Title: "Verify", Type: "Test", Status: domain.StatusTodo, Body: "Verify export"}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "changed intent" {
+				changed := story("US-001", "A different export")
+				if _, err = local.UpdateSpec(context.Background(), changed.Code, domain.SpecUpdate{Title: &changed.Title}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "malformed plan" {
+				cfg, loadErr := config.LoadExact(r.Workdir)
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				planDir := cfg.AbsPath(cfg.File.Planning)
+				if err = os.MkdirAll(planDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(planDir, "US-001-plan.yaml"), []byte("tasks: ["), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario != "unfinished story" {
+				if _, err = local.TransitionStatus(context.Background(), "US-001", domain.StatusDone); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario != "no product commit" {
+				if err = os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("verified export\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, r.Workdir, "add", "hello.txt")
+				runGit(t, r.Workdir, "commit", "-m", "feat: export without a plan")
+			}
+			if scenario == "dirty tree" {
+				if err = os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("unverified export\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := Result{Summary: "Try the verified export", Checks: []string{"export check — passed"}}
+			if scenario == "missing evidence" {
+				result.Checks = nil
+			}
+			got, err := s.Ready(context.Background(), r.ID, result)
+			if scenario != "ready" {
+				if err == nil {
+					t.Fatal("invalid delivery became reviewable")
+				}
+				persisted, readErr := s.Read(r.ID)
+				if readErr != nil || persisted.Status != Developing || persisted.ReadySHA != "" {
+					t.Fatal("rejected delivery changed readiness", persisted, readErr)
+				}
+				return
+			}
+			if err != nil || got.Status != Review || got.ReadySHA != runGit(t, r.Workdir, "rev-parse", "HEAD") || got.ReadyStories == "" {
+				t.Fatal("planless delivery not frozen", got, err)
+			}
+			tasks, taskErr := local.ReadSpecTasks(context.Background(), "US-001")
+			if !errors.Is(taskErr, os.ErrNotExist) || len(tasks) != 0 {
+				t.Fatal("planless delivery acquired tasks", tasks, taskErr)
+			}
+		})
+	}
+}
+
 type fakeHosting struct {
 	pr         *PullRequest
 	creates    int

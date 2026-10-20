@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -237,14 +239,13 @@ func (s *Service) completedStories(ctx context.Context, r Record) ([]domain.Spec
 	for _, accepted := range expected {
 		st, ok := byCode[accepted.Code]
 		if !ok || st.Status != domain.StatusDone || hash(canonical(st)) != hash(canonical(accepted)) {
-			return nil, iox.NewConflict("story "+accepted.Code+" is not complete or changed after approval", "finish its plan, implementation and review against the accepted intent", nil)
+			return nil, iox.NewConflict("story "+accepted.Code+" is not complete or changed after approval", "finish implementation and technical review against the accepted intent", nil)
 		}
 		tasks, taskErr := local.ReadSpecTasks(ctx, st.Code)
-		if taskErr != nil {
+		// A missing plan is valid for direct delivery. Malformed or unreadable
+		// existing plans still block readiness; their tasks cannot be ignored.
+		if taskErr != nil && !errors.Is(taskErr, os.ErrNotExist) {
 			return nil, taskErr
-		}
-		if len(tasks) == 0 {
-			return nil, iox.NewConflict("story "+st.Code+" has no implementation plan", "plan and verify every story before review", nil)
 		}
 		for _, task := range tasks {
 			if task.Status != domain.StatusDone {

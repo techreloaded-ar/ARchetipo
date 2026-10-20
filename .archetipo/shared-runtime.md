@@ -106,7 +106,7 @@ tooling, or add a small idempotent test setup command when it is missing. It mus
 locate only owned resources, choose an available local endpoint, provide synthetic
 configuration, check readiness and clean up only its own data/resources. Reference
 that command and its ownership/readiness/cleanup contract in the CLI-persisted
-plan. Keep the recipe with the project tests; shell history, temporary notes and
+plan when present, otherwise in the delivery summary with retained evidence. Keep the recipe with the project tests; shell history, temporary notes and
 an untracked environment file alone are not a handoff. A later phase reads this
 recipe before discovering or creating another environment.
 

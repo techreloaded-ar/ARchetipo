@@ -5,7 +5,7 @@ description: Guide an isolated product increment from a business intent through 
 
 # Product increment
 
-This is a thin composition of ARchetipo's existing methods. It works standalone
+This skill owns discovery, delivery and business approval for an isolated increment. It works standalone
 and inside a native View conversation. Never assume View is running.
 
 Read `.archetipo/shared-runtime.md` exactly once at activation. Use the
@@ -85,7 +85,7 @@ binding when present. This skill uses
 Start payload:
 
 ```json
-{"skill":"archetipo-increment","invocation":"/archetipo-increment <id>","scope":"<id>","conversation_id":"optional supplied Workflow conversation","state":{"revision":1,"stories":["US-001"],"phase":"autopilot"}}
+{"skill":"archetipo-increment","invocation":"/archetipo-increment <id>","scope":"<id>","conversation_id":"optional supplied Workflow conversation","state":{"revision":1,"stories":["US-001"],"phase":"implementation","review_attempts":0,"recoveries":{}}}
 ```
 
 Omit the binding when not supplied. Checkpoint with the last observed `revision`,
@@ -95,11 +95,23 @@ and `last_error` for a blocker. All four operations return `archetipo/v1`,
 `E_INVALID_INPUT`: repair input; `E_NOT_FOUND`: resolve the run; `E_CONFLICT`:
 reread/reconcile the revision or conflicting scope/binding; `E_INTERNAL`: preserve
 state and report the failure. Never edit checkpoint files directly.
-Its `state` holds only the approved revision, current story codes and delivery
-phase (`spec`, `autopilot`, `verify`, `ready`). Store delegated worker IDs before
-waiting, reconcile existing workers and partial changes on resume, and preserve
-intent approval. Mark the run `complete` only after `increment ready` succeeds.
-A concrete non-recoverable blocker is recorded as `blocked`, never success.
+Its `state` holds the approved intent revision, selected story codes, delivery
+phase (`implementation`, `technical-review`, `verify`, `ready`), worker IDs,
+review attempts, recovery counts, diff base/candidate and evidence references. Store delegated worker
+IDs before waiting. On resume, reconcile CLI story states, partial changes and
+existing workers before dispatching work; preserve approval and completed work.
+An older checkpoint with phase `autopilot` is a recovery input: reconcile its
+existing workers and nested run, retain findings and consumed review attempts,
+then continue the unfinished work with the methods below. Do not invoke another
+coordinator, duplicate a live worker or reset an exhausted review budget.
+
+Allow at most three recovery attempts per failed phase, retaining their counts
+across resume. Technical review allows an initial assessment and at most three
+correction rounds. Record the chosen review scope, all blockers and consumed
+attempts before starting another round. An exhausted budget, unresolved product
+ambiguity or unavailable required capability is a concrete `blocked` checkpoint,
+with remaining findings and the minimum intervention. Never mark a run complete
+until `increment ready` succeeds.
 
 If an interruption occurred after `increment ready` persisted but before this
 checkpoint closed, reread the increment. A frozen result already in `REVIEW`
@@ -107,48 +119,81 @@ settles this delivery run as complete before waiting for the business verdict;
 do not rerun development or publication to repair bookkeeping.
 
 Apply the shared local verification environment policy when preparing tests and
-preview. The called skills receive ordinary project/spec context and generic
-execution constraints. They do not receive an increment-specific policy or need
-to recognize this controller. Preserve the model and options explicitly requested
-by the person across delegation, resume and recovery.
+preview. The methods and workers receive ordinary project/spec context and generic
+execution constraints. Keep business state and approvals in this coordinator.
+Preserve the model and options explicitly requested by the person across
+delegation, resume and recovery.
+
+### Keep delivery context bounded
+
+At approval, feedback or recovery, resolve the latest persisted increment and
+workflow before choosing work. Carry the approved revision, selected story codes,
+roots, diff base/candidate, applicable product decisions, unresolved questions,
+worker ownership and original evidence references in the existing checkpoint.
+Keep references and concise decisions there, not copies of the proposal, reports
+or conversation. Current approved stories remain authoritative for scope; retain
+relevant product context beyond their text and do not silently discard a decision
+merely because it is absent from an acceptance criterion.
+
+A long discovery conversation is not a useful implementation handoff. When it
+contains substantial document/tool output and a bounded implementation scope
+benefits from delegation, prefer a worker with its own context; use the harness's
+documented non-inheriting spawn option when available. Supply the scope and exact
+source paths below, not the discovery transcript. Use the active runtime's
+documented native tools: do not assume a shared
+spawn flag, fork mode or compaction command. Keep this conversation and its
+native session as coordinator; do not spawn another coordinator or force workers
+for a small change. Without that capability, work inline with targeted reads.
+Context isolation never removes required instructions, permissions or the chosen
+model/options from a worker.
+
+Load only the method needed for the active phase. Reuse unchanged documents and
+envelopes already read in this activation; after edits or a revision change,
+reread the affected sources. Handoffs name outcomes, blockers and original
+reports; inspect targeted evidence rather than echoing full logs, proposals or
+source into messages. Expand reads when a concrete concern requires it. Full
+diagnostics and acceptance evidence must remain available at their original paths.
+These rules apply equally standalone and in View. They limit new context growth;
+they do not compact existing native history. Never reset the session, replace it
+with a transcript/summary, or claim compaction the harness did not perform.
 
 ### Delivery workflow
 
-When `status` is `DEVELOPING`, use the existing skills rather than a
-second implementation of their process. Invoke
-`/archetipo-autopilot <current local story codes>` in the sandbox to
-compose planning, implementation and autonomous technical acceptance. Only
-the approved local stories are eligible. The sandbox disables per-spec
-worktrees, so acceptance stays on the increment branch and cannot integrate
-into the original branch.
+When `status` is `DEVELOPING`, read and apply
+[implementation](references/implementation.md) for the approved local stories.
+Then read and apply [technical review](references/technical-review.md) to the
+combined change. These are internal methods, not separately installed skills.
+No formal plan, synthetic task list or additional delivery skill is required.
+Keep stories independently demonstrable and individually tracked; choose a
+bounded working group from dependencies, overlap and available context. Do not
+collapse their acceptance criteria into an undifferentiated assignment.
 
-Read the existing skills' own contracts. Invoke Autopilot as a nested skill in
-this same coordinator context; do not create another coordinator whose only work
-would be relaying the same queue. Keep its separate generic CLI checkpoint and
-its fresh planning, implementation and acceptance workers unchanged. Supply only
-the absolute sandbox root, local story selectors, detected human language, generic
-execution binding and explicitly requested model/options. Autopilot needs no
-increment ID, business state or special environment policy.
+Choose whether to use workers and parallelism. Delegate independent scopes when
+useful; coordinate shared files and serialize CLI state changes and commits.
+Avoid a second coordinator that merely relays the same work. Workers receive the
+absolute code/CLI roots, selected stories, approved intent, relevant product
+context, applicable instructions, explicit diff base (the increment BaseSHA for
+the full result), candidate and evidence,
+language, execution constraints and model/options; no business-state dependency.
+Preserve worker ownership and await terminal results before handing over their
+files. A worker's completion is an internal handoff: continue until ready or blocked.
 
-Autopilot's completion is an internal handoff, not the end of this invocation.
-Continue here through verification and `increment ready`; only a verified result
-or concrete blocker returns control. Reuse its just-observed authoritative CLI
-states when no intervening write occurred. If a separate controller was required
-by runtime/context constraints, await its terminal result and reread CLI state;
-never trust its prose alone. `increment ready` itself enforces complete accepted
-stories/tasks and the clean frozen snapshot; do not duplicate its validations by
-rediscovering the whole project.
+Review the combined result once per working group, rather than automatically
+opening a review session per story. Use a fresh independent reviewer for material
+risks or uncertain evidence (for example access control, data loss, migrations,
+concurrency or cross-story behavior). For a small low-risk change, an in-context
+assessment is sufficient; disclose that it was not independent. Persist this
+choice and its reason before review. Reuse valid original evidence; independence
+does not require repeating all tests. On blockers, use the reference's rework
+contract and the same checkpoint/budget, then recheck fixes and affected flows.
+A required independent review unavailable in the harness blocks completion.
 
-If Autopilot leaves any story incomplete, do not call `increment ready`: preserve
-its run. A terminal `left_in_review` has already exhausted the allowed technical
-path or names a non-reworkable blocker: record it as `blocked` here with remaining
-findings and the minimum intervention. Do not create a new technical run to reset
-its review budget. Recover only incomplete phases under the existing run’s budget.
-Never silently treat technical `left_in_review` as a business-ready result.
-
-Keep human product acceptance here:
-technical acceptance of a local story is not delivery into the product.
-When wiki.enabled is false, perform no automatic Wiki work.
+Only stories with sufficient implementation, evidence and no unresolved technical
+blocker move to DONE. Verify persisted effects through the CLI; reuse immediately
+observed states when no intervening write occurred. `increment ready` enforces the
+approved story snapshot, completion of any existing tasks and a clean committed
+result. Technical completion does not authorize publication or replace the final
+human result approval. When wiki.enabled is false, perform no automatic Wiki work.
 
 For a revised intent, reconcile the whole code diff with the current outcome.
 Removing a story does not remove its implementation automatically: remove or
@@ -180,8 +225,9 @@ Payload:
 
 preview_url is optional and must be a real local HTTP preview. An unavailable
 interactive preview must be stated plainly in the summary; provide other
-appropriate observable evidence. Every story and task must be complete, the
-accepted story content must match, and the product working tree must be clean.
+appropriate observable evidence. Every story and every existing task must be
+complete (a plan is optional), the accepted story content must match, and the
+product working tree must be clean.
 The CLI freezes the verified code and story snapshot.
 
 ## Business review, another round, publication
@@ -224,5 +270,5 @@ Never bypass a refused approval by writing JSON or backlog files directly.
 
 Show readable product outcomes in the conversation. Do not paste CLI envelopes
 or technical receipts into user messages. The persisted record is the effect
-verification for this conversation; each existing workflow action retains its
-own receipt contract.
+verification for this conversation; these internal methods emit no standalone
+implement/review receipt. Existing workflow actions retain their own contracts.

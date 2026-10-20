@@ -107,6 +107,12 @@ func TestInitializeCreatesACompleteWorkspace(t *testing.T) {
 				t.Fatalf("skill %s missing under %s: %v", skill, tool, err)
 			}
 		}
+		for _, reference := range []string{"implementation.md", "technical-review.md"} {
+			path := filepath.Join(dest, filepath.FromSlash(tool), "archetipo-increment", "references", reference)
+			if content, err := os.ReadFile(path); err != nil || len(content) == 0 {
+				t.Fatalf("increment reference %s missing under %s: %v", reference, tool, err)
+			}
+		}
 	}
 }
 

@@ -128,11 +128,14 @@ async function main(){
   };
   let recoveredTransport=false;
   const develop=async(format,n)=>{
-   let workflow=await cliJSON(["execution","workflow","start"],{skill:"archetipo-increment",invocation:"/archetipo-increment "+inc.id,scope:inc.id,conversation_id:id,state:{phase:"autopilot",revision:n}});
-   await cliJSON(["spec","plan","US-001"],{plan_body:"## Baseline\nhello.txt contains the previous result.\n## Solution\nChange the output and verify it.",tasks:[{id:"TASK-01",title:"Implement",type:"Impl",status:"TODO",dependencies:[],body:taskBody},{id:"TASK-02",title:"Verify",type:"Test",status:"TODO",dependencies:["TASK-01"],body:taskBody}]});
-   await cliJSON(["spec","start","US-001"]);
+   const legacyTasks=!recoveredTransport;
+   const current=await cliJSON(["increment","show",inc.id]);
+   let workflow=await cliJSON(["execution","workflow","start"],{skill:"archetipo-increment",invocation:"/archetipo-increment "+inc.id,scope:inc.id,conversation_id:id,state:{phase:"implementation",revision:current.revisions.length,stories:["US-001"],review_attempts:0,recoveries:{}}});
+   if(legacyTasks) await cliJSON(["spec","plan","US-001"],{plan_body:"## Baseline\nhello.txt contains the previous result.\n## Solution\nChange the output and verify it.",tasks:[{id:"TASK-01",title:"Implement",type:"Impl",status:"TODO",dependencies:[],body:taskBody},{id:"TASK-02",title:"Verify",type:"Test",status:"TODO",dependencies:["TASK-01"],body:taskBody}]});
+   if(legacyTasks) await cliJSON(["spec","start","US-001"]);
+   else await cliJSON(["spec","move","US-001","--to","in_progress"]);
    await fs.writeFile(path.join(inc.workdir,"hello.txt"),"Clienti in "+format+"\n");
-   await cliJSON(["task","done","US-001","TASK-01"]);
+   if(legacyTasks) await cliJSON(["task","done","US-001","TASK-01"]);
    if(!recoveredTransport){
     control.queue.push({kind:"exit",code:17});
     await until(()=>control.received.some(entry=>entry.kind==="turn/start"&&(entry.params?.input||[]).some(input=>input.text?.includes("Resume workflow run "+workflow.id))),"automatic same-session workflow continuation");
@@ -147,11 +150,17 @@ async function main(){
     recoveredTransport=true;
     ok("Una caduta del processo agente riprende automaticamente la stessa sessione, conservando task e approvazione.");
    }
-   await cliJSON(["task","done","US-001","TASK-02"]);
+   if(legacyTasks) await cliJSON(["task","done","US-001","TASK-02"]);
    await cliJSON(["spec","review","US-001"]);
    await cliJSON(["spec","move","US-001","--to","done"]);
+   if(!legacyTasks){
+    const planless=await cliJSON(["spec","show","US-001"]);
+    assert.equal(planless.tasks.length,0);
+    assert.ok(!planless.plan_body,"feedback revision should have no stale plan");
+   }
    await cliJSON(["increment","ready",inc.id],{summary:"Apri hello.txt: il risultato concordato è Clienti in "+format+".",checks:["Contenuto del file verificato: Clienti in "+format]});
-   await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:workflow.state});
+   await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:{...workflow.state,phase:"ready"}});
+   if(!legacyTasks) ok("La revisione successiva arriva a REVIEW senza piano o task sintetici, mantenendo approvazioni e pubblicazione unica.");
    await finish(n,"Il risultato è pronto. Provalo e dimmi cosa cambiare.");
    await openDetails();
    await page.waitFor('!!document.querySelector(\'[data-increment-action="publish"]:not(:disabled)\')',timeout,"business review");
