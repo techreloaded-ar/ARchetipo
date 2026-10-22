@@ -87,6 +87,27 @@ Use available services without altering unrelated instances; keep configuration
 inside the working directory. Never use production credentials or data. Report a
 specific blocker only after permitted setup has been attempted and cannot proceed.
 Record repeatable commands and cleanup; identify any preview intentionally left up.
+Register long-lived dependencies in the environment recipe's optional `resources`
+array, rather than hiding them in preview launch scripts or unregistered background
+commands. Each resource has a unique `name` and four finite command objects:
+`start`, `probe`, `stop`, `stopped` (each `name`, `argv`, `timeout_seconds`, max 30s).
+Array order is dependency order; stop runs in reverse. Adapters must make start/stop
+idempotent, tolerate partial starts, verify ownership on probe/stop, and preserve
+persistent test data on stop. The CLI journals the attempted start before running
+it and retains the original stop adapters for recovery. A detached local process,
+container, Compose project or another tool all use this same explicit contract.
+Declare uppercase port names in `ports`, e.g. `["DATABASE","API"]`. Commands and
+the managed preview receive `ARCHETIPO_PORT_DATABASE`, `ARCHETIPO_PORT_API`,
+`ARCHETIPO_RESOURCE_OWNER`, `ARCHETIPO_RESOURCE_NAME`, and the existing environment
+root/state/id variables. Use owner + resource name for unique resource identity;
+validate that identity before stopping anything. Never infer ownership from a port
+or reuse an old PID without verifying its live identity. Bind the assigned port
+strictly and fail on collision; ARchetipo cannot rewrite a tool's hard-coded ports.
+Runtime ports/owner records stay checkout-local; never version or copy them.
+Derived URLs must use those assigned endpoints, including auth callbacks/API URLs.
+Legacy environment/preview recipes remain readable but do not automatically acquire
+these guarantees: migrate their services into resources and remove fixed ports.
+Never erase `.archetipo` to stop services: stop/reconcile resources first.
 Required real browser/API/database checks cannot be replaced with mocks.
 
 Reuse a service only when it was explicitly supplied for this verification or its

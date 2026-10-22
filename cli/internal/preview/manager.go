@@ -19,19 +19,22 @@ import (
 )
 
 type View struct {
-	Configured  bool                 `json:"configured"`
-	Recipe      *Recipe              `json:"recipe,omitempty"`
-	State       string               `json:"state"`
-	URL         string               `json:"url,omitempty"`
-	Token       string               `json:"token,omitempty"`
-	Error       string               `json:"error,omitempty"`
-	ErrorCode   string               `json:"error_code,omitempty"`
-	Log         string               `json:"log,omitempty"`
-	Reused      bool                 `json:"reused"`
-	Preparation *verification.Result `json:"preparation,omitempty"`
+	Resources    *verification.ResourceState `json:"resources,omitempty"`
+	CleanupError string                      `json:"cleanup_error,omitempty"`
+	Configured   bool                        `json:"configured"`
+	Recipe       *Recipe                     `json:"recipe,omitempty"`
+	State        string                      `json:"state"`
+	URL          string                      `json:"url,omitempty"`
+	Token        string                      `json:"token,omitempty"`
+	Error        string                      `json:"error,omitempty"`
+	ErrorCode    string                      `json:"error_code,omitempty"`
+	Log          string                      `json:"log,omitempty"`
+	Reused       bool                        `json:"reused"`
+	Preparation  *verification.Result        `json:"preparation,omitempty"`
 }
 
 type Instance struct {
+	root   string
 	mu     sync.Mutex
 	view   View
 	cancel context.CancelFunc
@@ -73,17 +76,25 @@ func (m *Manager) Status(root, id string) (View, error) {
 	instance := m.instances[id]
 	m.mu.Unlock()
 	if instance != nil {
-		return instance.Snapshot(), nil
+		view := instance.Snapshot()
+		resources, err := verification.New(root, "").Resources()
+		if err != nil {
+			return view, err
+		}
+		if resources.Owner != "" {
+			view.Resources = &resources
+		}
+		return view, nil
 	}
 	r, err := Load(root)
 	if err != nil {
 		// Missing recipes are an ordinary first-use state, invalid ones are errors.
 		if code, ok := err.(*iox.CodedError); ok && code.Code == iox.CodePreconditionMissing {
-			return View{State: "unconfigured"}, nil
+			return resourceView(root, View{State: "unconfigured"})
 		}
 		return View{}, err
 	}
-	return View{Configured: true, Recipe: &r, State: "stopped"}, nil
+	return resourceView(root, View{Configured: true, Recipe: &r, State: "stopped"})
 }
 
 func (m *Manager) Start(root, id, parentOrigin string) (View, error) {
@@ -114,6 +125,11 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	if err != nil {
 		return View{}, err
 	}
+	if environment, loadErr := verification.Load(root); loadErr == nil && len(environment.Resources) > 0 {
+		if !r.PrepareEnvironment || !strings.Contains(r.URL, "{port}") {
+			return View{}, invalid("managed environment previews require prepare_environment and a dynamic {port} launch contract")
+		}
+	}
 	dir, err := r.Validate(root)
 	if err != nil {
 		return View{}, err
@@ -131,7 +147,7 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	if r.PrepareEnvironment || prepareOnly {
 		state = "preparing"
 	}
-	i := &Instance{view: View{Configured: true, Recipe: &r, State: state}, cancel: cancel, done: make(chan struct{})}
+	i := &Instance{root: root, view: View{Configured: true, Recipe: &r, State: state}, cancel: cancel, done: make(chan struct{})}
 	var listener net.Listener
 	if !prepareOnly {
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
@@ -182,8 +198,40 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 		}
 	}()
 	defer i.cancel()
+	service := verification.New(root, "")
+	if r.PrepareEnvironment && !prepareOnly {
+		lifetime, err := verification.OwnLifetime(root, i)
+		if err != nil {
+			i.fail(err)
+			return
+		}
+		if lifetime != nil {
+			service = lifetime.Service("")
+			watchCtx, stopWatch := context.WithCancel(ctx)
+			defer stopWatch()
+			go func() {
+				select {
+				case <-watchCtx.Done():
+				case <-lifetime.Done():
+					if watchCtx.Err() == nil {
+						i.fail(fmt.Errorf("il supervisore dell’ambiente è terminato; verifica i servizi registrati"))
+						i.cancel()
+					}
+				}
+			}()
+		}
+		defer func() {
+			i.cancel()
+			if err := lifetime.Close(); err != nil {
+				i.mu.Lock()
+				i.view.CleanupError = err.Error()
+				i.mu.Unlock()
+				i.fail(err)
+			}
+		}()
+	}
 	if r.PrepareEnvironment || prepareOnly {
-		result, err := verification.New(root, "").Execute(ctx, "prepare", "", "", false)
+		result, err := service.Execute(ctx, "prepare", "", "", false)
 		i.mu.Lock()
 		i.view.Preparation = &result
 		i.mu.Unlock()
@@ -221,7 +269,12 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 		return
 	}
 	if !reused {
-		go func() { exited <- runCommand(ctx, dir, r.Argv, i) }()
+		env, envErr := verification.New(root, "").RuntimeEnv()
+		if envErr != nil {
+			i.fail(envErr)
+			return
+		}
+		go func() { exited <- runCommand(ctx, dir, r.Argv, env, i) }()
 	}
 	defer func() {
 		if !reused {
@@ -266,14 +319,41 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 	}
 }
 
-func (m *Manager) Stop(id string) {
+func (m *Manager) Stop(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.stop(id)
+}
+
+func (m *Manager) stop(id string) error {
 	if i := m.instances[id]; i != nil {
 		i.cancel()
 		<-i.done
+		// Also recover an earlier failed cleanup, or services left by Prepare.
+		service := verification.New(i.root, "")
+		resources, err := service.Resources()
+		if err != nil {
+			return err
+		}
+		active := false
+		for _, r := range resources.Resources {
+			active = active || r.State != "stopped"
+		}
+		if active {
+			result, cleanupErr := service.Execute(context.Background(), "cleanup", "", "", false)
+			if cleanupErr != nil {
+				i.fail(cleanupErr)
+				return cleanupErr
+			}
+			if !result.Passed {
+				err = fmt.Errorf("arresto ambiente non riuscito; consulta %s", result.ReportPath)
+				i.fail(err)
+				return err
+			}
+		}
 		delete(m.instances, id)
 	}
+	return nil
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
@@ -282,6 +362,54 @@ func (m *Manager) Close() {
 	for id, i := range m.instances {
 		i.cancel()
 		<-i.done
+		// Prepare is an explicit durable setup, reused by a later run. Running
+		// previews have their independent lifetime guard and have already cleaned up.
 		delete(m.instances, id)
 	}
+}
+
+// StopEnvironment also works after a viewer restart, when only the durable
+// resource journal remains. A live owner's lifetime lock prevents takeover.
+func (m *Manager) StopEnvironment(root, id string) error {
+	if err := m.Stop(id); err != nil {
+		return err
+	}
+	service := verification.New(root, "")
+	resources, err := service.Resources()
+	if err != nil {
+		return err
+	}
+	active := false
+	for _, r := range resources.Resources {
+		active = active || r.State != "stopped"
+	}
+	if !active {
+		return nil
+	}
+	result, err := service.Execute(context.Background(), "cleanup", "", "", false)
+	if err != nil {
+		return err
+	}
+	if !result.Passed {
+		return fmt.Errorf("arresto ambiente non riuscito; consulta %s", result.ReportPath)
+	}
+	return nil
+}
+
+func resourceView(root string, view View) (View, error) {
+	resources, err := verification.New(root, "").Resources()
+	if err != nil {
+		return view, err
+	}
+	if resources.Owner != "" {
+		view.Resources = &resources
+	}
+	for _, r := range resources.Resources {
+		if r.State != "stopped" {
+			view.State = "error"
+			view.Error = "L’ambiente contiene servizi registrati da verificare o fermare. Usa Ferma ambiente per riconciliarli."
+			break
+		}
+	}
+	return view, nil
 }

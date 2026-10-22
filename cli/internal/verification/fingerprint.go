@@ -30,6 +30,9 @@ func fingerprint(root string, recipe Recipe, inputs []string, extra any) (string
 		_, _ = fmt.Fprintf(h, "%s\x00%t\x00%s\x00", key, present, value)
 	}
 	commands := append(append(append([]Command{}, recipe.Prepare...), recipe.Probe...), recipe.Cleanup...)
+	for _, resource := range recipe.Resources {
+		commands = append(commands, resource.Start, resource.Probe, resource.Stop, resource.Stopped)
+	}
 	for _, check := range recipe.Checks {
 		commands = append(commands, check.Command)
 	}

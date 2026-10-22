@@ -38,7 +38,7 @@ This section has priority over every other section in the skill.
 ## Environment CLI operations
 
    - `archetipo -C {data.workdir} execution environment show`
-   - `archetipo -C {data.workdir} execution environment configure --file <recipe.json>` (stdin `-` accepts the same version 1 recipe JSON: `version`, `inputs`, `outputs`, `env_keys`, `prepare`, `probe`, `cleanup`, `checks`; commands have `name`, `argv`, `timeout_seconds`; checks also have `inputs`, `cache`)
+   - `archetipo -C {data.workdir} execution environment configure --file <recipe.json>` (stdin `-` accepts the same version 1 recipe JSON: `version`, `inputs`, `outputs`, `env_keys`, `prepare`, `probe`, `cleanup`, `checks`, optional `ports` and `resources` per the shared ownership contract; commands have `name`, `argv`, `timeout_seconds`; checks also have `inputs`, `cache`)
    - `archetipo -C {data.workdir} execution environment prepare`
    - `archetipo -C {data.workdir} execution environment check <name> --spec {US-CODE} [--fresh]`
 
@@ -271,7 +271,7 @@ Apply this section when the plan requires e2e coverage, or when Mina determines 
 - For Playwright, run `archetipo -C {data.workdir} e2e run --spec {US-CODE}` with optional `--grep <pattern>`. Success returns the standard envelope, `kind: e2e_run`, with `data.passed`, `data.report_path` and `data.output_path`. The CLI retains complete output and command/result/source metadata under `{config.paths.test_results}/{US-CODE}/`, including failed attempts; it preserves older attempts. Check `data.passed`, not just envelope `ok`. `E_PRECONDITION`: complete framework setup; `E_INVALID_INPUT`: repair the selector; `E_INTERNAL`: repair report persistence before delivery.
 - A project's other e2e runner may be used with its native reporter configured to retain equivalent results in that spec directory. Debugging commands and console-only runs do not replace the final retained evidence. Functional execution is headless with **no video** — recording is a review concern.
 - Run the suite in the foreground with an explicit timeout sized for it. If it genuinely exceeds the runtime's per-call limit, split it — never move it to the background, because you will not be there when the notification arrives.
-- Start background services only when needed, and wait for readiness with a blocking check inside the same call (`until curl -sf localhost:3000 >/dev/null; do sleep 2; done`), never by ending your turn.
+- Declare required background services as managed recipe resources, using assigned endpoints and owner-verified readiness/stop adapters. Run them through the environment contract; do not start unregistered background services or use fixed example ports.
 - Read back the actual non-video report and full output files; verify their command, result and source cover the final code and planned acceptance paths. Keep replay, readiness and scoped cleanup instructions with the project's test tooling. A video-disabled configuration does not waive functional reports.
 - Retry flaky or timeout-based failures once; if they fail again, report them clearly as non-transient.
 

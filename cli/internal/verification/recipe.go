@@ -30,15 +30,28 @@ type Check struct {
 	Cache  bool     `json:"cache"`
 }
 
+// Resource commands are finite project adapters. Start must register/create only
+// the injected owner; Probe and Stop must verify that same identity. Stopped
+// succeeds only when that owner's service has actually stopped, preserving data.
+type Resource struct {
+	Name    string  `json:"name"`
+	Start   Command `json:"start"`
+	Probe   Command `json:"probe"`
+	Stop    Command `json:"stop"`
+	Stopped Command `json:"stopped"`
+}
+
 type Recipe struct {
-	Version int              `json:"version"`
-	Inputs  []string         `json:"inputs"`
-	Outputs []string         `json:"outputs"`
-	EnvKeys []string         `json:"env_keys,omitempty"`
-	Prepare []Command        `json:"prepare"`
-	Probe   []Command        `json:"probe"`
-	Cleanup []Command        `json:"cleanup,omitempty"`
-	Checks  map[string]Check `json:"checks"`
+	Ports     []string         `json:"ports,omitempty"`
+	Resources []Resource       `json:"resources,omitempty"`
+	Version   int              `json:"version"`
+	Inputs    []string         `json:"inputs"`
+	Outputs   []string         `json:"outputs"`
+	EnvKeys   []string         `json:"env_keys,omitempty"`
+	Prepare   []Command        `json:"prepare"`
+	Probe     []Command        `json:"probe"`
+	Cleanup   []Command        `json:"cleanup,omitempty"`
+	Checks    map[string]Check `json:"checks"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
@@ -86,8 +99,11 @@ func parseRecipe(root string, raw []byte) (Recipe, error) {
 			}
 		}
 	}
+	if err = validateResources(recipe); err != nil {
+		return recipe, err
+	}
 	for _, key := range recipe.EnvKeys {
-		if !envPattern.MatchString(key) || strings.HasPrefix(key, "ARCHETIPO_ENVIRONMENT_") {
+		if !envPattern.MatchString(key) || (strings.HasPrefix(key, "ARCHETIPO_ENVIRONMENT_") || strings.HasPrefix(key, "ARCHETIPO_RESOURCE_") || strings.HasPrefix(key, "ARCHETIPO_PORT_")) {
 			return recipe, invalid("invalid environment input key: " + key)
 		}
 	}
@@ -153,4 +169,37 @@ func localPath(root, rel string) (string, error) {
 
 func invalid(message string) error {
 	return iox.NewInvalidInput(message, fmt.Sprintf("use the version 1 %s contract; paths and resources must belong to this checkout", RecipePath), nil)
+}
+
+func validateResources(recipe Recipe) error {
+	names := map[string]bool{}
+	if len(recipe.Resources) > 16 || len(recipe.Ports) > 32 {
+		return invalid("at most 16 resources and 32 ports are supported")
+	}
+	for _, port := range recipe.Ports {
+		if !envPattern.MatchString(port) || names[port] {
+			return invalid("ports require unique uppercase environment names")
+		}
+		names[port] = true
+	}
+	names = map[string]bool{}
+	for _, r := range recipe.Resources {
+		if !namePattern.MatchString(r.Name) || names[r.Name] {
+			return invalid("resources require unique safe names")
+		}
+		names[r.Name] = true
+		// Names may repeat between lifecycle operations; they are logged separately.
+		for _, c := range []Command{r.Start, r.Probe, r.Stop, r.Stopped} {
+			if err := validateCommands([]Command{c}); err != nil {
+				return err
+			}
+			if c.TimeoutSeconds > 30 {
+				return invalid("resource commands must finish within 30 seconds")
+			}
+		}
+	}
+	if len(recipe.Ports) > 0 && len(recipe.Resources) == 0 {
+		return invalid("named ports require managed resources")
+	}
+	return nil
 }

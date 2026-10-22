@@ -21,7 +21,10 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 		}
 		return &iox.CodedError{Code: iox.CodeInternal, Message: "verification command ended unsuccessfully", Exit: code, Cause: err}
 	}})
-	for _, operation := range []string{"show", "configure", "prepare", "check", "cleanup"} {
+	root.AddCommand(&cobra.Command{Use: "_guard", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return verification.Guard(cmd.Context(), s.in, s.out)
+	}})
+	for _, operation := range []string{"show", "configure", "prepare", "check", "cleanup", "status", "run"} {
 		var spec string
 		var input string
 		var fresh bool
@@ -50,6 +53,36 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 				if err == nil {
 					result, err = verification.Configure(cfg.ProjectRoot, raw)
 				}
+			case "status":
+				result, err = verification.New(cfg.ProjectRoot, cfg.Paths.TestResults).Resources()
+			case "run":
+				lifetime, ownErr := verification.OwnLifetime(cfg.ProjectRoot, s.err)
+				if ownErr != nil {
+					return ownErr
+				}
+				if lifetime == nil {
+					return iox.NewPrecondition("environment run requires managed resources", "configure resources with start/probe/stop/stopped adapters", nil)
+				}
+				preparation, prepErr := lifetime.Service(cfg.Paths.TestResults).Execute(ctx, "prepare", "", "", false)
+				if prepErr != nil || !preparation.Passed || !preparation.Stable {
+					closeErr := lifetime.Close()
+					if prepErr != nil {
+						return prepErr
+					}
+					if closeErr != nil {
+						return closeErr
+					}
+					return iox.WriteOK(s.out, "verification_result", preparation)
+				}
+				if err = iox.WriteOK(s.out, "verification_result", preparation); err != nil {
+					_ = lifetime.Close()
+					return err
+				}
+				select {
+				case <-ctx.Done():
+				case <-lifetime.Done():
+				}
+				return lifetime.Close()
 			case "show":
 				result, err = verification.Load(cfg.ProjectRoot)
 			default:

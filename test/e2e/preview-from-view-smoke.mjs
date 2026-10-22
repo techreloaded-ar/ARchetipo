@@ -43,7 +43,9 @@ async function main(){
   await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,'server.mjs','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
   await run('preview-configure',cli,['execution','preview','configure','--file',recipe],{cwd:sandbox});
   const environmentRecipe=path.join(dir,'environment-recipe.json');
-  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,inputs:['server.mjs','setup.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
+  await fs.copyFile(path.join(repo,'test/e2e/support/managed-resource.mjs'),path.join(sandbox,'managed-resource.mjs'));
+  const resourceCommand=action=>({name:'dependency-'+action,argv:[process.execPath,'managed-resource.mjs',action],timeout_seconds:10});
+  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,ports:['DATABASE'],resources:[{name:'database',start:resourceCommand('start'),probe:resourceCommand('probe'),stop:resourceCommand('stop'),stopped:resourceCommand('stopped')}],inputs:['server.mjs','setup.mjs','managed-resource.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
   await fs.writeFile(path.join(sandbox,'setup.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
   await run('environment-configure',cli,['execution','environment','configure','--file',environmentRecipe],{cwd:sandbox});
   // Two real increments inherit committed recipes and helpers from main.
@@ -51,7 +53,7 @@ async function main(){
   await run('git-init','git',['init','-b','main'],{cwd:sandbox});
   await run('git-name','git',['config','user.name','Preview smoke'],{cwd:sandbox});
   await run('git-email','git',['config','user.email','preview@example.test'],{cwd:sandbox});
-  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','server.mjs','setup.mjs'],{cwd:sandbox});
+  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','server.mjs','setup.mjs','managed-resource.mjs'],{cwd:sandbox});
   await run('git-baseline','git',['commit','-m','test: reusable preview setup'],{cwd:sandbox});
   const incrementInput=path.join(dir,'increment.json');
   await fs.writeFile(incrementInput,JSON.stringify({title:'Isolated preview',request:'Verify inherited setup'}));
@@ -71,10 +73,17 @@ async function main(){
    assert.equal(await fs.readFile(path.join(created.workdir,'setup-count'),'utf8'),'setup\n');
    incrementPreviews.push({created,view:readyView});
   }
+  assert.notEqual(incrementPreviews[0].view.resources.ports.DATABASE,incrementPreviews[1].view.resources.ports.DATABASE,'increments share dependency port');
   assert.notEqual(incrementPreviews[0].view.recipe.url,incrementPreviews[1].view.recipe.url,'increments share app port');
   assert.notEqual(incrementPreviews[0].view.preparation.environment_id,incrementPreviews[1].view.preparation.environment_id,'increments share resource identity');
   assert.equal(await fs.stat(path.join(sandbox,'dependency.ready')).then(()=>true,()=>false),false,'increment setup mutated parent checkout');
-  for(const child of standalone)await stopProcess(child,run);
+  await stopProcess(standalone[0],run);
+  assert.equal((await fetch(incrementPreviews[1].view.url)).headers.get('x-checkout'),incrementPreviews[1].created.workdir,'stopping one increment disturbed another');
+  await stopProcess(standalone[1],run);
+  for(const {created} of incrementPreviews){
+   const resources=JSON.parse(await fs.readFile(path.join(created.workdir,'.archetipo/environment/resources.json'),'utf8'));
+   assert(resources.resources.every(r=>r.state==='stopped'),'standalone stop left services active');
+  }
   // A failed readiness probe must prevent launching the app, with durable logs.
   const broken=incrementPreviews[0].created.workdir;
   await fs.rm(path.join(broken,'server.pid'));
@@ -348,18 +357,36 @@ async function main(){
   await page.waitFor('document.querySelector(".preview-comment-reference").textContent.includes("non è più presente")',timeout,'missing component explained');
   assert.equal(await evaluateFrame('document.querySelector("[data-archetipo-highlight]").style.display'),'none');
   ok('Riferimenti ripristinati dopo reload; nessuna evidenziazione errata su altre pagine o componenti rimossi.');
+  const failStop=path.join(sandbox,'.archetipo/environment/fail-resource-stop');
+  await fs.writeFile(failStop,'fail stop');
+  await page.evaluate('document.querySelector("[data-preview=stop]").click()');
+  await until(async()=>{const state=await (await fetch(endpoint+'/preview')).json();return state.state==='error' && state.resources.resources.some(r=>r.state==='error');},'failed cleanup remains visible and registered');
+  await fs.rm(failStop);
+  await until(async()=>!(await page.evaluate('document.querySelector("[data-preview=stop]").disabled')),'cleanup retry enabled');
   await page.evaluate('document.querySelector("[data-preview=stop]").click()');
   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'preview stopped');
   const pid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));
   await until(()=>{try{process.kill(pid,0);return false;}catch{return true;}},'owned app process terminated');
-  ok('Preview e commenti leggibili a 390px; arresto del server realmente verificato sul processo.');
+  assert.equal(JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources[0].state,'stopped');
+  ok('Preview e commenti leggibili a 390px; arresto verificato di applicazione e dipendenza esterna.');
   // Hard viewer death closes the private supervisor pipe and its app tree.
   const started=await fetch(endpoint+'/preview',{method:'POST'});assert.equal(started.status,202);
   await until(async()=>{const state=await (await fetch(endpoint+'/preview')).json();return state.state==='ready';},'second app startup');
   const newPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));assert.notEqual(newPid,pid);
   viewer.child.kill('SIGKILL');
   await until(()=>{try{process.kill(newPid,0);return false;}catch{return true;}},'server cleanup on hard viewer death');
-  ok('Anche la terminazione forzata del viewer chiude il server posseduto.');
+  await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'external dependency cleanup on hard viewer death');
+  ok('Anche la terminazione forzata del viewer chiude applicazione e servizi esterni posseduti.');
+  // The standalone environment run uses the same independent lifetime owner.
+  const environmentRun=spawn(cli,['execution','environment','run'],{cwd:sandbox,env,stdio:['ignore','pipe','pipe']});standalone.push(environmentRun);
+  let environmentOutput='',environmentError='';
+  environmentRun.stdout.on('data',chunk=>{environmentOutput+=chunk;});environmentRun.stderr.on('data',chunk=>{environmentError+=chunk;});
+  await until(()=>{if(environmentRun.exitCode!==null)throw new Error(environmentError);try{return JSON.parse(environmentOutput).data.passed;}catch{return false;}},'standalone environment run ready');
+  const conflicting=await run('active-lifetime-conflict',cli,['execution','environment','prepare'],{cwd:sandbox,allowFailure:true});
+  assert.notEqual(conflicting.code,0);assert.match(conflicting.stderr,/E_CONFLICT/);
+  environmentRun.kill('SIGKILL');
+  await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'standalone run death cleans external dependency');
+  ok('Stop fallito conservato e riprovato; environment run standalone esclusivo e cleanup anche dopo SIGKILL.');
   assert.deepEqual(exceptions,[],'uncaught browser exceptions');
   await fs.writeFile(path.join(dir,'summary.json'),JSON.stringify({status:'pass',checks},null,2));
   await fs.writeFile(path.join(dir,'report.html'),`<!doctype html><meta charset="utf-8"><h1>Preview smoke: PASS</h1><ul>${checks.map(text=>'<li>'+text+'</li>').join('')}</ul>`);

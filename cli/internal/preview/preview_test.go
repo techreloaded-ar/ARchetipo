@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 	"io"
 	"net"
 	"net/http"
@@ -148,7 +149,9 @@ func TestBorrowedServerProxyAndOwnership(t *testing.T) {
 	if _, err = another.Start(root, "conversation-a", "http://127.0.0.1:8080"); err == nil {
 		t.Fatal("a second viewer took ownership")
 	}
-	m.Stop("conversation-a")
+	if err := m.Stop("conversation-a"); err != nil {
+		t.Fatal(err)
+	}
 	if !ready(context.Background(), app.URL) {
 		t.Fatal("stopping borrowed preview killed the app")
 	}
@@ -239,11 +242,36 @@ func TestProxyUpgradesAndClosesBorrowedWebSocket(t *testing.T) {
 	if err != nil || line != "ping\n" {
 		t.Fatalf("websocket tunnel: %q %v", line, err)
 	}
-	manager.Stop("ws")
+	if err := manager.Stop("ws"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = reader.ReadByte(); err == nil {
 		t.Fatal("WebSocket outlived preview stop")
 	}
 	if !ready(context.Background(), app.URL) {
 		t.Fatal("borrowed app was terminated")
+	}
+}
+
+func TestPendingResourcesRemainVisibleWithoutPreviewRecipe(t *testing.T) {
+	root := t.TempDir()
+	command := verification.Command{Name: "resource-command", Argv: []string{"unused-adapter"}, TimeoutSeconds: 1}
+	resources := verification.ResourceState{Version: 1, Owner: "owned-fixture", Ports: map[string]string{"DB": "12345"}, Resources: []verification.ResourceRecord{{Resource: verification.Resource{Name: "db", Start: command, Probe: command, Stop: command, Stopped: command}, State: "starting"}}}
+	raw, err := json.Marshal(resources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, ".archetipo", "environment")
+	if err = os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "resources.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager()
+	defer manager.Close()
+	view, err := manager.Status(root, "after-restart")
+	if err != nil || view.State != "error" || view.Resources == nil || view.Resources.Owner != "owned-fixture" || view.Error == "" {
+		t.Fatalf("lost recovery state: %+v %v", view, err)
 	}
 }

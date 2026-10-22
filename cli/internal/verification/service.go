@@ -58,9 +58,11 @@ type Runner interface {
 }
 
 type Service struct {
-	Root    string
-	Results string
-	Runner  Runner
+	Root          string
+	Results       string
+	Runner        Runner
+	env           []string
+	lifetimeOwner bool
 }
 
 func New(root, results string) *Service {
@@ -105,7 +107,25 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	}
 	recipe, err := Load(s.Root)
 	if err != nil {
-		return result, err
+		if operation != "cleanup" {
+			return result, err
+		}
+		// Managed resources retain their own original stop adapters.
+		if resources, resourceErr := s.Resources(); resourceErr != nil || resources.Owner == "" {
+			return result, err
+		}
+		recipe = Recipe{}
+	}
+	if !s.lifetimeOwner {
+		leaseStore, leaseErr := conversationlog.NewFileStore(s.Root)
+		if leaseErr != nil {
+			return result, leaseErr
+		}
+		lease, leaseErr := leaseStore.TryLock(ctx, "environment-lifetime")
+		if leaseErr != nil {
+			return result, iox.NewConflict("an active preview or environment run owns these services", "stop its owning preview or terminal before operating on these services", leaseErr)
+		}
+		defer func() { _ = lease.Unlock() }()
 	}
 	check, found := recipe.Checks[name]
 	if operation == "check" && !found {
@@ -147,11 +167,53 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		result, err = s.newResult(operation, "")
 		if err == nil {
 			result.Stable = true
-			err = s.run(ctx, &result, recipe.Cleanup)
+			resources, resourceErr := s.Resources()
+			if resourceErr != nil {
+				return result, resourceErr
+			}
+			s.env = resourceEnv(resources, "")
+			err = s.stopResources(ctx, &result, &resources)
+			if err == nil && result.Passed {
+				err = s.run(ctx, &result, recipe.Cleanup)
+			}
 		}
 		return result, err
 	}
+	resources, resourceErr := s.Resources()
+	if resourceErr != nil {
+		return result, resourceErr
+	}
+	if len(recipe.Resources) > 0 || len(resources.Resources) > 0 {
+		result, err = s.newResult("resources", "")
+		if err != nil {
+			return result, err
+		}
+		if err = s.ensureResources(ctx, &result, recipe); err != nil || !result.Passed {
+			return result, err
+		}
+		value, err = s.readState()
+		if err != nil {
+			return result, err
+		}
+	}
 	preparation, err := s.prepare(ctx, recipe, &value)
+	if (err != nil || !preparation.Passed) && len(recipe.Resources) > 0 {
+		// Compensate a failed install/project probe as well as a failed resource start.
+		cleanup, cleanupErr := s.newResult("prepare-rollback", "")
+		if cleanupErr != nil {
+			return preparation, cleanupErr
+		}
+		current, cleanupErr := s.Resources()
+		if cleanupErr != nil {
+			return preparation, cleanupErr
+		}
+		cleanCtx, cancel := context.WithTimeout(context.Background(), time.Duration(len(current.Resources)*60+5)*time.Second)
+		cleanupErr = s.stopResources(cleanCtx, &cleanup, &current)
+		cancel()
+		if cleanupErr != nil {
+			return preparation, cleanupErr
+		}
+	}
 	if err != nil || !preparation.Passed || operation == "prepare" {
 		return preparation, err
 	}
@@ -232,7 +294,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 	// its own inputs, outputs, commands, toolchain and environment keys only.
 	preparationRecipe := recipe
 	preparationRecipe.Checks, preparationRecipe.Cleanup = nil, nil
-	key, err := fingerprint(s.Root, preparationRecipe, recipe.Inputs, nil)
+	key, err := fingerprint(s.Root, preparationRecipe, recipe.Inputs, s.env)
 	if err != nil {
 		return Result{}, err
 	}
@@ -245,7 +307,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 		if err = s.run(ctx, &result, recipe.Probe); err != nil {
 			return result, err
 		}
-		after, hashErr := fingerprint(s.Root, preparationRecipe, recipe.Inputs, nil)
+		after, hashErr := fingerprint(s.Root, preparationRecipe, recipe.Inputs, s.env)
 		if hashErr != nil {
 			return result, hashErr
 		}
@@ -277,7 +339,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 	if err = s.run(ctx, &result, commands); err != nil {
 		return result, err
 	}
-	after, err := fingerprint(s.Root, preparationRecipe, recipe.Inputs, nil)
+	after, err := fingerprint(s.Root, preparationRecipe, recipe.Inputs, s.env)
 	if err != nil {
 		return result, err
 	}
@@ -351,7 +413,7 @@ func (s *Service) run(ctx context.Context, result *Result, commands []Command) e
 			return err
 		}
 		stepCtx, cancel := context.WithTimeout(ctx, time.Duration(command.TimeoutSeconds)*time.Second)
-		env := append(os.Environ(), "CI=1", "ARCHETIPO_ENVIRONMENT_ID="+s.environmentID(), "ARCHETIPO_ENVIRONMENT_ROOT="+s.Root, "ARCHETIPO_ENVIRONMENT_STATE="+s.dir())
+		env := mergeEnv(runtimeBase(), append([]string{"CI=1", "ARCHETIPO_ENVIRONMENT_ID=" + s.environmentID(), "ARCHETIPO_ENVIRONMENT_ROOT=" + s.Root, "ARCHETIPO_ENVIRONMENT_STATE=" + s.dir()}, s.env...))
 		runErr := s.Runner.Run(stepCtx, s.Root, env, command, output)
 		if stepCtx.Err() != nil {
 			runErr = stepCtx.Err()

@@ -89,6 +89,11 @@ riavvio. Interrompere un turno non elimina l'incremento o la sessione.
 Una conversazione libera di origine resta distinta dalla nuova conversazione
 creata direttamente nel worktree.
 
+La gestione di servizi, porte concorrenti e arresto è descritta in
+[Ambienti e servizi locali](local-services.md). Le dipendenze dichiarate
+condividono lo stesso ciclo di vita da CLI e view; i vecchi script con servizi
+avviati in background richiedono una migrazione esplicita.
+
 ## Pubblicazione
 
 La prima versione è locale, lavora sulle storie in sequenza e apre PR GitHub

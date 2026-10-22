@@ -138,7 +138,9 @@ func (s *Server) stopConversationForRemoval(ctx context.Context, ws *workspaceSe
 			}
 		}
 	}
-	ws.previews.Stop(record.ID)
+	if err := ws.previews.Stop(record.ID); err != nil {
+		return err
+	}
 	return nil
 }
 

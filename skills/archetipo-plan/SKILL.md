@@ -56,7 +56,7 @@ regressions are detected. Do not promise a clean check when its baseline is fail
 3. This skill uses only these CLI operations:
    - `archetipo config show`
    - `archetipo -C {data.workdir} execution environment show`
-   - `archetipo -C {data.workdir} execution environment configure --file <recipe.json>` (stdin `-` accepts the same version 1 recipe JSON: `version`, `inputs`, `outputs`, `env_keys`, `prepare`, `probe`, `cleanup`, `checks`; commands have `name`, `argv`, `timeout_seconds`; checks also have `inputs`, `cache`)
+   - `archetipo -C {data.workdir} execution environment configure --file <recipe.json>` (stdin `-` accepts the same version 1 recipe JSON: `version`, `inputs`, `outputs`, `env_keys`, `prepare`, `probe`, `cleanup`, `checks`, optional `ports` and `resources` per the shared ownership contract; commands have `name`, `argv`, `timeout_seconds`; checks also have `inputs`, `cache`)
    - `archetipo -C {data.workdir} execution environment prepare`
    - `archetipo -C {data.workdir} execution environment check <name> --spec {US-CODE} [--fresh]`
 

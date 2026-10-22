@@ -60,10 +60,14 @@ func (s *Server) changeConversationPreview(w http.ResponseWriter, r *http.Reques
 }
 func (s *Server) handleStopConversationPreview(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
-	if _, err := ws.conversationStore().GetMetadata(r.Context(), r.PathValue("id")); err != nil {
+	record, err := ws.conversationStore().GetMetadata(r.Context(), r.PathValue("id"))
+	if err != nil {
 		writeError(w, err)
 		return
 	}
-	ws.previews.Stop(r.PathValue("id"))
+	if err := ws.previews.StopEnvironment(record.WorkingDir, record.ID); err != nil {
+		writeError(w, err)
+		return
+	}
 	s.handleConversationPreview(w, r)
 }

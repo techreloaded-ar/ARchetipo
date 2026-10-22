@@ -17,13 +17,14 @@ type commandRequest struct {
 
 // The child supervisor owns the command tree. Its private control pipe closes
 // even on hard viewer death, so development servers do not become orphans.
-func runCommand(ctx context.Context, dir string, argv []string, output io.Writer) error {
+func runCommand(ctx context.Context, dir string, argv []string, env []string, output io.Writer) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command(executable, "execution", "preview", "_run")
 	cmd.Dir, cmd.Stdout, cmd.Stderr, cmd.WaitDelay = dir, output, output, 2*time.Second
+	cmd.Env = env
 	control, err := cmd.StdinPipe()
 	if err != nil {
 		return err

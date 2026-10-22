@@ -133,7 +133,16 @@ do not copy runtime checkpoints, credentials or dependencies between checkouts.
 `show`/`configure` return `kind: preview_recipe`; `execution preview prepare`
 returns `kind: preview` with `data.preparation` containing the standard environment
 result. Require `passed && stable` and inspect its report (including original
-evidence on reuse). Preparation does not start the preview server. Missing recipe
+evidence on reuse). Preparation does not start the preview server. Declare dependencies in the
+project environment's `resources` (name plus finite start/probe/stop/stopped
+commands, max 30s each) and `ports` (uppercase names), following shared ownership
+rules. Use assigned `ARCHETIPO_PORT_<NAME>` endpoints in launch/configuration;
+never put `docker run -d`, nohup or other unregistered services in the preview
+command. Start/Stop and viewer death then use the same generic resource lifecycle,
+independently of framework or service tool. Version the adapters with the recipe.
+Standalone `prepare` intentionally retains registered services for reuse; explicit
+cleanup ends them, while preview run owns them until its terminal ends.
+Missing recipe
 is `E_PRECONDITION`, invalid configuration is `E_INVALID_INPUT`, and concurrent
 ownership is `E_CONFLICT`; repair the specific cause rather than starting another
 setup. The viewer's Start and standalone `execution preview run` use the same

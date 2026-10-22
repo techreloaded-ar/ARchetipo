@@ -208,7 +208,9 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 					}
 					defer func() { _ = previewLock.Unlock() }()
 				}
-				if _, stateErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json")); stateErr == nil {
+				_, stateErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json"))
+				_, resourceErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "resources.json"))
+				if stateErr == nil || resourceErr == nil {
 					cleanup, cleanupErr := verification.New(r.Workdir, "").Execute(ctx, "cleanup", "", "", false)
 					if cleanupErr != nil {
 						return r, cleanupErr
@@ -218,8 +220,10 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 					}
 				} else if !os.IsNotExist(stateErr) {
 					return r, stateErr
+				} else if !os.IsNotExist(resourceErr) {
+					return r, resourceErr
 				}
-				for _, lockID := range []string{"verification-environment", "verification-command"} {
+				for _, lockID := range []string{"verification-environment", "verification-command", "environment-lifetime"} {
 					lock, lockErr := localStore.TryLock(ctx, lockID)
 					if lockErr != nil {
 						return r, iox.NewConflict("environment operation is still running", "wait before deleting its checkout", lockErr)
