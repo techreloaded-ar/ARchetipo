@@ -14,6 +14,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
@@ -134,7 +135,7 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	patterns := []string{"/.archetipo/increments/", "/.archetipo/increment-local/", "/.archetipo/increment-workspace.json", "/.archetipo/conversations/", "/.archetipo/executions/", "/.archetipo/workflow-runs/", "/.archetipo/environment/", "/.archetipo/tmp/", "/.archetipo/shared-runtime.md"}
+	patterns := []string{"/.archetipo/increments/", "/.archetipo/increment-archives/", "/.archetipo/increment-local/", "/.archetipo/increment-workspace.json", "/.archetipo/conversations/", "/.archetipo/executions/", "/.archetipo/workflow-runs/", "/.archetipo/environment/", "/.archetipo/tmp/", "/.archetipo/shared-runtime.md"}
 	for _, tool := range workspace.Tools() {
 		patterns = append(patterns, "/"+tool.SkillsDir+"/archetipo-*/")
 	}
@@ -159,6 +160,17 @@ func (s *Service) installRuntime(target string) error {
 	if _, err := os.Stat(sourceRecipe); err == nil {
 		if _, err = os.Stat(targetRecipe); os.IsNotExist(err) {
 			if err = workspace.CopyFile(sourceRecipe, targetRecipe); err != nil {
+				return err
+			}
+		}
+	}
+	// Versioned recipes arrive with main. Also inherit a portable workspace
+	// recipe before it is committed, but never a fixed endpoint from another run.
+	sourcePreview := filepath.Join(s.Config.ProjectRoot, preview.RecipePath)
+	targetPreview := filepath.Join(target, preview.RecipePath)
+	if _, err := os.Stat(targetPreview); os.IsNotExist(err) {
+		if recipe, loadErr := preview.Load(s.Config.ProjectRoot); loadErr == nil && strings.Contains(recipe.URL, "{port}") {
+			if err = workspace.CopyFile(sourcePreview, targetPreview); err != nil {
 				return err
 			}
 		}

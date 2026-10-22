@@ -50,6 +50,9 @@ var workspaceScopedRoutes = []scopedRoute{
 	{"GET /api/documentation/wiki/actions", http.MethodGet, "/api/documentation/wiki/actions", ""},
 	{"POST /api/documentation/wiki/actions", http.MethodPost, "/api/documentation/wiki/actions", "{}"},
 	{"POST /api/increments", http.MethodPost, "/api/increments", "{}"},
+	{"GET /api/increments/{id}/deletion-plan", http.MethodGet, "/api/increments/inc-1/deletion-plan", ""},
+	{"DELETE /api/increments/{id}", http.MethodDelete, "/api/increments/inc-1", ""},
+	{"GET /api/workspace/conversations/{id}/deletion-plan", http.MethodGet, "/api/workspace/conversations/c-1/deletion-plan", ""},
 	{"GET /api/increments/{id}", http.MethodGet, "/api/increments/inc-test", ""},
 	{"POST /api/increments/{id}/{action}", http.MethodPost, "/api/increments/inc-test/publish", "{}"},
 	{"GET /api/documentation", http.MethodGet, "/api/documentation", ""},
@@ -107,6 +110,7 @@ var workspaceScopedRoutes = []scopedRoute{
 	{"POST /api/workspace/conversations/{id}/resume", http.MethodPost, "/api/workspace/conversations/c-1/resume", "{}"},
 	{"GET /api/workspace/conversations/{id}/preview", http.MethodGet, "/api/workspace/conversations/c-1/preview", ""},
 	{"POST /api/workspace/conversations/{id}/preview", http.MethodPost, "/api/workspace/conversations/c-1/preview", "{}"},
+	{"POST /api/workspace/conversations/{id}/preview/prepare", http.MethodPost, "/api/workspace/conversations/c-1/preview/prepare", "{}"},
 	{"DELETE /api/workspace/conversations/{id}/preview", http.MethodDelete, "/api/workspace/conversations/c-1/preview", ""},
 	{"GET /api/mockups", http.MethodGet, "/api/mockups", ""},
 }

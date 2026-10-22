@@ -11,6 +11,49 @@ import (
 
 func newIncrementCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "increment", Short: "Develop an isolated product increment"}
+	var confirmed bool
+	var archiveConversations bool
+	var expectedHead string
+	deletionPlan := &cobra.Command{Use: "deletion-plan <id>", Short: "Inspect the worktree and unintegrated work before deleting an increment", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfigFor(cmd)
+		if err != nil {
+			return err
+		}
+		if cfg.Increment != nil {
+			return iox.NewPrecondition("inspect deletion from the parent workspace", "do not remove the current working directory", nil)
+		}
+		conn, err := connector.New(cfg)
+		if err != nil {
+			return err
+		}
+		result, err := increment.New(cfg, conn).DeletionPlan(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		return iox.WriteOK(s.out, "increment_deletion_plan", result)
+	}}
+	deletion := &cobra.Command{Use: "delete <id>", Short: "Save a local recovery copy and remove an increment, its worktree and branch", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := loadConfigFor(cmd)
+		if err != nil {
+			return err
+		}
+		if cfg.Increment != nil {
+			return iox.NewPrecondition("delete from the parent workspace", "do not remove the current working directory", nil)
+		}
+		conn, err := connector.New(cfg)
+		if err != nil {
+			return err
+		}
+		result, err := increment.New(cfg, conn).Delete(cmd.Context(), args[0], increment.DeletionOptions{HeadSHA: expectedHead, Confirm: confirmed, PreserveConversations: archiveConversations})
+		if err != nil {
+			return err
+		}
+		return iox.WriteOK(s.out, "increment_deletion", result)
+	}}
+	deletion.Flags().BoolVar(&archiveConversations, "archive-conversations", false, "retain linked conversations as readable archives after removing their environment")
+	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment after saving a local recovery copy")
+	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
+	root.AddCommand(deletionPlan, deletion)
 	for _, operation := range []string{"create", "show", "list", "propose", "approve", "ready", "feedback", "publish", "refresh"} {
 		var file string
 		cmd := &cobra.Command{Use: operation, Short: operation + " a product increment"}

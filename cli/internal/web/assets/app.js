@@ -6353,6 +6353,7 @@
 				return;
 			}
 			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
+			if (e.target.closest("[data-increment-delete]")) { deleteCurrentIncrement(); return; }
 			const incrementAction = e.target.closest("[data-increment-action]");
 			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
@@ -6472,6 +6473,7 @@
 				return;
 			}
 			if (e.target.closest("[data-conversation-close-open]")) {
+				if (conversationView?.removal_choice_required) { closeConversation(); return; }
 				conversationCloseArmed = true;
 				renderConversationPanel();
 				return;
@@ -6835,21 +6837,66 @@
 		}
 	}
 
-	// deleteConversation butta via una conversazione conclusa, subito e senza
-	// chiedere: la domanda è sostituita dal bottone «Annulla» che compare in
-	// fondo alla lista. Il server ferma le attività collegate prima di rimuovere
-	// il record, anche quando il runtime è già stato rilasciato.
-	//
-	// L'annullamento è possibile solo perché la DELETE risponde col record
-	// intero: è quella copia, e non la riga sintetica dell'indice, che verrà
-	// riscritta.
+	// Resource ownership and deletion choices come from the server. A linked
+	// worktree always gets an explicit choice; ordinary chat deletion keeps undo.
+	function chooseRemoval(plan) {
+		if (!plan.requires_choice) return Promise.resolve("keep");
+		if (document.querySelector("[data-removal-dialog]")) return Promise.resolve(null);
+		return new Promise(resolve => {
+			const opener = document.activeElement;
+			const dialog = document.createElement("dialog");
+			dialog.className = "modal removal-choice-dialog";
+			dialog.dataset.removalDialog = "true";
+			dialog.setAttribute("aria-labelledby", "removal-choice-title");
+			const title = document.createElement("h2"); title.id = "removal-choice-title"; title.textContent = plan.title;
+			const message = document.createElement("p"); message.textContent = plan.message;
+			const actions = document.createElement("div"); actions.className = "removal-choice-actions";
+			let selected = null;
+			const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ghost-btn"; cancel.textContent = "Annulla";
+			cancel.dataset.removalChoice = "cancel"; cancel.addEventListener("click", () => dialog.close()); actions.append(cancel);
+			for (const choice of plan.choices || []) {
+				const button = document.createElement("button"); button.type = "button"; button.className = "ghost-btn"; button.textContent = choice.label;
+				button.dataset.removalChoice = choice.id;
+				button.addEventListener("click", () => { selected = choice.id; dialog.close(); }); actions.append(button);
+			}
+			dialog.append(title, message, actions); document.body.append(dialog);
+			dialog.addEventListener("close", () => { dialog.remove(); if (opener?.isConnected) opener.focus(); resolve(selected); }, {once:true});
+			dialog.showModal(); cancel.focus();
+		});
+	}
+
+	function removalQuery(choice, plan) {
+		if (!plan.requires_choice) return "";
+		const query = new URLSearchParams({worktree: choice});
+		if (choice === "delete") query.set("head", plan.increment.head_sha);
+		return "?" + query;
+	}
+
+	async function deleteCurrentIncrement() {
+		const current = conversationView?.increment;
+		if (!current || conversationBusy) return;
+		try {
+			const plan = await apiGet(`/api/increments/${encodeURIComponent(current.id)}/deletion-plan`);
+			if (await chooseRemoval(plan) !== "delete") return;
+			conversationBusy = true; renderConversationPanel();
+			const result = await apiDelete(`/api/increments/${encodeURIComponent(current.id)}?confirm=true&head=${encodeURIComponent(plan.increment.head_sha)}`);
+			conversationsUndo = null;
+			conversationBusy = false;
+			if (result.conversation_ids?.includes(conversationsCurrentId)) prepareConversationOpen("");
+			showToast("Incremento e ambiente eliminati. Copia locale salvata per il recupero.", "ok");
+			await loadConversationsIndex();
+		} catch (err) { showToast(TEXT.deleteFailed(err.message || err), "err"); }
+		finally { conversationBusy = false; renderConversationPanel(); }
+	}
+
 	async function deleteConversation(id) {
 		if (!id) return;
 		let deleted;
 		try {
-			deleted = await apiDelete(
-				`/api/workspace/conversations/${encodeURIComponent(id)}/record`,
-			);
+			const plan = await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/deletion-plan`);
+			const choice = await chooseRemoval(plan);
+			if (!choice) return;
+			deleted = await apiDelete(`/api/workspace/conversations/${encodeURIComponent(id)}/record${removalQuery(choice, plan)}`);
 		} catch (err) {
 			showToast(TEXT.deleteFailed(err.message || err), "err");
 			return;
@@ -6862,7 +6909,7 @@
 			record && record.id
 				? { id: record.id, title: record.title || "", record }
 				: null;
-		showToast(TEXT.conversationDeleted, "ok");
+		showToast(deleted.archive_path ? "Conversazione e ambiente eliminati. Copia locale salvata per il recupero." : TEXT.conversationDeleted, "ok");
 		// Il pannello non può restare su un thread che non esiste più: torna
 		// all'offerta di aprirne uno nuovo, che è lo stato di un workspace che
 		// non sta mostrando nessuna conversazione.
@@ -8256,9 +8303,15 @@
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
-			// Archiving releases the runtime but preserves the native context.
+			let query = "";
+			if (conversationView && conversationView.session) {
+				const plan = await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/deletion-plan?action=archive`);
+				const choice = await chooseRemoval(plan);
+				if (!choice) return;
+				query = removalQuery(choice, plan);
+			}
 			const view = conversationView && conversationView.session
-				? await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/archive`, {})
+				? await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/archive${query}`, {})
 				: await apiDelete(`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`);
 			conversationRefusal = "";
 			// A slot has just been freed, so the reason an open was refused is no

@@ -106,6 +106,7 @@ func IsRepo(ctx context.Context, repoRoot string) bool {
 // so the diff and the commit cannot disagree about it.
 var RuntimeArtifactPathspecs = []string{
 	":(exclude).archetipo/increments",
+	":(exclude).archetipo/increment-archives",
 	":(exclude).archetipo/increment-local",
 	":(exclude).archetipo/increment-workspace.json",
 	":(exclude).archetipo/conversations",

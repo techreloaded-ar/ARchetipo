@@ -43,3 +43,22 @@ func TestConversationPreviewUsesItsWorkingDirectory(t *testing.T) {
 		t.Fatalf("wrong working directory: %+v", view)
 	}
 }
+
+func TestPreviewPreparationRejectsCrossOriginCommands(t *testing.T) {
+	cfg := config.Default()
+	cfg.ProjectRoot = t.TempDir()
+	server, err := NewServer(inmemory.New(cfg), cfg, nil, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.session().previews.Close()
+	for _, suffix := range []string{"/preview", "/preview/prepare"} {
+		request := httptest.NewRequest(http.MethodPost, "/api/workspace/conversations/missing"+suffix, nil)
+		request.Header.Set("Origin", "http://127.0.0.1:9999")
+		recorder := httptest.NewRecorder()
+		server.mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s", suffix, recorder.Code, recorder.Body.String())
+		}
+	}
+}

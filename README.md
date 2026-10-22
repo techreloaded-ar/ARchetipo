@@ -225,14 +225,53 @@ What that means in practice:
 - **Permissions are a provider capability.** The conversation's permissions control offers only profiles declared by its provider, with their limits explained. Choices apply to subsequent turns, survive viewer restarts and leave the workspace default alone. Save a default for new conversations in the provider settings. Codex supports project sandbox profiles with or without approval prompts, plus full access; Claude offers its native permission modes and does not promise folder isolation. Approval cards can offer session grants or remembered command rules when the adapter supports them; these are enforced and remembered by the native runtime. A remembered rule can affect other projects according to the runtime's rule storage, and is not an ARchetipo folder-scoped grant.
 - **Process steps run in the thread you are reading.** Pressing `plan`, `implement`, `review`, inception, backlog or spec draft starts a turn in the open conversation instead of launching a second agent beside it. Each step still gets its own execution record with its own effect verification, and the conversation stays open and writable during and after it — several steps in a row, with free messages in between.
 - **Several conversations at once.** A workspace can hold as many as you open, each with its own agent process, and they do not interfere with each other. One `archetipo view` process at a time owns a given conversation's runtime; a second viewer on the same workspace can read it and is told so plainly if it tries to write.
-- **Stop, archive and delete are three different things.** Stopping releases the runtime and keeps the context. Archiving puts the thread away without losing its native session — reopening resumes it. Deleting removes *ARchetipo's* record and timeline and says so: the harness's own transcript and your working files are never touched.
+- **Stop, archive and delete are three different things.** Stopping releases the runtime and keeps the context. Archiving keeps the conversation readable and preserves the harness session. Deleting a chat removes ARchetipo’s record and timeline. For a conversation linked to a worktree, archiving and deletion explicitly ask whether to keep the environment or remove the increment’s local resources. The harness transcript is always preserved; resuming after environment removal requires restoring its working directory.
 
 Two limits are worth knowing. A development server the agent starts may or may not outlive the turn that started it — that is the harness's behaviour, not ARchetipo's, and the two differ; what is promised is that the conversation comes back and that from inside it you can check, stop or restart the service. And conversations are a local-runtime feature: the `arcipelago` remote provider still runs `spec.plan` and `spec.implement` as batch runs and holds no native session.
+
+### Removing an increment and its environment
+
+**Elimina incremento** in the increment details offers a confirmed local cleanup.
+The same choice appears when archiving or deleting its conversation. Choosing to
+keep the environment leaves its branch, worktree, test data and services intact.
+Choosing removal stops the linked agent sessions and viewer previews, runs the
+checkout’s registered environment cleanup, then removes the worktree, local
+branch and live increment records. During archiving, the conversations remain
+readable; during deletion they are removed. Existing PRs and remote branches
+remain published. For other linked worktrees the dialog offers chat-only removal;
+their owning workflow remains responsible for resource removal.
+
+The dialog identifies dirty files and commits not integrated into the base
+branch. Removal first retains a local recovery snapshot under
+`.archetipo/increment-archives/<id>/worktree.tar.gz`, with the increment metadata
+and a durable deletion receipt in `deletion.json`. The snapshot includes
+untracked and ignored local files, preserves symbolic links without following
+them, and omits the worktree’s `.git` pointer. Commit history remains reachable
+through the receipt’s `refs/archetipo/deleted/<id>` backup ref. These local recovery
+files are excluded from workflow commits. They can contain private local settings
+and are retained with restrictive file permissions. Failed snapshot or cleanup
+operations preserve the working directory; an incomplete removal can be retried
+from the standalone CLI using the same confirmed head.
+
+Standalone operations run from the parent workspace:
+
+```bash
+archetipo increment deletion-plan <id>
+archetipo increment delete <id> --head <head_sha-from-plan> --confirm
+# Keep linked conversations as readable archives while removing their environment:
+archetipo increment delete <id> --head <head_sha-from-plan> --confirm --archive-conversations
+```
+
+The CLI refuses a live native-session owner or standalone preview; stop those
+before standalone deletion. Services and synthetic test resources must be owned
+and described by the project’s environment recipe and its cleanup commands.
+ARchetipo does not infer resource ownership from a port, process name or database
+name. Any cleanup failure blocks removal and retains its original report.
 
 ### Browser previews and comments
 
 Every conversation can show the work from its own working directory. Open
-**Preview**, ask **Prepara preview** to identify the project's launch command,
+**Preview**, ask **Configura con l’agente** to identify the project's launch command,
 then press **Avvia preview**. ARchetipo does not infer a framework or automatically
 start commands when a conversation opens.
 
@@ -250,22 +289,45 @@ working directory:
 ```bash
 archetipo execution preview configure --file preview-recipe.json
 archetipo execution preview show
+archetipo execution preview prepare
 ```
 
 ```json
 {
   "version": 1,
   "directory": ".",
-  "argv": ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"],
-  "url": "http://127.0.0.1:5173/"
+  "argv": ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--strictPort", "--port", "{port}"],
+  "url": "http://127.0.0.1:{port}/",
+  "prepare_environment": true
 }
 ```
 
 The CLI persists `.archetipo/preview.json`. `directory` is relative to that
 checkout; `argv` is an explicit argument array, executed without an implicit
-shell. Choose a dedicated port per working directory. Omit `argv` to use a server
-managed elsewhere. Missing dependencies or external services must be prepared
-before the preview can run. The same recipe is available standalone through
+shell. Adapt the example arguments to the project's actual startup script.
+`{port}` in both URL and launch arguments assigns a local application port at
+each start, without changing the saved recipe. Configure the application to fail
+if that port is occupied. Dynamic previews launch their own server rather than
+borrowing a server from another increment. Fixed URLs and omitted `argv` remain
+supported for explicitly supplied external servers.
+
+With `prepare_environment: true`, starting the preview first executes the existing
+`execution environment prepare` contract against this checkout's
+`.archetipo/environment.json`. It checks readiness on reuse and only repeats setup
+when necessary. Preparation failure prevents server launch and retains the full
+verification report. `preview prepare` (or **Prepara ambiente** in the options
+menu) runs that same preparation without launching the server or calling an agent.
+Legacy preview recipes without this flag retain their existing startup behavior.
+
+Use **Configura o ripara con l’agente** for initial discovery or configuration
+repairs. Keep both recipes and setup helpers versioned: subsequent increments
+inherit them from `main`. New increment checkouts also copy a missing portable
+preview recipe from the workspace, together with its environment recipe; resource
+checkpoints, credentials and dependency installations are never copied.
+Each checkout prepares and owns its local resources; package-manager caches may
+reduce downloads without sharing mutable dependency directories.
+
+The same preview recipe is available standalone through
 `archetipo execution preview run`, which prints its ready URL and runs until
 interrupted.
 

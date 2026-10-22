@@ -8207,6 +8207,7 @@ body.no-workspace [data-workspace-scoped] {
 .preview-location-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .preview-state-dot { width:6px; height:6px; border-radius:50%; background:var(--text-muted); flex-shrink:0; opacity:.5; }
 .browser-preview[data-state="ready"] .preview-state-dot { background:#4c967b; opacity:1; }
+.browser-preview[data-state="preparing"] .preview-state-dot,
 .browser-preview[data-state="starting"] .preview-state-dot { background:var(--accent); opacity:1; animation:preview-pulse 1s infinite alternate; }
 .browser-preview[data-state="error"] .preview-state-dot { background:#ba5b55; opacity:1; }
 @keyframes preview-pulse { to { opacity:.25; } }
@@ -8353,3 +8354,11 @@ body.no-workspace [data-workspace-scoped] {
 .conv-panel-toggle[aria-expanded="true"] { color:var(--accent); background:var(--surface-3); }
 .conv-panel-toggle:hover:not(:disabled) { color:var(--accent); background:var(--surface-3); border-color:transparent; }
 .conv-panel-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+.removal-choice-dialog { animation:none; width:min(560px,calc(100vw - 32px)); padding:24px; color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:12px; max-height:85dvh; overflow:auto; }
+.removal-choice-dialog::backdrop { background:#0007; }
+.removal-choice-dialog h2 { margin:0 0 14px; font-size:19px; }
+.removal-choice-dialog p { line-height:1.65; overflow-wrap:anywhere; }
+.removal-choice-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px; justify-content:flex-end; }
+.removal-choice-actions button { white-space:normal; min-height:40px; text-align:left; }
+.removal-choice-actions [data-removal-choice="delete"] { color:#a74e4b; }

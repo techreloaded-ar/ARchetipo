@@ -17,7 +17,7 @@ func newPreviewCmd(s streams) *cobra.Command {
 	root.AddCommand(&cobra.Command{Use: "_run", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return preview.Supervise(cmd.Context(), s.in, s.out, s.err)
 	}})
-	for _, operation := range []string{"show", "configure", "run"} {
+	for _, operation := range []string{"show", "configure", "prepare", "run"} {
 		var input string
 		cmd := &cobra.Command{Use: operation, Args: cobra.NoArgs}
 		if operation == "configure" {
@@ -28,12 +28,17 @@ func newPreviewCmd(s streams) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if operation == "run" {
+			if operation == "run" || operation == "prepare" {
 				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 				defer stop()
 				manager := preview.NewManager()
 				defer manager.Close()
-				_, startErr := manager.Start(cfg.ProjectRoot, "standalone", "")
+				var startErr error
+				if operation == "prepare" {
+					_, startErr = manager.Prepare(cfg.ProjectRoot, "standalone")
+				} else {
+					_, startErr = manager.Start(cfg.ProjectRoot, "standalone", "")
+				}
 				if startErr != nil {
 					return startErr
 				}
@@ -46,7 +51,20 @@ func newPreviewCmd(s streams) *cobra.Command {
 						return statusErr
 					}
 					if view.State == "error" {
-						return iox.NewPrecondition(view.Error, "inspect the preview server output: "+view.Log, fmt.Errorf("preview server failed"))
+						hint := "inspect the preview server output: " + view.Log
+						switch view.ErrorCode {
+						case iox.CodeConflict:
+							return iox.NewConflict(view.Error, hint, nil)
+						case iox.CodeInvalidInput:
+							return iox.NewInvalidInput(view.Error, hint, nil)
+						case iox.CodeInternal:
+							return iox.NewInternal(view.Error, nil)
+						default:
+							return iox.NewPrecondition(view.Error, hint, fmt.Errorf("preview server failed"))
+						}
+					}
+					if operation == "prepare" && view.State == "stopped" {
+						return iox.WriteOK(s.out, "preview", view)
 					}
 					if view.State == "ready" && !announced {
 						if err = iox.WriteOK(s.out, "preview", view); err != nil {

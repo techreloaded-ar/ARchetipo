@@ -259,32 +259,27 @@ func (s *Server) handleDeleteWorkspaceConversation(w http.ResponseWriter, r *htt
 		writeError(w, err)
 		return
 	}
-	if record.Native() {
-		if err := s.stopNativeConversationWork(ctx, ws, id); err != nil {
-			writeError(w, err)
+	if !sameOriginRemoval(w, r) {
+		return
+	}
+	plan, allowed := s.requireRemovalChoice(w, r, ws, record, false)
+	if !allowed {
+		return
+	}
+	if r.URL.Query().Get("worktree") == "delete" {
+		result, deleteErr := s.deleteIncrementEnvironment(ctx, ws, plan.Increment.Record.ID, r.URL.Query().Get("head"), false)
+		if deleteErr != nil {
+			writeError(w, deleteErr)
 			return
 		}
-		if snapshot, live := ws.conversation.get(id); live {
-			if err := ws.releaseNativeConversation(ctx, snapshot); err != nil {
-				writeError(w, iox.NewInternal("releasing the conversation "+id, err))
-				return
-			}
-		}
-	} else {
-		if record.ExecutionID != "" {
-			if err := s.cancelExecutionBeforeRemoval(ctx, ws, record.ExecutionID); err != nil {
-				writeError(w, err)
-				return
-			}
-		}
-		if snapshot, live := ws.conversation.get(id); live {
-			ws.sealConversation(ctx, snapshot)
-			if err := ws.conversation.closeOne(ctx, id); err != nil {
-				writeError(w, iox.NewInternal("closing the conversation "+id, err))
-				return
-			}
-		}
+		writeJSON(w, http.StatusOK, result)
+		return
 	}
+	if err := s.stopConversationForRemoval(ctx, ws, record); err != nil {
+		writeError(w, err)
+		return
+	}
+
 	record, err = s.readPastConversation(ctx, ws, id)
 	if err != nil {
 		writeError(w, err)

@@ -20,10 +20,11 @@ import (
 const RecipePath = ".archetipo/preview.json"
 
 type Recipe struct {
-	Version   int      `json:"version"`
-	Directory string   `json:"directory"`
-	Argv      []string `json:"argv,omitempty"`
-	URL       string   `json:"url"`
+	Version            int      `json:"version"`
+	Directory          string   `json:"directory"`
+	Argv               []string `json:"argv,omitempty"`
+	URL                string   `json:"url"`
+	PrepareEnvironment bool     `json:"prepare_environment,omitempty"`
 }
 
 func invalid(message string) error {
@@ -55,13 +56,21 @@ func (r Recipe) Validate(root string) (string, error) {
 	if err != nil || !info.IsDir() {
 		return "", invalid("preview directory is not a directory")
 	}
-	u, err := url.Parse(r.URL)
+	// {port} is an explicit contract, never a framework or command guess.
+	dynamic := strings.Contains(r.URL, "{port}")
+	u, err := url.Parse(strings.ReplaceAll(r.URL, "{port}", "1"))
 	if err != nil || u.Scheme != "http" || u.User != nil || u.Fragment != "" || u.Host == "" {
 		return "", invalid("preview URL must be a loopback HTTP URL without credentials or fragment")
 	}
 	ip := net.ParseIP(u.Hostname())
 	if u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		return "", invalid("preview URL must address localhost or a loopback IP")
+	}
+	if dynamic && (u.Port() != "1" || !strings.HasPrefix(r.URL, "http://"+net.JoinHostPort(u.Hostname(), "{port}")) || strings.Count(r.URL, "{port}") != 1 || len(r.Argv) == 0 || !strings.Contains(strings.Join(r.Argv, "\x00"), "{port}")) {
+		return "", invalid("a dynamic preview requires {port} in the URL port and in its launch arguments")
+	}
+	if !dynamic && strings.Contains(strings.Join(r.Argv, "\x00"), "{port}") {
+		return "", invalid("launch arguments use {port} but the URL has no matching port placeholder")
 	}
 	for _, arg := range r.Argv {
 		if strings.ContainsRune(arg, 0) {
@@ -72,6 +81,30 @@ func (r Recipe) Validate(root string) (string, error) {
 		return "", invalid("preview command is empty")
 	}
 	return actual, nil
+}
+
+// resolvePort keeps machine-specific endpoints out of the versioned recipe.
+// The application must bind the assigned port strictly; a collision is a failed
+// start, never permission to attach to a different increment's server.
+func (r Recipe) resolvePort() (Recipe, bool, error) {
+	if !strings.Contains(r.URL, "{port}") {
+		return r, false, nil
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return r, true, err
+	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	_ = listener.Close()
+	if err != nil {
+		return r, true, err
+	}
+	r.URL = strings.ReplaceAll(r.URL, "{port}", port)
+	r.Argv = append([]string(nil), r.Argv...)
+	for index, arg := range r.Argv {
+		r.Argv[index] = strings.ReplaceAll(arg, "{port}", port)
+	}
+	return r, true, nil
 }
 
 func Load(root string) (Recipe, error) {

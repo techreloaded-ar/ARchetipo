@@ -61,6 +61,10 @@ func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, ".archetipo", "environment.json"), recipe, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	previewRecipe := []byte(`{"version":1,"directory":".","argv":["server","{port}"],"url":"http://127.0.0.1:{port}","prepare_environment":true}`)
+	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, ".archetipo", "preview.json"), previewRecipe, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stateDir := filepath.Join(s.Config.ProjectRoot, ".archetipo", "environment")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -73,10 +77,45 @@ func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
 	if err != nil || string(got) != string(recipe) {
 		t.Fatal("project recipe unavailable in sandbox", err)
 	}
+	got, err = os.ReadFile(filepath.Join(r.Workdir, ".archetipo", "preview.json"))
+	if err != nil || string(got) != string(previewRecipe) {
+		t.Fatal("portable preview recipe unavailable in sandbox", err)
+	}
 	if _, err := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json")); !os.IsNotExist(err) {
 		t.Fatal("parent resource ownership checkpoint copied")
 	}
 }
+
+func TestSandboxDoesNotBorrowWorkspacePreviewEndpoint(t *testing.T) {
+	s := fixture(t)
+	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, ".archetipo", "preview.json"), []byte(`{"version":1,"directory":".","url":"http://127.0.0.1:41987"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := create(t, s)
+	if _, err := os.Stat(filepath.Join(r.Workdir, ".archetipo", "preview.json")); !os.IsNotExist(err) {
+		t.Fatal("inherited another checkout's fixed endpoint", err)
+	}
+}
+
+func TestSandboxKeepsPreviewRecipeFromMain(t *testing.T) {
+	s := fixture(t)
+	path := filepath.Join(s.Config.ProjectRoot, ".archetipo", "preview.json")
+	baseline := `{"version":1,"directory":".","argv":["server","--main","{port}"],"url":"http://127.0.0.1:{port}"}`
+	if err := os.WriteFile(path, []byte(baseline), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, s.Config.ProjectRoot, "add", ".archetipo/preview.json")
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: project preview recipe")
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(baseline, "--main", "--uncommitted")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := create(t, s)
+	got, err := os.ReadFile(filepath.Join(r.Workdir, ".archetipo", "preview.json"))
+	if err != nil || string(got) != baseline {
+		t.Fatal("overwrote increment's versioned recipe with workspace changes", err)
+	}
+}
+
 func create(t *testing.T, s *Service) Record {
 	t.Helper()
 	r, err := s.Create(context.Background(), "Customer export", "Prepare the sales review", "")

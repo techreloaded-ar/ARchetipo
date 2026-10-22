@@ -77,9 +77,10 @@ type conversationSnapshotView struct {
 // Events is never nil, so a client always receives an array and never has to
 // test for null before iterating.
 type conversationView struct {
-	Workflow  *workflowProgress `json:"workflow,omitempty"`
-	Increment *incrementView    `json:"increment,omitempty"`
-	Available bool              `json:"available"`
+	RemovalChoiceRequired bool              `json:"removal_choice_required,omitempty"`
+	Workflow              *workflowProgress `json:"workflow,omitempty"`
+	Increment             *incrementView    `json:"increment,omitempty"`
+	Available             bool              `json:"available"`
 	// UnavailableReason is omitted when a conversation can be opened, so a
 	// client can never render a reason next to an offer that has none.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`

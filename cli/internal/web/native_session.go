@@ -964,6 +964,26 @@ func (s *Server) handleArchiveNativeConversation(w http.ResponseWriter, r *http.
 		writeError(w, iox.NewConflict("the conversation "+id+" is a legacy transcript", "legacy transcripts can be deleted but have no native session to archive", nil))
 		return
 	}
+	if !sameOriginRemoval(w, r) {
+		return
+	}
+	plan, allowed := s.requireRemovalChoice(w, r, ws, record, true)
+	if !allowed {
+		return
+	}
+	if r.URL.Query().Get("worktree") == "delete" {
+		if _, deleteErr := s.deleteIncrementEnvironment(r.Context(), ws, plan.Increment.Record.ID, r.URL.Query().Get("head"), true); deleteErr != nil {
+			writeError(w, deleteErr)
+			return
+		}
+		record, err = ws.conversationStore().GetMetadata(r.Context(), id)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.pastNativeConversationView(ws, record, s.conversationOpenabilityOf(r.Context(), ws), 0))
+		return
+	}
 	if err := s.stopNativeConversationWork(r.Context(), ws, id); err != nil {
 		writeError(w, err)
 		return

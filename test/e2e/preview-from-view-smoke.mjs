@@ -4,7 +4,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
-import net from 'node:net';
+import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -17,7 +17,6 @@ const checks=[];
 const ok=text=>{checks.push(text);console.log('✓ '+text);};
 const timeout=20000;
 async function until(fn,label){const end=Date.now()+timeout;while(Date.now()<end){if(await fn())return;await delay(80);}throw new Error('Timeout: '+label);}
-async function freePort(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const port=s.address().port;await new Promise(r=>s.close(r));return port;}
 
 async function main(){
  if(process.platform==='win32'){console.log('SKIP: native fake uses a POSIX shebang');return;}
@@ -33,17 +32,60 @@ async function main(){
  });
  await new Promise(r=>control.listen(0,'127.0.0.1',r));
  const env={...process.env,ARCHETIPO_DATA_DIR:repo,ARCHETIPO_STATE_DIR:path.join(dir,'state'),FAKE_CODEX_CONTROL:`http://127.0.0.1:${control.address().port}`};
- const run=makeRunCommand(env);let viewer,contender,browser,page;
+ const run=makeRunCommand(env);const standalone=[];let viewer,contender,browser,page;
  try{
   await buildCLI(cli,repo,run);
   await run('init',cli,['init','--tool','codex','--connector','file','--yes'],{cwd:sandbox});
   await fs.appendFile(path.join(sandbox,'.archetipo/config.yaml'),'\nexecution:\n  default_provider:\n    id: codex\n    config:\n      command: '+JSON.stringify(path.join(repo,'test/e2e/support/fake-codex.mjs'))+'\n      model: gpt-fake\n      sandbox: workspace-write\n');
-  const port=await freePort();
   const app=path.join(sandbox,'server.mjs');
-  await fs.writeFile(app,`import http from 'node:http';import fs from 'node:fs';fs.writeFileSync('server.pid',String(process.pid));for(let i=0;i<150;i++)console.log('Output fixture '+i);http.createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Preview smoke</title><h1>Risultato</h1><p id=descrizione>Descrizione del risultato</p><a href="/seconda">Seconda pagina</a><button data-testid="salva" onclick="document.body.dataset.clicked=1">Salva</button><script>window.mountId=Math.random();</script>');}).listen(${port},'127.0.0.1');`);
+  await fs.writeFile(app,`import http from 'node:http';import fs from 'node:fs';fs.writeFileSync('server.pid',String(process.pid));for(let i=0;i<150;i++)console.log('Output fixture '+i);http.createServer((req,res)=>{res.setHeader('X-Checkout',process.cwd());res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Preview smoke</title><h1>Risultato</h1><p id=descrizione>Descrizione del risultato</p><a href="/seconda">Seconda pagina</a><button data-testid="salva" onclick="document.body.dataset.clicked=1">Salva</button><script>window.mountId=Math.random();</script>');}).listen(Number(process.argv[2]),'127.0.0.1');`);
   const recipe=path.join(dir,'recipe.json');
-  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,app],url:`http://127.0.0.1:${port}/`}));
+  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,'server.mjs','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
   await run('preview-configure',cli,['execution','preview','configure','--file',recipe],{cwd:sandbox});
+  const environmentRecipe=path.join(dir,'environment-recipe.json');
+  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,inputs:['server.mjs','setup.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
+  await fs.writeFile(path.join(sandbox,'setup.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
+  await run('environment-configure',cli,['execution','environment','configure','--file',environmentRecipe],{cwd:sandbox});
+  // Two real increments inherit committed recipes and helpers from main.
+  // Their resources and setup receipts remain checkout-local.
+  await run('git-init','git',['init','-b','main'],{cwd:sandbox});
+  await run('git-name','git',['config','user.name','Preview smoke'],{cwd:sandbox});
+  await run('git-email','git',['config','user.email','preview@example.test'],{cwd:sandbox});
+  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','server.mjs','setup.mjs'],{cwd:sandbox});
+  await run('git-baseline','git',['commit','-m','test: reusable preview setup'],{cwd:sandbox});
+  const incrementInput=path.join(dir,'increment.json');
+  await fs.writeFile(incrementInput,JSON.stringify({title:'Isolated preview',request:'Verify inherited setup'}));
+  const incrementPreviews=[];
+  for(let index=0;index<2;index++){
+   const created=JSON.parse((await run('increment-create-'+index,cli,['increment','create','--file',incrementInput],{cwd:sandbox})).stdout).data;
+   const prepared=JSON.parse((await run('increment-prepare-'+index,cli,['execution','preview','prepare'],{cwd:created.workdir})).stdout).data;
+   assert.equal(prepared.preparation.passed,true);assert.equal(prepared.preparation.stable,true);assert.equal(prepared.preparation.reused,false);
+   const child=spawn(cli,['execution','preview','run'],{cwd:created.workdir,env,stdio:['ignore','pipe','pipe']});standalone.push(child);
+   let output='',errors='',readyView;
+   child.stdout.on('data',chunk=>{output+=chunk;try{readyView=JSON.parse(output).data;}catch{/* Wait for complete envelope. */}});
+   child.stderr.on('data',chunk=>{errors+=chunk;});
+   child.on('error',error=>{errors+=error.message;});
+   await until(()=>{if(child.exitCode!==null)throw new Error('Standalone preview exited: '+errors);return readyView?.state==='ready';},'standalone increment preview '+index);
+   assert.equal(readyView.reused,false);assert.equal(readyView.preparation.reused,true);
+   assert.equal((await fetch(readyView.url)).headers.get('x-checkout'),created.workdir);
+   assert.equal(await fs.readFile(path.join(created.workdir,'setup-count'),'utf8'),'setup\n');
+   incrementPreviews.push({created,view:readyView});
+  }
+  assert.notEqual(incrementPreviews[0].view.recipe.url,incrementPreviews[1].view.recipe.url,'increments share app port');
+  assert.notEqual(incrementPreviews[0].view.preparation.environment_id,incrementPreviews[1].view.preparation.environment_id,'increments share resource identity');
+  assert.equal(await fs.stat(path.join(sandbox,'dependency.ready')).then(()=>true,()=>false),false,'increment setup mutated parent checkout');
+  for(const child of standalone)await stopProcess(child,run);
+  // A failed readiness probe must prevent launching the app, with durable logs.
+  const broken=incrementPreviews[0].created.workdir;
+  await fs.rm(path.join(broken,'server.pid'));
+  const brokenRecipe=JSON.parse(await fs.readFile(path.join(broken,'.archetipo/environment.json'),'utf8'));
+  brokenRecipe.probe=[{name:'failed',argv:[process.execPath,'-e','process.exit(9)'],timeout_seconds:10}];
+  const brokenInput=path.join(dir,'broken-environment.json');await fs.writeFile(brokenInput,JSON.stringify(brokenRecipe));
+  await run('configure-broken',cli,['execution','environment','configure','--file',brokenInput],{cwd:broken});
+  const failed=await run('failed-preview-start',cli,['execution','preview','run'],{cwd:broken,allowFailure:true});
+  assert.notEqual(failed.code,0);assert.match(failed.stdout+failed.stderr,/report.json/);
+  assert.equal(await fs.stat(path.join(broken,'server.pid')).then(()=>true,()=>false),false,'failed setup launched server');
+  ok('Due incrementi reali ereditano le ricette, preparano risorse proprie e partono insieme con porte diverse; un setup fallito impedisce l’avvio.');
   viewer=await startViewServer(cli,sandbox,env,'/api/board');
   const openedResponse=await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   const opened=await openedResponse.json();assert.equal(openedResponse.status,201,JSON.stringify(opened));
@@ -73,9 +115,20 @@ async function main(){
   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'configured preview ready to start');
   assert.equal(await fs.stat(path.join(sandbox,'server.pid')).then(()=>true,()=>false),false,'preview started before button');
+  const turnsBeforeSetup=received.filter(e=>e.kind==='turn/start').length;
+  await page.evaluate('document.querySelector(".preview-menu").open=true;document.querySelector("[data-preview=prepare]").click()');
+  await until(async()=>{const value=await (await fetch(endpoint+'/preview')).json();return value.state==='stopped' && value.preparation?.passed && value.preparation?.stable;},'deterministic preparation without server');
+  assert.equal(await fs.stat(path.join(sandbox,'server.pid')).then(()=>true,()=>false),false,'prepare launched app');
+  assert.equal(received.filter(e=>e.kind==='turn/start').length,turnsBeforeSetup,'prepare contacted agent');
+  await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'prepared preview start enabled');
   await page.evaluate('document.querySelector("[data-preview=start]").click()');
   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'injected picker handshake',()=>page.evaluate('document.querySelector(".preview-status").textContent'));
   const runtime=await (await fetch(endpoint+'/preview')).json();assert.equal(runtime.state,'ready');assert.equal(runtime.reused,false);
+  assert.equal(runtime.preparation.passed,true);assert.equal(runtime.preparation.stable,true);assert.equal(runtime.preparation.reused,true);
+  assert.equal(await fs.readFile(path.join(sandbox,'setup-count'),'utf8'),'setup\n','warm start repeated installation');
+  assert.equal(JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/preview.json'),'utf8')).url,'http://127.0.0.1:{port}/','runtime persisted its assigned port');
+  ok('Preparazione senza agente né server; avvio con riuso verificato e porta assegnata senza modificare la ricetta.');
+
   const tree=await page.send('Page.getFrameTree');let frameID=tree.frameTree.childFrames[0].frame.id;
   await until(()=>contexts.has(frameID),'preview execution context');
   const evaluateFrame=async expression=>{
@@ -315,6 +368,7 @@ async function main(){
   await fs.writeFile(path.join(dir,'failure.json'),JSON.stringify({error:error.stack,received,viewer:viewer?.log(),page:await page?.evaluate('document.body.innerText').catch(()=>null),focus:await page?.evaluate('({active:document.activeElement.outerHTML,editors:Array.from(document.querySelectorAll(".preview-comment-editor")).map(e=>e.hidden)})').catch(()=>null)},null,2));
   throw error;
  }finally{
+  for(const child of standalone)if(child.exitCode===null && child.signalCode===null)await stopProcess(child,run);
   await page?.close();await browser?.close();if(viewer?.child.exitCode===null && viewer?.child.signalCode===null)await stopProcess(viewer.child,run);
   if(contender?.child.exitCode===null && contender?.child.signalCode===null)await stopProcess(contender.child,run);
   control.closeAllConnections();await new Promise(resolve=>control.close(resolve));

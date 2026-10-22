@@ -117,7 +117,7 @@ Rules that follow from this, and that a change must not quietly undo:
 - **Skills come from the runtime.** Discovery is the harness's own (`skills/list` for Codex, `system/init` for Claude) and never a scan of `.claude/skills` accumulated across providers. A catalog not yet announced is declared unknown rather than guessed.
 - **Choices are per turn.** Model and options chosen during a turn apply to the *next* one, are validated against the session's own catalog, and never move the workspace default.
 - **Ownership is per conversation.** One viewer process at a time holds a native runtime, through the conversation lock the journal already uses; a second viewer reads it and is refused only when it writes.
-- **Deleting is ARchetipo's data only.** `DELETE …/{id}` releases the runtime; `DELETE …/{id}/record` removes the ARchetipo record and timeline and answers `native_session_preserved: true`. Neither destroys the harness's own transcript or any working file.
+- **Conversation deletion and environment removal are distinct choices.** `DELETE …/{id}` releases the runtime. Chat-only `DELETE …/{id}/record` removes the ARchetipo record and timeline and preserves the native session. For linked worktrees, deletion and archiving require an explicit keep/remove choice; confirmed increment removal delegates to the shared CLI increment deletion contract, which stops owned work, runs the registered environment cleanup, retains a local recovery snapshot/ref and removes its local worktree, branch and live records. Archiving with removal keeps the conversation readable. Never delete the harness transcript, guess service ownership or remove working files merely because a conversation was closed.
 
 The contract lives in `cli/internal/execution/session.go`; the adapters are `claude/native_session.go` and `codex/native_session.go`; the viewer side is `web/native_session.go`, `web/session_action.go` and `web/native_runtime.go`. `arcipelago` does **not** implement `SessionProvider` and keeps the legacy `Conversationalist` and batch run path.
 
@@ -335,3 +335,13 @@ retained expansion across tab changes and polling, Escape restoring before
 closing, and Ctrl+Alt+B toggling visibility. It saves an expanded increment
 screenshot. The preview smoke verifies that shared expansion and hide/reopen
 preserve the live iframe across Preview/Increment tab changes.
+
+
+- `npm run test:view-increment-deletion-smoke`: exercises the real CLI, Git,
+  viewer and headless Chrome with idle seeded native records and actual owned
+  HTTP test services. Covers cancelled confirmation, keep/remove choices during
+  conversation deletion and archiving, the dedicated increment delete button,
+  cleanup of synthetic data/services, branch/worktree removal, retained archived
+  native identities, recovery snapshots and a 390px confirmation dialog. No AI
+  credentials or remote traffic; missing Chrome fails. Reports and screenshots
+  remain under ignored `test/workspaces/increment-deletion-smoke/` paths.

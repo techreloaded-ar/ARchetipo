@@ -25,6 +25,10 @@ func TestRecipeRejectsEscapesAndExternalTargets(t *testing.T) {
 		{Version: 1, Directory: ".", URL: "http://user:password@localhost:3000"},
 		{Version: 1, Directory: ".", URL: "https://localhost:3000"},
 		{Version: 1, Directory: ".", URL: "http://localhost.evil.test:3000"},
+		{Version: 1, Directory: ".", URL: "http://127.0.0.1:{port}"},
+		{Version: 1, Directory: ".", URL: "http://127.0.0.1:3000/{port}", Argv: []string{"server", "{port}"}},
+		{Version: 1, Directory: ".", URL: "http://127.0.0.1:1/{port}", Argv: []string{"server", "{port}"}},
+		{Version: 1, Directory: ".", URL: "http://127.0.0.1:3000", Argv: []string{"server", "{port}"}},
 	} {
 		if _, err := r.Validate(root); err == nil {
 			t.Fatalf("accepted unsafe recipe: %+v", r)
@@ -46,6 +50,51 @@ func TestRecipeRejectsEscapesAndExternalTargets(t *testing.T) {
 	}
 	if _, err = Configure(root, []byte(`{"version":1,"directory":".","url":"http://localhost","unknown":true}`)); err == nil {
 		t.Fatal("accepted unknown fields")
+	}
+}
+
+func TestPortableRecipeResolvesOnlyAtStartup(t *testing.T) {
+	root := t.TempDir()
+	raw := []byte(`{"version":1,"directory":".","argv":["server","--port={port}"],"url":"http://127.0.0.1:{port}/page","prepare_environment":true}`)
+	if _, err := Configure(root, raw); err != nil {
+		t.Fatal(err)
+	}
+	recipe, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, owned, err := recipe.resolvePort()
+	if err != nil || !owned || strings.Contains(resolved.URL, "{port}") || !resolved.PrepareEnvironment {
+		t.Fatalf("unresolved recipe: %+v %v", resolved, err)
+	}
+	u, err := url.Parse(resolved.URL)
+	if err != nil || u.Port() == "" || resolved.Argv[1] != "--port="+u.Port() || u.Path != "/page" {
+		t.Fatalf("mismatched launch arguments: %+v %v", resolved, err)
+	}
+	persisted, err := Load(root)
+	if err != nil || persisted.URL != recipe.URL || recipe.Argv[1] != "--port={port}" {
+		t.Fatal("startup mutated reusable recipe", err)
+	}
+}
+
+func TestPreparationFailureNeverStartsPreview(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Configure(root, []byte(`{"version":1,"directory":".","argv":["must-not-run","{port}"],"url":"http://127.0.0.1:{port}","prepare_environment":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager()
+	defer manager.Close()
+	view, err := manager.Start(root, "missing-environment", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for view.State != "error" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		view, _ = manager.Status(root, "missing-environment")
+	}
+	if view.State != "error" || !strings.Contains(view.Error, "no project environment recipe") || view.Log != "" {
+		t.Fatalf("did not stop at missing setup: %+v", view)
 	}
 }
 

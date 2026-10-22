@@ -227,6 +227,8 @@ func (s *Server) handleAlways(pattern string, h http.HandlerFunc) {
 func (s *Server) registerRoutes() {
 	s.handleWorkspace("POST /api/increments", s.handleCreateIncrement)
 	s.handleWorkspace("GET /api/increments/{id}", s.handleGetIncrement)
+	s.handleWorkspace("GET /api/increments/{id}/deletion-plan", s.handleIncrementDeletionPlan)
+	s.handleWorkspace("DELETE /api/increments/{id}", s.handleDeleteIncrement)
 	s.handleWorkspace("POST /api/increments/{id}/{action}", s.handleIncrementAction)
 	s.handleWorkspace("GET /api/board", s.handleGetBoard)
 	s.handleWorkspace("GET /api/board/stream", s.handleStreamBoard)
@@ -284,6 +286,7 @@ func (s *Server) registerRoutes() {
 	// from an id alone, which is a choice an id does not carry.
 	s.handleWorkspace("GET /api/workspace/conversations/{id}/preview", s.handleConversationPreview)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview", s.handleStartConversationPreview)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview/prepare", s.handlePrepareConversationPreview)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/preview", s.handleStopConversationPreview)
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
@@ -303,6 +306,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("PUT /api/workspace/conversations/{id}/next-turn", s.handleUpdateNativeConversationNextTurn)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}", s.handleCloseWorkspaceConversation)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/record", s.handleDeleteWorkspaceConversation)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/deletion-plan", s.handleConversationDeletionPlan)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/record", s.handleRestoreWorkspaceConversation)
 	// Writing into a past conversation is the one thing this collection does
 	// that is neither a read nor a plain open: it opens a new conversation with

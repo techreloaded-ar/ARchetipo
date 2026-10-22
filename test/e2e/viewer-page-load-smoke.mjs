@@ -563,6 +563,7 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
       const path = parsed.pathname;
       const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
       if (path === '/api/workspace/conversations' && (!options.method || options.method === 'GET')) return json({available:true,conversations:[{id:'pagination-fixture',title:'Conversazione lunga in corso',live:true,message_count:events.length}],closed_limit:20});
+      if (path === '/api/workspace/conversations/pagination-fixture/deletion-plan') return json({requires_choice:false,choices:[]});
       if (path === '/api/workspace/conversations/pagination-fixture/archive') {
         await new Promise(resolve => { window.finishArchive = resolve; });
         return json({available:true,conversation:{id:'pagination-fixture',state:'SEALED'},session:{work:'IDLE',archive:'ARCHIVED',connection:'DISCONNECTED'},events:[],approvals:[],runs:[]});

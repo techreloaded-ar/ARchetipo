@@ -121,6 +121,23 @@ do not rerun development or publication to repair bookkeeping.
 Apply the shared local verification environment policy when preparing tests and
 preview. The methods and workers receive ordinary project/spec context and generic
 execution constraints. Keep business state and approvals in this coordinator.
+For a browser preview, first read `execution preview show` in the code checkout.
+Reuse a valid project recipe instead of rediscovering startup at every increment.
+When creating or repairing it, persist through `execution preview configure
+--file -` a version 1 JSON object with `directory` relative to that checkout,
+explicit `argv`, a loopback HTTP `url`, and `prepare_environment: true`. Use
+`{port}` in the URL port and launch arguments, with the project's strict-port
+option or equivalent so it cannot silently switch endpoints. Keep this recipe,
+`.archetipo/environment.json` and setup helpers versioned with product changes;
+do not copy runtime checkpoints, credentials or dependencies between checkouts.
+`show`/`configure` return `kind: preview_recipe`; `execution preview prepare`
+returns `kind: preview` with `data.preparation` containing the standard environment
+result. Require `passed && stable` and inspect its report (including original
+evidence on reuse). Preparation does not start the preview server. Missing recipe
+is `E_PRECONDITION`, invalid configuration is `E_INVALID_INPUT`, and concurrent
+ownership is `E_CONFLICT`; repair the specific cause rather than starting another
+setup. The viewer's Start and standalone `execution preview run` use the same
+preparation contract when the flag is enabled; neither needs a new agent turn.
 Preserve the model and options explicitly requested by the person across
 delegation, resume and recovery.
 

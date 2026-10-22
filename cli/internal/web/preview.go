@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 )
 
 func (s *Server) handleConversationPreview(w http.ResponseWriter, r *http.Request) {
@@ -21,6 +22,14 @@ func (s *Server) handleConversationPreview(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, view)
 }
 func (s *Server) handleStartConversationPreview(w http.ResponseWriter, r *http.Request) {
+	s.changeConversationPreview(w, r, false)
+}
+
+func (s *Server) handlePrepareConversationPreview(w http.ResponseWriter, r *http.Request) {
+	s.changeConversationPreview(w, r, true)
+}
+
+func (s *Server) changeConversationPreview(w http.ResponseWriter, r *http.Request, prepareOnly bool) {
 	// A site displayed in the preview must not be able to start local commands
 	// by submitting a cross-origin form or fetch to the viewer.
 	origin := "http://" + r.Host
@@ -37,7 +46,12 @@ func (s *Server) handleStartConversationPreview(w http.ResponseWriter, r *http.R
 		writeError(w, err)
 		return
 	}
-	view, err := ws.previews.Start(record.WorkingDir, record.ID, origin)
+	var view preview.View
+	if prepareOnly {
+		view, err = ws.previews.Prepare(record.WorkingDir, record.ID)
+	} else {
+		view, err = ws.previews.Start(record.WorkingDir, record.ID, origin)
+	}
 	if err != nil {
 		writeError(w, err)
 		return
