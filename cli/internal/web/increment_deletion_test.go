@@ -118,8 +118,11 @@ func TestIncrementEnvironmentRemovalFromChatArchiveAndButton(t *testing.T) {
 			if err != nil || !receipt.Deleted {
 				t.Fatal("missing deletion evidence", err)
 			}
-			if _, err = os.Stat(receipt.ArchivePath); err != nil {
-				t.Fatal("missing recovery copy", err)
+			if receipt.ArchivePath != "" {
+				t.Fatal("retained environment archive", receipt.ArchivePath)
+			}
+			if head := incrementGit(t, root, "rev-parse", receipt.BackupRef); head != plan.HeadSHA {
+				t.Fatal("missing recovery commit", head)
 			}
 			record, err := server.session().conversationStore().GetMetadata(context.Background(), id)
 			if action == "archive" {

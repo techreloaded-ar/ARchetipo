@@ -148,3 +148,15 @@ screenshot e report sotto `test/workspaces/`, ignorato da Git.
 Increment compone spec e Autopilot; le skill di base e Autopilot non dipendono
 dall’incremento. Checkpoint, recuperi della sessione e verifiche sono descritti
 in [Esecuzioni riprendibili](execution-recovery.md).
+
+## Eliminazione degli ambienti
+
+La rimozione confermata ferma il lavoro e i servizi posseduti dall’incremento,
+esegue il cleanup e rimuove worktree, branch e file locali, incluse dipendenze,
+file ignorati e modifiche non committate. Non crea archivi dell’ambiente.
+Rimangono una ricevuta di eliminazione per i tentativi successivi e un riferimento
+Git `refs/archetipo/deleted/<id>` per recuperare esclusivamente i commit salvati.
+Per recuperarli si può creare un nuovo branch dal riferimento con
+`git branch recupero-incremento refs/archetipo/deleted/<id>`.
+La ricevuta permette anche di leggere una conversazione archiviata dopo averne
+rimosso l’ambiente; non contiene una copia dei file del worktree.

@@ -82,7 +82,9 @@ async function main(){
     await until(async()=>{try{await fetch(item.service.url);return false;}catch{return true;}},'owned test service stopped');
     assert.equal(await git(['for-each-ref','--format=%(refname)','refs/heads/'+item.record.branch]),'');
     const receipt=JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/increment-archives',item.record.id,'deletion.json'),'utf8'));
-    assert.equal(receipt.deleted,true);assert.ok((await fs.stat(receipt.archive_path)).size>0);
+    assert.equal(receipt.deleted,true);assert.equal(receipt.archive_path,'');
+    assert.equal((await git(['rev-parse',receipt.backup_ref])).trim(),receipt.head_sha);
+    assert.deepEqual(await fs.readdir(path.dirname(path.join(sandbox,'.archetipo/increment-archives',item.record.id,'deletion.json'))),['deletion.json']);
    }
    ok(item.mode+': scelta verificata nel browser, esito confermato su chat, servizio, dati, worktree e branch');
   }

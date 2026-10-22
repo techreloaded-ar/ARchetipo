@@ -123,7 +123,7 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	r, err := s.incrementService(ws).Read(record.IncrementID)
 	if err != nil {
 		if receipt, receiptErr := s.incrementService(ws).DeletionReceipt(record.IncrementID); receiptErr == nil && receipt.Deleted {
-			view.Increment = &incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Copia recuperabile: " + receipt.ArchivePath}
+			view.Increment = &incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
 			return
 		}
 		view.Notice = "Incremento non disponibile: " + err.Error()

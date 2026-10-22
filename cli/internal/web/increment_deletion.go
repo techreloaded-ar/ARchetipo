@@ -52,9 +52,9 @@ func (s *Server) conversationRemovalPlan(ctx context.Context, ws *workspaceSessi
 		plan.Choices[0].Label = "Archivia e conserva l’ambiente"
 	}
 	if plan.Increment != nil {
-		plan.Message += " La pulizia completa ferma agente e preview, esegue il cleanup dei servizi e dei dati di test dell’incremento e rimuove worktree, branch e file locali. Rimane una copia locale recuperabile; eventuali PR e branch remoti restano invariati."
+		plan.Message += " La pulizia completa ferma agente e preview, esegue il cleanup dei servizi e dei dati di test dell’incremento e rimuove worktree, branch e file locali. Restano recuperabili solo i commit salvati in Git, senza archivi dell’ambiente; eventuali PR e branch remoti restano invariati."
 		if plan.Increment.Dirty {
-			plan.Message += " Sono presenti modifiche locali non salvate in un commit."
+			plan.Message += " Le modifiche locali non salvate in un commit verranno eliminate definitivamente."
 		}
 		if plan.Increment.UnmergedCommits > 0 {
 			plan.Message += fmt.Sprintf(" Ci sono %d commit non integrati in %s.", plan.Increment.UnmergedCommits, plan.Increment.Record.BaseBranch)

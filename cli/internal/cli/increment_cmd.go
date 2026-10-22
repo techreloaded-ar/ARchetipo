@@ -32,7 +32,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 		}
 		return iox.WriteOK(s.out, "increment_deletion_plan", result)
 	}}
-	deletion := &cobra.Command{Use: "delete <id>", Short: "Save a local recovery copy and remove an increment, its worktree and branch", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	deletion := &cobra.Command{Use: "delete <id>", Short: "Retain committed work in a Git ref and remove an increment, its worktree and branch", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfigFor(cmd)
 		if err != nil {
 			return err
@@ -51,7 +51,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 		return iox.WriteOK(s.out, "increment_deletion", result)
 	}}
 	deletion.Flags().BoolVar(&archiveConversations, "archive-conversations", false, "retain linked conversations as readable archives after removing their environment")
-	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment after saving a local recovery copy")
+	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment and its local files, retaining only committed work in Git")
 	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
 	root.AddCommand(deletionPlan, deletion)
 	for _, operation := range []string{"create", "show", "list", "propose", "approve", "ready", "feedback", "publish", "refresh"} {

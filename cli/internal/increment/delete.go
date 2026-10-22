@@ -32,7 +32,7 @@ type DeletionOptions struct {
 type DeletionResult struct {
 	Record                 Record   `json:"increment"`
 	HeadSHA                string   `json:"head_sha"`
-	ArchivePath            string   `json:"archive_path"`
+	ArchivePath            string   `json:"archive_path"` // Legacy receipts only; new deletions retain commits, never environment files.
 	BackupRef              string   `json:"backup_ref"`
 	WorktreeRemoved        bool     `json:"worktree_removed"`
 	BranchRemoved          bool     `json:"branch_removed"`
@@ -131,15 +131,15 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 			if result.Deleted {
 				return result.Record, nil
 			}
-			if info, archiveErr := os.Stat(result.ArchivePath); archiveErr != nil || info.Size() == 0 {
-				return Record{}, iox.NewPrecondition("recovery snapshot unavailable", "restore the snapshot before continuing deletion", archiveErr)
+			if head, refErr := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", result.BackupRef); refErr != nil || head != expectedHead {
+				return Record{}, iox.NewPrecondition("recovery commit unavailable", "restore the Git recovery ref before continuing deletion", refErr)
 			}
 		} else if !os.IsNotExist(readErr) {
 			return Record{}, readErr
 		}
 		r, err := s.Read(id)
 		if err != nil {
-			if result.WorktreeRemoved && result.ArchivePath != "" && errors.Is(err, os.ErrNotExist) {
+			if result.WorktreeRemoved && result.BackupRef != "" && errors.Is(err, os.ErrNotExist) {
 				r = result.Record
 			} else {
 				return r, err
@@ -178,9 +178,9 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 		}
 		save := func() error { return recordfile.WriteAtomic(dir, receipt, ".deletion-", result) }
 		if !result.WorktreeRemoved {
-			// A previous completed snapshot can be used only for an already absent
-			// checkout. A live checkout is always inspected and snapshotted again.
-			if _, statErr := os.Lstat(r.Workdir); os.IsNotExist(statErr) && result.ArchivePath != "" {
+			// A saved recovery ref permits resuming after checkout removal.
+			// A live checkout is always inspected again.
+			if _, statErr := os.Lstat(r.Workdir); os.IsNotExist(statErr) && result.BackupRef != "" {
 				result.WorktreeRemoved = true
 			} else {
 				plan, planErr := s.DeletionPlan(ctx, id)
@@ -248,19 +248,14 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 					return r, err
 				}
 				result.HeadSHA = plan.HeadSHA
-				archivePath := filepath.Join(dir, "worktree.tar.gz")
 				result.BackupRef = "refs/archetipo/deleted/" + id
-				if err = snapshotWorktree(ctx, r.Workdir, archivePath); err != nil {
-					return r, err
-				}
 				currentPlan, verifyErr := s.DeletionPlan(ctx, id)
 				if verifyErr != nil {
 					return r, verifyErr
 				}
 				if currentPlan.HeadSHA != expectedHead {
-					return r, iox.NewConflict("increment changed during recovery snapshot", "inspect its newer commits and confirm again; worktree preserved", nil)
+					return r, iox.NewConflict("increment changed during cleanup", "inspect its newer commits and confirm again; worktree preserved", nil)
 				}
-				result.ArchivePath = archivePath
 				if _, err = git(ctx, s.Config.ProjectRoot, "update-ref", result.BackupRef, plan.HeadSHA); err != nil {
 					return r, err
 				}
@@ -285,7 +280,7 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 			current, refErr := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/"+r.Branch)
 			if refErr == nil {
 				if current != expectedHead {
-					return r, iox.NewConflict("branch advanced after the snapshot", "preserve its newer commits before removing it; archive: "+result.ArchivePath, nil)
+					return r, iox.NewConflict("branch advanced after confirmation", "preserve its newer commits before removing it; recovery ref: "+result.BackupRef, nil)
 				}
 				if _, err = git(ctx, s.Config.ProjectRoot, "branch", "-D", r.Branch); err != nil {
 					return r, err
@@ -322,11 +317,18 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 		if err = os.Remove(parentPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return r, err
 		}
+		// Finish legacy interrupted deletions without retaining their environment archive.
+		if result.ArchivePath != "" {
+			if err = os.Remove(result.ArchivePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return r, err
+			}
+			result.ArchivePath = ""
+		}
 		result.Deleted = true
 		return r, save()
 	})
-	if err != nil && result.ArchivePath != "" {
-		return result, iox.NewConflict("increment deletion incomplete: "+err.Error(), fmt.Sprintf("recovery copy: %s; retry the same confirmed deletion", result.ArchivePath), err)
+	if err != nil && result.BackupRef != "" {
+		return result, iox.NewConflict("increment deletion incomplete: "+err.Error(), fmt.Sprintf("recovery ref: %s; retry the same confirmed deletion", result.BackupRef), err)
 	}
 	return result, err
 }
@@ -358,7 +360,7 @@ func (s *Service) DeletionReceipt(id string) (DeletionResult, error) {
 	if err = json.Unmarshal(raw, &result); err != nil {
 		return result, err
 	}
-	if result.Record.ID != id || result.Record.Workdir != filepath.Join(s.dir(), "worktrees", id) || result.Record.Branch != "archetipo/increments/"+id || result.ArchivePath != filepath.Join(dir, "worktree.tar.gz") || result.BackupRef != "refs/archetipo/deleted/"+id {
+	if result.Record.ID != id || result.Record.Workdir != filepath.Join(s.dir(), "worktrees", id) || result.Record.Branch != "archetipo/increments/"+id || (result.ArchivePath != "" && result.ArchivePath != filepath.Join(dir, "worktree.tar.gz")) || result.BackupRef != "refs/archetipo/deleted/"+id {
 		return result, iox.NewConflict("invalid deletion receipt", "preserve its recovery files", nil)
 	}
 	return result, nil
