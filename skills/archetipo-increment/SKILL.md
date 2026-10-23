@@ -69,6 +69,16 @@ It never updates the parent backlog.
 
 ## Develop and prepare the result
 
+After intent approval and before development, prepare the checkout in a separate
+technical worker/session using `/archetipo-environment`. View performs this
+orchestration automatically and supplies the preparation evidence. Reuse it for
+this exact checkout; do not repeat configuration/install/build commands in the
+product conversation. Standalone, delegate the same skill, require persisted
+`passed && stable`, and keep setup logs in the technical worker. If delegation is
+unavailable or prerequisites are missing, report the concrete blocker. Discovery
+does not prepare an environment. A later setup requirement is a technical blocker,
+not permission to move setup output into the development thread.
+
 ### Execution ownership and checkpoints
 
 After the intent is approved, own delivery until `increment ready` has frozen the
@@ -127,8 +137,9 @@ When creating or repairing it, persist through `execution preview configure
 --file -` a version 1 JSON object with `directory` relative to that checkout,
 explicit `argv`, a loopback HTTP `url`, and `prepare_environment: true`. Use
 `{port}` in the URL port and launch arguments, with the project's strict-port
-option or equivalent so it cannot silently switch endpoints. Keep this recipe,
-`.archetipo/environment.json` and setup helpers versioned with product changes;
+option or equivalent so it cannot silently switch endpoints. The technical worker publishes the sole common workspace configuration, including
+its explicit non-secret helpers, through `execution environment publish`. Keep
+configuration and helpers versioned with the project;
 do not copy runtime checkpoints, credentials or dependencies between checkouts.
 `show`/`configure` return `kind: preview_recipe`; `execution preview prepare`
 returns `kind: preview` with `data.preparation` containing the standard environment

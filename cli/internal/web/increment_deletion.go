@@ -116,6 +116,9 @@ func (s *Server) handleIncrementDeletionPlan(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) stopConversationForRemoval(ctx context.Context, ws *workspaceSession, record conversationlog.Record) error {
+	if _, err := ws.dispatch.cancelAndWait(ctx, "environment:"+record.WorkingDir); err != nil {
+		return err
+	}
 	if record.Native() {
 		if err := s.stopNativeConversationWork(ctx, ws, record.ID); err != nil {
 			return err

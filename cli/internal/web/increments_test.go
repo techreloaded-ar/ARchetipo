@@ -56,6 +56,7 @@ func finishIncrementTurn(t *testing.T, srv *Server, p *persistentFakeNativeProvi
 func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(t *testing.T) {
 	p := newPersistentFakeNativeProvider("native-fake", nil)
 	srv, cfg, conn := newRunServer(t, p, true)
+	seedCommonEnvironment(t, srv)
 	incrementGit(t, cfg.ProjectRoot, "init", "-b", "main")
 	incrementGit(t, cfg.ProjectRoot, "config", "user.email", "tests@example.test")
 	incrementGit(t, cfg.ProjectRoot, "config", "user.name", "Tests")
@@ -116,6 +117,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if accepted.Code != 200 {
 		t.Fatalf("approve: %d %s", accepted.Code, accepted.Body.String())
 	}
+	awaitEnvironmentReady(t, srv, r.Workdir)
 	if p.lastStart.Session.Native.ID != view.Session.Session.Native.ID || p.lastStart.Session.Environment.WorkingDir != r.Workdir {
 		t.Fatal("approval started another agent outside the increment")
 	}
@@ -210,6 +212,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		t.Fatal(err)
 	}
 	defer restarted.session().stop(time.Second)
+	restarted.session().environmentRunner = directEnvironmentRunner{}
 	resumesBefore := p.store.resumes
 	restored := doJSON(t, restarted, "GET", conversationsRoute+"/"+view.Conversation.ID, nil)
 	var afterRestart conversationView
@@ -230,6 +233,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		if response.Code != 200 {
 			t.Fatalf("resume increment: %d %s", response.Code, response.Body.String())
 		}
+		awaitEnvironmentReady(t, restarted, r.Workdir)
 		if p.store.resumes != before+1 || p.store.next != nativeSessionsBefore || len(restoredProvider.turnStarts) == 0 {
 			t.Fatalf("resume did not reuse exactly one native session: resumes=%d starts=%d", p.store.resumes, p.store.next)
 		}

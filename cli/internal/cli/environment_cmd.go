@@ -2,15 +2,46 @@ package cli
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 )
 
 func newEnvironmentCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "environment", Short: "Run the project's explicit reusable environment and verification recipe"}
+	var assets []string
+	publish := &cobra.Command{Use: "publish", Short: "Publish the common workspace recipe and explicit non-secret helpers", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := loadConfigFor(cmd)
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(filepath.Join(cfg.ProjectRoot, verification.RecipePath))
+		if err != nil {
+			return err
+		}
+		if _, err = verification.Configure(cfg.ProjectRoot, raw); err != nil {
+			return err
+		}
+		if raw, err = os.ReadFile(filepath.Join(cfg.ProjectRoot, preview.RecipePath)); err == nil {
+			if _, err = preview.Configure(cfg.ProjectRoot, raw); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		result, err := environmentrecipe.Publish(cfg.ProjectRoot, assets)
+		if err != nil {
+			return err
+		}
+		return iox.WriteOK(s.out, "environment_recipe", result)
+	}}
+	publish.Flags().StringArrayVar(&assets, "asset", nil, "explicit non-secret helper under scripts/archetipo/; repeat for each file")
+	root.AddCommand(publish)
 	root.AddCommand(&cobra.Command{Use: "_run", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		code, err := verification.Supervise(cmd.Context(), s.in, s.out, s.err)
 		if err == nil {

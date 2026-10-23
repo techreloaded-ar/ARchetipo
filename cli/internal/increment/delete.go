@@ -201,7 +201,7 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				defer func() { _ = mutationLock.Unlock() }()
 				// A released native session may still have a preview owned by another
 				// viewer. Every preview lock must be free, including the standalone CLI.
-				for _, previewID := range append([]string{"standalone"}, result.ConversationIDs...) {
+				for _, previewID := range append([]string{"standalone", "environment"}, result.ConversationIDs...) {
 					previewLock, lockErr := localStore.TryLock(ctx, "preview-"+previewID)
 					if lockErr != nil {
 						return r, iox.NewConflict("a preview is still running", "stop the preview in its owning viewer or terminal before deleting this increment", lockErr)
@@ -223,7 +223,7 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				} else if !os.IsNotExist(resourceErr) {
 					return r, resourceErr
 				}
-				for _, lockID := range []string{"verification-environment", "verification-command", "environment-lifetime"} {
+				for _, lockID := range []string{"environment-preparation", "verification-environment", "verification-command", "environment-lifetime"} {
 					lock, lockErr := localStore.TryLock(ctx, lockID)
 					if lockErr != nil {
 						return r, iox.NewConflict("environment operation is still running", "wait before deleting its checkout", lockErr)

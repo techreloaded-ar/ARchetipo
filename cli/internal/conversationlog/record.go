@@ -27,6 +27,7 @@ import (
 // archive, connection, recovery and work separately; a restart can reconnect
 // their native reference without inventing a new conversation.
 type Record struct {
+	Purpose string `json:"purpose,omitempty"`
 	// Interrupt intent survives a lost acknowledgement or terminal frame.
 	StopRequestedTurnID string `json:"stop_requested_turn_id,omitempty"`
 	IncrementID         string `json:"increment_id,omitempty"`

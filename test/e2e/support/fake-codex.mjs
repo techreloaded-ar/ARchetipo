@@ -30,6 +30,7 @@ if (!control) {
   process.exit(2);
 }
 
+const fixtureThreadID=process.env.FAKE_CODEX_UNIQUE_THREADS ? `thread-${process.pid}` : "thread-1";
 let turnActive = false;
 let pumping = false;
 
@@ -100,12 +101,12 @@ rl.on("line", async (line) => {
     }
     case "thread/start":
       await report("thread/start", { params: message.params });
-      write({ id: message.id, result: { thread: { id: "thread-1" } } });
+      write({ id: message.id, result: { thread: { id: fixtureThreadID } } });
       startPump();
       break;
     case "thread/resume":
       await report("thread/resume", { params: message.params });
-      write({ id: message.id, result: { thread: { id: message.params?.threadId || "thread-1", ephemeral: false }, model: "gpt-fake", reasoningEffort: "medium" } });
+      write({ id: message.id, result: { thread: { id: message.params?.threadId || fixtureThreadID, ephemeral: false }, model: "gpt-fake", reasoningEffort: "medium" } });
       startPump();
       break;
     case "turn/start":

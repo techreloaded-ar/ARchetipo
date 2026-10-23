@@ -227,6 +227,7 @@ func builtin() Template {
 			"archetipo-spec",
 			"archetipo-wiki",
 			"archetipo-increment",
+			"archetipo-environment",
 		},
 		Actions: []Action{
 			{

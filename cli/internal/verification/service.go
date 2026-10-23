@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
@@ -127,10 +128,6 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		}
 		defer func() { _ = lease.Unlock() }()
 	}
-	check, found := recipe.Checks[name]
-	if operation == "check" && !found {
-		return result, invalid("unknown project check: " + name)
-	}
 	store, err := conversationlog.NewFileStore(s.Root)
 	if err != nil {
 		return result, err
@@ -154,6 +151,21 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	}
 	if err = commandLock.Unlock(); err != nil {
 		return result, err
+	}
+	if operation != "cleanup" {
+		if err = environmentrecipe.Sync(s.Root); err != nil {
+			return result, err
+		}
+	}
+	if operation != "cleanup" {
+		recipe, err = Load(s.Root)
+		if err != nil {
+			return result, err
+		}
+	}
+	check, found := recipe.Checks[name]
+	if operation == "check" && !found {
+		return result, invalid("unknown project check: " + name)
 	}
 	value, err := s.readState()
 	if err != nil && operation != "cleanup" {
@@ -303,17 +315,19 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 		return result, err
 	}
 	result.InputKey = key
-	if value.PreparationKey == key && value.PreparationID != "" && s.outputsExist(recipe.Outputs) {
+	original, retained := s.cachedEvidence(filepath.Join(s.dir(), "runs", filepath.Base(value.PreparationID), "report.json"), key, len(recipe.Prepare)+len(recipe.Probe))
+	if value.PreparationKey == key && value.PreparationID != "" && retained && s.outputsExist(recipe.Outputs) {
 		if err = s.run(ctx, &result, recipe.Probe); err != nil {
 			return result, err
 		}
-		after, hashErr := fingerprint(s.Root, preparationRecipe, recipe.Inputs, s.env)
+		after, hashErr := preparationFingerprint(s.Root, s.env)
 		if hashErr != nil {
 			return result, hashErr
 		}
 		if result.Passed && after == key && s.outputsExist(recipe.Outputs) {
 			result.Stable = true
 			result.Reused, result.PreparationID = true, value.PreparationID
+			result.ReusedReport = original.ReportPath
 			return result, s.saveResult(&result)
 		}
 		*value = state{Checks: map[string]string{}}
@@ -339,7 +353,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 	if err = s.run(ctx, &result, commands); err != nil {
 		return result, err
 	}
-	after, err := fingerprint(s.Root, preparationRecipe, recipe.Inputs, s.env)
+	after, err := preparationFingerprint(s.Root, s.env)
 	if err != nil {
 		return result, err
 	}
@@ -463,9 +477,12 @@ func hashFile(path string) (string, error) {
 }
 
 func (s *Service) cached(path, key string) (Result, bool) {
+	return s.cachedEvidence(path, key, 1)
+}
+func (s *Service) cachedEvidence(path, key string, steps int) (Result, bool) {
 	var result Result
 	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &result) != nil || result.EnvironmentID != s.environmentID() || result.Status != "complete" || !result.Passed || !result.Stable || result.Reused || result.InputKey != key || len(result.Steps) != 1 {
+	if err != nil || json.Unmarshal(raw, &result) != nil || result.EnvironmentID != s.environmentID() || result.Status != "complete" || !result.Passed || !result.Stable || result.Reused || result.InputKey != key || len(result.Steps) != steps {
 		return result, false
 	}
 	for _, step := range result.Steps {
@@ -475,4 +492,15 @@ func (s *Service) cached(path, key string) (Result, bool) {
 		}
 	}
 	return result, true
+}
+
+// A shared recipe can be updated from another checkout while a command runs.
+// Re-read its effective preparation contract before certifying the result.
+func preparationFingerprint(root string, env []string) (string, error) {
+	recipe, err := Load(root)
+	if err != nil {
+		return "", err
+	}
+	recipe.Checks, recipe.Cleanup = nil, nil
+	return fingerprint(root, recipe, recipe.Inputs, env)
 }

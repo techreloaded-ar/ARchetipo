@@ -863,6 +863,7 @@ func (s *Server) handleOpenWorkspaceConversation(w http.ResponseWriter, r *http.
 // the adoption of a run that found no thread — differ in exactly these fields
 // and in nothing else.
 type conversationOpenSpec struct {
+	purpose     string
 	workingDir  string
 	incrementID string
 	// specCode is the spec the conversation is about, empty for a free one.
@@ -990,7 +991,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		}
 		openedAt := time.Now().UTC()
 		record := conversationlog.Record{
-			Version: conversationlog.CurrentVersion, ID: id, SpecCode: spec.specCode, IncrementID: spec.incrementID,
+			Version: conversationlog.CurrentVersion, ID: id, SpecCode: spec.specCode, IncrementID: spec.incrementID, Purpose: spec.purpose,
 			Title: conversationTitleOf(nil, openedAt), WorkingDir: environment.WorkingDir,
 			ProviderID: created.Session.ProviderID, OpenedAt: openedAt, LastMessageAt: openedAt,
 			Session: &created.Session, Archive: created.Archive, Connection: created.Connection,
@@ -1131,8 +1132,9 @@ type openConversationReq struct {
 }
 
 type sendConversationMessageReq struct {
-	Message string `json:"message"`
-	Skill   string `json:"skill,omitempty"`
+	environmentPrepared bool
+	Message             string `json:"message"`
+	Skill               string `json:"skill,omitempty"`
 	// executionID names the ARchetipo action this turn carries out, and is
 	// deliberately not a JSON field: a browser cannot claim that the message it
 	// is typing belongs to an action. It is filled in by the two callers that

@@ -13,7 +13,7 @@
  const monitor=icon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>');
  host.innerHTML=`<div class="preview-toolbar">
   <div class="preview-location"><span class="preview-state-dot"></span><span class="preview-location-text">Anteprima locale</span></div>
-  <div class="preview-toolbar-actions"><button type="button" class="preview-pick" data-preview="reopen" hidden>Apri pannello</button><button type="button" class="preview-launch" data-preview="setup">${play}<span>Configura con l’agente</span></button><button type="button" class="preview-launch" data-preview="start">${play}<span>Avvia preview</span></button><button type="button" class="preview-icon" data-preview="reload" aria-label="Ricarica preview" title="Ricarica">${refreshIcon}</button><button type="button" class="preview-icon" data-preview="fullscreen" aria-label="Preview a schermo intero" title="Schermo intero" aria-pressed="false">${expand}</button><a class="preview-icon" data-preview="external" target="_blank" rel="noopener noreferrer" aria-label="Apri preview nel browser" title="Apri nel browser">${external}</a><details class="preview-menu"><summary class="preview-icon" aria-label="Altre opzioni preview" title="Altre opzioni">···</summary><div><button type="button" data-preview="reconfigure">Configura o ripara con l’agente</button><button type="button" data-preview="prepare">Prepara ambiente</button><button type="button" class="preview-stop" data-preview="stop">Ferma ambiente</button></div></details></div>
+  <div class="preview-toolbar-actions"><button type="button" class="preview-pick" data-preview="reopen" hidden>Apri pannello</button><button type="button" class="preview-launch" data-preview="start">${play}<span>Preview</span></button><button type="button" class="preview-icon" data-preview="reload" aria-label="Ricarica preview" title="Ricarica">${refreshIcon}</button><button type="button" class="preview-icon" data-preview="fullscreen" aria-label="Preview a schermo intero" title="Schermo intero" aria-pressed="false">${expand}</button><a class="preview-icon" data-preview="external" target="_blank" rel="noopener noreferrer" aria-label="Apri preview nel browser" title="Apri nel browser">${external}</a><details class="preview-menu"><summary class="preview-icon" aria-label="Altre opzioni preview" title="Altre opzioni">···</summary><div><button type="button" data-preview="reconfigure">Ripara configurazione</button><button type="button" data-preview="environment" hidden>Dettagli ambiente</button><button type="button" class="preview-stop" data-preview="stop">Ferma ambiente</button></div></details></div>
  </div>
  <div class="preview-tools"><label class="preview-viewport">${monitor}<span class="sr-only">Dimensioni schermo</span><select data-preview="width" aria-label="Dimensioni schermo"><option value="100%">Adatta</option><option value="820px">Tablet · 820</option><option value="390px">Mobile · 390</option></select></label><button type="button" class="preview-pick" data-preview="pick">${pointer}<span>Commenta un elemento</span></button></div>
  <div class="preview-stage"><div class="preview-placeholder"><svg width="64" height="54" viewBox="0 0 64 54" fill="none" aria-hidden="true"><rect x="5" y="5" width="54" height="43" rx="7" stroke="currentColor" stroke-width="1.4"/><path d="M5 17h54M13 11h1m4 0h1m4 0h1M25 27l-5 5 5 5m14-10 5 5-5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><h3>Il tuo lavoro, qui.</h3><p>Avvia l’applicazione per esplorare il risultato e indicare cosa cambiare.</p></div></div>
@@ -140,17 +140,15 @@
   find("fullscreen").hidden=!document.fullscreenEnabled;
   find("pick").querySelector("span").textContent=picking?"Selezione attiva · Esc":"Commenta un elemento";
   find("pick").setAttribute("aria-pressed",String(picking));
-  find("setup").disabled=busy || !current?.writable;
-  find("start").disabled=busy || !view?.configured || ["preparing","starting","ready"].includes(view?.state);
-  find("prepare").disabled=busy || !view?.configured || ["preparing","starting","ready"].includes(view?.state);
-  find("reconfigure").disabled=busy || !current?.writable || ["preparing","starting","ready"].includes(view?.state);
-  find("stop").disabled=busy || !["preparing","starting","ready","error"].includes(view?.state);
+  find("start").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","ready"].includes(view?.state);
+  find("reconfigure").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","ready"].includes(view?.state);
+  find("stop").disabled=busy || !["configuring","waiting","preparing","starting","ready","error"].includes(view?.state);
   find("reload").disabled=!frame;
   const state=view?.state || "unconfigured";
   host.dataset.state=state;
-  find("setup").hidden=state!=="unconfigured";
-  find("start").hidden=["unconfigured","ready"].includes(state);
-  find("start").querySelector("span").textContent=state==="preparing"?"Preparazione in corso…":state==="starting"?"Avvio in corso…":"Avvia preview";
+  find("environment").hidden=!view?.environment?.conversation_id;
+  find("start").hidden=state==="ready";
+  find("start").querySelector("span").textContent=state==="configuring"?"Configurazione…":state==="waiting"?"Serve il tuo intervento":state==="preparing"?"Preparazione…":state==="starting"?"Avvio…":"Preview";
   find("pick").hidden=state!=="ready";
   find("reload").hidden=state!=="ready";
   find("external").hidden=state!=="ready";
@@ -166,9 +164,9 @@
  }
  function apply(value){
   view=value;
-  host.querySelector(".preview-log pre").textContent=[value.resources?.resources?.map(r=>`Servizio ${r.resource.name}: ${r.state}${r.error ? " — "+r.error : ""}`).join("\n"),value.resources?.ports ? Object.entries(value.resources.ports).map(([name,port])=>`${name}: 127.0.0.1:${port}`).join("\n") : "",value.log,value.preparation?.report_path ? "Report ambiente: "+value.preparation.report_path : ""].filter(Boolean).join("\n");
+  host.querySelector(".preview-log pre").textContent=[value.resources?.resources?.map(r=>`Servizio ${r.resource.name}: ${r.state}${r.error ? " — "+r.error : ""}`).join("\n"),value.resources?.ports ? Object.entries(value.resources.ports).map(([name,port])=>`${name}: 127.0.0.1:${port}`).join("\n") : "",value.environment?.log,value.log,value.preparation?.report_path ? "Report ambiente: "+value.preparation.report_path : ""].filter(Boolean).join("\n");
   host.querySelector(".preview-error-badge").hidden=!(value.state==="error" || value.error);
-  const labels={unconfigured:"Configura la preview con l’agente una volta per questo progetto.",stopped:"Preview pronta da avviare.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",ready:"Preview disponibile.",error:value.error};
+  const labels={unconfigured:"Premi Preview: configuriamo e prepariamo l’ambiente del progetto.",configuring:"Configurazione ambiente nella sessione tecnica…",waiting:"Serve il tuo intervento. Apri Dettagli ambiente.",stopped:"Premi Preview per aprire l’applicazione.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",ready:"Preview disponibile.",error:value.error};
   status.textContent=notice || labels[value.state] || value.state;
   if(value.state==="ready") {
    find("external").href=value.url;
@@ -213,6 +211,7 @@
   const button=event.target.closest("[data-preview]");if(!button || button.disabled)return;
   const action=button.dataset.preview==="reconfigure"?"setup":button.dataset.preview;
   host.querySelector(".preview-menu").open=false;
+  if(action==="environment"){window.dispatchEvent(new CustomEvent("archetipo:environment-open",{detail:{id:view?.environment?.conversation_id}}));return;}
   if(action==="close"){open=false;persist();visibility();return;}
   if(action==="fullscreen"){
    try{if(document.fullscreenElement===host)await document.exitFullscreen();else await host.requestFullscreen();}catch(error){showError(error);}return;
@@ -227,7 +226,7 @@
   if(!["start","stop","prepare","setup","send"].includes(action) || busy)return;
   const selected=key, url=route();request++;notice="";busy=true;updateButtons();
   try{
-   if(action==="setup"){await messageToAgent(window.Preview.setupMessage());if(key===selected){notice="Ho chiesto all’agente di preparare la preview.";status.textContent=notice;}}
+   if(action==="setup"){const value=await api(url+"/configure","POST");if(key===selected)apply(value);}
    if(action==="send"){
     if(comments.some(c=>!c.note.trim()))return;
     const batch=comments;

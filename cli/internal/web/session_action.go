@@ -167,8 +167,28 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 	if plan.userInput != "" {
 		display += "\n\n" + plan.userInput
 	}
-	if err := s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: prompt, Skill: plan.skill, executionID: opened.ID, display: display}); err != nil {
-		ws.settleSessionAction(ctx, opened.ID, nil, err)
+	send := func(sendCtx context.Context) error {
+		if operation := readEnvironmentOperation(snapshot.workingDir); plan.action == execution.ActionImplement && operation.Preparation != nil {
+			prompt += "\nEnvironment preparation report for " + snapshot.workingDir + ": " + operation.Preparation.ReportPath
+		}
+		err := s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: prompt, Skill: plan.skill, executionID: opened.ID, display: display})
+		if err != nil {
+			ws.settleSessionAction(sendCtx, opened.ID, nil, err)
+		}
+		return err
+	}
+	if plan.action == execution.ActionImplement {
+		prompt += "\nL’ambiente è preparato da una sessione tecnica separata. Riusa la ricetta comune e il report di preparazione; non ripetere la configurazione o la build di setup in questa conversazione. Se i requisiti cambiano, segnala il blocco ambiente."
+		if err := s.queueEnvironment(ctx, ws, snapshot.workingDir, false, false, func(jobCtx context.Context) error {
+			if err := send(jobCtx); err != nil {
+				return err
+			}
+			return nil
+		}, func(err error) { ws.settleSessionAction(context.Background(), opened.ID, nil, err) }); err != nil {
+			ws.settleSessionAction(ctx, opened.ID, nil, err)
+			return nil, err
+		}
+	} else if err := send(ctx); err != nil {
 		return nil, err
 	}
 	// The link is written on the conversation as well as on the record, because

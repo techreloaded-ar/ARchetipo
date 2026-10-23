@@ -211,6 +211,9 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 	closedCount := 0
 	hasMoreClosed := false
 	for _, record := range records {
+		if record.Purpose == "environment" {
+			continue
+		}
 		live := alive[record.ID] && record.Connection != execution.ConnectionReleased
 		if !live {
 			if closedCount >= closedLimit {

@@ -19,8 +19,8 @@ test('picker payload has a bounded explicit shape',()=>{
  assert.equal(preview.cleanElement({tag:"button",url:"/old"}).selector,"");
  assert.equal(element.text.length,1000);assert.equal(element.evil,undefined);
 });
-test('preparation asks the agent for an explicit recipe without starting it',()=>{
- const message=preview.setupMessage();assert.match(message,/resources/);assert.match(message,/start, probe, stop, stopped/);assert.match(message,/ARCHETIPO_RESOURCE_OWNER/);assert.match(message,/ARCHETIPO_PORT_<NOME>/);assert.match(message,/archetipo execution preview configure/);assert.match(message,/Non avviare il server/);assert.match(message,/\{port\}/);assert.match(message,/prepare_environment/);assert.match(message,/execution preview prepare/);assert.match(message,/versionati/);assert.match(message,/directory di lavoro/);
+test('the browser does not own agent setup instructions',()=>{
+ assert.equal(preview.setupMessage,undefined);
 });
 
 test('panel limits retain the live page at small and large available heights',()=>{

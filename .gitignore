@@ -56,3 +56,11 @@ graphify-out
 .taskman
 .pi-subagents
 update.sh
+
+# Explicit source files for workspace environment orchestration.
+!cli/internal/environmentrecipe/
+!cli/internal/environmentrecipe/**
+!cli/internal/web/environment.go
+!cli/internal/web/environment_test.go
+!skills/archetipo-environment/
+!skills/archetipo-environment/**

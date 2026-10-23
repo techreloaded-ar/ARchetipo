@@ -8055,6 +8055,10 @@
 	}
 	// Preview feedback uses this same native conversation; it never starts an
 	// action selected in the composer or consumes the person's draft.
+ window.addEventListener("archetipo:environment-open", async event => {
+  const id=event.detail?.id;if(!id)return;
+  try{await switchToConversation(id);}catch(error){showToast(error.message || String(error),"error");}
+ });
 	window.addEventListener("archetipo:preview-send", async (event) => {
 		const {id, message, resolve, reject} = event.detail;
 		if (id !== conversationsCurrentId || conversationBusy || !conversationIsActive()) { reject(new Error("Attendi che la conversazione possa ricevere un messaggio.")); return; }

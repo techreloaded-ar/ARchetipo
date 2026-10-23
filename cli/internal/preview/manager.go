@@ -66,13 +66,19 @@ func (i *Instance) fail(err error) {
 type Manager struct {
 	mu        sync.Mutex
 	instances map[string]*Instance
+	roots     map[string]string
 	closed    bool
 }
 
-func NewManager() *Manager { return &Manager{instances: map[string]*Instance{}} }
+func NewManager() *Manager {
+	return &Manager{instances: map[string]*Instance{}, roots: map[string]string{}}
+}
 
 func (m *Manager) Status(root, id string) (View, error) {
 	m.mu.Lock()
+	if owner := m.roots[root]; owner != "" {
+		id = owner
+	}
 	instance := m.instances[id]
 	m.mu.Unlock()
 	if instance != nil {
@@ -113,6 +119,13 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	if m.closed {
 		return View{}, iox.NewConflict("workspace preview manager is stopped", "open the workspace again", nil)
 	}
+	if owner := m.roots[root]; owner != "" && owner != id {
+		if existing := m.instances[owner]; existing != nil {
+			if state := existing.Snapshot(); state.State != "error" && state.State != "stopped" {
+				return state, nil
+			}
+		}
+	}
 	if existing := m.instances[id]; existing != nil {
 		if state := existing.Snapshot(); state.State != "error" && state.State != "stopped" {
 			return state, nil
@@ -138,7 +151,7 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	if err != nil {
 		return View{}, err
 	}
-	lock, err := store.TryLock(context.Background(), "preview-"+id)
+	lock, err := store.TryLock(context.Background(), "preview-environment")
 	if err != nil {
 		return View{}, iox.NewConflict("another viewer owns this preview", "stop the existing preview before starting another", err)
 	}
@@ -170,6 +183,7 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 		listener = &previewListener{Listener: listener, connections: map[*previewConnection]struct{}{}}
 	}
 	m.instances[id] = i
+	m.roots[root] = id
 	go i.run(ctx, root, dir, parentOrigin, r, listener, lock, prepareOnly)
 	return i.Snapshot(), nil
 }
@@ -371,6 +385,11 @@ func (m *Manager) Close() {
 // StopEnvironment also works after a viewer restart, when only the durable
 // resource journal remains. A live owner's lifetime lock prevents takeover.
 func (m *Manager) StopEnvironment(root, id string) error {
+	m.mu.Lock()
+	if owner := m.roots[root]; owner != "" {
+		id = owner
+	}
+	m.mu.Unlock()
 	if err := m.Stop(id); err != nil {
 		return err
 	}

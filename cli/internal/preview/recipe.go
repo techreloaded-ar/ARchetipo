@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
@@ -109,7 +110,7 @@ func (r Recipe) resolvePort() (Recipe, bool, error) {
 
 func Load(root string) (Recipe, error) {
 	var r Recipe
-	raw, err := os.ReadFile(filepath.Join(root, RecipePath))
+	raw, err := environmentrecipe.Read(root, RecipePath)
 	if os.IsNotExist(err) {
 		return r, iox.NewPrecondition("preview is not configured", "ask the agent to configure archetipo execution preview configure in this conversation's working directory", err)
 	}
@@ -134,6 +135,13 @@ func parse(root string, raw []byte) (Recipe, error) {
 func Configure(root string, raw []byte) (Recipe, error) {
 	r, err := parse(root, raw)
 	if err != nil {
+		return r, err
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		return r, err
+	}
+	if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
 		return r, err
 	}
 	dir := filepath.Join(root, ".archetipo")

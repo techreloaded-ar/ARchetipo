@@ -26,7 +26,7 @@ async function main(){
  const received=[],queue=[];
  const control=http.createServer(async(req,res)=>{
   res.setHeader('Content-Type','application/json');
-  if(req.url.startsWith('/next')){res.end(JSON.stringify(queue.shift()||{kind:'none'}));return;}
+  if(req.url.startsWith('/next')){const pid=Number(new URL(req.url,'http://localhost').searchParams.get('pid'));const index=queue.findIndex(item=>!item.targetPid||item.targetPid===pid);res.end(JSON.stringify(index<0?{kind:'none'}:queue.splice(index,1)[0]));return;}
   if(req.url==='/received'){received.push(JSON.parse(await readBody(req)));res.end('{}');return;}
   res.writeHead(404);res.end('{}');
  });
@@ -95,6 +95,7 @@ async function main(){
   assert.notEqual(failed.code,0);assert.match(failed.stdout+failed.stderr,/report.json/);
   assert.equal(await fs.stat(path.join(broken,'server.pid')).then(()=>true,()=>false),false,'failed setup launched server');
   ok('Due incrementi reali ereditano le ricette, preparano risorse proprie e partono insieme con porte diverse; un setup fallito impedisce l’avvio.');
+  await run('publish-common',cli,['execution','environment','publish'],{cwd:sandbox});
   viewer=await startViewServer(cli,sandbox,env,'/api/board');
   const openedResponse=await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   const opened=await openedResponse.json();assert.equal(openedResponse.status,201,JSON.stringify(opened));
@@ -125,7 +126,8 @@ async function main(){
   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'configured preview ready to start');
   assert.equal(await fs.stat(path.join(sandbox,'server.pid')).then(()=>true,()=>false),false,'preview started before button');
   const turnsBeforeSetup=received.filter(e=>e.kind==='turn/start').length;
-  await page.evaluate('document.querySelector(".preview-menu").open=true;document.querySelector("[data-preview=prepare]").click()');
+  assert.equal(await page.evaluate('!!document.querySelector("[data-preview=prepare]")'),false,'ordinary UI exposes redundant preparation');
+  await fetch(endpoint+'/preview/prepare',{method:'POST'});
   await until(async()=>{const value=await (await fetch(endpoint+'/preview')).json();return value.state==='stopped' && value.preparation?.passed && value.preparation?.stable;},'deterministic preparation without server');
   assert.equal(await fs.stat(path.join(sandbox,'server.pid')).then(()=>true,()=>false),false,'prepare launched app');
   assert.equal(received.filter(e=>e.kind==='turn/start').length,turnsBeforeSetup,'prepare contacted agent');
@@ -387,6 +389,61 @@ async function main(){
   environmentRun.kill('SIGKILL');
   await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'standalone run death cleans external dependency');
   ok('Stop fallito conservato e riprovato; environment run standalone esclusivo e cleanup anche dopo SIGKILL.');
+  // First use has one Preview button and a distinct durable technical session.
+  // The fake agent chooses configuration; CLI, preparation and startup are real.
+  {
+   const bootstrap=path.join(dir,'bootstrap');await fs.mkdir(bootstrap);
+   await run('bootstrap-init',cli,['init','--tool','codex','--connector','file','--yes'],{cwd:bootstrap});
+   await fs.appendFile(path.join(bootstrap,'.archetipo/config.yaml'),'\nexecution:\n  default_provider:\n    id: codex\n    config:\n      command: '+JSON.stringify(path.join(repo,'test/e2e/support/fake-codex.mjs'))+'\n      model: gpt-fake\n      sandbox: workspace-write\n');
+   await fs.copyFile(app,path.join(bootstrap,'server.mjs'));
+   for(const args of [['init','-b','main'],['config','user.name','Tests'],['config','user.email','tests@example.test'],['add','.archetipo/config.yaml','server.mjs'],['commit','-m','initial']])await run('bootstrap-git','git',args,{cwd:bootstrap});
+   const early=JSON.parse((await run('early-increment',cli,['increment','create','--file',incrementInput],{cwd:bootstrap})).stdout).data;
+   viewer=await startViewServer(cli,bootstrap,{...env,FAKE_CODEX_UNIQUE_THREADS:'1'},'/api/board');
+   const product=await (await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+   const productID=product.conversation.id,productEndpoint=viewer.url+'/api/workspace/conversations/'+productID;
+   await page.send('Page.navigate',{url:viewer.url});
+   await page.waitFor(`!!document.querySelector('[data-conversation-id="${productID}"]')`,timeout,'bootstrap conversation');
+   await page.evaluate(`document.querySelector('[data-conversation-id="${productID}"]').click()`);
+   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'bootstrap preview control');
+   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
+   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'first-use Preview enabled');
+   assert.equal(await page.evaluate('!!document.querySelector("[data-preview=setup], [data-preview=prepare]")'),false);
+   await page.evaluate('document.querySelector("[data-preview=start]").click()');
+   let technicalID,technicalStart;
+   await until(async()=>{const state=await (await fetch(productEndpoint+'/preview')).json();technicalID=state.environment?.conversation_id;technicalStart=received.find(e=>e.kind==='turn/start'&&(e.params.input||[]).some(i=>i.text?.includes('/archetipo-environment')));return technicalID&&technicalStart;},'separate technical setup session');
+   assert.notEqual(technicalID,productID);
+   const ordinaryIndex=await (await fetch(viewer.url+'/api/workspace/conversations')).json();
+   assert(!ordinaryIndex.conversations.some(c=>c.id===technicalID),'technical session leaked into ordinary rail');
+   const technical=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
+   assert.notEqual(technical.conversation.id,productID);
+   await fs.mkdir(path.join(bootstrap,'scripts/archetipo'),{recursive:true});
+   await fs.writeFile(path.join(bootstrap,'scripts/archetipo/prepare.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
+   const setupInput=path.join(dir,'bootstrap-environment.json');
+   await fs.writeFile(setupInput,JSON.stringify({version:1,inputs:['scripts/archetipo/prepare.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'scripts/archetipo/prepare.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(!require('node:fs').existsSync('dependency.ready'))process.exit(1)"],timeout_seconds:10}],checks:{}}));
+   await run('bootstrap-configure',cli,['execution','environment','configure','--file',setupInput],{cwd:bootstrap});
+   await run('bootstrap-preview',cli,['execution','preview','configure','--file',recipe],{cwd:bootstrap});
+   await run('bootstrap-publish',cli,['execution','environment','publish','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'setup-output',delta:'BUILD_ONLY_IN_TECHNICAL_SESSION'}});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-1',status:'completed'}}});
+   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'first-use configuration continues automatically into preview');
+   const productHistory=await (await fetch(productEndpoint)).json();
+   assert(!JSON.stringify(productHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log polluted product conversation');
+   const technicalHistory=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
+   assert(JSON.stringify(technicalHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log was not durable');
+   assert.equal(await fs.readFile(path.join(bootstrap,'setup-count'),'utf8'),'setup\n');
+   const startsBefore=received.filter(e=>e.kind==='turn/start').length;
+   const inherited=JSON.parse((await run('early-increment-preparation',cli,['execution','environment','prepare'],{cwd:early.workdir})).stdout).data;
+   assert(inherited.passed&&inherited.stable);assert.equal(await fs.readFile(path.join(early.workdir,'setup-count'),'utf8'),'setup\n');
+   const later=JSON.parse((await run('later-increment',cli,['increment','create','--file',incrementInput],{cwd:bootstrap})).stdout).data;
+   const laterPrepared=JSON.parse((await run('later-increment-preparation',cli,['execution','environment','prepare'],{cwd:later.workdir})).stdout).data;
+   assert(laterPrepared.passed&&laterPrepared.stable);
+   assert.equal(received.filter(e=>e.kind==='turn/start').length,startsBefore,'inheritance reconfigured through agent');
+   const another=await (await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+   const shared=await (await fetch(viewer.url+'/api/workspace/conversations/'+another.conversation.id+'/preview',{method:'POST'})).json();
+   const original=await (await fetch(productEndpoint+'/preview')).json();assert.equal(shared.url,original.url,'same checkout launched duplicate preview');
+   await fetch(productEndpoint+'/preview',{method:'DELETE'});
+   ok('Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; nessun log nella chat di sviluppo. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
+  }
   assert.deepEqual(exceptions,[],'uncaught browser exceptions');
   await fs.writeFile(path.join(dir,'summary.json'),JSON.stringify({status:'pass',checks},null,2));
   await fs.writeFile(path.join(dir,'report.html'),`<!doctype html><meta charset="utf-8"><h1>Preview smoke: PASS</h1><ul>${checks.map(text=>'<li>'+text+'</li>').join('')}</ul>`);

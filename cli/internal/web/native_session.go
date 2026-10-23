@@ -141,6 +141,7 @@ func (ws *workspaceSession) restoreNativeConversations(registry *execution.Regis
 		// provider, an archived thread, a session that will turn out to be
 		// unresumable — are reconciled too. A turn this record still calls
 		// running belongs to a runtime that died with the previous View process.
+		ws.reconcilePendingEnvironmentExecution(ctx, record)
 		ws.reconcileInterruptedTurn(ctx, record)
 		if record.Archive == execution.ArchiveArchived {
 			ws.nativeRuntime.drop(record.ID)
@@ -553,6 +554,16 @@ func (ws *workspaceSession) sendNativeConversationMessage(ctx context.Context, s
 	record, err := ws.conversationStore().GetMetadata(ctx, snapshot.id)
 	if err != nil {
 		return err
+	}
+	if record.Purpose != "environment" && !body.environmentPrepared {
+		operation := readEnvironmentOperation(record.WorkingDir)
+		if operation.State == "preparing" || operation.State == "configuring" || operation.State == "waiting" {
+			if lease, leaseErr := environmentLease(ctx, record.WorkingDir); leaseErr != nil {
+				return iox.NewConflict("preparazione ambiente in corso", "consulta Preview e Dettagli ambiente; il messaggio non è stato inviato", leaseErr)
+			} else {
+				_ = lease.Unlock()
+			}
+		}
 	}
 	if record.Archive == execution.ArchiveArchived {
 		return iox.NewConflict("the conversation "+snapshot.id+" is archived", "reopen it before sending another turn", nil)

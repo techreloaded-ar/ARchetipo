@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 )
@@ -59,7 +60,7 @@ var envPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 func Load(root string) (Recipe, error) {
 	var recipe Recipe
-	raw, err := os.ReadFile(filepath.Join(root, RecipePath))
+	raw, err := environmentrecipe.Read(root, RecipePath)
 	if os.IsNotExist(err) {
 		return recipe, iox.NewPrecondition("no project environment recipe", "create .archetipo/environment.json with explicit project setup, probes and checks; do not guess services or credentials", err)
 	}
@@ -75,6 +76,13 @@ func Configure(root string, raw []byte) (Recipe, error) {
 		return recipe, err
 	}
 	dir := filepath.Join(root, ".archetipo")
+	encoded, err := json.Marshal(recipe)
+	if err != nil {
+		return recipe, err
+	}
+	if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
+		return recipe, err
+	}
 	return recipe, recordfile.WriteAtomic(dir, filepath.Join(root, RecipePath), ".recipe-", recipe)
 }
 

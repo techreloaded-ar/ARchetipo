@@ -98,6 +98,20 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 			}
 		}
 	}
+	if environment := readEnvironmentOperation(r.Workdir); environment.State != "" {
+		switch environment.State {
+		case "preparing", "configuring":
+			view.ActivityLabel = "Preparazione ambiente"
+			view.Busy = true
+		case "waiting":
+			view.ActivityLabel = "Ambiente: serve il tuo intervento"
+			view.Busy = true
+			view.Note = "Apri Preview e Dettagli ambiente per rispondere nella sessione tecnica."
+		case "error":
+			view.ActivityLabel = "Ambiente da verificare"
+			view.Note = environment.Error
+		}
+	}
 	for _, action := range tpl.IncrementActions {
 		allowed := false
 		for _, status := range action.Statuses {
@@ -288,7 +302,15 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, iox.NewConflict("la conversazione deve essere ripresa", "riapri la sessione dell’incremento; l’intento approvato è conservato", nil))
 			return
 		}
-		if err = s.sendNativeConversationMessage(ctx, ws, snapshot, sendConversationMessageReq{Message: incrementPrompt(current, message), display: message}); err != nil {
+		send := func(sendCtx context.Context) error {
+			return s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: incrementPrompt(current, message) + "\nEnvironment preparation report: " + environmentReport(current.Workdir) + "\nL’ambiente è stato preparato separatamente. Usa la ricetta comune e i report esistenti; non ripetere configurazione o build di setup nella chat di sviluppo. Per modifiche ai requisiti dell’ambiente, segnala il blocco nel pannello ambiente.", display: message})
+		}
+		if action == "approve-intent" || action == "develop" {
+			err = s.queueEnvironment(ctx, ws, current.Workdir, false, false, send)
+		} else {
+			err = send(ctx)
+		}
+		if err != nil {
 			writeError(w, err)
 			return
 		}
@@ -300,7 +322,7 @@ func (s *Server) prepareIncrementMessage(ctx context.Context, ws *workspaceSessi
 	if err != nil {
 		return err
 	}
-	if record.IncrementID == "" {
+	if record.Purpose == "environment" || record.IncrementID == "" {
 		return nil
 	}
 	service := s.incrementService(ws)

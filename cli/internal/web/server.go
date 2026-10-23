@@ -287,6 +287,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversations/{id}/preview", s.handleConversationPreview)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview", s.handleStartConversationPreview)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview/prepare", s.handlePrepareConversationPreview)
+	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview/configure", s.handleConfigureConversationPreview)
 	s.handleWorkspace("DELETE /api/workspace/conversations/{id}/preview", s.handleStopConversationPreview)
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)

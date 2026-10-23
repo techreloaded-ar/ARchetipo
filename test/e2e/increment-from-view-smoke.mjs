@@ -71,6 +71,10 @@ async function main(){
   await run("init",cli,["init","--tool","codex","--connector","file","--yes"],{cwd:sandbox});
   await fs.appendFile(path.join(sandbox,".archetipo/config.yaml"),"\nexecution:\n  default_provider:\n    id: codex\n    config:\n      command: "+JSON.stringify(fakeCodex)+"\n      model: gpt-fake\n      sandbox: workspace-write\n");
   await fs.writeFile(path.join(sandbox,"hello.txt"),"originale\n");
+  const environmentInput=path.join(runDir,"environment.json");
+  await fs.writeFile(environmentInput,JSON.stringify({version:1,probe:[{name:"ready",argv:[process.execPath,"--version"],timeout_seconds:10}],checks:{}}));
+  await run("environment-configure",cli,["execution","environment","configure","--file",environmentInput],{cwd:sandbox});
+  await run("environment-publish",cli,["execution","environment","publish"],{cwd:sandbox});
   await fs.writeFile(path.join(sandbox,".gitignore"),".agents/\n");
   const git=async(args,cwd=sandbox)=>(await run("git","git",args,{cwd})).stdout.trim();
   await git(["init","-b","main"]);await git(["config","user.email","tests@example.test"]);await git(["config","user.name","Tests"]);

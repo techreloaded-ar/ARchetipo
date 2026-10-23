@@ -12,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
@@ -78,8 +79,9 @@ type workspaceSession struct {
 	// describing what the action itself did. See registerActionConfirmation.
 	actionConfirmations sync.Map
 	// A manual creation and a proposed story share progressive code assignment.
-	specCreateMu sync.Mutex
-	previews     *preview.Manager
+	specCreateMu      sync.Mutex
+	previews          *preview.Manager
+	environmentRunner verification.Runner
 
 	// startOnce, stopOnce and cancel govern the lifecycle. cancel is nil until
 	// start runs, so a session built and never started can still be stopped.

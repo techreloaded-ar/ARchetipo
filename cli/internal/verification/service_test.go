@@ -331,3 +331,31 @@ func TestCancellationLeavesNoReusablePreparation(t *testing.T) {
 		t.Fatalf("cancelled setup was reused: %+v", next)
 	}
 }
+
+func TestMissingPreparationEvidenceRequiresFreshSetup(t *testing.T) {
+	s, runner, _ := fixture(t)
+	first := execute(t, s, "prepare")
+	if err := os.Remove(first.ReportPath); err != nil {
+		t.Fatal(err)
+	}
+	second := execute(t, s, "prepare")
+	if second.Reused || !second.Passed || first.PreparationID == second.PreparationID {
+		t.Fatal("reused a preparation whose original evidence was removed")
+	}
+	if strings.Join(runner.calls, ",") != "install,ready,install,ready" {
+		t.Fatalf("setup was not repeated: %v", runner.calls)
+	}
+}
+
+func TestPreparationLogsAreBoundedAndConfinedToCheckout(t *testing.T) {
+	s, _, _ := fixture(t)
+	result := execute(t, s, "prepare")
+	logs, err := s.Logs(result, 32)
+	if err != nil || len(logs) > 32 {
+		t.Fatalf("invalid bounded logs: %q %v", logs, err)
+	}
+	result.Steps[0].LogPath = filepath.Join(t.TempDir(), "unrelated.log")
+	if _, err = s.Logs(result, 32); err == nil {
+		t.Fatal("accepted a log outside the checkout's environment reports")
+	}
+}

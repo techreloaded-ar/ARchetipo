@@ -26,6 +26,7 @@ func newActionSessionServer(t *testing.T) (*Server, *persistentFakeNativeProvide
 		execution.CapabilitySpecReview,
 	}
 	srv, _, conn := newRunServer(t, provider, true)
+	seedCommonEnvironment(t, srv)
 	// The followers write into the workspace directory the framework is about
 	// to delete, so they are ended before it goes: a cancellation alone would
 	// leave one mid-write.
@@ -89,6 +90,14 @@ func startSpecActionIn(t *testing.T, srv *Server, code, action, conversationID s
 	var decoded map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("undecodable response (%d): %s", w.Code, w.Body.String())
+	}
+	if action == "implement" && w.Code == http.StatusCreated {
+		id, _ := decoded["id"].(string)
+		awaitEnvironmentReady(t, srv, srv.session().cfg.ProjectRoot)
+		thread := conversationOfExecution(t, srv, id)
+		awaitRecord(t, srv, thread, func(record conversationlog.Record) bool {
+			return record.CurrentTurn != nil && record.CurrentTurn.ExecutionID == id
+		}, "implementation after environment preparation")
 	}
 	return w.Code, decoded
 }
