@@ -93,6 +93,13 @@ func (s *Server) queueEnvironment(ctx context.Context, ws *workspaceSession, roo
 }
 
 func (s *Server) prepareEnvironment(ctx context.Context, ws *workspaceSession, root string, needPreview, repair bool, value *environmentOperation) error {
+	// A preview started during discovery may still own the environment. Release
+	// our own preview before development prepares/checks that same checkout.
+	if !needPreview && !repair {
+		if err := ws.previews.StopOwned(root); err != nil {
+			return err
+		}
+	}
 	_, envErr := verification.Load(root)
 	_, commonErr := environmentrecipe.Load(root)
 	_, previewErr := preview.Load(root)

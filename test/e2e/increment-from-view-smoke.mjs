@@ -65,16 +65,23 @@ async function main(){
  const env={...process.env,ARCHETIPO_DATA_DIR:repoRoot,ARCHETIPO_STATE_DIR:path.join(runDir,"state"),FAKE_CODEX_CONTROL:control.url,FAKE_GH_STATE:ghState,PATH:bin+path.delimiter+process.env.PATH};
  const run=makeRunCommand(env);
  await fs.writeFile(path.join(bin,"gh"),"#!/usr/bin/env node\n("+fakeGhMain.toString()+")().catch(e=>{console.error(e.message);process.exit(1)});\n",{mode:0o755});
- let view,browser,page,failure;
+ let view,browser,page,failure,incrementRoot;
  try{
   await buildCLI(cli,repoRoot,run);
   await run("init",cli,["init","--tool","codex","--connector","file","--yes"],{cwd:sandbox});
   await fs.appendFile(path.join(sandbox,".archetipo/config.yaml"),"\nexecution:\n  default_provider:\n    id: codex\n    config:\n      command: "+JSON.stringify(fakeCodex)+"\n      model: gpt-fake\n      sandbox: workspace-write\n");
   await fs.writeFile(path.join(sandbox,"hello.txt"),"originale\n");
+  await fs.mkdir(path.join(sandbox,"scripts/archetipo"),{recursive:true});
+  await fs.copyFile(path.join(repoRoot,"test/e2e/support/managed-resource.mjs"),path.join(sandbox,"scripts/archetipo/managed-resource.mjs"));
+  const resourceCommand=action=>({name:action,argv:[process.execPath,"scripts/archetipo/managed-resource.mjs",action],timeout_seconds:10});
   const environmentInput=path.join(runDir,"environment.json");
-  await fs.writeFile(environmentInput,JSON.stringify({version:1,probe:[{name:"ready",argv:[process.execPath,"--version"],timeout_seconds:10}],checks:{}}));
+  await fs.writeFile(environmentInput,JSON.stringify({version:1,ports:["DATABASE"],resources:[{name:"database",start:resourceCommand("start"),probe:resourceCommand("probe"),stop:resourceCommand("stop"),stopped:resourceCommand("stopped")}],probe:[{name:"ready",argv:[process.execPath,"--version"],timeout_seconds:10}],checks:{}}));
   await run("environment-configure",cli,["execution","environment","configure","--file",environmentInput],{cwd:sandbox});
-  await run("environment-publish",cli,["execution","environment","publish"],{cwd:sandbox});
+  await fs.writeFile(path.join(sandbox,"scripts/archetipo/preview.mjs"),'import http from "node:http"; http.createServer((req,res)=>res.end("Preview fixture")).listen(Number(process.argv[2]),"127.0.0.1");\n');
+  const previewInput=path.join(runDir,"preview.json");
+  await fs.writeFile(previewInput,JSON.stringify({version:1,directory:".",argv:[process.execPath,"scripts/archetipo/preview.mjs","{port}"],url:"http://127.0.0.1:{port}",prepare_environment:true}));
+  await run("preview-configure",cli,["execution","preview","configure","--file",previewInput],{cwd:sandbox});
+  await run("environment-publish",cli,["execution","environment","publish","--asset","scripts/archetipo/preview.mjs","--asset","scripts/archetipo/managed-resource.mjs"],{cwd:sandbox});
   await fs.writeFile(path.join(sandbox,".gitignore"),".agents/\n");
   const git=async(args,cwd=sandbox)=>(await run("git","git",args,{cwd})).stdout.trim();
   await git(["init","-b","main"]);await git(["config","user.email","tests@example.test"]);await git(["config","user.name","Tests"]);
@@ -100,7 +107,7 @@ async function main(){
   assert.ok(id,"conversation id");
   let convURL=view.url+"/api/workspace/conversations/"+id;
   const read=async()=>await (await fetch(convURL)).json();
-  let current=await read(),inc=current.increment;
+  let current=await read(),inc=current.increment;incrementRoot=inc.workdir;
   assert.ok(inc&&inc.workdir!==sandbox);assert.equal(current.session.session.environment.working_dir,inc.workdir);
   const native=current.session.session.native.id;
   const cliJSON=async(args,payload,cwd=inc.workdir)=>{
@@ -203,8 +210,19 @@ async function main(){
   await page.send("Emulation.clearDeviceMetricsOverride");
   ok("Il laterale scorre su desktop e mobile, conserva lettura e focus al polling e lascia spazio al compositore quando chiuso.");
   const parentBefore=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(parentBefore.items.length,0);
+  const previewURL=convURL+"/preview";
+  assert.equal((await fetch(previewURL,{method:"POST"})).status,202);
+  await until(async()=>(await (await fetch(previewURL)).json()).state==="ready","discovery preview owns the environment");
+  const blockedResult=await run("blocked-prepare",cli,["execution","environment","prepare"],{cwd:inc.workdir,allowFailure:true});
+  const blocked=JSON.parse(blockedResult.stdout||blockedResult.stderr);
+  assert.equal(blocked.error?.code,"E_CONFLICT","preview must hold the standalone environment lifetime");
   await click("approve-intent");
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=2,"development turn");
+  const releasedPreview=await (await fetch(previewURL)).json();
+  assert.equal(releasedPreview.url,undefined,"development must release the preview proxy");
+  assert.ok(releasedPreview.resources.resources.every(resource=>resource.state==="ready"),"development must prepare its own resource generation");
+  assert.equal((await read()).session.session.native.id,native);
+  ok("Avviare lo sviluppo arresta la preview posseduta nella sandbox e prepara l’ambiente nella stessa sessione nativa.");
   // A planning worker can finish before an implementation worker asks for
   // permission. Both belong to the still-active parent native turn.
   control.queue.push({kind:"emit",method:"turn/started",params:{threadId:"child-plan",turn:{id:"child-plan-turn"}}});
@@ -296,6 +314,7 @@ async function main(){
  finally{
   await page?.close();await browser?.close();
   if(view)await stopProcess(view.child,run);
+  if(incrementRoot)await run("environment-cleanup",cli,["execution","environment","cleanup"],{cwd:incrementRoot,allowFailure:true});
   await control.close();
   await fs.writeFile(path.join(runDir,"summary.json"),JSON.stringify({ok:!failure,checks,error:failure?.stack},null,2));
   await fs.writeFile(path.join(runDir,"report.html"),"<meta charset=utf-8><title>Increment smoke</title><h1>"+(failure?"FAIL":"PASS")+"</h1><pre>"+checks.map(s=>s.replaceAll("&","&amp;").replaceAll("<","&lt;")).join("\n")+"</pre>");

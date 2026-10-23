@@ -339,6 +339,18 @@ func (m *Manager) Stop(id string) error {
 	return m.stop(id)
 }
 
+// StopOwned releases only this manager's preview for the checkout. Development
+// must release its lifetime before using the standalone verification contract;
+// a terminal run or another viewer remains protected by its own lifetime lock.
+func (m *Manager) StopOwned(root string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id := m.roots[root]; id != "" {
+		return m.stop(id)
+	}
+	return nil
+}
+
 func (m *Manager) stop(id string) error {
 	if i := m.instances[id]; i != nil {
 		i.cancel()

@@ -149,8 +149,20 @@ func TestBorrowedServerProxyAndOwnership(t *testing.T) {
 	if _, err = another.Start(root, "conversation-a", "http://127.0.0.1:8080"); err == nil {
 		t.Fatal("a second viewer took ownership")
 	}
-	if err := m.Stop("conversation-a"); err != nil {
+	if err := another.StopOwned(root); err != nil {
 		t.Fatal(err)
+	}
+	if err := m.StopOwned(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := m.Status(root, "conversation-a"); err != nil || status.State != "ready" {
+		t.Fatalf("stopped an unrelated preview: %+v %v", status, err)
+	}
+	if err := m.StopOwned(root); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := m.Status(root, "conversation-a"); err != nil || status.State != "stopped" {
+		t.Fatalf("owned preview still active: %+v %v", status, err)
 	}
 	if !ready(context.Background(), app.URL) {
 		t.Fatal("stopping borrowed preview killed the app")
