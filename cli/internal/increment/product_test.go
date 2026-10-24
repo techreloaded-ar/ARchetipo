@@ -178,7 +178,7 @@ func TestSpecificationAndEvidenceHistoryRemainsPortable(t *testing.T) {
 		t.Fatal(err)
 	}
 	dossier := Dossier(r)
-	for _, part := range []string{"First scope", "Second scope", previous, "Change the scope", "go test ./..."} {
+	for _, part := range []string{"First scope", "Second scope", previous, "Change the scope", "git diff --check HEAD~1 HEAD"} {
 		if !strings.Contains(dossier, part) {
 			t.Fatalf("history lost %q", part)
 		}
