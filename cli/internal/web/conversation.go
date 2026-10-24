@@ -1135,6 +1135,7 @@ type sendConversationMessageReq struct {
 	environmentPrepared bool
 	Message             string `json:"message"`
 	Skill               string `json:"skill,omitempty"`
+	PreviewFeedback     bool   `json:"preview_feedback,omitempty"`
 	// executionID names the ARchetipo action this turn carries out, and is
 	// deliberately not a JSON field: a browser cannot claim that the message it
 	// is typing belongs to an action. It is filled in by the two callers that

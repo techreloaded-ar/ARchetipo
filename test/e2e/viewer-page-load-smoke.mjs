@@ -1104,6 +1104,10 @@ export async function launchChrome(chromePath, userDataDir) {
     },
     async close() {
       await stopProcess(child);
+      // Chrome helpers may inherit these pipes and outlive the browser. Close
+      // our readers after shutdown so they cannot keep the smoke process alive.
+      child.stdout.destroy();
+      child.stderr.destroy();
     },
   };
 }

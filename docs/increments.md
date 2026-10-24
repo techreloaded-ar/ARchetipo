@@ -79,10 +79,32 @@ L'incremento mantiene tutte le revisioni dell'intento e le evidenze dei
 risultati precedenti. All'approvazione di una revisione:
 
 - le storie invariate conservano piano, stato e lavoro verificato;
-- le storie cambiate mantengono il codice locale ma perdono piano e accettazione
+- le storie cambiate mantengono il codice locale e lo storico degli stati ma perdono piano e accettazione
   precedenti, così da essere ripianificate e verificate;
 - le storie ritirate escono dal backlog interno; lo sviluppo deve riconciliare
   anche codice, test e documentazione con il risultato corrente.
+
+I commenti sugli elementi della preview restano nella stessa conversazione e
+nello stesso incremento. La skill registra richiesta e riferimento all’elemento,
+collegandoli ai codici delle storie interessate:
+
+- `correction`: corregge un criterio già approvato, conserva i requisiti e riapre
+  soltanto le storie collegate. Una nuova revisione di lavorazione conserva
+  l’approvazione dell’intento e lo storico dei risultati; la correzione viene
+  sviluppata e verificata senza richiedere un’altra approvazione dell’intento.
+- `refinement`: cambia i criteri della stessa capacità, aggiorna le storie
+  esistenti e richiede l’approvazione della nuova revisione. Non basta annotare
+  il cambiamento nell’intento lasciando invariate le storie.
+- `scope`: aggiunge o cambia l’ambito; può aggiungere storie nello stesso
+  incremento, prima dello sviluppo e previa approvazione. Un commento non crea
+  automaticamente un nuovo incremento. Dopo la consegna si avvia un nuovo
+  incremento con una decisione esplicita.
+
+La classificazione spetta alla skill; il CLI valida codici e transizioni.
+Le domande mantengono valido il risultato. Ogni nuovo risultato verificato,
+comprese le correzioni, richiede l’approvazione finale prima della pubblicazione.
+Le revisioni riusano i servizi, le porte e i dati sintetici dell’ambiente corrente;
+la sospensione della preview per tornare allo sviluppo non equivale a Ferma ambiente.
 
 Il record, la sessione nativa e le identità di pubblicazione sopravvivono al
 riavvio. Interrompere un turno non elimina l'incremento o la sessione.
@@ -126,6 +148,9 @@ viewer. I comandi deterministici usano il normale envelope JSON
 - `increment approve <id> --file -`: `{"revision":N}`.
 - `increment ready <id> --file -`: `{"summary":"…","checks":["comando — risultato"],"preview_url":"http://127.0.0.1:3000"}`; anteprima facoltativa.
 - `increment feedback <id> --file -`: `{"feedback":"…"}`.
+  Sono opzionali `kind` (`correction`, `refinement`, `scope`) e `story_codes`;
+  i codici sono obbligatori per correction/refinement. Il payload storico senza
+  classificazione mantiene il passaggio attraverso definizione e approvazione.
 - `increment publish <id> --file -`: `{"revision":N,"head_sha":"commit provato"}`.
 - `increment refresh <id>`: stato effettivo della PR e riconciliazione.
 

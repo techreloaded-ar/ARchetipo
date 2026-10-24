@@ -24,6 +24,20 @@ test("la conversazione ordinaria non acquisisce pannelli o approvazioni di incre
  assert.doesNotMatch(html,/data-increment-action/);
  assert.match(html,/posso sviluppare liberamente/);
 });
+test("le richieste mostrano le storie collegate nella revisione corrente, in attesa e nello storico", () => {
+ const change={feedback:'Badge <rosso>',kind:'future-server-kind',story_codes:['US-001','<unsafe>']};
+ const ui={incrementSections:{'panel-':true,feedback:true,history:true}};
+ for(const increment of [
+  {revisions:[{...revision,feedback:change.feedback,change}]},
+  {revisions:[revision],pending_change:change},
+  {revisions:[{...revision,number:1,feedback:change.feedback,change},revision]}
+ ]){
+  const html=renderConversation({...base,increment},'',ui);
+  assert.match(html,/Storie interessate: US-001, &lt;unsafe&gt;/);
+  assert.match(html,/Badge &lt;rosso&gt;/);
+  assert.doesNotMatch(html,/<unsafe>|future-server-kind/);
+ }
+});
 test("cronologia ed evidenze sono leggibili e le sezioni aperte resistono al polling", () => {
  const html = renderConversation({...base,increment:{revisions:[{...revision,number:1},revision],result:{summary:"Prova il risultato",checks:["18 verifiche passate"],preview_url:"http://127.0.0.1:3000"},actions:[]}}, "", {incrementSections:{"panel-":true,history:true,checks:true}});
  assert.match(html,/data-increment-section="history" open/);

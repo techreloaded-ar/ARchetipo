@@ -34,12 +34,13 @@ type View struct {
 }
 
 type Instance struct {
-	root   string
-	mu     sync.Mutex
-	view   View
-	cancel context.CancelFunc
-	done   chan struct{}
-	server *http.Server
+	root              string
+	mu                sync.Mutex
+	view              View
+	cancel            context.CancelFunc
+	done              chan struct{}
+	server            *http.Server
+	retainEnvironment bool
 }
 
 func (i *Instance) Snapshot() View { i.mu.Lock(); defer i.mu.Unlock(); return i.view }
@@ -236,7 +237,16 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 		}
 		defer func() {
 			i.cancel()
-			if err := lifetime.Close(); err != nil {
+			i.mu.Lock()
+			retain := i.retainEnvironment
+			i.mu.Unlock()
+			var err error
+			if retain {
+				err = lifetime.Release()
+			} else {
+				err = lifetime.Close()
+			}
+			if err != nil {
 				i.mu.Lock()
 				i.view.CleanupError = err.Error()
 				i.mu.Unlock()
@@ -351,6 +361,27 @@ func (m *Manager) StopOwned(root string) error {
 	return nil
 }
 
+// SuspendOwned stops this manager's application/proxy and releases its lifetime
+// lock while retaining the checkout's prepared services, ports and test data.
+func (m *Manager) SuspendOwned(root string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := m.roots[root]
+	if i := m.instances[id]; i != nil {
+		i.mu.Lock()
+		i.retainEnvironment = true
+		i.mu.Unlock()
+		i.cancel()
+		<-i.done
+		if message := i.Snapshot().CleanupError; message != "" {
+			return fmt.Errorf("rilascio ambiente: %s", message)
+		}
+		delete(m.instances, id)
+		delete(m.roots, root)
+	}
+	return nil
+}
+
 func (m *Manager) stop(id string) error {
 	if i := m.instances[id]; i != nil {
 		i.cancel()
@@ -436,7 +467,7 @@ func resourceView(root string, view View) (View, error) {
 		view.Resources = &resources
 	}
 	for _, r := range resources.Resources {
-		if r.State != "stopped" {
+		if r.State != "stopped" && r.State != "ready" {
 			view.State = "error"
 			view.Error = "L’ambiente contiene servizi registrati da verificare o fermare. Usa Ferma ambiente per riconciliarli."
 			break

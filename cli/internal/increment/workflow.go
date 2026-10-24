@@ -65,6 +65,9 @@ func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, e
 		if frozen(r) {
 			return r, iox.NewConflict("increment already approved for publication", "finish the existing PR before starting other work", nil)
 		}
+		if r.PendingChange != nil && r.PendingChange.Kind == "correction" {
+			return r, iox.NewConflict("correction story reopening is incomplete", "retry increment feedback with the same classified request", nil)
+		}
 		if r.Status == Review {
 			return r, iox.NewConflict("record the requested changes before revising the intent", "use increment feedback for an explicit change request; ordinary questions keep the verified result", nil)
 		}
@@ -89,13 +92,36 @@ func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, e
 				}
 			}
 		}
+		if change := r.PendingChange; change != nil && change.Kind == "refinement" {
+			previous := r.Revisions[len(r.Revisions)-1].Stories
+			if len(previous) != len(p.Stories) {
+				return r, iox.NewInvalidInput("a refinement must keep existing story identities", "declare a scope change to add or retire stories", nil)
+			}
+			affected := map[string]bool{}
+			for _, code := range change.StoryCodes {
+				affected[code] = true
+			}
+			proposed := map[string]domain.Spec{}
+			for _, st := range p.Stories {
+				proposed[st.Code] = st
+			}
+			for _, st := range previous {
+				next, exists := proposed[st.Code]
+				changed := hash(canonical(st)) != hash(canonical(next))
+				if !exists || changed != affected[st.Code] {
+					return r, iox.NewInvalidInput("refinement stories do not match the affected codes", "update the linked stories with the requested criteria and preserve unrelated stories", nil)
+				}
+			}
+		}
 		// A changed intent always needs a new human decision, even if the same
 		// stories remain. Old revisions and their evidence remain inspectable.
 		revision := Revision{Number: len(r.Revisions) + 1, Proposal: p, CreatedAt: time.Now().UTC()}
+		revision.Change = r.PendingChange
 		if len(r.Feedback) > 0 {
 			revision.Feedback = r.Feedback[len(r.Feedback)-1]
 		}
 		r.Revisions = append(r.Revisions, revision)
+		r.PendingChange = nil
 		r.Status = Discovery
 		r.ReadySHA = ""
 		r.ReadyStories = ""
@@ -147,6 +173,15 @@ func (s *Service) Approve(ctx context.Context, id string, revision int) (Record,
 				present[st.Code] = true
 				continue
 			}
+			if keep {
+				// Replanning invalidates stale work artifacts, not the story's
+				// identity or the history of its earlier delivery rounds.
+				target.History = append([]domain.StatusChange(nil), st.History...)
+				if st.Status != domain.StatusTodo {
+					target.History = append(target.History, domain.StatusChange{Status: domain.StatusTodo, At: time.Now().UTC().Format(time.RFC3339)})
+				}
+				desired[st.Code] = target
+			}
 			if _, err = local.DeleteSpec(ctx, st.Code); err != nil {
 				return r, err
 			}
@@ -154,7 +189,7 @@ func (s *Service) Approve(ctx context.Context, id string, revision int) (Record,
 		missing := []domain.Spec{}
 		for _, st := range latest.Stories {
 			if !present[st.Code] {
-				missing = append(missing, st)
+				missing = append(missing, desired[st.Code])
 			}
 		}
 		if len(missing) > 0 {
@@ -216,6 +251,9 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 	})
 }
 func (s *Service) completedStories(ctx context.Context, r Record) ([]domain.Spec, error) {
+	if r.PendingChange != nil && r.PendingChange.Kind == "correction" {
+		return nil, iox.NewConflict("correction story reopening is incomplete", "retry increment feedback with the same classified request", nil)
+	}
 	if len(r.Revisions) == 0 || !r.Revisions[len(r.Revisions)-1].Approved {
 		return nil, iox.NewConflict("the latest intent is not approved", "approve it before development", nil)
 	}
@@ -275,22 +313,95 @@ func (s *Service) requireClean(ctx context.Context, r Record) error {
 	return nil
 }
 func (s *Service) FeedbackFor(ctx context.Context, id, feedback string) (Record, error) {
+	return s.RequestChanges(ctx, id, FeedbackRequest{Feedback: feedback})
+}
+
+func (s *Service) RequestChanges(ctx context.Context, id string, change FeedbackRequest) (Record, error) {
 	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
 			return r, err
 		}
+		change.Feedback = strings.TrimSpace(change.Feedback)
+		if change.Feedback == "" {
+			return r, iox.NewInvalidInput("feedback is required", "describe what should change", nil)
+		}
+		if change.Kind == "" {
+			change.Kind = "scope"
+		}
+		if r.Status == Developing && r.PendingChange != nil && r.PendingChange.Kind == "correction" && hash(*r.PendingChange) == hash(change) {
+			return s.reopenCorrection(ctx, r)
+		}
 		if r.Status != Review {
 			return r, iox.NewConflict("feedback requires a result ready to review", "wait for development to finish", nil)
 		}
-		if strings.TrimSpace(feedback) == "" {
-			return r, iox.NewInvalidInput("feedback is required", "describe what should change", nil)
+		if change.Kind != "correction" && change.Kind != "refinement" && change.Kind != "scope" {
+			return r, iox.NewInvalidInput("unknown feedback kind", "use correction, refinement or scope", nil)
 		}
-		r.Feedback = append(r.Feedback, strings.TrimSpace(feedback))
+		if (change.Kind == "correction" || change.Kind == "refinement") && len(change.StoryCodes) == 0 {
+			return r, iox.NewInvalidInput("affected stories are required", "link the request to existing story codes", nil)
+		}
+		if len(r.Revisions) == 0 || !r.Revisions[len(r.Revisions)-1].Approved {
+			return r, iox.NewConflict("feedback requires an approved intent", "read the current increment", nil)
+		}
+		latest := r.Revisions[len(r.Revisions)-1]
+		known := map[string]bool{}
+		for _, st := range latest.Stories {
+			known[st.Code] = true
+		}
+		seen := map[string]bool{}
+		for _, code := range change.StoryCodes {
+			if !known[code] || seen[code] {
+				return r, iox.NewInvalidInput("unknown or duplicate affected story: "+code, "use distinct codes from the approved intent", nil)
+			}
+			seen[code] = true
+		}
+		if change.Kind == "correction" {
+			if _, err = s.completedStories(ctx, r); err != nil {
+				return r, err
+			}
+			latest.Number = len(r.Revisions) + 1
+			latest.CreatedAt = time.Now().UTC()
+			latest.Feedback = change.Feedback
+			latest.Change = &change
+			latest.Result = nil
+			latest.HeadSHA = ""
+			r.Revisions = append(r.Revisions, latest)
+		}
+		r.Feedback = append(r.Feedback, change.Feedback)
 		r.Status = Discovery
+		r.PendingChange = &change
+		if change.Kind == "correction" {
+			r.Status = Developing
+		}
 		r.Result = nil
 		r.ReadySHA = ""
 		r.ReadyStories = ""
-		return r, s.save(r)
+		r.ApprovedSHA = ""
+		// Save the request and revoke the verified result before reopening any
+		// story. A crash leaves an explicit, retryable pending correction.
+		if err = s.save(r); err != nil {
+			return r, err
+		}
+		if change.Kind == "correction" {
+			return s.reopenCorrection(ctx, r)
+		}
+		return r, nil
 	})
+}
+
+func (s *Service) reopenCorrection(ctx context.Context, r Record) (Record, error) {
+	local, err := s.local(r)
+	if err != nil {
+		return r, err
+	}
+	// Keep the story, its plan, tasks and status history. Repeating a partial
+	// reopen adds no duplicate transitions and never starts another revision.
+	for _, code := range r.PendingChange.StoryCodes {
+		if _, err = local.TransitionStatus(ctx, code, domain.StatusTodo); err != nil {
+			return r, err
+		}
+	}
+	r.PendingChange = nil
+	return r, s.save(r)
 }

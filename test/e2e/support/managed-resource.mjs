@@ -18,9 +18,13 @@ const request=async(target,route='/')=>{
 const action=process.argv[2];
 if(!owner || !name || !port)throw new Error('Missing owned resource context');
 if(action==='serve'){
- const server=http.createServer((req,res)=>{
+ let data=null;
+ const server=http.createServer(async(req,res)=>{
   if(req.headers['x-owner']!==owner){res.writeHead(403);res.end('{}');return;}
-  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({owner,name}));
+  if(req.url==='/data' && req.method==='POST'){
+   let body='';for await(const chunk of req)body+=chunk;data=JSON.parse(body);
+  }
+  res.setHeader('Content-Type','application/json');res.end(JSON.stringify({owner,name,data}));
   if(req.url==='/stop'){server.close(()=>process.exit(0));server.closeAllConnections();}
  });
  server.listen(port,'127.0.0.1',()=>{

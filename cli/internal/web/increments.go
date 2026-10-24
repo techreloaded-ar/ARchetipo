@@ -330,6 +330,14 @@ func (s *Server) prepareIncrementMessage(ctx context.Context, ws *workspaceSessi
 	if err != nil {
 		return err
 	}
+	// The picker declares an explicit change request, without deciding which
+	// story or requirement it changes. Release only our app/proxy so the skill
+	// can run standalone verification against the existing dependency data.
+	if body.PreviewFeedback && (current.Status == increment.Review || current.Status == increment.Developing) {
+		if err := ws.previews.SuspendOwned(current.Workdir); err != nil {
+			return err
+		}
+	}
 
 	// The person's message stays readable; only the harness sees the method and
 	// sandbox binding. An ordinary free conversation never enters this branch.

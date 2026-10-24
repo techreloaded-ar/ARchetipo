@@ -213,6 +213,17 @@ async function main(){
   const previewURL=convURL+"/preview";
   assert.equal((await fetch(previewURL,{method:"POST"})).status,202);
   await until(async()=>(await (await fetch(previewURL)).json()).state==="ready","discovery preview owns the environment");
+  const originalResources=(await (await fetch(previewURL)).json()).resources;
+  const resourceURL="http://127.0.0.1:"+originalResources.ports.DATABASE+"/data";
+  const resourceHeaders={"X-Owner":originalResources.owner};
+  const demoData={outings:[{title:"Uscita dimostrativa",free:true}]};
+  await fetch(resourceURL,{method:"POST",headers:resourceHeaders,body:JSON.stringify(demoData)});
+  const assertEnvironmentRetained=async()=>{
+   const resources=JSON.parse(await fs.readFile(path.join(inc.workdir,".archetipo/environment/resources.json"),"utf8"));
+   assert.equal(resources.owner,originalResources.owner,"revision replaced the resource generation");
+   assert.deepEqual(resources.ports,originalResources.ports,"revision replaced dependency ports");
+   assert.deepEqual((await (await fetch(resourceURL,{headers:resourceHeaders})).json()).data,demoData,"revision lost demonstration data");
+  };
   const blockedResult=await run("blocked-prepare",cli,["execution","environment","prepare"],{cwd:inc.workdir,allowFailure:true});
   const blocked=JSON.parse(blockedResult.stdout||blockedResult.stderr);
   assert.equal(blocked.error?.code,"E_CONFLICT","preview must hold the standalone environment lifetime");
@@ -220,9 +231,10 @@ async function main(){
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=2,"development turn");
   const releasedPreview=await (await fetch(previewURL)).json();
   assert.equal(releasedPreview.url,undefined,"development must release the preview proxy");
-  assert.ok(releasedPreview.resources.resources.every(resource=>resource.state==="ready"),"development must prepare its own resource generation");
+  assert.ok(releasedPreview.resources.resources.every(resource=>resource.state==="ready"),"development must reuse ready resources");
+  await assertEnvironmentRetained();
   assert.equal((await read()).session.session.native.id,native);
-  ok("Avviare lo sviluppo arresta la preview posseduta nella sandbox e prepara l’ambiente nella stessa sessione nativa.");
+  ok("Avviare lo sviluppo sospende la preview e conserva servizi, porte e dati dimostrativi nella stessa sessione nativa.");
   // A planning worker can finish before an implementation worker asks for
   // permission. Both belong to the still-active parent native turn.
   control.queue.push({kind:"emit",method:"turn/started",params:{threadId:"child-plan",turn:{id:"child-plan-turn"}}});
@@ -249,9 +261,17 @@ async function main(){
   assert.equal((await read()).increment.ready_sha,reviewedSHA);
   ok("Una domanda sul risultato non diventa una richiesta di modifica.");
   const beforeFeedback=(await read()).session.current_turn.native_id;
-  await page.evaluate('(()=>{const input=document.querySelector(".conv-composer-input");input.value="Preferisco Excel al CSV";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()');
+  assert.equal((await fetch(previewURL,{method:"POST"})).status,202);
+  await until(async()=>(await (await fetch(previewURL)).json()).state==="ready","review preview before annotations");
+  await assertEnvironmentRetained();
+  await page.waitFor('!!document.querySelector(".conv-composer-input:not(:disabled)")',timeout,"annotation delivery available");
+  await page.evaluate(`new Promise((resolve,reject)=>window.dispatchEvent(new CustomEvent("archetipo:preview-send",{detail:{id:${JSON.stringify(id)},message:Preview.commentMessage([{element:{page:"Risultato",url:"http://127.0.0.1/export",tag:"button",text:"CSV"},note:"Preferisco Excel al CSV"}]),resolve,reject}})))`);
   await until(async()=>{const v=await read();return v.session.current_turn?.native_id!==beforeFeedback&&v.session.work==="TURN_ACTIVE";},"feedback interview");
-  await cliJSON(["increment","feedback",inc.id],{feedback:"Preferisco Excel al CSV"});
+  const submitted=control.received.filter(e=>e.kind==="turn/start").at(-1);
+  assert.ok(submitted.params.input.some(input=>input.text?.includes("/archetipo-increment "+inc.id)&&input.text.includes("Richieste di modifica dalla preview")),"annotation lost increment binding");
+  assert.equal((await (await fetch(previewURL)).json()).url,undefined,"annotation must release its app proxy for verification");
+  await assertEnvironmentRetained();
+  await cliJSON(["increment","feedback",inc.id],{feedback:"Preferisco Excel al CSV",kind:"refinement",story_codes:["US-001"]});
   await propose("Excel",4);
   await stopProcess(view.child,run);
   view=await startViewServer(cli,sandbox,env,"/api/board");
@@ -269,9 +289,23 @@ async function main(){
   ok("Dopo il riavvio l’azione riprende la stessa sessione nativa; leggere la cronologia non avvia l’agente.");
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=5,"second development");
   await develop("Excel",5);
+  await assertEnvironmentRetained();
   current=await read();assert.equal(current.session.session.native.id,native);assert.equal(current.increment.id,inc.id);assert.equal(current.increment.revisions.length,2);
   const localStories=await cliJSON(["spec","list"]);assert.equal(localStories.items.length,1);assert.equal(localStories.items[0].code,"US-001");
   ok("Il feedback aggiorna la stessa storia e conserva sessione, sandbox e revisioni.");
+  const beforeCorrection=current.session.current_turn.native_id;
+  await page.waitFor('!!document.querySelector(".conv-composer-input:not(:disabled)")',timeout,"correction delivery available");
+  await page.evaluate(`new Promise((resolve,reject)=>window.dispatchEvent(new CustomEvent("archetipo:preview-send",{detail:{id:${JSON.stringify(id)},message:"Il file include clienti non richiesti: correggi il criterio già approvato.",resolve,reject}})))`);
+  await until(async()=>{const v=await read();return v.session.current_turn?.native_id!==beforeCorrection&&v.session.work==="TURN_ACTIVE";},"correction turn");
+  const correction=await cliJSON(["increment","feedback",inc.id],{feedback:"Il file include clienti non richiesti",kind:"correction",story_codes:["US-001"]});
+  assert.equal(correction.status,"DEVELOPING");
+  assert.equal(correction.revisions.at(-1).approved,true);
+  assert.equal((await cliJSON(["spec","show","US-001"])).spec.status,"TODO");
+  await develop("Excel corretto",6);
+  await assertEnvironmentRetained();
+  assert.equal((await read()).session.session.native.id,native);
+  assert.equal((await cliJSON(["increment","list"],undefined,sandbox)).length,1,"feedback created another increment");
+  ok("Una correzione riapre la storia approvata senza una nuova approvazione dell’intento, conserva l’ambiente e torna al risultato da provare.");
   await openDetails();
   await page.evaluate('document.querySelector(\'[data-increment-section="intent"]\').open=true');
   await page.send("Page.reload");await page.once("Page.loadEventFired",timeout,"reload");
@@ -285,7 +319,7 @@ async function main(){
   await until(async()=>(await read()).increment.status==="PROPOSED","PR publication");
   const proposed=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(proposed.items.length,1);assert.equal(proposed.items[0].status,"TODO");assert.match(proposed.items[0].body,/Proposta di incremento/);
   const frozen=(await read()).increment;
-  await cliJSON(["increment","publish",inc.id],{revision:2,head_sha:frozen.ready_sha},sandbox);
+  await cliJSON(["increment","publish",inc.id],{revision:frozen.revisions.at(-1).number,head_sha:frozen.ready_sha},sandbox);
   let hosting=JSON.parse(await fs.readFile(ghState,"utf8"));assert.equal(hosting.creates,1);
   assert.equal((await cliJSON(["spec","list"],undefined,sandbox)).items.length,1);
   ok("La PR pubblica solo la storia finale come proposta; un retry non duplica PR o storie.");

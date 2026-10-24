@@ -18,7 +18,7 @@ import (
 // viewer. Its private control pipe closes even when the caller is SIGKILLed.
 // Only one preview/run may own a checkout's dependency services at a time.
 type Lifetime struct {
-	control io.Closer
+	control io.WriteCloser
 	root    string
 	done    chan struct{}
 	err     error
@@ -82,6 +82,24 @@ func (l *Lifetime) Close() error {
 	return l.err
 }
 
+// Release hands a prepared environment back to the standalone contract without
+// stopping its services. EOF or process death still means cleanup; retaining
+// resources requires this explicit message on the owner's private pipe.
+func (l *Lifetime) Release() error {
+	if l == nil {
+		return nil
+	}
+	err := json.NewEncoder(l.control).Encode(struct {
+		Operation string `json:"operation"`
+	}{Operation: "release"})
+	_ = l.control.Close()
+	<-l.done
+	if err != nil {
+		return err
+	}
+	return l.err
+}
+
 // Guard holds the environment lock through cleanup. Logs/reports and resource
 // errors survive both a failed cleanup and deletion of the current recipe.
 func Guard(parent context.Context, input io.Reader, output io.Writer) error {
@@ -107,10 +125,19 @@ func Guard(parent context.Context, input io.Reader, output io.Writer) error {
 	if err = json.NewEncoder(output).Encode(lifetimeReady{}); err != nil {
 		return err
 	}
-	closed := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, reader); close(closed) }()
+	released := make(chan bool, 1)
+	go func() {
+		var command struct {
+			Operation string `json:"operation"`
+		}
+		err := json.NewDecoder(reader).Decode(&command)
+		released <- err == nil && command.Operation == "release"
+	}()
 	select {
-	case <-closed:
+	case retain := <-released:
+		if retain {
+			return nil
+		}
 	case <-parent.Done():
 	}
 	// A command's own supervisor might still be terminating after parent death.

@@ -60,6 +60,27 @@ the current set. Never invent a main-backlog US code: local codes are sandbox
 identities. Use small, independently demonstrable stories and existing spec
 validation rules. History is retained by the CLI.
 
+Feedback from a preview element belongs to this increment, conversation and
+checkout. Keep its page/element reference in the recorded request. Do not call
+`increment create`, start a replacement environment, or create a story for each
+comment. Classify requests against the approved acceptance criteria:
+
+- A correction fixes an implementation that fails an already approved criterion.
+  Link it to the existing story codes; do not change the accepted requirements.
+- A refinement changes a criterion of an existing capability (for example, a
+  newly requested badge colour). Update those same stories and their criteria in
+  the proposal, preserving their codes and the unrelated stories. Recording the
+  change only in the intent while leaving the affected story unchanged is invalid.
+- A scope change adds an independently demonstrable capability. Add a story in
+  this increment if the person wants it included; get approval before developing
+  the expanded scope. Separate work or requests after delivery need a separate
+  increment started by an explicit decision, never an automatic consequence of a
+  preview comment. Do not invent stories retrospectively after writing the code.
+
+For mixed requests, use the scope/refinement approval path and describe all
+affected stories. If the classification is uncertain, clarify the requirement
+before declaring a correction.
+
 Explain the proposal and wait for the human's approval. The View approval
 button calls `increment approve <id> --file -` with
 `{"revision":N}`. Standalone, call it only after the person explicitly
@@ -271,9 +292,42 @@ The CLI freezes the verified code and story snapshot.
 
 At `REVIEW`, present the result, its evidence and any limitations. Wait.
 An ordinary question about the result does not invalidate it. When the
-person explicitly requests a change, both in View and standalone, call `increment feedback <id> --file -` with
-`{"feedback":"The person's requested changes"}`, then repeat the shorter
-discovery and exact-revision approval. All rounds stay in this increment.
+person explicitly requests a change, both in View and standalone, call
+`archetipo -C <workdir> increment feedback <id> --file -` with one of:
+
+    {"feedback":"Request, element reference and the approved criterion being corrected","kind":"correction","story_codes":["US-001"]}
+    {"feedback":"Requested refinement and its element reference","kind":"refinement","story_codes":["US-001"]}
+    {"feedback":"Requested additional capability","kind":"scope","story_codes":["US-001"]}
+
+`story_codes` is required for correction/refinement and optional for scope (a new
+capability may have no existing story). The legacy `{"feedback":"…"}` payload
+still takes the scope/discovery path. The CLI returns `kind: increment`:
+
+- `correction` preserves the approved intent/stories in a new delivery revision,
+  reopens only the linked stories to TODO, and returns `DEVELOPING`. Previous
+  results remain inspectable. Explain the affected stories and continue directly
+  with implementation, technical review and relevant verification; no new intent
+  approval is needed because its requirements have not changed. Preserve existing
+  completed tasks; verify the requested correction explicitly rather than treating
+  their DONE status as proof of the fix. A new result still needs business approval
+  before publication.
+  If interrupted while `pending_change.kind` is `correction`, retry the identical
+  feedback payload to finish reopening the stories; readiness is blocked until
+  reconciliation finishes, and retrying does not create another revision.
+- `refinement` and `scope` return `DISCOVERY`, with the classified request in
+  `pending_change`. Repeat the shorter discovery and exact-revision approval.
+  The next revision's `change` records the kind and linked stories. A refinement
+  proposal must update exactly those stories while preserving the story set.
+
+All rounds stay in this increment and its environment. Reuse the environment
+preparation/report for this checkout and keep synthetic demonstration data. The
+View suspends its application/proxy for preview feedback and development, retaining
+registered dependencies and their ports. Use the standalone environment contract
+for readiness/checks; do not run cleanup or create replacement services merely
+because a revision starts. Explicit environment stop/removal, failed readiness or
+a changed resource recipe still follow their existing cleanup/recovery contract.
+If another live owner refuses an operation with `E_CONFLICT`, report the actual
+owner conflict; do not bypass its lock or move work to another environment.
 
 Only after explicit human approval of the verified result may standalone
 execution call `increment publish <id> --file -` with

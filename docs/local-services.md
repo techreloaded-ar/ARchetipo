@@ -115,10 +115,16 @@ prossima preparazione o cleanup. Spegnimento della macchina o morte del supervis
 stesso richiedono ugualmente questa riconciliazione: non si promette l'esecuzione
 di cleanup mentre nessun processo può eseguirlo.
 
-Avviare o riprendere lo sviluppo dalla view arresta prima la preview che lo stesso
-viewer possiede per quel checkout, poi prepara l’ambiente con il contratto CLI.
+Avviare o riprendere lo sviluppo dalla view sospende prima l’applicazione e il
+proxy della preview che lo stesso viewer possiede per quel checkout, poi prepara
+l’ambiente con il contratto CLI. Il supervisore riceve un rilascio esplicito:
+servizi registrati, porte e dati dimostrativi rimangono disponibili e vengono
+verificati prima del riuso. Lo stesso passaggio avviene per le richieste di
+modifica inviate dallo strumento di commento della preview di un incremento.
 Questo evita che una preview aperta durante la definizione dell’intento blocchi
-lo sviluppo con un conflitto di ownership. Preview di altri checkout e ambienti
+lo sviluppo con un conflitto di ownership o che una revisione ricrei un database
+di prova vuoto. Ferma ambiente, rimozione e perdita improvvisa del proprietario
+di una preview attiva continuano a eseguire il cleanup. Preview di altri checkout e ambienti
 posseduti da altri viewer o terminali restano protetti dai rispettivi lock.
 
 Chiudere una scheda, interrompere un turno agente e cancellare un ambiente restano

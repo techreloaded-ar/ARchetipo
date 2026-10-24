@@ -22,6 +22,14 @@ synthetic data. Declare all persistent services through managed `resources` with
 Never adopt unrelated services or copy credentials, installed dependencies,
 resource ownership records or data from another checkout.
 
+Revision rounds reuse this checkout's services and demonstration data. Make
+preparation and synthetic-data seeding idempotent: preserve existing demo rows
+and user edits, apply needed migrations, and add only missing fixtures. Never
+reset a database or create a replacement service just because development or a
+preview resumes. Destructive resets require an explicit request. Readiness
+failure and recipe changes follow the managed recovery contract and must be
+reported if their recovery loses demonstration data.
+
 Call only these operations:
 
 - `archetipo execution environment show`: `kind: verification_result`, recipe in

@@ -8067,7 +8067,7 @@
 		try {
 			await conversationNextTurnSaves.get(id);
 			if (id !== conversationsCurrentId) throw new Error("La conversazione è cambiata; i commenti sono conservati.");
-			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`, {message});
+			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`, {message, preview_feedback: true});
 			if (id === conversationsCurrentId) { applyConversationView(view); startConversationPolling(); }
 			resolve();
 		} catch (error) { reject(error); }

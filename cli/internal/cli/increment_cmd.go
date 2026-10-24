@@ -98,12 +98,14 @@ func newIncrementCmd(s streams) *cobra.Command {
 				value, err = service.Refresh(cmd.Context(), args[0])
 			default:
 				var input struct {
-					Title                string `json:"title"`
-					Request              string `json:"request"`
-					OriginConversationID string `json:"origin_conversation_id"`
-					Revision             int    `json:"revision"`
-					Feedback             string `json:"feedback"`
-					HeadSHA              string `json:"head_sha"`
+					Title                string   `json:"title"`
+					Request              string   `json:"request"`
+					OriginConversationID string   `json:"origin_conversation_id"`
+					Revision             int      `json:"revision"`
+					Feedback             string   `json:"feedback"`
+					Kind                 string   `json:"kind"`
+					StoryCodes           []string `json:"story_codes" yaml:"story_codes"`
+					HeadSHA              string   `json:"head_sha"`
 				}
 				// Proposals and verification results retain their existing domain shapes.
 				switch operation {
@@ -129,7 +131,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 					case "approve":
 						value, err = service.Approve(cmd.Context(), args[0], input.Revision)
 					case "feedback":
-						value, err = service.FeedbackFor(cmd.Context(), args[0], input.Feedback)
+						value, err = service.RequestChanges(cmd.Context(), args[0], increment.FeedbackRequest{Feedback: input.Feedback, Kind: input.Kind, StoryCodes: input.StoryCodes})
 					case "publish":
 						value, err = service.Publish(cmd.Context(), args[0], input.HeadSHA, input.Revision)
 					}
