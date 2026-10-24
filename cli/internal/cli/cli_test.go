@@ -2090,8 +2090,8 @@ func TestInitWiki_WritesEnabledGate(t *testing.T) {
 	if res.exit != 0 {
 		t.Fatalf("init failed: stdout=%s stderr=%s", res.stdout.String(), res.stderr.String())
 	}
-	if !strings.Contains(res.stdout.String(), "/archetipo-wiki bootstrap") {
-		t.Fatalf("init --wiki must suggest the bootstrap:\n%s", res.stdout.String())
+	if !strings.Contains(res.stdout.String(), "Next: archetipo view") {
+		t.Fatalf("init --wiki must open the product without a mandatory bootstrap:\n%s", res.stdout.String())
 	}
 
 	raw, err := os.ReadFile(filepath.Join(".archetipo", "config.yaml"))
