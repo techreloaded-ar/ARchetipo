@@ -264,6 +264,7 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 			'conversationDraft = "";', // ripresa riuscita di una conversazione passata
 			'conversationDraft = "";', // reset di workspace
 			'conversationDraft = "";', // proposta accettata dall’azione
+			'conversationDraft = "";', // avvio diretto del lavoro dalla richiesta
 			'conversationDraft = "";', // invio: il campo si svuota appena parte
 			"conversationDraft = typed;", // consegna rifiutata: il testo torna nel campo
 		];

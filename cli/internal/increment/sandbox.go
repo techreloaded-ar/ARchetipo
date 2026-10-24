@@ -30,6 +30,13 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func (s *Service) Create(ctx context.Context, title, request, origin string) (Record, error) {
+	return s.CreateWithMode(ctx, title, request, origin, "")
+}
+
+func (s *Service) CreateWithMode(ctx context.Context, title, request, origin, mode string) (Record, error) {
+	if mode != "" && mode != Continuous {
+		return Record{}, iox.NewInvalidInput("unknown development mode", "use continuous or omit development_mode", nil)
+	}
 	return s.locked(ctx, func() (record Record, err error) {
 		title, request = strings.TrimSpace(title), strings.TrimSpace(request)
 		if title == "" || request == "" {
@@ -38,7 +45,18 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 		if s.Config.Increment != nil {
 			return record, iox.NewConflict("cannot create an increment inside another increment", "open the original workspace", nil)
 		}
-		const base = "main"
+		base := "main"
+		if mode == Continuous {
+			if err = s.prepareNewApp(ctx); err != nil {
+				return record, err
+			}
+			if _, mainErr := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/main^{commit}"); mainErr != nil {
+				base, err = git(ctx, s.Config.ProjectRoot, "symbolic-ref", "--short", "HEAD")
+				if err != nil {
+					return record, err
+				}
+			}
+		}
 		sha, err := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
 		if err != nil {
 			return record, iox.NewPrecondition("increment base branch main is unavailable", "create or fetch the local main branch before starting an increment", err)
@@ -48,7 +66,7 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 			return record, err
 		}
 		id := "inc-" + hex.EncodeToString(entropy[:])
-		record = Record{ID: id, Title: title, Request: request, OriginConversationID: origin, Status: Discovery, CreatedAt: time.Now().UTC(), BaseBranch: base, BaseSHA: sha, Branch: "archetipo/increments/" + id, Workdir: filepath.Join(s.dir(), "worktrees", id), Revisions: []Revision{}, Feedback: []string{}}
+		record = Record{DevelopmentMode: mode, ID: id, Title: title, Request: request, OriginConversationID: origin, Status: Discovery, CreatedAt: time.Now().UTC(), BaseBranch: base, BaseSHA: sha, Branch: "archetipo/increments/" + id, Workdir: filepath.Join(s.dir(), "worktrees", id), Revisions: []Revision{}, Feedback: []string{}}
 		if err = os.MkdirAll(filepath.Dir(record.Workdir), 0o700); err != nil {
 			return Record{}, err
 		}
@@ -215,4 +233,49 @@ func (s *Service) installRuntime(target string) error {
 		}
 	}
 	return nil
+}
+
+// prepareNewApp initializes only a workspace containing installed workflow assets.
+// Existing source directories must be explicitly imported into Git by their owner.
+func (s *Service) prepareNewApp(ctx context.Context) error {
+	root := s.Config.ProjectRoot
+	if top, repoErr := git(ctx, root, "rev-parse", "--show-toplevel"); repoErr == nil {
+		actual, pathErr := filepath.EvalSymlinks(root)
+		canonicalTop, topErr := filepath.EvalSymlinks(top)
+		if pathErr != nil || topErr != nil || actual != canonicalTop {
+			return iox.NewPrecondition("workspace is inside another repository", "open the repository root or initialize a dedicated repository for this workspace", nil)
+		}
+		if _, headErr := git(ctx, root, "rev-parse", "--verify", "HEAD^{commit}"); headErr == nil {
+			return nil
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{".git": true, ".DS_Store": true, ".archetipo": true, ".agents": true, ".claude": true, ".cursor": true, ".gemini": true, ".opencode": true, ".github": true, ".pi": true, ".gitignore": true, "AGENTS.md": true, "GEMINI.md": true}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] && (!entry.IsDir() || !emptyDirectory(filepath.Join(root, entry.Name()))) {
+			return iox.NewPrecondition("existing project is not versioned in Git: "+entry.Name(), "initialize and commit the existing application before starting a worktree", nil)
+		}
+	}
+	if _, err = git(ctx, root, "init", "-b", "main"); err != nil {
+		return err
+	}
+	_, err = git(ctx, root, "-c", "user.name=ARchetipo", "-c", "user.email=workspace@archetipo.local", "commit", "--allow-empty", "--only", "-m", "chore: initialize app workspace")
+	return err
+}
+
+// Config initialization may create empty output directories before the first app.
+func emptyDirectory(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !emptyDirectory(filepath.Join(path, entry.Name())) {
+			return false
+		}
+	}
+	return true
 }

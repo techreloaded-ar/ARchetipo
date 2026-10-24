@@ -659,3 +659,111 @@ func TestIncrementWithoutMainDoesNotCreateWorktree(t *testing.T) {
 		t.Fatalf("failed creation persisted increment state: %v", err)
 	}
 }
+
+func TestContinuousDevelopmentPersistsSpecAndNeverAuthorizesPublication(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	r, err := s.CreateWithMode(ctx, "Booking", "Build booking", "", Continuous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = git(ctx, s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir) })
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Book a visit", Stories: []domain.Spec{story("US-001", "Book")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != Developing || !r.Revisions[0].Approved || r.Revisions[0].ApprovalSource != "request" {
+		t.Fatalf("wrong authorization: %+v", r)
+	}
+	live, err := s.Stories(ctx, r)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("spec not reconciled: %v %v", live, err)
+	}
+	if _, err = s.Publish(ctx, r.ID, "", 1); err == nil {
+		t.Fatal("development authorized publication")
+	}
+	complete(t, s, r)
+	r = ready(t, s, r)
+	r, err = s.RequestChanges(ctx, r.ID, FeedbackRequest{Feedback: "Add cancellation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Book and cancel", Stories: []domain.Spec{story("US-001", "Book and cancel")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != Developing || r.ReadySHA != "" || r.Revisions[1].ApprovalSource != "request" {
+		t.Fatalf("stale candidate: %+v", r)
+	}
+	live, err = s.Stories(ctx, r)
+	if err != nil || live[0].Status != domain.StatusTodo {
+		t.Fatalf("changed spec retained stale acceptance: %+v %v", live, err)
+	}
+}
+
+func TestInvalidDevelopmentModeDoesNotCreateWorktree(t *testing.T) {
+	s := fixture(t)
+	if _, err := s.CreateWithMode(context.Background(), "App", "Build", "", "unknown"); err == nil {
+		t.Fatal("unknown mode accepted")
+	}
+	records, err := s.List()
+	if err != nil || len(records) != 0 {
+		t.Fatalf("unexpected side effects: %v %v", records, err)
+	}
+}
+
+func TestContinuousUsesCurrentBranchWhenMainAbsent(t *testing.T) {
+	s := fixture(t)
+	runGit(t, s.Config.ProjectRoot, "branch", "-m", "product")
+	r, err := s.CreateWithMode(context.Background(), "App", "Change app", "", Continuous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = git(context.Background(), s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir)
+	})
+	if r.BaseBranch != "product" {
+		t.Fatalf("wrong base: %s", r.BaseBranch)
+	}
+	if _, err = s.Create(context.Background(), "Legacy", "Change app", ""); err == nil {
+		t.Fatal("legacy base contract changed")
+	}
+}
+
+func TestContinuousBootstrapsEmptyWorkspaceWithoutCommittingUntrackedFiles(t *testing.T) {
+	s := fixture(t)
+	if err := os.RemoveAll(filepath.Join(s.Config.ProjectRoot, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.Config.ProjectRoot, "hello.txt")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, s.Config.ProjectRoot, "init", "-b", "main")
+	runGit(t, s.Config.ProjectRoot, "add", ".archetipo/config.yaml")
+	r, err := s.CreateWithMode(context.Background(), "New app", "Build app", "", Continuous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = git(context.Background(), s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir)
+	})
+	if files := runGit(t, s.Config.ProjectRoot, "ls-tree", "--name-only", "HEAD"); files != "" {
+		t.Fatalf("unexpected committed files: %s", files)
+	}
+	if r.BaseBranch != "main" {
+		t.Fatal(r.BaseBranch)
+	}
+}
+
+func TestContinuousRefusesUnversionedExistingCode(t *testing.T) {
+	s := fixture(t)
+	if err := os.RemoveAll(filepath.Join(s.Config.ProjectRoot, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateWithMode(context.Background(), "Existing", "Change app", "", Continuous); err == nil {
+		t.Fatal("unversioned source silently omitted")
+	}
+	if _, err := os.Stat(filepath.Join(s.Config.ProjectRoot, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("created Git after refusal: %v", err)
+	}
+}

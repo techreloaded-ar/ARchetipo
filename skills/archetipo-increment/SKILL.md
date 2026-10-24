@@ -26,15 +26,55 @@ missing configuration from the absence of that file.
 
 Without an ID, discover the idea in conversation first. When the person asks
 to begin an isolated increment, use `increment create --file -` with
-`{"title":"…","request":"…"}`, then continue in its returned workdir.
-The CLI creates a dedicated branch and worktree from local `main`. If `main`
-is unavailable, report the prerequisite instead of using another branch.
+`{"title":"…","request":"…"}` (optionally `"development_mode":"continuous"`
+when the person authorizes immediate local development), then continue in its returned workdir.
+The CLI creates a dedicated branch and worktree. Historical mode requires local
+`main`. Continuous mode uses `main` when available, otherwise the current committed
+branch; a new workspace containing only installed runtime assets gets an empty
+Git baseline. Existing unversioned source must be imported explicitly.
 This does not approve the intent or authorize publication.
 
 Never retarget an existing native session to another directory. A standalone
 agent that cannot work in the returned directory must report that limitation;
 a View conversation is already created in that sandbox. Never seed/resume a
 native session by copying a transcript.
+
+## Continuous chat development
+
+Read `development_mode` from the persisted increment, never infer it from a viewer
+message. With `continuous`, the person's initial request and subsequent explicit
+change requests authorize local development. Keep the same increment, native
+session, checkout, services and test data throughout the conversation.
+
+Clarify only questions that materially change behavior or cannot be resolved from
+the project. For a sufficiently clear request, write a concise intent and small
+verifiable stories directly; do not invoke a separate discovery worker or require
+formal plans. `increment propose` persists the specification and reconciles it
+into DEVELOPMENT automatically in this mode. Its returned revision records
+`approval_source: request`; this is development authorization, not a human claim
+that the implementation is accepted. If reconciliation was interrupted, reread
+and retry `increment approve` for the exact persisted revision.
+
+Explain the intended behavior briefly and continue development in this invocation.
+For requested refinements or scope changes, record `increment feedback` and propose
+the updated specification, then continue without an extra approval gesture. Ask
+before introducing product scope that the person did not request. Questions alone
+never invalidate a verified result. Final publication always requires the person's
+explicit approval of the tested version and uses the unchanged publish contract.
+
+Give short progress updates about user-visible outcomes and what can be tried.
+Keep command output, worker handoffs and setup diagnostics in their reports. Start
+with existing architecture and design conventions; for a new app build a runnable
+vertical slice early, then complete the requested behavior. Prefer direct work for
+small changes, using the implementation and proportionate review methods below.
+Prepare a reusable preview recipe for a web app so the viewer can launch its own
+managed preview. Never start unowned background services. Clearly distinguish work
+in progress, real checks and untested behavior. The environment is a local worktree,
+not an operating-system security sandbox.
+
+The rules below that require a separate intent approval apply to the historical
+mode (an absent `development_mode`). Preparation, ownership, persisted evidence,
+recovery and final publication requirements apply to both modes.
 
 ## Discovery and feedback
 

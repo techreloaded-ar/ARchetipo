@@ -20,6 +20,9 @@ const (
 	Delivered  = "DELIVERED"
 )
 
+// Continuous development authorizes local iterations from the request, never publication.
+const Continuous = "continuous"
+
 type Proposal struct {
 	Intent  string        `json:"intent"`
 	Stories []domain.Spec `json:"stories"`
@@ -35,12 +38,13 @@ type FeedbackRequest struct {
 type Revision struct {
 	Number int `json:"number"`
 	Proposal
-	Approved  bool             `json:"approved"`
-	CreatedAt time.Time        `json:"created_at"`
-	Feedback  string           `json:"feedback,omitempty"`
-	Result    *Result          `json:"result,omitempty"`
-	HeadSHA   string           `json:"head_sha,omitempty"`
-	Change    *FeedbackRequest `json:"change,omitempty"`
+	ApprovalSource string           `json:"approval_source,omitempty"`
+	Approved       bool             `json:"approved"`
+	CreatedAt      time.Time        `json:"created_at"`
+	Feedback       string           `json:"feedback,omitempty"`
+	Result         *Result          `json:"result,omitempty"`
+	HeadSHA        string           `json:"head_sha,omitempty"`
+	Change         *FeedbackRequest `json:"change,omitempty"`
 }
 type Result struct {
 	Summary    string   `json:"summary"`
@@ -49,6 +53,7 @@ type Result struct {
 }
 type Record struct {
 	ID                   string            `json:"id"`
+	DevelopmentMode      string            `json:"development_mode,omitempty"`
 	Title                string            `json:"title"`
 	Request              string            `json:"request"`
 	Status               string            `json:"status"`

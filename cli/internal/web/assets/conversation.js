@@ -1292,13 +1292,15 @@
 		const metadata = objectAt(session, "session");
 		const environment = objectAt(metadata, "environment");
 		const location = textAt(environment, "location");
-		const dirHtml = dir
+		const work = objectAt(view, "increment");
+		const simple = !!textAt(work, "development_mode");
+		const dirHtml = simple ? `<span class="conv-work-caption">Il tuo lavoro</span>` : dir
 			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
 			: "";
 		const providerHtml = agent
 			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";
-		const locationHtml = location
+		const locationHtml = !simple && location
 			? `<span class="conv-provider" title="${escapeHtml(location)}">${escapeHtml(location)}</span>`
 			: "";
 		return `<div class="conv-head">
@@ -1563,7 +1565,8 @@
 		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
 		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
 		const active = stories.filter(story => story.active === true);
-		if (!panel) return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" aria-label="Incremento di prodotto"><header><strong title="' + escapeHtml(textAt(increment, "title")) + '">' + escapeHtml(textAt(increment, "title")) + '</strong><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="' + panelOpen + '">Dettagli incremento</button></header><div class="conv-increment-progress"><span>' + escapeHtml([textAt(increment, "activity_label"), textAt(increment, "progress_label")].filter(Boolean).join(" · ")) + '</span>' + active.map(story => '<button type="button" class="ghost-btn conv-increment-active" data-increment-story="' + escapeHtml(story.code) + '">In lavorazione: ' + escapeHtml(story.code + " · " + story.title) + '</button>').join("") + '</div></section>';
+		const quickActions = (increment.development_mode ? arrayAt(increment, "actions") : []).map(action => '<button type="button" class="ghost-btn" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
+		if (!panel) return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" aria-label="Incremento di prodotto"><header><strong title="' + escapeHtml(textAt(increment, "title")) + '">' + escapeHtml(textAt(increment, "title")) + '</strong><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="' + panelOpen + '">Dettagli incremento</button></header><div class="conv-increment-progress"><span>' + escapeHtml([textAt(increment, "activity_label"), textAt(increment, "progress_label")].filter(Boolean).join(" · ")) + '</span>' + active.map(story => '<button type="button" class="ghost-btn conv-increment-active" data-increment-story="' + escapeHtml(story.code) + '">In lavorazione: ' + escapeHtml(story.code + " · " + story.title) + '</button>').join("") + '</div><div class="conv-work-actions">' + quickActions + '</div></section>';
 		if (!panelOpen) return "";
 		const renderChange = (change, feedback) => {
 			const codes = arrayAt(change, "story_codes");
@@ -1630,6 +1633,17 @@
 		if (!conversation) {
 			if (local.activitySelection) {
 				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}${renderComposer(false, typed, Object.assign({}, local, { writable: offered }), offered, false, renderConversationModelChoice(value, local, false))}</section>`;
+			}
+			const startWork = objectAt(objectAt(local, "activities"), "start_work");
+			if (startWork && !local.openingSpecCode) {
+				const enabled = offered && startWork.runnable === true;
+				return `<section class="conv-panel conv-empty-panel conv-work-home" aria-label="Nuovo lavoro">
+					<div class="conv-work-welcome"><span class="conv-work-eyebrow">Dall’idea alla tua app</span><h1>Cosa vuoi costruire?</h1><p>Descrivi la tua idea o una modifica. Sviluppiamo insieme, mentre provi il risultato.</p></div>
+					${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}
+					${!enabled ? `<p role="status">${escapeHtml(textAt(startWork, "unavailable_reason"))}</p>` : ""}
+					${renderComposer(false, typed, Object.assign({}, local, {writable: enabled, activitySelection: {placeholder: startWork.placeholder}}), enabled, false, renderConversationModelChoice(value, local, false))}
+					<details class="conv-work-other"><summary>Conversazione e altre attività</summary>${renderActivities(objectAt(local, "activities"), local)}</details>
+				</section>`;
 			}
 			const activities = renderActivities(objectAt(local, "activities"), local);
 			if (activities && !local.openingSpecCode) {

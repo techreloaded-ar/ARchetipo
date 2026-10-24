@@ -13,6 +13,7 @@ import (
 
 type conversationActivityView struct {
 	template.ConversationActivity
+	DevelopmentMode   string `json:"development_mode,omitempty"`
 	Kind              string `json:"kind"`
 	Primary           bool   `json:"primary"`
 	Scope             string `json:"scope,omitempty"`
@@ -21,6 +22,7 @@ type conversationActivityView struct {
 }
 
 type conversationActivitiesView struct {
+	StartWork      *conversationActivityView  `json:"start_work,omitempty"`
 	ConversationID string                     `json:"conversation_id"`
 	SkillsKnown    bool                       `json:"skills_known"`
 	Items          []conversationActivityView `json:"items"`
@@ -94,8 +96,22 @@ func (s *Server) handleGetConversationActivities(w http.ResponseWriter, r *http.
 			}
 		}
 	}
+	var startWork *conversationActivityView
+	if id == "" {
+		for _, item := range items {
+			if item.Kind == "increment" {
+				item.DevelopmentMode = "continuous"
+				item.Runnable = conversationTarget.sessions != nil && conversationTarget.reason == ""
+				item.UnavailableReason = conversationTarget.reason
+				item.Label = "Sviluppa la tua app"
+				item.Placeholder = "Descrivi l’app che vuoi creare o cosa vuoi cambiare…"
+				startWork = &item
+				break
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, conversationActivitiesView{
-		ConversationID: id, SkillsKnown: discovery.SkillsKnown, Items: items,
+		StartWork: startWork, ConversationID: id, SkillsKnown: discovery.SkillsKnown, Items: items,
 	})
 }
 

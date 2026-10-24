@@ -23,10 +23,11 @@ type incrementStoryView struct {
 	Active      bool   `json:"active"`
 }
 type incrementView struct {
-	Stories       []incrementStoryView `json:"stories"`
-	ProgressLabel string               `json:"progress_label,omitempty"`
-	ActivityLabel string               `json:"activity_label,omitempty"`
-	Note          string               `json:"note"`
+	PreviewAutoStart bool                 `json:"preview_auto_start"`
+	Stories          []incrementStoryView `json:"stories"`
+	ProgressLabel    string               `json:"progress_label,omitempty"`
+	ActivityLabel    string               `json:"activity_label,omitempty"`
+	Note             string               `json:"note"`
 	increment.Record
 	StatusLabel string             `json:"status_label"`
 	Actions     []incrementControl `json:"actions"`
@@ -112,6 +113,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 			view.Note = environment.Error
 		}
 	}
+	view.PreviewAutoStart = r.DevelopmentMode == increment.Continuous && r.Status == increment.Review && !view.Busy
 	for _, action := range tpl.IncrementActions {
 		allowed := false
 		for _, status := range action.Statuses {
@@ -158,6 +160,7 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		DevelopmentMode      string            `json:"development_mode"`
 		Title                string            `json:"title"`
 		Request              string            `json:"request"`
 		OriginConversationID string            `json:"origin_conversation_id"`
@@ -183,7 +186,7 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 		body.Title = truncateRunes(strings.TrimSpace(body.Request), 72)
 	}
 	service := s.incrementService(ws)
-	created, err := service.Create(ctx, body.Title, body.Request, body.OriginConversationID)
+	created, err := service.CreateWithMode(ctx, body.Title, body.Request, body.OriginConversationID, body.DevelopmentMode)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -333,7 +336,7 @@ func (s *Server) prepareIncrementMessage(ctx context.Context, ws *workspaceSessi
 	// The picker declares an explicit change request, without deciding which
 	// story or requirement it changes. Release only our app/proxy so the skill
 	// can run standalone verification against the existing dependency data.
-	if body.PreviewFeedback && (current.Status == increment.Review || current.Status == increment.Developing) {
+	if (body.PreviewFeedback || current.DevelopmentMode == increment.Continuous) && (current.Status == increment.Review || current.Status == increment.Developing) {
 		if err := ws.previews.SuspendOwned(current.Workdir); err != nil {
 			return err
 		}

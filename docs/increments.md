@@ -1,3 +1,48 @@
+# Lavorare su un’app dalla chat
+
+La schermata iniziale offre direttamente il campo «Cosa vuoi costruire?».
+Il primo invio crea un lavoro dedicato (incremento), il worktree e una sessione
+nativa persistente. «Nuovo lavoro» torna a questa schermata; conversazione libera
+e attività del processo rimangono nel menu secondario.
+
+Il nuovo percorso crea l’incremento con `development_mode: continuous`. La richiesta
+autorizza lo sviluppo locale: l’agente chiarisce le sole ambiguità rilevanti,
+persiste intento e criteri con `increment propose` e prosegue senza richiedere
+una seconda conferma. La revisione registra `approval_source: request`, distinta
+da un’approvazione umana. Le revisioni dei lavori precedenti mantengono il percorso
+con approvazione esplicita. L’opzione è disponibile anche standalone nel JSON di
+`increment create`; valori diversi da `continuous` sono rifiutati.
+
+I messaggi successivi e i commenti sugli elementi conservano lavoro, worktree e
+sessione. Le richieste di modifica aggiornano la specifica e invalidano le vecchie
+verifiche; le domande non cambiano il risultato accettabile. La chat mostra brevi
+aggiornamenti sul risultato; log e dettagli restano consultabili separatamente.
+La pubblicazione conserva il gate esplicito sulla versione verificata e non viene
+autorizzata dalla modalità continua.
+
+L’anteprima è affiancata alla chat fin dall’apertura del lavoro. Alla disponibilità
+di un risultato verificato, con ricetta configurata e turno concluso, il browser
+avvia automaticamente la preview gestita. Non si dichiara funzionante un’app in
+assenza di una ricetta o readiness. Un errore non genera retry infiniti e il pulsante
+Ferma resta operativo. Durante un nuovo turno continuo la preview viene sospesa,
+conservando servizi e dati; dopo il turno può ripartire. Questo primo percorso non
+promette una preview ininterrotta durante compilazione e verifiche.
+
+Ogni lavoro usa la gestione esistente di porte, servizi posseduti, dati separati e
+cleanup. Il worktree non è una sandbox di sicurezza del sistema operativo.
+Una nuova app in un workspace contenente soltanto asset del workflow riceve una
+base Git vuota, senza committare file runtime. Un’app esistente deve essere già
+versionata; il sistema non importa né committa automaticamente sorgenti o segreti.
+Il percorso continuo usa `main` se disponibile, altrimenti il branch corrente
+committato. La creazione storica continua a richiedere `main`.
+
+Verifica: `npm run test:view-chat-smoke` attraversa la pagina reale, il primo invio,
+la specifica riconciliata dal CLI, l’avvio automatico dell’anteprima, il feedback,
+il reload e il rifiuto di una pubblicazione con commit errato. Solo l’agente e
+GitHub sono simulati; screenshot e report restano sotto `test/workspaces/`.
+
+---
+
 # Incrementi di prodotto
 
 Un incremento è un percorso guidato disponibile fra le **Attività** della

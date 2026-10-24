@@ -26,6 +26,9 @@
  let current=null, key="", open=false, frame=null, view=null, ready=false, picking=false, busy=false, poll=null, request=0;
  let comments=[], notice="", panel=window.Preview.panelState({},{}), activeComment=null, drag=null;
  const states=new Map();
+ const autoStarted=new Set();
+ const candidateKey=()=>key+":"+(current?.candidate || "");
+ function manuallyStopped(candidate){try{return sessionStorage.getItem("preview-stopped:"+key)===candidate;}catch{return false;}}
  const route=()=>`/api/workspace/conversations/${encodeURIComponent(current.id)}/preview`;
  async function api(url,method="GET") {
   const response=await fetch(url,{method,headers:method==="GET"?{}:{"Content-Type":"application/json"},body:method==="POST"?"{}":undefined});
@@ -164,6 +167,14 @@
  }
  function apply(value){
   view=value;
+  // One automatic attempt per verified candidate; Stop and errors never loop.
+  const candidate=candidateKey();
+  if(current?.autoStart && current.writable && value.configured && value.state==="stopped" && !autoStarted.has(candidate) && !manuallyStopped(candidate)) {
+   autoStarted.add(candidate);
+   const selected=key, generation=++request, url=route();
+   busy=true;
+   void api(url,"POST").then(next=>{if(selected===key && generation===request)apply(next);}).catch(error=>{if(selected===key && generation===request)showError(error);}).finally(()=>{if(selected===key && generation===request){busy=false;updateButtons();}});
+  }
   host.querySelector(".preview-log pre").textContent=[value.resources?.resources?.map(r=>`Servizio ${r.resource.name}: ${r.state}${r.error ? " — "+r.error : ""}`).join("\n"),value.resources?.ports ? Object.entries(value.resources.ports).map(([name,port])=>`${name}: 127.0.0.1:${port}`).join("\n") : "",value.environment?.log,value.log,value.preparation?.report_path ? "Report ambiente: "+value.preparation.report_path : ""].filter(Boolean).join("\n");
   host.querySelector(".preview-error-badge").hidden=!(value.state==="error" || value.error);
   const labels={unconfigured:"Premi Preview: configuriamo e prepariamo l’ambiente del progetto.",configuring:"Configurazione ambiente nella sessione tecnica…",waiting:"Serve il tuo intervento. Apri Dettagli ambiente.",stopped:"Premi Preview per aprire l’applicazione.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",ready:"Preview disponibile.",error:value.error};
@@ -202,7 +213,7 @@
    stopDrag();persist();request++;clearFrame();current=value;key=next;view=null;ready=false;busy=false;notice="";
    let saved=states.get(key);
    if(!saved){let drafts=[];try{drafts=JSON.parse(localStorage.getItem(key)||"[]");}catch{/* Invalid drafts are ignored. */}saved={open:false,comments:Array.isArray(drafts)?drafts.filter(c=>window.Preview.cleanElement(c?.element) && typeof c.note==="string").slice(0,30):[]};}
-   open=window.WorkspacePanels?.isPreviewActive() || false;comments=saved.comments;panel=window.Preview.panelState(saved.panel,{});activeComment=saved.activeComment || null;drawComments();visibility();
+   open=window.WorkspacePanels?.isPreviewActive() || false;comments=saved.comments;panel=window.Preview.panelState(saved.panel || (value?.compact?{mode:"collapsed"}:{}),{});activeComment=saved.activeComment || null;drawComments();visibility();
   },
   setActive(active){if(open===active)return;open=active;persist();visibility();},
   toggle(){if(!current)return;if(window.WorkspacePanels){window.WorkspacePanels.toggle("preview");return;}open=!open;persist();visibility();}
@@ -225,6 +236,11 @@
   if(action==="reload"){if(frame){ready=false;frame.src=frame.src;}return;}
   if(!["start","stop","prepare","setup","send"].includes(action) || busy)return;
   const selected=key, url=route();request++;notice="";busy=true;updateButtons();
+  if(action==="stop"){
+   autoStarted.add(candidateKey());
+   try{sessionStorage.setItem("preview-stopped:"+key,candidateKey());}catch{/* In-memory stop still prevents a restart. */}
+  }
+  if(action==="start"){try{sessionStorage.removeItem("preview-stopped:"+key);}catch{/* Explicit start remains available. */}}
   try{
    if(action==="setup"){const value=await api(url+"/configure","POST");if(key===selected)apply(value);}
    if(action==="send"){

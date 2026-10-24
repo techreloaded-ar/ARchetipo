@@ -8042,8 +8042,9 @@
 		finally { conversationBusy = false; renderConversationPanel(); }
 	}
 
-	async function startIncrementFromConversation(proposal) {
+	async function startIncrementFromConversation(proposal, developmentMode) {
 		const body = {request: proposal, origin_conversation_id: conversationsCurrentId || ""};
+		if (developmentMode) body.development_mode = developmentMode;
 		const override = conversationModelOverride();
 		if (override) Object.assign(body, override);
 		try {
@@ -8101,6 +8102,17 @@
 			return;
 		}
 		const id = conversationsCurrentId;
+		if (!id && !conversationOpeningSpecCode && conversationActivitiesView?.start_work?.runnable && proposal) {
+			conversationBusy = true;
+			renderConversationPanel();
+			try {
+				if (await startIncrementFromConversation(proposal, conversationActivitiesView.start_work.development_mode)) {
+					conversationDraft = "";
+					startConversationPolling();
+				}
+			} finally { conversationBusy = false; renderConversationPanel(); }
+			return;
+		}
 		if (!id || !conversationView) return;
 		// Writing in a conversation that has ended is not writing in a live one:
 		// it takes that one up again in a new conversation. One composer, two
@@ -8343,13 +8355,14 @@
 		window.WorkspacePanels?.configure({
 			key: currentConversation ? currentConversation.working_dir + ":" + currentConversation.id : "",
 			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
-			detailsLabel: conversationView?.increment ? "Incremento" : "Storie",
+			detailsLabel: conversationView?.increment ? "Specifica e verifiche" : "Storie",
+			openPreview: !!conversationView?.increment?.development_mode,
 		});
 		if (window.WorkspacePanels?.detailsSelected()) {
 			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
 			else conversationProposalsOpen = true;
 		}
-		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsActive() && !conversationBusy} : null);
+		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsActive() && !conversationBusy, compact: !!conversationView?.increment?.development_mode, autoStart: conversationView?.increment?.preview_auto_start === true, candidate: (conversationView?.increment?.ready_sha || "") + ":" + (conversationView?.session?.current_turn?.id || "")} : null);
 		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
 		if (newConversation) {
 			newConversation.disabled = conversationBusy;

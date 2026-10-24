@@ -78,7 +78,7 @@
  }
  window.WorkspacePanels={
   configure(value){
-   if(key!==value.key){remember();key=value.key||"";const state=states.get(key);selected=state?.selected||"preview";opened=state?.opened||false;expanded=state?.expanded||false;}
+   if(key!==value.key){remember();key=value.key||"";const state=states.get(key);selected=state?.selected||"preview";opened=state?.opened ?? value.openPreview===true;expanded=state?.expanded||false;}
    hasDetails=value.hasDetails===true;detailsLabel=value.detailsLabel||"Storie";
    if(!hasDetails&&selected==="details")selected="preview";
    if(!key)opened=false;

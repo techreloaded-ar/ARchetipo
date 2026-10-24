@@ -239,9 +239,11 @@ func (p *persistentFakeNativeProvider) StreamSessionEvents(ctx context.Context, 
 	return nil
 }
 func (p *persistentFakeNativeProvider) SteerTurn(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	if p.steerFindsNoTurn {
-		p.store.mu.Lock()
-		session := p.store.sessions[request.Session.Native.ID]
+	p.store.mu.Lock()
+	session := p.store.sessions[request.Session.Native.ID]
+	// A journal can still show ACTIVE after the native turn has completed.
+	// Match real adapters: refuse steering so delivery starts the next turn.
+	if p.steerFindsNoTurn || session.snapshot.Work == execution.SessionIdle {
 		completed := time.Now().UTC()
 		if session.snapshot.CurrentTurn != nil {
 			session.snapshot.CurrentTurn.State = execution.TurnCompleted
@@ -252,6 +254,7 @@ func (p *persistentFakeNativeProvider) SteerTurn(_ context.Context, request exec
 		return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUncertain},
 			&execution.RunCommandError{Reason: execution.RunRefusedNotActive, Err: fmt.Errorf("no active turn to steer")}
 	}
+	p.store.mu.Unlock()
 	return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryConfirmed}, nil
 }
 func (p *persistentFakeNativeProvider) RespondSessionInput(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {

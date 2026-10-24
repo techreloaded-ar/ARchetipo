@@ -98,6 +98,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 				value, err = service.Refresh(cmd.Context(), args[0])
 			default:
 				var input struct {
+					DevelopmentMode      string   `json:"development_mode"`
 					Title                string   `json:"title"`
 					Request              string   `json:"request"`
 					OriginConversationID string   `json:"origin_conversation_id"`
@@ -127,7 +128,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 					}
 					switch operation {
 					case "create":
-						value, err = service.Create(cmd.Context(), input.Title, input.Request, input.OriginConversationID)
+						value, err = service.CreateWithMode(cmd.Context(), input.Title, input.Request, input.OriginConversationID, input.DevelopmentMode)
 					case "approve":
 						value, err = service.Approve(cmd.Context(), args[0], input.Revision)
 					case "feedback":

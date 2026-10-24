@@ -8362,3 +8362,21 @@ body.no-workspace [data-workspace-scoped] {
 .removal-choice-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:24px; justify-content:flex-end; }
 .removal-choice-actions button { white-space:normal; min-height:40px; text-align:left; }
 .removal-choice-actions [data-removal-choice="delete"] { color:#a74e4b; }
+
+/* Chat-first work entry: the request is the primary action. */
+.conv-work-home { justify-content:center; padding:clamp(20px,5vw,72px); gap:24px; }
+.conv-work-welcome, .conv-work-home > .conv-composer, .conv-work-other { width:100%; max-width:740px; margin-inline:auto; }
+.conv-work-welcome h1 { font-size:clamp(28px,3.6vw,46px); letter-spacing:-.04em; line-height:1.15; margin:12px 0 16px; }
+.conv-work-welcome p { color:var(--text-secondary,#777); font-size:16px; line-height:1.6; max-width:540px; }
+.conv-work-eyebrow { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-secondary,#777); }
+.conv-work-home .conv-composer { flex:none; border:0; padding:0; }
+.conv-work-home .conv-composer-surface { border-radius:20px; box-shadow:0 8px 32px #00000008; }
+.conv-work-home .conv-composer-input { min-height:100px; padding:20px; }
+.conv-work-other > summary { cursor:pointer; font-size:13px; color:var(--text-secondary,#777); padding:8px 0; }
+.conv-work-other .conv-activities { margin-top:16px; }
+@media(max-width:700px) { .conv-work-home { padding:24px 16px; justify-content:flex-start; overflow-y:auto; } }
+
+.conv-work-home > .conv-composer { background:transparent; }
+.conv-work-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+.conv-work-caption { font-size:13px; color:var(--text-secondary,#777); }
+.conv-work-actions:empty { display:none; }

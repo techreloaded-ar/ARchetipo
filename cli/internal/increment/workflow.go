@@ -57,6 +57,16 @@ func frozen(r Record) bool {
 }
 
 func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, error) {
+	r, err := s.propose(ctx, id, p)
+	if err != nil || r.DevelopmentMode != Continuous {
+		return r, err
+	}
+	// The creator explicitly authorized local development. Reconcile through
+	// the same approval contract, preserving revision checks and crash recovery.
+	return s.Approve(ctx, id, r.Revisions[len(r.Revisions)-1].Number)
+}
+
+func (s *Service) propose(ctx context.Context, id string, p Proposal) (Record, error) {
 	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)
 		if err != nil {
@@ -148,6 +158,10 @@ func (s *Service) Approve(ctx context.Context, id string, revision int) (Record,
 			return r, iox.NewConflict("intent cannot be approved in this state", "read the current increment", nil)
 		}
 		latest.Approved = true
+		latest.ApprovalSource = "human"
+		if r.DevelopmentMode == Continuous {
+			latest.ApprovalSource = "request"
+		}
 		r.Status = Developing
 		// Persist the decision first. Repeating this command reconciles the same
 		// story set after a crash; it never creates a second set of local codes.
