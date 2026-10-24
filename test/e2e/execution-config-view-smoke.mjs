@@ -231,7 +231,7 @@ async function main() {
     const todo = await apiJSON(`${view.url}/api/spec/US-901`);
     assertActions(todo, [["plan", "Pianifica"]], "US-901 (TODO)");
     const planned = await apiJSON(`${view.url}/api/spec/US-902`);
-    assertActions(planned, [["implement", "Implementa"]], "US-902 (PLANNED)");
+    assertActions(planned, [], "US-902 (PLANNED)");
     console.log("-> AC-4 ok: admitted actions exposed with id and label");
 
     // AC-5 — after a status change the list is recomputed, empty when nothing is admitted.

@@ -633,13 +633,13 @@ func TestRunSpecActionRefusals(t *testing.T) {
 			t.Fatalf("empty action: %d %v", status, body)
 		}
 	})
-	t.Run("action the status does not admit", func(t *testing.T) {
+	t.Run("retired delivery action", func(t *testing.T) {
 		srv, cfg, _ := newRunServer(t, releasedProvider("fake", nil), true)
 		status, body := startAction(t, srv, "US-901", "implement")
-		if status != http.StatusConflict {
+		if status != http.StatusBadRequest {
 			t.Fatalf("implement on a TODO spec: %d %v", status, body)
 		}
-		if message, _ := body["error"].(string); !strings.Contains(message, string(domain.StatusTodo)) {
+		if message, _ := body["error"].(string); !strings.Contains(message, "unsupported execution action") {
 			t.Fatalf("the refusal does not name the current status: %q", message)
 		}
 		if got := recordFileCount(t, cfg.ProjectRoot, "US-901"); got != 0 {

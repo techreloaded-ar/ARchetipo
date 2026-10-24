@@ -8,9 +8,6 @@ description: Explore a product problem, build and test a working solution, prese
 Read `.archetipo/shared-runtime.md` once. Use the person's language. Start with
 `archetipo increment show <id>`; use `-C <workdir>` for all subsequent commands.
 The worktree, native session and test data belong to this work throughout its life.
-For a record without `development_mode: continuous`, read `references/legacy.md`
-and follow that historical delivery contract instead of the product method below.
-
 ## Understand and preserve the problem
 
 Read the request, current specification, learning and applicable repository
@@ -24,7 +21,13 @@ Persist the evolving specification with `increment propose <id> --file -`:
 {"intent":"Markdown: problem and people; desired behavior and concrete examples; assumptions; exclusions; decisions and open questions"}
 ```
 
-No stories, epics, points, tasks or formal implementation plan are required.
+Stories and the enterprise backlog remain optional planning tools. Read linked
+stories when present and keep acceptance criteria and documentation consistent.
+Use `increment link <id> --file -` with `{"story_codes":["US-010"]}` before
+the first specification, or include `story_codes` in a later `propose` payload
+to version changed links. Codes must exist in the parent backlog; never clone
+its stories into an internal delivery board. Do not change story status merely
+because this work is ready or its PR merged. No formal implementation plan is required.
 The CLI versions the specification and makes it actionable without declaring it
 human-approved. Keep the specification consistent with decisions; never rewrite
 requirements to conceal a failed implementation or test. Preserve unknowns.
@@ -72,6 +75,10 @@ use independent assessment for material risk such as permissions, migrations,
 concurrency or data loss. Keep unrelated failures distinct from regressions.
 Do not run a full ceremony per feature or repeat setup/checks without a reason.
 
+Update documentation affected by the implemented behavior, recording decisions and
+relevant page references. Keep product intent distinct from current implementation.
+Use targeted documentation checks; a full Wiki rebuild is not required each turn.
+
 Commit the verified product changes on this branch, excluding runtime and secrets.
 Call `increment ready <id> --file -`:
 
@@ -100,7 +107,7 @@ Do not expand scope beyond the person's request without discussing it.
 
 Only publish after explicit human approval of the displayed tested version:
 `increment publish <id> --file -` with `{"revision":N,"head_sha":"tested commit"}`.
-The PR carries the specification and evidence. Developers may evolve its code;
+The PR carries the specification, original story references, decisions and evidence. Developers may evolve its code;
 that does not retroactively approve or verify their commits. `increment refresh`
 reads the actual PR state. Never merge or deploy on behalf of this method.
 

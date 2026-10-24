@@ -12,8 +12,7 @@ Run `archetipo spec list`. Expect the same envelope with `kind: backlog`, `data.
 
 ## Discover the intended increment
 
-Read `./spec-discovery.md` and follow the same discovery used for backlog
-extension. A request to evaluate an idea is exploratory even when the caller
+Use the core backlog method. A request to evaluate an idea is exploratory even when the caller
 asks for a single proposed story. Agree on the outcome and scope before writing
 acceptance criteria. No artifact or receipt is due while a question is pending.
 
@@ -36,7 +35,7 @@ acceptance criteria. No artifact or receipt is due while a question is pending.
 When a structured receipt is requested, close with one JSON line using this shape, with markdown newlines escaped as `\n`:
 
 ```json
-{"artifact":"spec_draft","status":"PROPOSED","title":"Story title","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"}
+{"artifact":"spec_draft","status":"PROPOSED","title":"Story title","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":0,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"}
 ```
 
 For an existing epic, supply its `epic_code` and omit `epic_title` or leave it empty. Persist only when the person subsequently requests creation, using the existing CLI extension flow.
@@ -44,7 +43,7 @@ For an existing epic, supply its `epic_code` and omit `epic_title` or leave it e
 For several stories, emit one receipt containing the complete set:
 
 ```json
-{"artifact":"spec_draft","status":"PROPOSED","proposals":[{"title":"First story","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"},{"title":"Second story","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"}]}
+{"artifact":"spec_draft","status":"PROPOSED","proposals":[{"title":"First story","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":0,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"},{"title":"Second story","epic_code":"","epic_title":"New epic name","priority":"MEDIUM","points":0,"scope":"MVP","blocked_by":[],"body":"Complete story markdown"}]}
 ```
 
 When a structured receipt is requested, keep the surrounding chat to a short
@@ -58,7 +57,7 @@ present readable markdown and use the same confirmation-before-persistence rule.
 Example revision item (inside `proposals`, or in the single-story receipt):
 
 ```json
-{"draft_id":"story-1","revises_spec":"US-001","title":"Revised title","epic_code":"EP-001","priority":"MEDIUM","points":3,"scope":"MVP","blocked_by":[],"body":"Complete revised story markdown"}
+{"draft_id":"story-1","revises_spec":"US-001","title":"Revised title","epic_code":"EP-001","priority":"MEDIUM","points":0,"scope":"MVP","blocked_by":[],"body":"Complete revised story markdown"}
 ```
 
 Standalone, after explicit approval of a revision, use

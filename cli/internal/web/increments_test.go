@@ -10,9 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 )
@@ -96,7 +93,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		t.Fatal("initial turn lost the increment context")
 	}
 	service := increment.New(cfg, conn)
-	proposal := increment.Proposal{Intent: "Esportare i clienti in Excel.", Stories: []domain.Spec{{Code: "US-001", Title: "Esportazione", Epic: domain.Epic{Code: "EP-001", Title: "Export"}, Priority: domain.Priority("MEDIUM"), Points: 3, Status: domain.StatusTodo, Scope: domain.Scope("MVP"), Body: "## Dimostrazione\nEsporto il file.\n- [ ] Il file contiene i clienti."}}}
+	proposal := increment.Proposal{Intent: "Esportare i clienti in Excel."}
 	if _, err := service.Propose(context.Background(), r.ID, proposal); err != nil {
 		t.Fatal(err)
 	}
@@ -105,60 +102,13 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if err := json.Unmarshal(draftResponse.Body.Bytes(), &draft); err != nil {
 		t.Fatal(err)
 	}
-	if len(draft.Stories) != 1 || draft.Stories[0].StatusLabel != "Da approvare" || draft.Stories[0].Active || draft.ProgressLabel != "" {
-		t.Fatalf("unapproved intent acquired sandbox progress: %s", draftResponse.Body.String())
-	}
-	denied := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
-	if denied.Code != 409 {
-		t.Fatalf("approved while active: %d %s", denied.Code, denied.Body.String())
+	if draft.Status != increment.Developing || draft.Revisions[0].Approved || len(draft.Stories) != 0 {
+		t.Fatalf("wrong product state: %+v", draft)
 	}
 	finishIncrementTurn(t, srv, p, view)
-	accepted := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
-	if accepted.Code != 200 {
-		t.Fatalf("approve: %d %s", accepted.Code, accepted.Body.String())
-	}
-	awaitEnvironmentReady(t, srv, r.Workdir)
-	if p.lastStart.Session.Native.ID != view.Session.Session.Native.ID || p.lastStart.Session.Environment.WorkingDir != r.Workdir {
-		t.Fatal("approval started another agent outside the increment")
-	}
-	// The view reads sandbox states, never the parent card with the same code
-	// or the frozen TODO status of the approved proposal.
-	sandboxCfg, err := config.LoadExact(r.Workdir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := filefs.New(sandboxCfg)
-	current, err := service.Read(r.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, step := range []struct {
-		column   string
-		active   bool
-		progress string
-	}{
-		{"in_progress", true, "0/1 storie completate"},
-		{"done", false, "1/1 storie completate"},
-	} {
-		if _, err = local.MoveBoardCard(context.Background(), "US-001", step.column, domain.ReorderAnchor{}); err != nil {
-			t.Fatal(err)
-		}
-		response := doJSON(t, srv, "GET", "/api/increments/"+r.ID, nil)
-		var projected incrementView
-		if err = json.Unmarshal(response.Body.Bytes(), &projected); err != nil {
-			t.Fatal(err)
-		}
-		if len(projected.Stories) != 1 || projected.Stories[0].Active != step.active || projected.ProgressLabel != step.progress || projected.Revisions[0].Stories[0].Status != domain.StatusTodo {
-			t.Fatalf("wrong sandbox projection: %s", response.Body.String())
-		}
-	}
-	// An old record with no readable sandbox still exposes the original
-	// stories and result; it does not invent completion or activity.
-	current.Workdir = t.TempDir()
-	current.Result = &increment.Result{Summary: "Risultato precedente"}
-	fallback := srv.incrementView(context.Background(), srv.session(), current)
-	if len(fallback.Stories) != 1 || fallback.Stories[0].Active || fallback.ProgressLabel != "" || fallback.Stories[0].Body != proposal.Stories[0].Body || fallback.Result.Summary != "Risultato precedente" {
-		t.Fatalf("legacy content lost or progress invented: %+v", fallback)
+	removed := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
+	if removed.Code != 409 {
+		t.Fatal("retired approval is still offered", removed.Code)
 	}
 	untouched, err := conn.FetchBacklogItems(context.Background(), "")
 	if err != nil || len(untouched) != 2 {

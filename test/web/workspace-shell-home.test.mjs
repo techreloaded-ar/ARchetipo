@@ -336,8 +336,8 @@ describe("AC-4 — il dettaglio spec non è una finestra", () => {
 		);
 	});
 
-	it("le tre schede del dettaglio sono tutte ancora presenti", () => {
-		for (const tab of ["story", "plan", "review"]) {
+	it("il backlog conserva storia e piano facoltativo", () => {
+		for (const tab of ["story", "plan"]) {
 			assert.ok(
 				html.includes(`data-tab="${tab}"`),
 				`la scheda data-tab="${tab}" è sparita dal dettaglio spec: il contenuto del dettaglio non doveva cambiare`,

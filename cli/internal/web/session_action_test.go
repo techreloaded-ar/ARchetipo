@@ -194,7 +194,7 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 		t.Fatalf("next-turn = %d: %s", w.Code, w.Body.String())
 	}
 
-	status, startedImplement := startSpecActionIn(t, srv, "US-901", "implement", conversationID)
+	status, startedImplement := startSpecActionIn(t, srv, "US-902", "plan", conversationID)
 	if status != http.StatusCreated {
 		t.Fatalf("start implement = %d: %v", status, startedImplement)
 	}
@@ -204,8 +204,8 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 	}
 	// The record stamps the status the spec had when the action was accepted,
 	// not the one the action's own transition has just produced.
-	if startedImplement["spec_status_before"] != string(domain.StatusPlanned) {
-		t.Fatalf("the implementation record says the spec was %v, want %s", startedImplement["spec_status_before"], domain.StatusPlanned)
+	if startedImplement["spec_status_before"] != string(domain.StatusTodo) {
+		t.Fatalf("the implementation record says the spec was %v, want %s", startedImplement["spec_status_before"], domain.StatusTodo)
 	}
 	if conversationOfExecution(t, srv, implementID) != conversationID {
 		t.Fatalf("the implementation was started in another conversation")
@@ -218,9 +218,8 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 		t.Fatalf("the implementation turn is %+v, want the chosen model and its own execution", last)
 	}
 
-	moveSpecTo(t, conn, "US-901", domain.StatusReview)
-	completeEveryTask(t, conn, "US-901")
-	provider.completeCurrentTurn(t, "{\"spec_code\":\"US-901\",\"status\":\"REVIEW\",\"tasks_done\":2,\"tests\":\"verdi\"}", execution.TurnCompleted)
+	persistPlanFor(t, conn, "US-902")
+	provider.completeCurrentTurn(t, "{\"spec_code\":\"US-902\",\"status\":\"PLANNED\",\"tasks\":2}", execution.TurnCompleted)
 	awaitExecutionStatus(t, srv, implementID, execution.StatusSucceeded)
 
 	// The session is still the person's to talk in, and the free message it
@@ -250,19 +249,6 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 
 // completeEveryTask closes every task of the persisted plan, which is what the
 // implementation gate reads before it accepts the receipt.
-func completeEveryTask(t *testing.T, conn connector.Connector, code string) {
-	t.Helper()
-	ctx := context.Background()
-	tasks, err := conn.ReadSpecTasks(ctx, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, task := range tasks {
-		if _, err := conn.CompleteTask(ctx, code, task.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
 
 // awaitRecordSettled waits for the follower to have observed the end of the
 // turn, so an assertion about "the action is still running" is made after the

@@ -134,6 +134,9 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 				return iox.NewInternal("copy "+sk, err)
 			}
 		}
+		if err := workspace.RemoveRetiredSkills(target); err != nil {
+			return err
+		}
 		fmt.Fprintf(s.out, "  ✓ %s → %s\n", t.Name, target)
 	}
 

@@ -22,7 +22,7 @@ test('unavailable work entry preserves the draft and explains the refusal',()=>{
 
 test('product details show specification and learning without synthetic stories or approval',()=>{
  const html=renderConversation({available:true,conversation:{id:'c',state:'ACTIVE'},increment:{id:'work',development_mode:'continuous',title:'Booking',status_label:'Da provare',stories:[],revisions:[{number:1,intent:'Problema e comportamento',stories:[],approved:false}],learning:[{observation:'Osservazione <reale>',decision:'Semplificare'}],actions:[]}},'',{incrementSections:{'panel-work':true}});
- assert.match(html,/Specifica evolutiva/);
+ assert.match(html,/Specifica/);
  assert.match(html,/Osservazioni e decisioni/);
  assert.match(html,/Osservazione &lt;reale&gt;/);
  assert.doesNotMatch(html,/Storie dell’incremento|da approvare|Le storie appariranno/);

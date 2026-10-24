@@ -44,7 +44,7 @@ var specCheckRules = []validationRule{
 	{checkCode: "SPEC_TITLES_PRESENT", message: "spec titles are present", findingCodes: []string{"SPEC_TITLE_EMPTY"}},
 	{checkCode: "SPEC_EPICS_VALID", message: "spec epics match EP-NNN", findingCodes: []string{"SPEC_EPIC_INVALID"}},
 	{checkCode: "SPEC_PRIORITIES_VALID", message: "spec priorities are valid", findingCodes: []string{"SPEC_PRIORITY_INVALID"}},
-	{checkCode: "SPEC_POINTS_VALID", message: "spec points are greater than zero", findingCodes: []string{"SPEC_POINTS_INVALID"}},
+	{checkCode: "SPEC_POINTS_VALID", message: "spec points are non-negative", findingCodes: []string{"SPEC_POINTS_INVALID"}},
 	{checkCode: "SPEC_STATUSES_PRESENT", message: "spec statuses are present", findingCodes: []string{"SPEC_STATUS_EMPTY"}},
 	{checkCode: "SPEC_BODIES_COMPLETE", message: "spec bodies include story, demonstrates, and acceptance criteria", findingCodes: []string{"SPEC_BODY_EMPTY", "SPEC_DEMONSTRATES_MISSING", "SPEC_ACCEPTANCE_MISSING"}},
 	{checkCode: "SPEC_BLOCKERS_CHECKED", message: "spec blockers reference known dependencies or are flagged as warnings", findingCodes: []string{"SPEC_BLOCKER_UNKNOWN"}},

@@ -2,29 +2,10 @@ package increment
 
 import (
 	"context"
-	"fmt"
-	"strconv"
-	"strings"
+	"time"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
-
-func nextCode(specs []domain.Spec, prefix string) int {
-	max := 0
-	for _, st := range specs {
-		code := st.Code
-		if prefix == "EP-" {
-			code = st.Epic.Code
-		}
-		if strings.HasPrefix(code, prefix) {
-			if n, err := strconv.Atoi(strings.TrimPrefix(code, prefix)); err == nil && n > max {
-				max = n
-			}
-		}
-	}
-	return max + 1
-}
 
 func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision int) (Record, error) {
 	return s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
@@ -48,58 +29,26 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err != nil {
 			return r, err
 		}
-		stories, err := s.completedStories(ctx, r)
-		if err != nil {
-			return r, err
+		if head != r.ReadySHA || candidateScope(r) != r.ReadyScope {
+			return r, iox.NewConflict("code or specification changed after verification", "verify the current result before approval", nil)
 		}
-		if head != r.ReadySHA || hash(stories) != r.ReadyStories {
-			return r, iox.NewConflict("code or stories changed after verification", "verify the new result before approval", nil)
-		}
-		if s.Connector == nil || s.Hosting == nil {
-			return r, iox.NewPrecondition("publication is not configured", "configure the workspace connector and GitHub CLI", nil)
+		if s.Hosting == nil {
+			return r, iox.NewPrecondition("publication is not configured", "configure the Git hosting adapter", nil)
 		}
 		if _, err = git(ctx, r.Workdir, "remote", "get-url", "origin"); err != nil {
 			return r, err
 		}
-		existing := []domain.Spec{}
-		if len(stories) > 0 {
-			existing, err = s.Connector.FetchBacklogItems(ctx, "")
-		}
-		if err != nil {
-			if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
-				return r, err
-			}
-			existing = []domain.Spec{}
-		}
-		if len(stories) > 0 && len(r.Published) == 0 {
-			summary, summaryErr := s.Connector.ReadExistingBacklog(ctx)
-			if summaryErr != nil {
-				if ce, ok := summaryErr.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
-					return r, summaryErr
-				}
-			}
-			known := append([]domain.Spec(nil), existing...)
-			for _, code := range summary.Codes {
-				known = append(known, domain.Spec{Code: code})
-			}
-			for _, epic := range summary.Epics {
-				known = append(known, domain.Spec{Epic: epic})
-			}
-			r.Published = map[string]string{}
-			next := nextCode(known, "US-")
-			for _, st := range stories {
-				r.Published[st.Code] = fmt.Sprintf("US-%03d", next)
-				next++
-			}
-			r.PublishedEpic = fmt.Sprintf("EP-%03d", nextCode(known, "EP-"))
-		}
 		r.ApprovedSHA = r.ReadySHA
+		if r.ApprovedAt == nil {
+			now := time.Now().UTC()
+			r.ApprovedAt = &now
+		}
 		r.Status = Publishing
 		if err = s.save(r); err != nil {
 			return r, err
 		}
 		// A retry looks up the same head/base before creating, including after an
-		// unknown network outcome. Story identities were persisted before any IO.
+		// unknown network outcome. The human approval is persisted before any external IO.
 		if _, err = git(ctx, r.Workdir, "push", "origin", r.ApprovedSHA+":refs/heads/"+r.Branch); err != nil {
 			return r, err
 		}
@@ -108,18 +57,7 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 			return r, err
 		}
 		if pr == nil {
-			var body strings.Builder
-			fmt.Fprintf(&body, "%s\n\n%s\n\n", r.ID, r.Revisions[len(r.Revisions)-1].Intent)
-			for _, st := range stories {
-				fmt.Fprintf(&body, "- %s — %s\n", r.Published[st.Code], st.Title)
-			}
-			if r.Result != nil {
-				fmt.Fprintf(&body, "\n%s\n\nVerifiche:\n", r.Result.Summary)
-				for _, check := range r.Result.Checks {
-					fmt.Fprintf(&body, "- %s\n", check)
-				}
-			}
-			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, r.Title, body.String())
+			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, r.Title, Dossier(r))
 			if err != nil {
 				return r, err
 			}
@@ -134,61 +72,9 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err = s.save(r); err != nil {
 			return r, err
 		}
-		if err = s.publishStories(ctx, r, stories); err != nil {
-			return r, err
-		}
 		r.Status = Proposed
 		return r, s.save(r)
 	})
-}
-
-func sourceMarker(id, code string) string {
-	return "<!-- archetipo-increment:" + id + ":" + code + " -->"
-}
-func publishedStory(r Record, local domain.Spec) domain.Spec {
-	st := canonical(local)
-	st.Code = r.Published[local.Code]
-	st.Epic = domain.Epic{Code: r.PublishedEpic, Title: r.Title}
-	for i, dependency := range st.BlockedBy {
-		st.BlockedBy[i] = r.Published[dependency]
-	}
-	st.Body += "\n\n" + sourceMarker(r.ID, local.Code) + "\n\nProposta di incremento: " + r.PR.URL + "\n"
-	return canonical(st)
-}
-func (s *Service) publishStories(ctx context.Context, r Record, stories []domain.Spec) error {
-	for _, local := range stories {
-		st := publishedStory(r, local)
-		marker := sourceMarker(r.ID, local.Code)
-		existing, err := s.Connector.FetchBacklogItems(ctx, "")
-		if err != nil {
-			if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
-				return err
-			}
-			existing = []domain.Spec{}
-		}
-		found := false
-		for _, previous := range existing {
-			if previous.Code == st.Code {
-				if !strings.Contains(previous.Body, marker) || hash(canonical(previous)) != hash(canonical(st)) {
-					return iox.NewConflict("published story code changed or is already in use", "reconcile the existing story before retrying publication", nil)
-				}
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		if len(existing) == 0 {
-			_, err = s.Connector.SaveInitialBacklog(ctx, []domain.Spec{st})
-		} else {
-			_, err = s.Connector.AppendSpecs(ctx, []domain.Spec{st})
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
@@ -207,30 +93,11 @@ func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
 		if err != nil {
 			return r, err
 		}
-		if pr.HeadSHA != r.ApprovedSHA && r.DevelopmentMode != Continuous {
-			return r, iox.NewConflict("PR changed after business approval", "verify the changed result before marking it delivered", nil)
-		}
 		r.PR = pr
 		if pr.State == "MERGED" {
 			r.IntegrationSHA = pr.HeadSHA
-			// Each transition is repeatable. A crash partway through never invents a
-			// merge, creates another story, or marks the increment delivered early.
-			for _, local := range r.Revisions[len(r.Revisions)-1].Stories {
-				code := r.Published[local.Code]
-				st, readErr := s.Connector.ReadSpecDetail(ctx, code)
-				if readErr != nil {
-					return r, readErr
-				}
-				if hash(canonical(st)) != hash(publishedStory(r, local)) {
-					return r, iox.NewConflict("published story changed after approval", "reconcile the story with the approved increment before marking it delivered", nil)
-				}
-			}
-			for _, local := range r.Revisions[len(r.Revisions)-1].Stories {
-				code := r.Published[local.Code]
-				if _, err = s.Connector.TransitionStatus(ctx, code, domain.StatusDone); err != nil {
-					return r, err
-				}
-			}
+			// Integration is a developer decision. Preserve the business
+			// candidate SHA without approving the developers' later commits.
 			r.Status = Delivered
 		}
 		return r, s.save(r)

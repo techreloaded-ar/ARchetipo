@@ -34,7 +34,7 @@ func (s *Service) Learn(ctx context.Context, id, observation, decision string, c
 			r.Conclusion = decision
 			r.Status = Concluded
 			r.ReadySHA = ""
-			r.ReadyStories = ""
+			r.ReadyScope = ""
 			r.Result = nil
 		}
 		return r, s.save(r)

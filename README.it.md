@@ -1,413 +1,87 @@
-<div align="center">
-
 # ARchetipo
 
-[English](README.md) · **Italiano**
+[English](README.md) · Italiano
 
-**Comprendere un problema di prodotto, costruire una soluzione funzionante, imparare e adattarla.**
+Uno spazio di lavoro per comprendere un problema, costruire e provare una soluzione,
+imparare dall’esperienza e consegnare ai developer una versione verificata.
 
-ARchetipo sta evolvendo in uno spazio di lavoro sul prodotto per persone e agenti.
-Descrivi un problema in chat, provi una soluzione in un ambiente dedicato e conservi
-specifica, osservazioni e decisioni. Puoi consegnare una versione verificata ai
-developer tramite PR, oppure concludere un’indagine senza produrre codice.
+La chat e l’app sono al centro. Backlog, storie, specifiche, piani facoltativi e
+Wiki mantengono la tracciabilità necessaria in azienda, senza imporre un ciclo di
+pianificazione, implementazione e review per ogni modifica.
 
-Questo branch introduce il nuovo nucleo; i percorsi storici descritti più avanti
-restano disponibili, ma non sono prerequisiti del nuovo percorso dalla chat.
-Vedi [Lavoro sul prodotto](docs/increments.md) per contratto e limiti attuali.
+## Provare questo branch
 
-[![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#licenza)
-[![Made for](https://img.shields.io/badge/made%20for-Claude%20Code%20%7C%20Codex%20%7C%20Cursor%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Copilot-black.svg)](#)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#)
+Da questo repository servono Go per compilare e Node/npm per la distribuzione di
+sviluppo. Non è necessario un servizio cloud per gli ambienti locali.
 
-[Quickstart](#quickstart) · [Workflow](#workflow) · [Da dove parto](#da-dove-parto) · [CLI](#cli-e-comandi) · [Configurazione](#configurazione) · [FAQ](#faq)
-
-</div>
-
----
-
-## Perché ARchetipo
-
-Gli AI coding agent sono veloci, ma una risposta veloce a un prompt isolato non è un processo di prodotto. **ARchetipo trasforma l'agente in una squadra disciplinata di sviluppo prodotto**: raccoglie l'intento, scrive specifiche, costruisce backlog, pianifica ogni slice, implementa, testa e lascia artefatti durevoli.
-
-- **Un workflow, non prompt sparsi.** Ogni fase ha una skill, un ruolo, un contratto e un output che alimenta il passo successivo.
-- **Spec-driven di default.** Il ciclo `spec -> plan -> implement` si ripete per ogni slice di valore fino al completamento del prodotto.
-- **Memoria persistente del progetto.** PRD, backlog, spec, piani, mockup e risultati dei test vivono nel repo o nel connector configurato.
-- **Agnostico rispetto al tool.** Lo stesso metodo funziona con Claude Code, Codex, Cursor, Gemini CLI, OpenCode e GitHub Copilot.
-- **Auto-detect della lingua.** Le skill adottano la lingua della conversazione: scrivi in italiano, ricevi artefatti in italiano; scrivi in inglese, ricevi artefatti in inglese.
-
----
-
-## Quickstart
-
-### 1. Installa la CLI una volta sola
-
-```bash
-npm install -g @techreloaded/archetipo
+```sh
+npm run install:dev
+cd /percorso/del/progetto
+archetipo init --tool codex --connector file
+archetipo view
 ```
 
- se non puoi installare pacchetti npm globali, installa ARchetipo come dipendenza locale del progetto.
-
-```bash
- npm install @techreloaded/archetipo
-```
-
- Poi aggiungi la CLI locale al `PATH` della sessione corrente:
-
-```bash
- # Windows PowerShell
- $env:PATH = "$(Get-Location)\node_modules\.bin;$env:PATH"
- 
- # macOS / Linux
- export PATH="$PWD/node_modules/.bin/:$PATH"
-```
-
-Dopo, `archetipo init` funziona normalmente.
-
-### 2. Inizializza un progetto
-
-```bash
-cd il-mio-progetto
-archetipo init
-
-# oppure in modo non interattivo:
-archetipo init --tool claude --connector file
-
-# scegliendo esplicitamente il Template di processo:
-archetipo init --tool claude --connector file --template fabbrica-del-software
-```
-
-`archetipo init` copia le skill del **Template di processo** selezionato nella directory del tool AI, per esempio `.claude/skills/`, `.cursor/skills/` o `.gemini/skills/`, e crea:
-
-- `.archetipo/config.yaml`, con un blocco `template:` che riporta `id` e `version` del Template che ha dato forma al workspace
-- `.archetipo/shared-runtime.md`
-
-Il Template decide quali skill riceve il workspace e quali stati usa il suo workflow. Omettere `--template` seleziona `fabbrica-del-software`, il processo descritto in questo README: un'inizializzazione senza scelta esplicita si comporta quindi esattamente come prima. Un identificativo di Template sconosciuto viene rifiutato prima di scrivere qualunque cosa, quindi non lascia mai un workspace inizializzato a metà.
-
-Dopo l'inizializzazione, usa le skill `/archetipo-*` dentro il tuo AI coding agent. Le skill invocano la CLI in background quando devono leggere o salvare gli artefatti del workflow.
-
----
-
-## Workflow
-
-ARchetipo implementa uno Spec-Driven Development supportato dalla Wiki: la conoscenza viva guida ogni incremento e viene aggiornata attraverso `spec -> plan -> implement -> review`.
-
-La Wiki viva usa una struttura Markdown conforme all'[Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
-
-```mermaid
-flowchart LR
-    I["<b>Inception</b><br/><i>PRD temporaneo</i>"] --> W["<b>Wiki viva</b><br/><i>docs/wiki/</i>"]
-    W --> S
-    I -. concept opzionale .-> D["<b>Design</b><br/><i>docs/mockups/</i>"]
-
-    subgraph Loop["Spec-Driven Loop"]
-        direction TB
-        S["<b>Spec</b><br/><i>.archetipo/backlog.yaml<br/>.archetipo/specs/</i>"] --> P["<b>Plan</b><br/><i>.archetipo/plans/</i>"]
-        P --> IM["<b>Implement</b><br/><i>codice + test + aggiornamenti Wiki generated</i>"]
-        IM --> R["<b>Review</b><br/><i>accetta + pubblica</i>"]
-        R -. spec successiva .-> S
-    end
-
-    P -. serve UI .-> D
-```
-
-| Step | Skill | Output | Cosa succede |
-|---|---|---|---|
-| 1. Discovery | `/archetipo-inception` | `docs/wiki/` | Produce un PRD temporaneo, lo compila in conoscenza viva e lo conserva come concept in `references/`. |
-| 2. Concept visivo, opzionale | `/archetipo-design` | `docs/mockups/` | Crea mockup HTML/CSS isolati senza toccare il codice applicativo. |
-| 3. Backlog | `/archetipo-spec` | `.archetipo/backlog.yaml`, `.archetipo/specs/` | Carica le pagine Wiki pertinenti e crea o estende user story INVEST-compliant. |
-| 4. Planning | `/archetipo-plan US-001` | `.archetipo/plans/US-001-plan.yaml` | Produce soluzione tecnica, task ordinati, dipendenze e strategia di test. |
-| 5. Code | `/archetipo-implement US-001` | Codice, test, note di review | Esegue il piano, lancia i test, conduce la review e porta la spec verso l'approvazione umana. |
-| 6. Accettazione | `/archetipo-review US-001` | Verdetto: `DONE` o feedback di rework | Presenta l'incremento consegnato (criteri, diff, evidenze di test) ed esegue il verdetto umano: approva o rimanda indietro con feedback. |
-
-### Stati workflow
-
-Le spec attraversano stati standardizzati. ARchetipo automatizza il loop; l'accettazione è umana per default, oppure autonoma quando usi l'Autopilot.
-
-| Stato | Significato | Transizione |
-|---|---|---|
-| `TODO` | Spec presente nel backlog, non ancora pianificata. | Creata da spec |
-| `PLANNED` | Pianificazione tecnica completata. | Impostata da plan |
-| `IN PROGRESS` | Implementazione avviata. | Impostata da implement |
-| `REVIEW` | Code review e test completati; pronta per la review. | Impostata da implement |
-| `DONE` | Spec accettata e rilasciata. | Approvazione umana via `/archetipo-review`, oppure accettazione autonoma via `/archetipo-autopilot` |
-
-### Il team AI
-
-Le personas di ARchetipo non sono scena: sono lenti diverse che rendono il processo visibile.
-
-| Persona | Ruolo | Competenza principale |
-|---|---|---|
-| Andrea | Product Manager | Vision, personas, scope dell'MVP |
-| Costanza | Business Strategist | Discovery, posizionamento, ipotesi di prodotto |
-| Emanuele | Requirements Analyst | Acceptance criteria, edge case, qualità delle spec |
-| Leonardo | Architect | Soluzione tecnica e decisioni architetturali |
-| Ugo | Full-Stack Developer | Implementazione e task breakdown |
-| Mina | Test Architect | Strategia di test e coverage |
-| Cesare | Code Reviewer | Qualità, sicurezza, aderenza al piano |
-| Livia | UX Designer | Mockup e linguaggio visivo |
-
----
-
-## Da dove parto?
-
-Usa questa guida dentro il tuo AI coding agent:
-
-| Domanda | Se la risposta è no | Se la risposta è sì |
-|---|---|---|
-| Hai già un PRD? | Lancia `/archetipo-inception`. | Continua. |
-| Vuoi concept visivi prima dello sviluppo? | Salta design per ora. | Lancia `/archetipo-design`. |
-| Hai già un backlog di spec? | Lancia `/archetipo-spec`. | Continua. |
-| Le spec sono già `PLANNED`? | Lancia `/archetipo-plan US-001` su una spec `TODO`. | Continua. |
-| Una spec è pronta per l'implementazione? | Pianificala prima. | Lancia `/archetipo-implement US-001`. |
-| Una spec è in attesa in `REVIEW`? | Implementala prima. | Lancia `/archetipo-review US-001` per accettarla o rimandarla indietro. |
-
-Per il lavoro batch, `/archetipo-autopilot` esegue l'intera pipeline — planning, implementazione e accettazione autonoma — finché ogni spec eleggibile raggiunge `DONE`. Avvialo senza argomenti per tutto il backlog eleggibile, oppure passa una qualsiasi combinazione di selettori `EP-XXX` e `US-XXX`: `/archetipo-autopilot EP-002 US-011 US-030` lavora sull'unione di ciò che selezionano. Aggiungi `--max-specs N` per limitare il run a `N` spec: la coda viene troncata al momento del congelamento, quindi le spec escluse non vengono mai toccate e il report finale le elenca.
-
-L'accettazione autonoma applica lo stesso gate di `/archetipo-review`, verdetto compreso: approva solo se tutti i criteri di accettazione sono soddisfatti, tutti i task sono done e la Wiki non ha blocker. Altrimenti rimanda indietro la spec con feedback strutturato per al massimo tre cicli di rework; una spec ancora non accettabile resta in `REVIEW` per te, e l'Autopilot prosegue con le spec rimanenti non bloccate.
-
----
-
-## CLI e comandi
-
-Il viewer offre Conversazione, Board e **Documentazione** come viste allo stesso livello. Documentazione legge `paths.wiki` anche con la manutenzione automatica disattivata: puoi navigare per argomento, cercare in titoli e contenuti, seguire i link della Wiki e consultare stato di revisione e fonti. Gli indirizzi delle pagine supportano ricaricamento e Indietro/Avanti. La prima raccolta è la Wiki in sola lettura; altre raccolte potranno essere aggiunte con un proprio ciclo di gestione.
-
-ARchetipo usa una CLI deterministica scritta in Go, `archetipo`, per persistenza e operazioni sui connector. Nel flusso normale parli con le skill; sono loro a chiamare questi comandi in background.
-
-| Comando | Scopo |
-|---|---|
-| `archetipo init [--template <id>]` | Installa nel progetto corrente le skill del Template di processo selezionato e crea `.archetipo/config.yaml` — con `id` e `version` del Template — più `.archetipo/shared-runtime.md`. |
-| `archetipo doctor` | Diagnostica l'installazione: data directory, skill nel pacchetto e installate, config di progetto, git e autenticazione gh (connettore github). |
-| `archetipo view` | Avvia una board Kanban locale per `.archetipo/backlog.yaml`, `.archetipo/specs/` e `.archetipo/plans/`. Il pannello Execution sceglie il provider predefinito del workspace fra quelli registrati — solo impostazioni non segrete — ogni spec mostra le azioni che il Template di processo ammette nel suo stato corrente, e una conversazione con l'agente è una sessione nativa e durevole dell'harness. Vedi [Le conversazioni sono sessioni native dell'harness](#le-conversazioni-sono-sessioni-native-dellharness). |
-| `archetipo config show` | Inizializza il connector e stampa i metadati, incluso il Template di processo del workspace (`id` e `version`). |
-| `archetipo prd write [--file PRD.md]` | Salva il markdown del PRD da `--file` o stdin. |
-| `archetipo validate prd [--file PRD.md]` | Valida il PRD contro le regole strutturali del PRD. |
-| `archetipo spec list [--status STATUS]` | Legge backlog e metadati riassuntivi, opzionalmente filtrato per stato. |
-| `archetipo spec add --file specs.yaml` | Crea o estende il backlog con spec (corpo user-story). |
-| `archetipo spec show US-001` | Legge una spec e i suoi task per codice. |
-| `archetipo spec next --status TODO` | Seleziona automaticamente la prima spec eleggibile per stato. |
-| `archetipo spec actions US-001` | Elenca le azioni che il Template di processo del workspace ammette per lo stato corrente della spec, ciascuna con identificativo stabile, etichetta utente e skill associata. Uno stato senza azioni ammesse restituisce un elenco vuoto. |
-| `archetipo spec plan US-001 --file plan.yaml` | Salva il piano di implementazione e porta la spec in `PLANNED`. |
-| `archetipo spec start US-001` | Porta una spec pianificata in `IN PROGRESS`. |
-| `archetipo spec review US-001 [--file note.md] [--commit-type feat] [--commit-summary "summary"]` | Porta una spec in `REVIEW`, allega un commento finale e fa un auto-commit dei cambiamenti sporchi — sempre nella worktree della spec, e nella radice del progetto quando `git.auto_commit` è acceso — con un soggetto Conventional Commit (default: `chore(US-001): {title}`). |
-| `archetipo spec request-changes US-001 --file feedback.json` | Rimanda una spec in `REVIEW` a `TODO` con feedback di rework strutturato aggiunto al corpo. |
-| `archetipo spec update US-001 --file patch.yaml` | Applica una patch parziale (title, priority, points, scope, blocked_by, body, epic, rework) a una spec esistente. Supportato su tutti i connector. |
-| `archetipo spec integrate US-001` | Fonde il branch worktree di una spec approvata nel base, pulisce e la marca `DONE` (workflow worktree). |
-| `archetipo task done US-001 TASK-01` | Marca un task come completato. |
-| `archetipo execution setup [--url <hub>] [--workspace <nome>]` | Configura il provider di esecuzione predefinito: verifica la credenziale contro l'hub, sceglie il workspace (senza chiedere quando ce n'è uno solo) e scrive `execution.default_provider`. |
-| `archetipo execution provider list` | Elenca i provider registrati, le loro capability, le chiavi di configurazione che accettano e se possono eseguire un dispatch adesso. |
-| `archetipo execution provider set-default <id> --file provider.yaml` | Valida e salva atomicamente il provider predefinito del workspace e la sua configurazione non segreta. |
-| `archetipo execution provider show-default` | Rilegge il provider predefinito senza esporre credenziali d'ambiente. |
-| `archetipo execution run US-001 plan [--provider <id>]` | Crea una sola execution durevole e invia `plan`; un provider esplicito prevale sul default del workspace. |
-| `archetipo execution show <execution-id>` | Rilegge il risultato persistito o l'errore del provider per una execution. |
-| `archetipo metrics` | Riporta l'avanzamento del backlog: totali, completamento, dettaglio per epic, WIP, rework, spec bloccate e cycle/lead time medi dalla history degli stati. |
-| `archetipo spec move US-001 --to review` | Riordina o sposta una spec tra colonne del workflow. |
-| `archetipo validate spec --file specs.yaml` | Valida un payload di spec generato senza salvarlo. |
-| `archetipo validate plan US-001 --file plan.yaml` | Valida un payload di piano senza cambiare lo stato della spec. |
-
-La CLI legge `.archetipo/config.yaml` dal progetto per scegliere connector attivo e percorsi degli artefatti. Tutti i comandi `archetipo validate ...` restituiscono `kind: "validation_result"` su stdout con `data.ok` a `true` o `false`; gli error envelope restano riservati agli errori di processo.
-
-I record delle execution sono stato runtime locale sotto `.archetipo/executions/` e sono ignorati da Git. La sezione opzionale `execution.default_provider` conserva l'ID di un provider registrato e una configurazione non segreta; token e credenziali devono restare fuori da `.archetipo/config.yaml`. `set-default` valida prima dell'aggiornamento atomico, mentre una run senza `--provider` valida nuovamente la configurazione salvata prima del dispatch. Un `--provider` esplicito prevale sempre e riceve una configurazione vuota. Tre provider sono registrati di serie — `arcipelago`, `codex` e `claude`; `archetipo execution provider list` mostra cosa accetta ciascuno. Sia i dispatch riusciti sia i fallimenti del provider già registrati restituiscono un envelope `kind: "execution"`; errori di lookup, configurazione o capability vengono rifiutati prima di creare record.
-
-### Le conversazioni sono sessioni native dell'harness
-
-Una conversazione in `archetipo view` non è una chat costruita attorno a un'invocazione usa e getta: è una **sessione durevole dell'harness di sviluppo** — Claude Code o Codex CLI — che gira sulla tua macchina, nella directory del tuo progetto, con i tuoi tool e le skill che il tuo runtime ha davvero.
-
-La scoperta delle storie coinvolge le personalità dell'inception: Andrea, Costanza, Livia, Leonardo ed Emanuele mettono alla prova valore, assunzioni, esperienza d'uso, fattibilità e criteri di accettazione, con una domanda alla volta. Una chiamata a `/archetipo-spec` può produrre più storie quando lo scope concordato beneficia di una suddivisione. Nel viewer i richiami compatti restano nel punto in cui ogni versione è stata proposta; un pannello dedicato mostra le storie formattate, le versioni precedenti e le modifiche da approvare. Puoi accettare ogni storia nel backlog, modificarla nel modulo o continuare a ragionarci nella stessa chat. Le revisioni aggiornano lo stesso codice della storia e conservano stato di processo e piano. Per le vecchie proposte rinominate prive di identità stabile viene richiesta la scelta della storia da aggiornare. L'accettazione resiste al ricaricamento e ai tentativi ripetuti, anche dopo una modifica del titolo proposto.
-
-In pratica:
-
-- **Non scade.** Nessun timeout globale e nessun timeout di inattività chiudono una conversazione. Chiudere la tab del browser non interrompe il lavoro; interrompere un turn ferma quel turn e nient'altro. Una conversazione finisce quando la chiudi tu.
-- **Torna.** Riavvia `archetipo view` e la conversazione è ancora lì, con lo stesso id e la stessa sessione nativa: l'agente ricorda quello che ha fatto, perché il contesto è dell'harness e viene ripreso per riferimento. Niente viene riassunto e niente gli viene rimesso davanti.
-- **Può agire.** L'agente legge e modifica il workspace, usa i tool, avvia server e invoca skill, sotto la permission policy nativa del tuo harness — le cui domande ti arrivano come approval nel pannello. Non è un assistente in sola lettura che può soltanto proporre.
-- **Modello ed effort si cambiano in corsa.** Li scegli per il turn *successivo* mentre quello corrente sta ancora lavorando. Il catalogo offerto è quello che dichiara il runtime della sessione, e sceglierlo qui non riscrive mai il default del workspace in `.archetipo/config.yaml`.
-- **I passi di processo lavorano nel thread che stai leggendo.** Premere `plan`, `implement`, `review`, inception, backlog o bozza di spec avvia un turn nella conversazione aperta invece di lanciare un secondo agente accanto. Ogni passo conserva il proprio record execution con la propria verifica degli effetti, e la conversazione resta aperta e scrivibile durante e dopo — più passi di fila, con messaggi liberi in mezzo.
-- **Più conversazioni insieme.** Un workspace ne tiene quante ne apri, ognuna con il proprio processo agente, e non interferiscono fra loro. Un solo processo `archetipo view` alla volta possiede il runtime di una data conversazione; un secondo viewer sullo stesso workspace la legge, e se prova a scriverci glielo dice chiaramente.
-- **Fermare, archiviare ed eliminare sono tre cose diverse.** Fermare rilascia il runtime e conserva il contesto. Archiviare mette via il thread senza perdere la sessione nativa — riaprendolo si riprende. Eliminare rimuove il record e la timeline *di ARchetipo* e lo dichiara: il transcript nativo dell'harness e i tuoi file di lavoro non vengono mai toccati.
-
-Due limiti vale la pena conoscerli. Un server di sviluppo avviato dall'agente può sopravvivere o no al turn che l'ha avviato: dipende dall'harness, non da ARchetipo, e i due si comportano diversamente; quello che è promesso è che la conversazione torni e che da dentro tu possa verificare, fermare o riavviare il servizio. E le conversazioni sono una funzionalità del runtime locale: il provider remoto `arcipelago` esegue ancora `spec.plan` e `spec.implement` come run batch e non tiene sessioni native.
-
-### Esecuzione remota su una flotta ARcipelago
-
-Il provider `arcipelago` manda `spec.plan` e `spec.implement` a una flotta remota: pianificazione e implementazione girano sulle macchine di qualcun altro, mentre il backlog resta qui.
-
-Una volta sola, sull'hub, da amministratore:
-
-```bash
-arcipelago workspaces create demo --cwd /workspace --requires project:demo --model <provider/modello>
-arcipelago apps create archetipo --workspace demo    # stampa il token una volta sola
-```
-
-Poi, nel progetto:
-
-```bash
-export ARCIPELAGO_TOKEN='arc_app_…'
-archetipo execution setup --url https://arcipelago.example
-archetipo doctor
-archetipo execution run US-001 plan
-```
-
-`execution setup` legge il token dall'ambiente per verificarlo, e non lo scrive da nessuna parte: `.archetipo/config.yaml` registra solo il *nome* della variabile, `token_env`, che di default è `ARCIPELAGO_TOKEN`. L'export sta nel profilo della shell, o in quello che la CI usa per i segreti.
-
-Il provider richiede che la working directory del runner sia un checkout di questo progetto, con le skill ARchetipo installate e lo stesso connector configurato. `--requires project:<slug>` sul workspace è il modo di dichiararlo: un runner che non espone quel tag viene rifiutato subito, nominando ciò che manca, invece di lasciare il lavoro in coda fino allo scadere dell'attesa locale. `archetipo doctor` dice la stessa cosa prima ancora di spedire qualcosa. Vedi [`docs/wiki/decisions/remote-plan-ownership.md`](docs/wiki/decisions/remote-plan-ownership.md).
-
-Per sviluppo locale della CLI senza pubblicare pacchetti npm, vedi [`guides/dev-local-cli.md`](guides/dev-local-cli.md).
-
-### Workflow ibrido per modelli
-
-ARchetipo è ottimizzato per un setup misto. Usa un modello più forte per `/archetipo-inception`, `/archetipo-spec`, `/archetipo-plan` e review sensibili; poi usa un modello più economico o open-weight per `/archetipo-implement`. I task del piano contengono execution contract, e i comandi `validate` bloccano problemi strutturali prima che gli artefatti diventino fonte di verità.
-
----
-
-## Connector
-
-Le skill non decidono dove vivono gli artefatti. Applicano le regole runtime condivise, invocano comandi CLI espliciti e lasciano al connector configurato la persistenza.
-
-| Connector | Dove vivono gli artefatti | Ideale per |
-|---|---|---|
-| `file` | File locali sotto `.archetipo/`, più `docs/PRD.md` e `docs/mockups/` | Lavoro individuale, prime fasi di prodotto, workflow offline |
-| `github` | GitHub Issues più GitHub Projects v2 | Tracking di team, collaborazione cloud, board di progetto |
-
-### Connector `file`
-
-- Backlog: `.archetipo/backlog.yaml`
-- Documenti delle spec: `.archetipo/specs/US-XXX.yaml`
-- Piani: `.archetipo/plans/US-XXX-plan.yaml`
-- PRD: `docs/PRD.md`
-- Mockup: `docs/mockups/`
-- Risultati dei test: `docs/test-results/`
-
-Non richiede autenticazione. Tutto resta locale e versionabile.
-
-### Connector `github`
-
-- Gli elementi del backlog diventano issue su una board GitHub Projects v2.
-- I task delle spec vengono creati come sub-issue collegate.
-- I piani vengono aggiunti al body della issue padre.
-- Le transizioni di stato sono gestite tramite campi custom del Project.
-- Richiede `gh` CLI autenticato con scope `repo` e `project`.
-
-L'architettura della CLI è estendibile, ma i connector integrati oggi sono `file` e `github`.
-
----
-
-## Skill
-
-| Skill | Scopo | Trigger tipici |
-|---|---|---|
-| `archetipo-inception` | Facilita la product discovery e scrive il PRD. | "definisci il prodotto", "idea di prodotto", "scrivi un PRD" |
-| `archetipo-design` | Produce mockup frontend isolati in `docs/mockups/`. | "fammi un mockup", "concept dashboard", "landing page" |
-| `archetipo-spec` | Crea o estende il backlog a partire dall'intento di prodotto. | "crea il backlog", "aggiungi una spec", "serve una feature per..." |
-| `archetipo-plan` | Pianifica una spec con architettura, task, dipendenze e test. | "pianifica US-005", "come lo costruiamo?", "rompi questa spec in task" |
-| `archetipo-implement` | Esegue una spec pianificata attraverso codice, test, review e handoff. | "implementa US-005", "esegui la prossima spec pronta" |
-| `archetipo-review` | Facilita il gate di accettazione umano: approva verso `DONE` o rimanda indietro con feedback di rework. | "review US-005", "accetta la spec", "cosa c'è in attesa di review?" |
-| `archetipo-autopilot` | Esegue planning, implementazione e accettazione autonoma su più spec eleggibili, fino a `DONE`. Accetta più selettori `EP-XXX`/`US-XXX` e `--max-specs N`. | "fai tutto", "autopilot del backlog", "implementa al massimo due spec" |
-| `archetipo-wiki` | Costruisce una mappa DDD codebase-first di domini, bounded context candidati, relazioni logiche e ownership fisica di codice e test. | "inizializza la Wiki", "mappa i domini", "aggiorna la conoscenza" |
-
----
-
-## Configurazione
-
-`.archetipo/config.yaml` definisce connector, percorsi e stati del workflow. Le chiavi mancanti vengono completate con i default ufficiali.
-
-```yaml
-connector: file   # file | github
-
-paths:
-  prd: docs/PRD.md
-  wiki: docs/wiki/
-  backlog: .archetipo/backlog.yaml   # solo connector file
-  planning: .archetipo/plans/
-  mockups: docs/mockups/
-  test_results: docs/test-results/
-
-# Wiki viva, disattiva di default
-wiki:
-  enabled: false
-
-# Un commit per spec senza worktree, disattivo di default
-git:
-  auto_commit: false
-
-workflow:
-  statuses:
-    todo: TODO
-    planned: PLANNED
-    in_progress: IN PROGRESS
-    review: REVIEW
-    done: DONE   # gate: /archetipo-review (approvazione umana esplicita) o /archetipo-autopilot (accettazione autonoma)
-
-github:
-  # owner: auto-detected from repo
-  # project_number: auto-detected from repo
-```
-
-**`wiki.enabled` governa la Wiki automatica, non la Wiki.** Vale `false` di default, quindi la Wiki automatica è opt-in: il workflow standard — inception, spec, plan, implement, review — non legge né mantiene pagine, i piani non producono un contratto `Wiki Impact` e l'accettazione non approva pagine. I comandi `archetipo wiki ...` e l'invocazione esplicita di `/archetipo-wiki` funzionano comunque, quindi la Wiki resta disponibile su richiesta. `archetipo init --wiki` crea un progetto con il gate già acceso; la chiave si cambia in qualsiasi momento qui o dal tab config di `archetipo view`.
-
-**`git.auto_commit` serve solo ai progetti senza worktree.** Quando è `true`, `archetipo spec review` mette in stage e committa tutto ciò che è sporco nella radice del progetto prima di portare la spec in `REVIEW`: ogni incremento diventa un commit `<type>(US-XXX): <summary>` invece di accumularsi nel working tree. Accendilo se usi `/archetipo-autopilot` senza worktree — l'autopilot completa più spec di fila, e senza questa chiave le loro modifiche finiscono tutte insieme in un blocco indistinguibile. È `false` di default perché implementando una spec alla volta di norma vuoi committare tu, e il commit mette in stage l'intero working tree, comprese eventuali tue modifiche non correlate. **Non riguarda il workflow worktree**: con `worktree.enabled: true` il commit per spec avviene sempre, perché il diff del branch è ciò che review e `spec integrate` consumano. Nei progetti che non sono repository git non viene fatto nulla.
-
----
-
-## Filosofia
-
-- **Il team è una lente, non un costume.** Ogni persona applica un tipo diverso di attenzione, così il lavoro diventa più facile da ragionare.
-- **Contesto lean.** Le skill caricano solo ciò che serve: runtime condiviso, config, contratti CLI e poi i template specifici della fase.
-- **Output persistenti.** Ogni fase produce artefatti che sopravvivono alla sessione di chat e alimentano il comando successivo.
-- **Autonomia responsabile.** Le skill si fermano davanti a blocker reali: dipendenze esterne, precondizioni mancanti o ambiguità che cambiano il contratto.
-- **Agnostico rispetto a tool e connector.** Cambiare AI agent o sistema di tracking non deve riscrivere il processo di prodotto.
-
----
-
-## FAQ
-
-<details>
-<summary><b>Serve un PRD per iniziare?</b></summary>
-
-Per costruire un backlog solido, sì. Se non ne hai ancora uno, parti da `/archetipo-inception`.
-</details>
-
-<details>
-<summary><b>Posso aggiungere spec senza ricreare tutto il backlog?</b></summary>
-
-Sì. `/archetipo-spec` riconosce se deve creare il backlog iniziale o estenderne uno esistente.
-</details>
-
-<details>
-<summary><b>I mockup di design diventano codice applicativo?</b></summary>
-
-No. `/archetipo-design` scrive mockup isolati in `docs/mockups/`. L'implementazione può usarli come riferimento visivo, ma i file di mockup non toccano il codice di produzione.
-</details>
-
-<details>
-<summary><b>Posso usare ARchetipo su un progetto esistente?</b></summary>
-
-Sì. Aggiungi o raffina le spec con `/archetipo-spec`, pianificale con `/archetipo-plan`, poi implementale con `/archetipo-implement`.
-</details>
-
-<details>
-<summary><b>Cosa succede se il mio AI tool non supporta subagent?</b></summary>
-
-Le skill principali funzionano comunque in-context. Autopilot è l'eccezione: richiede un worker isolato e nuovo per ogni fase di planning e implementazione e si ferma prima di qualsiasi modifica quando il runtime non può fornirlo.
-</details>
-
-<details>
-<summary><b>Come si fa il debug di una skill?</b></summary>
-
-Ogni skill dichiara le reference che carica e i comandi CLI che usa. Attiva la modalità verbose del tuo AI tool e verifica che i comandi `archetipo ...` attesi vengano eseguiti nell'ordine corretto.
-</details>
-
----
-
-## Licenza
-
-MIT © [techreloaded](https://github.com/techreloaded-ar)
-
----
-
-<div align="center">
-
-**Se ARchetipo aiuta il tuo team a costruire con AI in modo più deliberato, lascia una stella e condividilo.**
-
-[Report bug](https://github.com/techreloaded-ar/ARchetipo/issues) · [Richiedi feature](https://github.com/techreloaded-ar/ARchetipo/issues) · [Discussions](https://github.com/techreloaded-ar/ARchetipo/discussions)
-
-</div>
+La build di sviluppo installa il contenuto di questo branch. Il pacchetto npm
+pubblico può contenere una versione precedente. Per la chat occorre configurare
+un provider con sessioni native, Codex o Claude, con il proprio accesso al modello.
+Gli altri tool supportano l’uso standalone delle skill installate.
+
+Un’app esistente deve essere versionata in Git. Per una nuova app basta un workspace
+contenente gli asset di ARchetipo: viene creata una base Git vuota, senza includere
+file non versionati. Il lavoro parte da `main`, oppure dal branch corrente
+committato se `main` non esiste.
+
+## Esperienza
+
+1. Descrivi il problema in chat, oppure apri una storia dal **Backlog** e scegli
+   **Lavora su questa storia**.
+2. ARchetipo crea un worktree, un branch e una sessione nativa dedicati. L’agente
+   chiarisce quanto serve e mantiene una specifica Markdown evolutiva.
+3. Il codice viene sviluppato e verificato nell’ambiente del lavoro. Porte,
+   servizi e dati di prova sono gestiti attraverso ricette riutilizzabili.
+4. Prova l’app nell’anteprima. Scrivi in chat o seleziona elementi e commentali.
+   Le revisioni conservano lo stesso ambiente e la stessa conversazione.
+5. **Specifica e decisioni** raccoglie requisiti, versioni, verifiche e osservazioni.
+   **Esporta dossier** scarica un documento Markdown consultabile fuori dal prodotto.
+6. **Approva risultato e apri PR** consegna la versione provata ai developer.
+   I developer possono modificarla, riscriverla, integrarla e portarla in produzione.
+
+ARchetipo non esegue merge o deploy dalla UI. Una conclusione utile può anche non
+richiedere codice: osservazione e decisione vengono registrate nel lavoro.
+
+## Gestione e memoria del prodotto
+
+- Le storie restano nel backlog originale, con epiche, priorità, criteri e storico.
+  Zero punti indica una storia non stimata.
+- I collegamenti storia → lavoro → PR sono navigabili in entrambe le direzioni.
+  Ogni revisione conserva la copia dei requisiti originali usati come contesto.
+- Specifica, feedback, risultati precedenti, osservazioni e decisioni restano
+  consultabili. Il dossier della PR identifica anche il commit approvato.
+- La Wiki documenta il progetto; PRD e piani sono strumenti facoltativi.
+- Il merge non modifica automaticamente lo stato delle storie. La versione
+  approvata dal business resta distinta dalle successive modifiche dei developer.
+- La rimozione di un ambiente conserva il dossier e i riferimenti alle storie.
+  I commit sono recuperabili tramite un riferimento Git; i dati locali dell’ambiente
+  vengono rimossi secondo il contratto di cleanup.
+
+## Architettura e limiti
+
+La UI orchestra e presenta. La CLI gestisce deterministicamente persistenza,
+connector, Git e risorse locali. Le skill interpretano richieste e producono contenuti.
+Le sessioni sono native e durevoli: cambiare schermata non chiude il lavoro.
+
+I worktree separano codice e dati di lavoro; **non sono sandbox di sicurezza del
+sistema operativo**. La base locale non richiede Kubernetes, Docker o servizi a
+pagamento. La ricetta del progetto può usare gli strumenti che servono all’app.
+La preview viene sospesa quando il turno necessita dell’ambiente e riparte dal
+candidato verificato; non è ancora una preview continua durante ogni compilazione.
+L’esecuzione remota e l’isolamento di sicurezza richiedono un ulteriore livello runtime.
+
+Questo branch rimuove le skill `archetipo-autopilot`, `archetipo-design`,
+`archetipo-implement` e `archetipo-review`, insieme al vecchio percorso degli
+incrementi con backlog interno, approvazione dell’intento e review che integra branch
+nel viewer. `init` elimina quelle quattro skill gestite durante l’aggiornamento;
+conserva le skill personali. I lavori storici restano leggibili: il loro workflow
+non viene ricreato. I comandi CLI per gestire gli artefatti aziendali restano disponibili.
+
+Vedi [contratto del lavoro](docs/increments.md) e [istruzioni del repository](AGENTS.md).

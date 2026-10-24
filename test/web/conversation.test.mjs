@@ -1703,21 +1703,14 @@ describe("la ripresa di una conversazione finita", () => {
 		);
 	});
 
-	it("un errore della conversazione non è un passaggio tecnico", () => {
-		// Il vocabolario porta anche `error`, che non è la lavorazione ma una
-		// risposta: si legge senza premere niente.
-		const text = visibleText(
-			renderConversation(
-				withConversation({
-					events: [{ id: 1, kind: "error", text: "ERRORE-DELLA-CONVERSAZIONE" }],
-					last_id: 1,
-				}),
-				"",
-				{},
-			),
-		);
-		assert.match(text, /ERRORE-DELLA-CONVERSAZIONE/);
-	});
+	it("un’interruzione resta visibile e il messaggio tecnico si può aprire", () => {
+        const view=withConversation({events:[{id:1,kind:"error",text:"ERRORE-TECNICO-ORIGINALE"}],last_id:1});
+        const compact=renderConversation(view,"",{});
+        assert.match(visibleText(compact),/interruzione dell’agente/);
+        assert.match(visibleText(compact),/con errore/);
+        assert.doesNotMatch(visibleText(compact),/ERRORE-TECNICO-ORIGINALE/);
+        assert.match(visibleText(renderConversation(view,"",{technicalAll:true})),/ERRORE-TECNICO-ORIGINALE/);
+    });
 
 	it("i ganci di apertura sono ripiegati, e la piega li nomina", () => {
 		// Ogni conversazione vera si apre con due righe che nessun provider

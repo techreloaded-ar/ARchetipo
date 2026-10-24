@@ -2,7 +2,6 @@ package increment
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 )
@@ -127,46 +125,16 @@ func create(t *testing.T, s *Service) Record {
 	})
 	return r
 }
-func proposeApprove(t *testing.T, s *Service, r Record, stories ...domain.Spec) Record {
+func specify(t *testing.T, s *Service, r Record, _ ...domain.Spec) Record {
 	t.Helper()
-	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Export the current customers.", Stories: stories})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err = s.Approve(context.Background(), r.ID, len(r.Revisions))
+	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Export the current customers."})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
-func complete(t *testing.T, s *Service, r Record) {
-	t.Helper()
-	local, err := s.local(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, st := range r.Revisions[len(r.Revisions)-1].Stories {
-		tasks, taskErr := local.ReadSpecTasks(context.Background(), st.Code)
-		if taskErr != nil {
-			tasks = nil
-		}
-		if len(tasks) == 0 {
-			_, err = local.SavePlan(context.Background(), st.Code, domain.PlanInput{PlanBody: "Implement and verify.", Tasks: []domain.Task{{ID: "TASK-01", Title: "Implement", Type: domain.TaskType("Impl"), Status: domain.StatusTodo, Body: "Implement and verify"}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err = local.CompleteTask(context.Background(), st.Code, "TASK-01"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = local.TransitionStatus(context.Background(), st.Code, domain.StatusDone); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
 func ready(t *testing.T, s *Service, r Record) Record {
 	t.Helper()
-	complete(t, s, r)
 	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("increment "+r.ID+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +167,7 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 	if err != nil || len(items) != 0 {
 		t.Fatalf("local backlog = %v, %v", items, err)
 	}
-	r = proposeApprove(t, s, r, story("US-001", "Export Excel"))
+	r = specify(t, s, r, story("US-001", "Export Excel"))
 	items, err = s.Connector.FetchBacklogItems(context.Background(), "")
 	if err != nil || len(items) != 1 || items[0].Code != "US-010" {
 		t.Fatalf("parent backlog touched: %v %v", items, err)
@@ -227,56 +195,9 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 	}
 }
 
-func TestRevisionsPreserveUnchangedWorkAndInvalidateChangedStories(t *testing.T) {
-	s := fixture(t)
-	r := create(t, s)
-	first, keep, retire := story("US-001", "CSV"), story("US-002", "Unchanged"), story("US-003", "Retire")
-	r = proposeApprove(t, s, r, first, keep, retire)
-	complete(t, s, r)
-	first.Title = "Excel"
-	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Excel replaces CSV.", Stories: []domain.Spec{first, keep}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Approve(context.Background(), r.ID, 1); err == nil {
-		t.Fatal("accepted a superseded intent")
-	}
-	r, err = s.Approve(context.Background(), r.ID, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local, _ := s.local(r)
-	items, err := local.FetchBacklogItems(context.Background(), "")
-	if err != nil || len(items) != 2 {
-		t.Fatalf("stories: %v %v", items, err)
-	}
-	for _, st := range items {
-		if st.Code == "US-001" && st.Status != domain.StatusTodo {
-			t.Fatal("changed story kept old acceptance")
-		}
-		if st.Code == "US-002" && st.Status != domain.StatusDone {
-			t.Fatal("unchanged story lost its work")
-		}
-	}
-	tasks, _ := local.ReadSpecTasks(context.Background(), "US-001")
-	if len(tasks) != 0 {
-		t.Fatal("stale plan survived revision")
-	}
-	if len(r.Revisions) != 2 || r.Revisions[0].Stories[0].Title != "CSV" {
-		t.Fatal("revision history rewritten")
-	}
-	if _, err = s.Approve(context.Background(), r.ID, 2); err != nil {
-		t.Fatalf("approval retry: %v", err)
-	}
-	items, _ = local.FetchBacklogItems(context.Background(), "")
-	if len(items) != 2 {
-		t.Fatal("approval duplicated stories")
-	}
-}
-
 func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 	s := fixture(t)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+	r := specify(t, s, create(t, s), story("US-001", "Export"))
 	if _, err := s.Ready(context.Background(), r.ID, Result{Summary: "Result", Checks: []string{"check"}}); err == nil {
 		t.Fatal("unfinished story was reviewable")
 	}
@@ -291,83 +212,6 @@ func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 	runGit(t, r.Workdir, "commit", "-m", "changed after review")
 	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err == nil {
 		t.Fatal("new head reused old acceptance")
-	}
-}
-
-func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
-	for _, scenario := range []string{"ready", "unfinished story", "unfinished task", "malformed plan", "changed intent", "dirty tree", "no product commit", "missing evidence"} {
-		t.Run(scenario, func(t *testing.T) {
-			s := fixture(t)
-			r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-			local, err := s.local(r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if scenario == "unfinished task" {
-				_, err = local.SavePlan(context.Background(), "US-001", domain.PlanInput{PlanBody: "Verify export", Tasks: []domain.Task{{ID: "TASK-01", Title: "Verify", Type: "Test", Status: domain.StatusTodo, Body: "Verify export"}}})
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario == "changed intent" {
-				changed := story("US-001", "A different export")
-				if _, err = local.UpdateSpec(context.Background(), changed.Code, domain.SpecUpdate{Title: &changed.Title}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario == "malformed plan" {
-				cfg, loadErr := config.LoadExact(r.Workdir)
-				if loadErr != nil {
-					t.Fatal(loadErr)
-				}
-				planDir := cfg.AbsPath(cfg.File.Planning)
-				if err = os.MkdirAll(planDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err = os.WriteFile(filepath.Join(planDir, "US-001-plan.yaml"), []byte("tasks: ["), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario != "unfinished story" {
-				if _, err = local.TransitionStatus(context.Background(), "US-001", domain.StatusDone); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario != "no product commit" {
-				if err = os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("verified export\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				runGit(t, r.Workdir, "add", "hello.txt")
-				runGit(t, r.Workdir, "commit", "-m", "feat: export without a plan")
-			}
-			if scenario == "dirty tree" {
-				if err = os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("unverified export\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			result := Result{Summary: "Try the verified export", Checks: []string{"export check — passed"}}
-			if scenario == "missing evidence" {
-				result.Checks = nil
-			}
-			got, err := s.Ready(context.Background(), r.ID, result)
-			if scenario != "ready" {
-				if err == nil {
-					t.Fatal("invalid delivery became reviewable")
-				}
-				persisted, readErr := s.Read(r.ID)
-				if readErr != nil || persisted.Status != Developing || persisted.ReadySHA != "" {
-					t.Fatal("rejected delivery changed readiness", persisted, readErr)
-				}
-				return
-			}
-			if err != nil || got.Status != Review || got.ReadySHA != runGit(t, r.Workdir, "rev-parse", "HEAD") || got.ReadyStories == "" {
-				t.Fatal("planless delivery not frozen", got, err)
-			}
-			tasks, taskErr := local.ReadSpecTasks(context.Background(), "US-001")
-			if !errors.Is(taskErr, os.ErrNotExist) || len(tasks) != 0 {
-				t.Fatal("planless delivery acquired tasks", tasks, taskErr)
-			}
-		})
 	}
 }
 
@@ -394,35 +238,6 @@ func (f *fakeHosting) Create(_ context.Context, dir, _, base, _, _ string) (*Pul
 }
 func (f *fakeHosting) Read(context.Context, string, int) (*PullRequest, error) { return f.pr, nil }
 
-// Remote connectors normalize leading/trailing Markdown whitespace.
-type trimmedConnector struct{ connector.Connector }
-
-func (c trimmedConnector) FetchBacklogItems(ctx context.Context, status domain.Status) ([]domain.Spec, error) {
-	stories, err := c.Connector.FetchBacklogItems(ctx, status)
-	for i := range stories {
-		stories[i].Body = strings.TrimSpace(stories[i].Body)
-	}
-	return stories, err
-}
-func (c trimmedConnector) ReadSpecDetail(ctx context.Context, ref string) (domain.Spec, error) {
-	story, err := c.Connector.ReadSpecDetail(ctx, ref)
-	story.Body = strings.TrimSpace(story.Body)
-	return story, err
-}
-
-type failAfterAppend struct {
-	connector.Connector
-	failed bool
-}
-
-func (f *failAfterAppend) AppendSpecs(ctx context.Context, specs []domain.Spec) (domain.WriteResult, error) {
-	result, err := f.Connector.AppendSpecs(ctx, specs)
-	if err == nil && !f.failed {
-		f.failed = true
-		return result, errors.New("connection lost after write")
-	}
-	return result, err
-}
 func remote(t *testing.T, s *Service) {
 	t.Helper()
 	bare := filepath.Join(t.TempDir(), "origin.git")
@@ -433,98 +248,17 @@ func remote(t *testing.T, s *Service) {
 	runGit(t, s.Config.ProjectRoot, "remote", "add", "origin", bare)
 	runGit(t, s.Config.ProjectRoot, "push", "-u", "origin", "main")
 }
-func TestPublicationRecoversPartialWritesAndDeliversOnlyAfterConfirmedMerge(t *testing.T) {
-	s := fixture(t)
-	remote(t, s)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Excel"), story("US-002", "Area filter"))
-	r = ready(t, s, r)
-	hosting := &fakeHosting{}
-	s.Hosting = hosting
-	s.Connector = &failAfterAppend{Connector: trimmedConnector{Connector: s.Connector}}
-	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err == nil {
-		t.Fatal("injected partial publication did not fail")
-	}
-	partial, err := s.Read(r.ID)
-	if err != nil || partial.Status != Publishing || partial.PR == nil || len(partial.Published) != 2 {
-		t.Fatalf("lost recovery state: %+v %v", partial, err)
-	}
-	r, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hosting.creates != 1 || r.Status != Proposed {
-		t.Fatalf("duplicate PR or wrong state: %+v creates=%d", r, hosting.creates)
-	}
-	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
-		t.Fatal(err)
-	}
-	specs, _ := s.Connector.FetchBacklogItems(context.Background(), "")
-	if len(specs) != 3 {
-		t.Fatalf("duplicated stories: %d", len(specs))
-	}
-	for _, st := range specs {
-		if st.Code != "US-010" && st.Status != domain.StatusTodo {
-			t.Fatal("story delivered before merge")
-		}
-	}
-	if _, err = s.Refresh(context.Background(), r.ID); err != nil {
-		t.Fatal(err)
-	}
-	current, _ := s.Read(r.ID)
-	if current.Status != Proposed {
-		t.Fatal("open PR delivered")
-	}
-	hosting.pr.State = "CLOSED"
-	current, err = s.Refresh(context.Background(), r.ID)
-	if err != nil || current.Status != Proposed {
-		t.Fatal("closed, unmerged PR delivered")
-	}
-	hosting.pr.State = "MERGED"
-	hosting.pr.HeadSHA = "another-unapproved-head"
-	if _, err = s.Refresh(context.Background(), r.ID); err == nil {
-		t.Fatal("unapproved PR head delivered")
-	}
-	hosting.pr.HeadSHA = r.ApprovedSHA
-	code := r.Published["US-001"]
-	original, readErr := s.Connector.ReadSpecDetail(context.Background(), code)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	changedBody := original.Body + "A new unapproved requirement."
-	if _, err = s.Connector.UpdateSpec(context.Background(), code, domain.SpecUpdate{Body: &changedBody}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Refresh(context.Background(), r.ID); err == nil {
-		t.Fatal("changed official story delivered")
-	}
-	if _, err = s.Connector.UpdateSpec(context.Background(), code, domain.SpecUpdate{Body: &original.Body}); err != nil {
-		t.Fatal(err)
-	}
-	current, err = s.Refresh(context.Background(), r.ID)
-	if err != nil || current.Status != Delivered {
-		t.Fatalf("merge not reconciled: %+v %v", current, err)
-	}
-	specs, _ = s.Connector.FetchBacklogItems(context.Background(), "")
-	for _, st := range specs {
-		if st.Code != "US-010" && st.Status != domain.StatusDone {
-			t.Fatal("merged story not delivered")
-		}
-	}
-	if got := runGit(t, s.Config.ProjectRoot, "show", "HEAD:hello.txt"); got != "original" {
-		t.Fatal("publication merged the code itself")
-	}
-}
 
 func TestFeedbackKeepsSameSandboxAndPreservesPriorResult(t *testing.T) {
 	s := fixture(t)
-	r := ready(t, s, proposeApprove(t, s, create(t, s), story("US-001", "Export")))
+	r := ready(t, s, specify(t, s, create(t, s), story("US-001", "Export")))
 	prior := r
 	var err error
 	r, err = s.FeedbackFor(context.Background(), r.ID, "Use Excel instead of CSV.")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ID != prior.ID || r.Workdir != prior.Workdir || r.Branch != prior.Branch || r.ReadySHA != "" || r.Status != Discovery || r.Revisions[0].Result == nil || r.Revisions[0].HeadSHA != prior.ReadySHA {
+	if r.ID != prior.ID || r.Workdir != prior.Workdir || r.Branch != prior.Branch || r.ReadySHA != "" || r.Status != Developing || r.Revisions[0].Result == nil || r.Revisions[0].HeadSHA != prior.ReadySHA {
 		t.Fatalf("feedback lost identity/evidence: %+v", r)
 	}
 }
@@ -590,27 +324,6 @@ func TestMissingSandboxMarkerNeverFallsBackToTheParentConnector(t *testing.T) {
 	}
 }
 
-func TestTechnicalReworkNotesDoNotChangeTheApprovedProductIntent(t *testing.T) {
-	s := fixture(t)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	local, err := s.local(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := local.ReadSpecDetail(context.Background(), "US-001")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := domain.AppendReworkFeedback(spec.Body, []domain.ReviewComment{{File: "hello.txt", Line: 1, Body: "Fix the implementation to satisfy the existing criterion."}})
-	if _, err = local.UpdateSpec(context.Background(), spec.Code, domain.SpecUpdate{Body: &body}); err != nil {
-		t.Fatal(err)
-	}
-	r = ready(t, s, r)
-	if r.Status != Review || len(r.Revisions) != 1 {
-		t.Fatal("technical fix required another business-intent revision")
-	}
-}
-
 func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
 	s := fixture(t)
 	remote(t, s)
@@ -630,7 +343,7 @@ func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.Workdir, "unrelated.txt")); !os.IsNotExist(err) {
 		t.Fatalf("unrelated branch content leaked into increment: %v", err)
 	}
-	r = ready(t, s, proposeApprove(t, s, r, story("US-001", "Export")))
+	r = ready(t, s, specify(t, s, r, story("US-001", "Export")))
 	hosting := &fakeHosting{}
 	s.Hosting = hosting
 	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
@@ -641,63 +354,6 @@ func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
 	}
 	if runGit(t, root, "branch", "--show-current") != "feature/unrelated" || runGit(t, root, "rev-parse", "HEAD") != parentSHA {
 		t.Fatal("parent checkout changed")
-	}
-}
-
-func TestIncrementWithoutMainDoesNotCreateWorktree(t *testing.T) {
-	s := fixture(t)
-	root := s.Config.ProjectRoot
-	runGit(t, root, "branch", "-m", "other")
-	before := runGit(t, root, "worktree", "list", "--porcelain")
-	if _, err := s.Create(context.Background(), "Export", "Prepare export", ""); err == nil {
-		t.Fatal("increment silently used a branch other than main")
-	}
-	if after := runGit(t, root, "worktree", "list", "--porcelain"); after != before {
-		t.Fatal("failed creation changed worktrees")
-	}
-	if _, err := os.Stat(filepath.Join(root, ".archetipo", "increments")); !os.IsNotExist(err) {
-		t.Fatalf("failed creation persisted increment state: %v", err)
-	}
-}
-
-func TestContinuousDevelopmentPersistsSpecAndNeverAuthorizesPublication(t *testing.T) {
-	s := fixture(t)
-	ctx := context.Background()
-	r, err := s.CreateWithMode(ctx, "Booking", "Build booking", "", Continuous)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = git(ctx, s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir) })
-	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Book a visit", Stories: []domain.Spec{story("US-001", "Book")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Status != Developing || !r.Revisions[0].Approved || r.Revisions[0].ApprovalSource != "request" {
-		t.Fatalf("wrong authorization: %+v", r)
-	}
-	live, err := s.Stories(ctx, r)
-	if err != nil || len(live) != 1 {
-		t.Fatalf("spec not reconciled: %v %v", live, err)
-	}
-	if _, err = s.Publish(ctx, r.ID, "", 1); err == nil {
-		t.Fatal("development authorized publication")
-	}
-	complete(t, s, r)
-	r = ready(t, s, r)
-	r, err = s.RequestChanges(ctx, r.ID, FeedbackRequest{Feedback: "Add cancellation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Book and cancel", Stories: []domain.Spec{story("US-001", "Book and cancel")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Status != Developing || r.ReadySHA != "" || r.Revisions[1].ApprovalSource != "request" {
-		t.Fatalf("stale candidate: %+v", r)
-	}
-	live, err = s.Stories(ctx, r)
-	if err != nil || live[0].Status != domain.StatusTodo {
-		t.Fatalf("changed spec retained stale acceptance: %+v %v", live, err)
 	}
 }
 
@@ -725,9 +381,7 @@ func TestContinuousUsesCurrentBranchWhenMainAbsent(t *testing.T) {
 	if r.BaseBranch != "product" {
 		t.Fatalf("wrong base: %s", r.BaseBranch)
 	}
-	if _, err = s.Create(context.Background(), "Legacy", "Change app", ""); err == nil {
-		t.Fatal("legacy base contract changed")
-	}
+
 }
 
 func TestContinuousBootstrapsEmptyWorkspaceWithoutCommittingUntrackedFiles(t *testing.T) {

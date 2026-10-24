@@ -24,20 +24,20 @@ func activityByID(items []conversationActivityView, id string) (conversationActi
 func TestConversationActivitiesDoNotGuessAnUnannouncedCatalog(t *testing.T) {
 	tpl := template.Default()
 	items := resolveConversationActivities(tpl, nil, conversationlog.Record{}, execution.SessionDiscovery{
-		Skills: []execution.SessionSkill{{Name: "archetipo-design"}},
+		Skills: []execution.SessionSkill{{Name: "archetipo-wiki"}},
 	}, "")
-	design, found := activityByID(items, "design")
+	design, found := activityByID(items, "wiki")
 	if !found || design.Runnable || design.UnavailableReason == "" {
 		t.Fatalf("unknown catalog became available: %+v", items)
 	}
-	if _, found := activityByID(items, "native:archetipo-design"); found {
+	if _, found := activityByID(items, "native:archetipo-wiki"); found {
 		t.Fatal("unknown catalog was treated as a discovered skill")
 	}
 	record := conversationlog.Record{Version: conversationlog.CurrentVersion,
 		Session: &execution.SessionMetadata{Native: execution.NativeSessionReference{ID: "native"}},
 		Archive: execution.ArchiveOpen, Recovery: execution.RecoveryResumable, Work: execution.SessionIdle}
 	items = resolveConversationActivities(tpl, nil, record, execution.SessionDiscovery{SkillsKnown: true}, "")
-	if _, found := activityByID(items, "design"); found {
+	if _, found := activityByID(items, "wiki"); found {
 		t.Fatal("a known catalog without design still offers it")
 	}
 }
@@ -64,41 +64,14 @@ func TestConversationActivityLabelsDoNotExposeAgentInstructions(t *testing.T) {
 	items := resolveConversationActivities(template.Default(), nil, conversationlog.Record{}, execution.SessionDiscovery{
 		SkillsKnown: true,
 		Skills: []execution.SessionSkill{
-			{Name: "archetipo-design"},
-			{Name: "plugin:build-report", Description: "Prepara plugin:build-report dopo archetipo-design. " + strings.Repeat("Use when the user asks for a report. ", 30)},
+			{Name: "archetipo-wiki"},
+			{Name: "plugin:build-report", Description: "Prepara plugin:build-report dopo archetipo-wiki. " + strings.Repeat("Use when the user asks for a report. ", 30)},
 		},
 	}, "")
 	item, found := activityByID(items, "native:plugin:build-report")
 	if !found || item.Label != "plugin · build report" || item.Description != "" || item.Skill != "plugin:build-report" {
 		t.Fatalf("agent instructions became activity presentation: %+v", item)
 	}
-}
-
-func TestConversationAutopilotUsesTemplatePresentationAndNativeInvocation(t *testing.T) {
-	provider := &activityCatalogProvider{
-		persistentFakeNativeProvider: newPersistentFakeNativeProvider("native-autopilot", nil), known: true,
-		skills: []execution.SessionSkill{{Name: "archetipo-autopilot", Description: "Runs the ARchetipo pipeline autonomously end to end. " + strings.Repeat("Requires a fresh isolated worker. ", 30), Invocation: "/archetipo-autopilot"}},
-	}
-	srv, _, _ := newRunServer(t, provider, true)
-	id := openConversationOK(t, srv).Conversation.ID
-	view := readActivityCatalog(t, srv, id)
-	activity, found := activityByID(view.Items, "autopilot")
-	if !found || !activity.Runnable || activity.Label != "Avvia il workflow autonomo" || activity.Description != "Pianifica, implementa e verifica le storie del backlog in autonomia." || activity.Placeholder == "" {
-		t.Fatalf("autopilot lacks user-facing presentation: %+v", activity)
-	}
-	if _, found := activityByID(view.Items, "native:archetipo-autopilot"); found {
-		t.Fatal("autopilot is duplicated by the native catalog")
-	}
-	w := doJSON(t, srv, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{
-		"message": "Completa US-001", "skill": activity.Skill,
-	})
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("selected autopilot = %d: %s", w.Code, w.Body.String())
-	}
-	if provider.lastStart.Display != "Completa US-001" || !strings.Contains(provider.lastStart.Message, "Workflow conversation: "+id) || len(provider.lastStart.Skills) != 1 || provider.lastStart.Skills[0].Name != "archetipo-autopilot" || provider.lastStart.Session.ConversationID != id {
-		t.Fatalf("autopilot changed message, invocation or session: %+v", provider.lastStart)
-	}
-	closeConversation(t, srv, id)
 }
 
 type activityCatalogProvider struct {
@@ -134,21 +107,21 @@ func readActivityCatalog(t *testing.T, srv *Server, id string) conversationActiv
 func TestConversationActivitiesUseTheNativeSessionAndLeaveTheMessageUntouched(t *testing.T) {
 	provider := &activityCatalogProvider{
 		persistentFakeNativeProvider: newPersistentFakeNativeProvider("native-activities", nil), known: true,
-		skills: []execution.SessionSkill{{Name: "archetipo-design", Description: "Native design", Invocation: "/archetipo-design"}},
+		skills: []execution.SessionSkill{{Name: "archetipo-wiki", Description: "Native design", Invocation: "/archetipo-wiki"}},
 	}
 	srv, _, _ := newRunServer(t, provider, true)
 	before := readActivityCatalog(t, srv, "")
 	if provider.store.next != 0 || provider.store.starts != 0 || before.SkillsKnown {
 		t.Fatal("reading the starter opened a session or invented its catalog")
 	}
-	starter, found := activityByID(before.Items, "design")
+	starter, found := activityByID(before.Items, "wiki")
 	if !found || starter.Kind != "connect" || !starter.Runnable {
 		t.Fatalf("native discovery cannot be started from the activity: %+v", starter)
 	}
 	id := openConversationOK(t, srv).Conversation.ID
 	view := readActivityCatalog(t, srv, id)
-	design, found := activityByID(view.Items, "design")
-	if !found || !design.Runnable || design.Label != "Nuovo mockup" || !view.SkillsKnown || view.ConversationID != id {
+	design, found := activityByID(view.Items, "wiki")
+	if !found || !design.Runnable || design.Label != "Consulta la documentazione" || !view.SkillsKnown || view.ConversationID != id {
 		t.Fatalf("native design not offered: %+v", view)
 	}
 	if provider.store.starts != 0 || strings.Contains(design.Label, design.Skill) {
@@ -164,7 +137,7 @@ func TestConversationActivitiesUseTheNativeSessionAndLeaveTheMessageUntouched(t 
 		t.Fatalf("activity changed message or session: %+v", provider.lastStart)
 	}
 	busy := readActivityCatalog(t, srv, id)
-	design, found = activityByID(busy.Items, "design")
+	design, found = activityByID(busy.Items, "wiki")
 	if !found || design.Runnable || design.UnavailableReason == "" {
 		t.Fatal("a native activity is offered during an active turn")
 	}
@@ -176,7 +149,7 @@ func TestConversationActivitiesDoNotBorrowAnotherConversationsCatalog(t *testing
 	srv, _, _ := newRunServer(t, provider, true)
 	id := openConversationOK(t, srv).Conversation.ID
 	view := readActivityCatalog(t, srv, id)
-	if _, found := activityByID(view.Items, "design"); found {
+	if _, found := activityByID(view.Items, "wiki"); found {
 		t.Fatal("design was inferred from installed files rather than this catalog")
 	}
 	w := doJSON(t, srv, http.MethodGet, "/api/workspace/activities?conversation_id=unknown", nil)

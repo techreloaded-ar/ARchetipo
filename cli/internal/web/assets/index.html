@@ -31,7 +31,6 @@
     <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
-    <div class="blueprint-grid" aria-hidden="true"></div>
 
     <header class="topbar">
         <div class="brand">
@@ -48,7 +47,7 @@
             </span>
             <div class="brand-stack">
                 <span class="brand-name">ARchetipo</span>
-                <span class="brand-sub">by Tech Reloaded</span>
+
             </div>
             <!-- Who is looking at what (US-052). It lives inside the brand cell,
                  which is a flex container, so the three-column grid of the
@@ -57,7 +56,7 @@
                  visible with no workspace open, because its job is to declare
                  the absence too. -->
             <button id="workspace-indicator" type="button" class="workspace-indicator">
-                <span class="workspace-indicator-eyebrow">workspace</span>
+
                 <span class="workspace-indicator-name" id="workspace-indicator-name">&mdash;</span>
             </button>
         </div>
@@ -77,7 +76,7 @@
         <div class="topbar-actions">
             <button id="new-spec-btn" type="button" class="ghost-btn new-spec-btn" data-workspace-scoped>
                 <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-                <span>Nuova spec</span>
+                <span>Nuova storia</span>
             </button>
             <!-- Everything the topbar used to keep one click away (US-061).
                  The bar exposes the workspace identity, one primary action, the
@@ -102,14 +101,6 @@
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 13.5h12" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 13.5V9M7 13.5V5.5M10.5 13.5V7.5M14 13.5V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
                         <span>Metriche</span>
                     </button>
-                    <div class="dropdown" id="mockups-dropdown" data-workspace-scoped>
-                        <button id="mockups-btn" type="button" class="ghost-btn" aria-haspopup="true" aria-expanded="false">
-                            <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 5.5h13M5 13.5h6M8 12v1.5" stroke="currentColor" stroke-width="1.2"/></svg>
-                            <span>Mockup</span>
-                            <svg class="btn-caret" width="9" height="9" viewBox="0 0 9 9" aria-hidden="true"><path d="M1.5 3l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
-                        </button>
-                        <div class="dropdown-menu hidden" id="mockups-menu" role="menu"></div>
-                    </div>
                     <div class="menu-sep" role="separator"></div>
                     <button id="workspaces-btn" type="button" class="ghost-btn" data-workspace-scoped>
                         <svg class="btn-ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="1.5" y="9.5" width="13" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4 4.5h.01M4 11.5h.01" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -244,12 +235,11 @@
                 <!-- Opens a conversation about the spec on screen (US-058): a
                      new conversation carrying this spec's code, so it lands in
                      the rail under Spec and not among the free threads. -->
-                <button id="spec-conversation-btn" type="button" class="ghost-btn" data-conversation-new-spec>Conversa su questa spec</button>
+                <button id="spec-conversation-btn" type="button" class="ghost-btn" data-conversation-new-spec>Parla di questa storia</button><button id="spec-develop-btn" type="button" class="primary-btn">Lavora su questa storia</button>
             </header>
             <nav class="modal-tabs" role="tablist">
                 <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Storia</button>
                 <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Piano</button>
-                <button type="button" class="tab hidden" data-tab="review" id="review-tab" role="tab" aria-selected="false">Revisione</button>
             </nav>
             <section class="tab-panel active" data-panel="story">
                 <div id="story-view" class="story-view">
@@ -271,7 +261,7 @@
                     </div>
                     <div class="story-execution" id="story-execution"></div>
                     <div class="story-run" id="story-run"></div>
-                    <div class="markdown-rendered" id="story-body-view"></div>
+                    <div class="markdown-rendered" id="story-body-view"></div><section id="story-linked-work" class="story-linked-work" aria-label="Lavori collegati"></section>
                     <div class="form-actions">
                         <button type="button" id="story-edit-btn" class="primary-btn">Modifica</button>
                     </div>
@@ -290,7 +280,7 @@
                         </select>
                     </label>
                     <label class="field">
-                        <span>Story point</span>
+                        <span>Stima · 0 = non stimata</span>
                         <input type="number" name="story_points" min="0" max="100" />
                     </label>
                     <label class="field">
@@ -365,18 +355,6 @@
                     </div>
                 </form>
             </section>
-            <section class="tab-panel" data-panel="review">
-                <div class="review-toolbar">
-                    <div class="review-branch" id="review-branch"></div>
-                    <div class="review-actions">
-                        <button type="button" id="review-request-btn" class="ghost-btn" title="Riporta la spec a TODO con i rilievi della revisione da pianificare">Chiedi modifiche</button>
-                        <button type="button" id="review-approve-btn" class="primary-btn" title="Accetta l'incremento e chiude la spec">Approva e chiudi</button>
-                    </div>
-                </div>
-                <div class="review-dossier" id="review-dossier"></div>
-                <div class="review-diff" id="review-diff"></div>
-                <span class="status-msg" id="review-status"></span>
-            </section>
                 </div>
             </div>
         </div>
@@ -387,18 +365,6 @@
          altrove, e un collegamento raggiungibile con il tasto di tabulazione
          dentro un contenitore nascosto sarebbe un punto di fermata senza voce.
          Per questo aria-hidden e' sceso sui singoli promemoria. -->
-    <footer class="hint-bar">
-        <span aria-hidden="true"><kbd>R</kbd> ricarica</span>
-        <span aria-hidden="true"><kbd>T</kbd> tema</span>
-        <span aria-hidden="true"><kbd>Esc</kbd> chiudi</span>
-        <span class="hint-spacer" aria-hidden="true"></span>
-        <!-- Due destinazioni, perche' sono due cose diverse: il nome del
-             prodotto porta al suo repository, la firma porta a chi lo fa. -->
-        <span class="hint-version">
-            <a class="hint-link" href="https://github.com/techreloaded-ar/ARchetipo" target="_blank" rel="noopener noreferrer" title="Il repository di ARchetipo su GitHub">ARchetipo</a>
-            <a class="hint-link" href="https://techreloaded.it" target="_blank" rel="noopener noreferrer" title="Il sito di Tech Reloaded">by Tech Reloaded</a>
-        </span>
-    </footer>
 
     <div id="prd-modal" class="modal-root hidden" role="dialog" aria-modal="true" aria-labelledby="prd-editor-title">
         <div class="modal">
@@ -532,8 +498,8 @@
                         <span class="field-error" data-error-for="priority"></span>
                     </label>
                     <label class="field">
-                        <span>Story point</span>
-                        <input type="number" name="story_points" min="1" max="100" value="3" />
+                        <span>Stima · 0 = non stimata</span>
+                        <input type="number" name="story_points" min="0" max="100" value="0" />
                         <span class="field-error" data-error-for="points"></span>
                     </label>
                     <label class="field">
@@ -907,6 +873,7 @@
 <script src="/documentation.js"></script>
     <script src="/workspace-runs.js"></script>
     <script src="/workspace-identity.js"></script>
+    <script src="/story-trace.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>

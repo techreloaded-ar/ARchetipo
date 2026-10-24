@@ -225,7 +225,7 @@ When the inception flow has gathered the minimum required information, generate 
 <!-- archetipo:prd section=next_steps required=true -->
 
 1. **Backlog** - Run `/archetipo-spec` to transform this PRD into a backlog
-2. **Design** - Run `/archetipo-design` for UI mockups (when applicable)
+2. **Design** - Explore the proposed flow in the working app when useful
 3. **Validation** - Review with stakeholders and test the riskiest assumptions
 
 ---

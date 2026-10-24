@@ -361,22 +361,6 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 		}
 		return nil, mapExecutionStartError(err, providerID)
 	}
-	// An implementation carries out a plan, so a spec that has none has nothing
-	// to execute. Refusing here costs nothing; refusing later would already have
-	// moved the spec and burned a run.
-	if action == execution.ActionImplement {
-		hasPlan, err := execution.HasPersistedPlan(ctx, ws.conn, code)
-		if err != nil {
-			return nil, iox.NewInternal("reading the plan tasks of "+code, err)
-		}
-		if !hasPlan {
-			return nil, iox.NewConflict(
-				"the spec "+code+" has no persisted plan to implement",
-				"plan it before implementing it, then run the action again",
-				nil,
-			)
-		}
-	}
 
 	// The state change an accepted start owes the backlog is the caller's,
 	// because the caller is the only one holding a connector — the execution
@@ -536,11 +520,6 @@ type actionAvailability struct {
 	// a conversation now), a running execution only blocks *its own* action;
 	// an empty value means "unknown" and keeps the old conservative refusal.
 	runningAction string
-	// specHasPlan says whether the spec has at least one persisted plan task.
-	// Only the implement action depends on it, but it travels here rather than
-	// being re-read per action because the detail has already read the plan and
-	// hands the count over.
-	specHasPlan bool
 }
 
 // providerAvailability answers "which provider would this workspace run with,
@@ -567,7 +546,7 @@ type providerAvailability struct {
 }
 
 func (s *Server) actionAvailabilityFor(ctx context.Context, ws *workspaceSession, code string, planTaskCount int) actionAvailability {
-	availability := actionAvailability{specHasPlan: planTaskCount > 0}
+	availability := actionAvailability{}
 	availability.runningID, availability.runningAction, availability.specHasRunning = s.specRunningExecution(ctx, ws, code)
 	availability.providerAvailability = s.providerAvailabilityFor(ctx, ws)
 	return availability
@@ -648,13 +627,7 @@ func (a actionAvailability) reasonFor(actionID string) string {
 	if reason := a.providerAvailability.reasonFor(capability); reason != "" {
 		return reason
 	}
-	// Last, and only for the implementation: the provider is fine, the spec is
-	// free, but there is no plan to carry out. It is checked after the provider
-	// for the same reason the route refuses in that order — an incompatible
-	// provider is the more fundamental obstacle.
-	if execution.ActionID(actionID) == execution.ActionImplement && !a.specHasPlan {
-		return "questa spec non ha un piano salvato: pianificala prima di implementarla"
-	}
+
 	return ""
 }
 
@@ -735,8 +708,6 @@ func actionNames(actions []template.Action) string {
 func supportedActions() string {
 	known := []execution.ActionID{
 		execution.ActionPlan,
-		execution.ActionImplement,
-		execution.ActionReview,
 		execution.ActionInception,
 		execution.ActionBacklog,
 		execution.ActionSpecDraft,

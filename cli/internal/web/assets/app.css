@@ -112,12 +112,12 @@ html[data-density="compatta"] {
 html[data-theme="light"] {
 	color-scheme: light;
 
-	--bg: #f7f5f0;
+	--bg: #fafafa;
 	--bg-grid: rgba(62, 66, 133, 0.05);
 	--surface: #ffffff;
 	--surface-2: #ffffff;
-	--surface-3: #f0eee8;
-	--surface-hover: #f0eee8;
+	--surface-3: #f4f4f6;
+	--surface-hover: #f4f4f6;
 	--border: #e3e0d8;
 	--border-strong: #c9c5ba;
 	--rule: #e3e0d8;
@@ -286,14 +286,7 @@ h4 {
 }
 
 /* La trama della carta. Molto tenue: si sente, non si guarda. */
-.blueprint-grid {
-	position: fixed;
-	inset: 0;
-	z-index: -1;
-	pointer-events: none;
-	background-image: radial-gradient(var(--bg-grid) 1px, transparent 1px);
-	background-size: 22px 22px;
-}
+
 
 /* ---- Topbar ------------------------------------------------------------ */
 .topbar {
@@ -774,49 +767,6 @@ html[data-theme="light"] .theme-ico-moon {
 	font-size: 14px;
 }
 
-.mockups-section + .mockups-section {
-	margin-top: 4px;
-	border-top: 1px solid var(--border);
-	padding-top: 4px;
-}
-.mockups-section-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 6px var(--space-3);
-	font-size: 12px;
-	font-weight: 800;
-	color: var(--text-muted);
-	text-transform: uppercase;
-	letter-spacing: 0.09em;
-}
-.mockups-section-header.clickable {
-	cursor: pointer;
-	border-radius: var(--radius-sm);
-	transition:
-		background var(--transition),
-		color var(--transition);
-	user-select: none;
-}
-.mockups-section-header.clickable:hover {
-	background: var(--surface-3);
-	color: var(--accent);
-}
-.mockups-section-caret {
-	transition: transform 0.15s var(--ease);
-}
-.mockups-section.collapsed .mockups-section-caret {
-	transform: rotate(-90deg);
-}
-.mockups-section-body.hidden {
-	display: none;
-}
-.mockups-section-stories .mockups-section-body {
-	max-height: min(50vh, 360px);
-	overflow-y: auto;
-	overscroll-behavior: contain;
-	scrollbar-gutter: stable;
-}
 
 .hidden {
 	display: none !important;
@@ -1211,66 +1161,16 @@ html[data-theme="light"] .theme-ico-moon {
 }
 
 /* ---- Footer hint bar -------------------------------------------------- */
-.hint-bar {
-	display: flex;
-	align-items: center;
-	gap: var(--space-4);
-	padding: var(--space-2) var(--space-5);
-	background: var(--surface);
-	border-top: 1px solid var(--border);
-	font-size: 12px;
-	font-weight: 600;
-	color: var(--text-dim);
-}
 
-.hint-bar kbd {
-	display: inline-block;
-	font-family: var(--font-mono);
-	font-size: 11px;
-	padding: 2px 6px;
-	margin-right: 5px;
-	border: 1px solid var(--border-strong);
-	border-radius: 6px;
-	background: var(--surface-3);
-	color: var(--text-muted);
-	line-height: 1.2;
-}
 
-.hint-spacer {
-	flex: 1;
-}
 
-.hint-version {
-	display: inline-flex;
-	align-items: baseline;
-	gap: 4px;
-	font-size: 12px;
-	font-weight: 700;
-	color: var(--text-dim);
-}
 
 /* La firma e' fatta di due collegamenti, e deve continuare a leggersi come una
    firma: nessuna sottolineatura a riposo, nessun colore da collegamento. Che
    siano premibili lo dice il passaggio del puntatore, e il percorso da tastiera
    ha comunque il suo contorno visibile. */
-.hint-link {
-	color: inherit;
-	text-decoration: none;
-	border-radius: 4px;
-	transition: color 0.12s ease;
-}
 
-.hint-link:hover,
-.hint-link:focus-visible {
-	color: var(--accent);
-	text-decoration: underline;
-	text-underline-offset: 2px;
-}
 
-.hint-link:focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: 2px;
-}
 
 /* ---- Modal ------------------------------------------------------------- */
 .modal-root {
@@ -2112,18 +2012,7 @@ html[data-theme="light"] .theme-ico-moon {
 	background: var(--danger-soft);
 }
 
-.meta-chip.mockup-link {
-	text-decoration: none;
-	color: var(--text-muted);
-	transition:
-		color var(--transition),
-		border-color var(--transition);
-}
 
-.meta-chip.mockup-link:hover {
-	color: var(--accent);
-	border-color: var(--accent);
-}
 
 .story-view-title {
 	margin: 0;
@@ -2712,10 +2601,6 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	.form-grid {
 		grid-template-columns: 1fr 1fr;
 	}
-	.hint-bar {
-		flex-wrap: wrap;
-		padding: var(--space-2) var(--space-4);
-	}
 }
 
 @media (max-width: 600px) {
@@ -2740,385 +2625,6 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 		animation-duration: 0.01ms !important;
 		transition-duration: 0.01ms !important;
 	}
-}
-
-/* ---- Review tab: diff viewer + inline comments ------------------------- */
-
-.review-toolbar {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: var(--space-3);
-	margin-bottom: var(--space-4);
-	padding: var(--space-3) var(--space-4);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
-	background: var(--surface);
-	flex-wrap: wrap;
-}
-
-.review-branch {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	flex-wrap: wrap;
-}
-
-.review-chip {
-	font-family: var(--font-mono);
-	font-size: 13px;
-	padding: 2px 10px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-pill);
-	color: var(--text-muted);
-	background: var(--surface-3);
-}
-
-.review-actions {
-	display: flex;
-	gap: var(--space-2);
-	flex-wrap: wrap;
-}
-
-/* The review dossier: the evidence a provider prepared, above the diff a person
-   reads. It reuses the surface, border and status colours already in the sheet —
-   a panel with its own palette would read as a different application. */
-.review-dossier {
-	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
-	background: var(--surface);
-	padding: var(--space-4);
-	margin-bottom: var(--space-4);
-}
-
-.review-dossier:empty {
-	display: none;
-}
-
-.review-dossier-head {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	flex-wrap: wrap;
-	margin-bottom: var(--space-3);
-}
-
-.review-dossier-summary {
-	margin: 0 0 var(--space-3);
-	font-size: 16px;
-	line-height: 1.6;
-	max-width: var(--reading-width);
-	color: var(--text);
-}
-
-.review-verdict {
-	font-size: 15px;
-	color: var(--text-strong);
-	border-left: 3px solid var(--ok);
-	padding-left: var(--space-3);
-	margin-bottom: var(--space-3);
-}
-
-.review-criteria {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-}
-
-/* Badge e identificativo sulla prima riga, nota sulla seconda a tutta
-   larghezza: una nota lunga in coda al badge, su una riga che va a capo,
-   si legge come un blocco unico senza inizio. */
-.review-criteria li {
-	display: grid;
-	grid-template-columns: auto 1fr;
-	align-items: baseline;
-	gap: 2px var(--space-2);
-	font-size: 15px;
-	line-height: 1.55;
-}
-
-.criterion-badge {
-	font-size: 11px;
-	font-weight: 800;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-	padding: 1px 10px;
-	border-radius: var(--radius-pill);
-	border: 1px solid var(--border);
-	color: var(--text-muted);
-	background: var(--surface-3);
-}
-
-.criterion-met {
-	border-color: var(--ok-border);
-	background: var(--ok-soft);
-	color: var(--ok);
-}
-
-.criterion-unclear {
-	border-color: var(--attention-border);
-	background: var(--attention-soft);
-	color: var(--attention);
-}
-
-.criterion-not_verifiable {
-	border-color: var(--danger-border);
-	background: var(--danger-soft);
-	color: var(--danger);
-}
-
-.criterion-id {
-	font-family: var(--font-mono);
-	font-size: 13px;
-	color: var(--text-strong);
-}
-
-.criterion-note {
-	grid-column: 1 / -1;
-	color: var(--text-muted);
-	font-size: 15px;
-	max-width: var(--reading-width);
-}
-
-.review-blockers {
-	margin-top: var(--space-3);
-	padding: var(--space-3) var(--space-4);
-	border: 1px solid var(--danger-border);
-	border-radius: var(--radius);
-	background: var(--danger-soft);
-	font-size: 15px;
-	color: var(--text);
-}
-
-.review-blockers ul,
-.review-minor ul {
-	margin: var(--space-2) 0 0;
-	padding-left: 20px;
-	color: var(--text);
-}
-
-/* Le segnalazioni non bloccanti si leggono, non allarmano: stesso impianto dei
-   bloccanti, senza il rosso, perché non c'è niente da scavalcare. */
-.review-minor {
-	margin-top: var(--space-3);
-	padding: var(--space-3) var(--space-4);
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface-2);
-	font-size: 15px;
-	color: var(--text);
-}
-
-.review-empty {
-	color: var(--text-muted);
-	padding: var(--space-6);
-	text-align: center;
-}
-
-.review-diff {
-	border: 1px solid var(--border);
-	border-radius: var(--radius-lg);
-	background: var(--surface);
-	overflow: hidden;
-	font-family: var(--font-mono);
-	font-size: 13px;
-}
-
-.diff-file + .diff-file {
-	border-top: 1px solid var(--border-strong);
-}
-
-.diff-file-header {
-	display: flex;
-	align-items: center;
-	gap: var(--space-2);
-	padding: var(--space-2) var(--space-4);
-	background: var(--surface-3);
-	border-bottom: 1px solid var(--border);
-	position: sticky;
-	top: 0;
-}
-
-.diff-file-path {
-	color: var(--text-strong);
-}
-
-.diff-file-status {
-	text-transform: uppercase;
-	font-size: 11px;
-	letter-spacing: 0.06em;
-	padding: 1px 8px;
-	border-radius: var(--radius-pill);
-	border: 1px solid var(--border);
-	color: var(--text-muted);
-}
-
-.diff-added {
-	color: var(--ok);
-	border-color: var(--ok-border);
-}
-.diff-deleted {
-	color: var(--danger);
-	border-color: var(--danger-border);
-}
-.diff-renamed {
-	color: var(--accent);
-	border-color: var(--accent);
-}
-
-/* Il file grande del diff nasce ripiegato e si apre da qui: costruire le sue
-   righe è quello che costa, non mostrarle. */
-.diff-file-expand {
-	display: block;
-	width: 100%;
-	padding: var(--space-2) var(--space-4);
-	text-align: left;
-	color: var(--accent);
-	background: none;
-	border: none;
-	border-top: 1px solid var(--border);
-	font: inherit;
-	cursor: pointer;
-}
-
-.diff-file-expand:hover {
-	background: var(--surface-3);
-}
-
-.diff-hunk-header {
-	padding: 2px var(--space-4);
-	color: var(--accent);
-	font-weight: 500;
-	background: var(--surface-3);
-	border-top: 1px solid var(--border);
-	border-bottom: 1px solid var(--border);
-	white-space: pre-wrap;
-}
-
-.diff-line {
-	display: grid;
-	grid-template-columns: 3em 3em 1.2em 1em 1fr;
-	align-items: baseline;
-	column-gap: var(--space-1);
-	padding: 0 var(--space-2);
-	white-space: pre-wrap;
-	word-break: break-word;
-}
-
-.diff-line.diff-add {
-	background: var(--ok-soft);
-	color: var(--ok);
-}
-.diff-line.diff-del {
-	background: var(--danger-soft);
-	color: var(--danger);
-}
-
-.diff-gutter {
-	color: var(--text-dim);
-	text-align: right;
-	user-select: none;
-	font-size: 12px;
-}
-
-.diff-sign {
-	color: var(--text-muted);
-	user-select: none;
-}
-.diff-add .diff-sign {
-	color: var(--ok);
-}
-.diff-del .diff-sign {
-	color: var(--danger);
-}
-
-.diff-code {
-	white-space: pre-wrap;
-}
-
-.diff-comment-add {
-	visibility: hidden;
-	cursor: pointer;
-	color: var(--accent);
-	font-weight: 700;
-	text-align: center;
-	user-select: none;
-	border-radius: var(--radius-sm);
-}
-.diff-line:hover .diff-comment-add {
-	visibility: visible;
-}
-.diff-comment-add:hover {
-	background: var(--accent-soft);
-}
-
-.diff-comment-block {
-	grid-column: 1 / -1;
-	margin: var(--space-1) var(--space-2);
-	padding: var(--space-3);
-	border: 1px solid var(--border-strong);
-	border-radius: var(--radius);
-	background: var(--surface-3);
-	font-family: var(--font-sans);
-	font-size: 15px;
-	display: flex;
-	gap: var(--space-2);
-	align-items: flex-start;
-}
-
-.diff-comment-body {
-	flex: 1;
-	white-space: pre-wrap;
-	color: var(--text);
-}
-
-.diff-comment-del {
-	border: none;
-	background: none;
-	color: var(--text-muted);
-	cursor: pointer;
-	font-size: 18px;
-	line-height: 1;
-}
-.diff-comment-del:hover {
-	color: var(--danger);
-}
-
-.diff-composer {
-	flex-direction: column;
-}
-
-.diff-comment-input {
-	width: 100%;
-	resize: vertical;
-	font-family: var(--font-sans);
-	font-size: 15px;
-	padding: var(--space-2) var(--space-3);
-	border: 1.5px solid var(--border-strong);
-	border-radius: var(--radius);
-	background: var(--surface);
-	color: var(--text);
-}
-
-.diff-composer-actions {
-	display: flex;
-	gap: var(--space-2);
-	margin-top: var(--space-2);
-}
-
-.card-branch {
-	margin-top: var(--space-2);
-	padding-top: var(--space-1);
-	border-top: 1px dashed var(--border);
-	font-family: var(--font-mono);
-	font-size: 12px;
-	color: var(--text-muted);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 
 /* ---- Metrics panel ------------------------------------------------------ */
@@ -8380,3 +7886,26 @@ body.no-workspace [data-workspace-scoped] {
 .conv-work-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
 .conv-work-caption { font-size:13px; color:var(--text-secondary,#777); }
 .conv-work-actions:empty { display:none; }
+
+/* The working app owns the screen; enterprise context stays one view away. */
+.story-linked-work { margin-top:28px; border-top:1px solid var(--border); padding-top:18px; }
+.story-linked-work ul,.story-links { list-style:none; margin:0; padding:0; }
+.story-linked-work li,.story-links li { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 0; border-bottom:1px solid var(--border); }
+.story-linked-work li>span,.story-links li>span { color:var(--text-muted); font-size:12px; }
+.story-linked-work a { font-size:13px; margin-left:auto; }
+.conv-work-home { background:radial-gradient(ellipse at 60% 52%,#ede9fe66,transparent 65%); }
+.conv-work-welcome h1 { font-weight:650; letter-spacing:-.045em; }
+.conv-increment { border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; margin:0; padding:12px 16px; }
+.conv-increment>header { flex-wrap:wrap; row-gap:6px; }
+.conv-increment>header>strong { flex:1 1 160px; }
+.conv-increment-phase { font-weight:500; color:var(--text-muted); }
+.conv-increment>header>button { margin-left:auto; }
+.conv-work-actions:empty { display:none; }
+@media(max-width:700px) { .story-view-actions { flex-wrap:wrap; } .spec-pane-body>.modal-header { flex-wrap:wrap; } }
+
+@media(max-width:700px) {
+ .story-view-topbar { flex-direction:column; align-items:stretch; }
+ .story-view-meta { width:100%; }
+ .story-view-actions { display:flex; flex-wrap:wrap; width:100%; max-width:100%; }
+ .story-view-actions>button,.story-view-actions>select { flex:1 1 140px; min-width:0; max-width:100%; }
+}

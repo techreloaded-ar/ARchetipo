@@ -328,12 +328,14 @@ func statusActionOf(t *testing.T, view workspaceStatusResponse, id string) struc
 // two templates, so the recommendation can only come from the Archetipo.
 func TestResolveStageFollowsTheArchetypeOrder(t *testing.T) {
 	real := template.Default()
+	real.Actions = append(real.Actions, template.Action{ID: "assess", Statuses: []domain.Status{domain.StatusReview}})
+	reviewStageDefinition := template.Stage{ID: "da-rivedere", Scope: template.ScopeSpec, Action: "assess"}
 	planFirst := template.Template{
 		ID:      real.ID,
 		Actions: real.Actions,
 		Stages: []template.Stage{
 			stageOfArchetype(t, "da-pianificare"),
-			stageOfArchetype(t, "da-rivedere"),
+			reviewStageDefinition,
 			stageOfArchetype(t, "completo"),
 		},
 	}
@@ -341,7 +343,7 @@ func TestResolveStageFollowsTheArchetypeOrder(t *testing.T) {
 		ID:      real.ID,
 		Actions: real.Actions,
 		Stages: []template.Stage{
-			stageOfArchetype(t, "da-rivedere"),
+			reviewStageDefinition,
 			stageOfArchetype(t, "da-pianificare"),
 			stageOfArchetype(t, "completo"),
 		},
@@ -454,18 +456,9 @@ func TestWorkspaceStatusScopedToASpecRecommendsImplementingThatSpec(t *testing.T
 
 	view := readScopedWorkspaceStatus(t, srv, "US-902")
 
-	assertStageMatchesArchetype(t, view, "da-implementare")
-	if view.NextStep == nil {
-		t.Fatal("a PLANNED spec has a next step, but next_step is null")
-	}
-	if view.NextStep.Action != "implement" {
-		t.Fatalf("next_step.action = %q, want implement", view.NextStep.Action)
-	}
-	if view.NextStep.Spec == nil || view.NextStep.Spec.Code != "US-902" {
-		t.Fatalf("next_step.spec = %+v, want US-902", view.NextStep.Spec)
-	}
-	if !view.NextStep.Runnable || view.NextStep.UnavailableReason != "" {
-		t.Fatalf("the implement step is not runnable: %+v", view.NextStep)
+	assertStageMatchesArchetype(t, view, "completo")
+	if view.NextStep != nil {
+		t.Fatal("retired implementation ceremony is recommended", view.NextStep)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 type conversationActivityView struct {
@@ -174,7 +175,7 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 	}
 	if discovery.SkillsKnown {
 		for _, skill := range discovery.Skills {
-			if strings.TrimSpace(skill.Name) == "" || slices.ContainsFunc(tpl.ConversationActivities, func(activity template.ConversationActivity) bool { return activity.Skill == skill.Name }) ||
+			if workspace.IsRetiredSkill(skill.Name) || strings.TrimSpace(skill.Name) == "" || slices.ContainsFunc(tpl.ConversationActivities, func(activity template.ConversationActivity) bool { return activity.Skill == skill.Name }) ||
 				slices.ContainsFunc(tpl.WorkspaceActions, func(action template.WorkspaceAction) bool { return action.Skill == skill.Name }) {
 				continue
 			}

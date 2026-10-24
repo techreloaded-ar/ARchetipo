@@ -82,11 +82,8 @@ const SPEC_OPERATION_IDS = [
 	"story-actions",
 	"story-execution",
 	"story-run",
-	"review-tab",
-	"review-approve-btn",
-	"review-request-btn",
 ];
-const SPEC_TABS = ["story", "plan", "review"];
+const SPEC_TABS = ["story", "plan"];
 
 // Every viewer request this file makes, in order. It is what turns "the panel
 // of that run was never opened" from a comment into an assertion.
@@ -275,10 +272,14 @@ async function scenario(runDir) {
 			(data) => byID(data, specID) && byID(data, workspaceID),
 			`both the spec-scoped run ${specID} and the workspace-scoped run ${workspaceID} to be listed`,
 		);
-		const ids = (listed.runs || []).map((entry) => entry.id).sort();
-		if (JSON.stringify(ids) !== JSON.stringify([specID, workspaceID].sort())) {
-			throw new Error(`AC-3: the list must hold exactly the two runs in flight; got ${JSON.stringify(listed.runs)}`);
-		}
+        const ids = (listed.runs || []).map(entry=>entry.id);
+        const executionIDs = (listed.runs || []).filter(entry=>entry.id!==entry.conversation_id).map(entry=>entry.id).sort();
+        if (JSON.stringify(executionIDs)!==JSON.stringify([specID,workspaceID].sort())) throw new Error(`AC-3: wrong running execution set: ${JSON.stringify(listed.runs)}`);
+        if (new Set(ids).size!==ids.length) throw new Error("AC-3: duplicate activity identities");
+        for (const entry of listed.runs.filter(entry=>entry.id===entry.conversation_id)) {
+            if (entry.can_stop!==false) throw new Error("Native conversation interrupt must stay in its own session");
+        }
+
 		if (ids.includes(closedID)) {
 			throw new Error(`AC-3: the terminal execution ${closedID} must not be listed; got ${JSON.stringify(listed.runs)}`);
 		}
@@ -355,8 +356,6 @@ async function scenario(runDir) {
 		// The routes of the spec detail are exercised between the two readings:
 		// on the server, opening and closing that pane is exactly these reads.
 		await apiJSON(`${view.url}/api/spec/${SPEC_ACTIVE}`);
-		await probe(`${view.url}/api/spec/${SPEC_ACTIVE}/diff`);
-		await probe(`${view.url}/api/spec/${SPEC_ACTIVE}/review`);
 		await apiJSON(`${view.url}/api/board`);
 		await apiJSON(`${view.url}/api/spec/${SPEC_CLOSED}`);
 
@@ -372,7 +371,7 @@ async function scenario(runDir) {
 		assertAlive(view.child, "AC-2: the viewer process");
 		ok(
 			"AC-2",
-			`after five reads of the spec detail routes the conversation ${conversationID} answers with the same id, the same ${conversationAfter.events.length}-event history and the same cursor ${conversationAfter.last_id}, on the same viewer process (pid ${pid}), never restarted`,
+			`after three reads of the spec detail routes the conversation ${conversationID} answers with the same id, the same ${conversationAfter.events.length}-event history and the same cursor ${conversationAfter.last_id}, on the same viewer process (pid ${pid}), never restarted`,
 		);
 
 		// --- AC-1, AC-2, AC-4 and AC-5 ----------------------------------------
@@ -520,7 +519,7 @@ function assertShellStructure(html) {
 	if (!html.includes('id="topbar-more-menu"')) {
 		throw new Error("US-061 AC-5: the served index.html carries no #topbar-more-menu: the entries moved out of the topbar would have nowhere to live");
 	}
-	const collected = ["metrics-btn", "prd-btn", "mockups-dropdown", "new-workspace-btn", "workspaces-btn", "config-btn", "refresh-btn"];
+	const collected = ["metrics-btn", "prd-btn", "new-workspace-btn", "workspaces-btn", "config-btn"];
 	const lostEntries = collected.filter((id) => !html.includes(`id="${id}"`));
 	if (lostEntries.length) {
 		throw new Error(`US-061 AC-5: the served index.html lost the topbar entries ${JSON.stringify(lostEntries)}: they are reachable from neither the bar nor the menu`);

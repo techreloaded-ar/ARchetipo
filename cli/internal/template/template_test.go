@@ -12,12 +12,8 @@ import (
 // workspace receives when it is initialized with the Fabbrica del software
 // Template, so changing the process must break this test explicitly.
 var processSkills = []string{
-	"archetipo-autopilot",
-	"archetipo-design",
-	"archetipo-implement",
 	"archetipo-inception",
 	"archetipo-plan",
-	"archetipo-review",
 	"archetipo-spec",
 	"archetipo-wiki",
 	"archetipo-increment",
@@ -34,18 +30,6 @@ var processActions = []Action{
 		Label:    "Pianifica",
 		Skill:    "archetipo-plan",
 		Statuses: []domain.Status{domain.StatusTodo},
-	},
-	{
-		ID:       "implement",
-		Label:    "Implementa",
-		Skill:    "archetipo-implement",
-		Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
-	},
-	{
-		ID:       "review",
-		Label:    "Rivedi",
-		Skill:    "archetipo-review",
-		Statuses: []domain.Status{domain.StatusReview},
 	},
 }
 
@@ -96,20 +80,6 @@ var processStages = []Stage{
 		Summary: "Ci sono spec in TODO: il passo successivo è pianificarne una.",
 		Scope:   ScopeSpec,
 		Action:  "plan",
-	},
-	{
-		ID:      "da-implementare",
-		Label:   "Da implementare",
-		Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
-		Scope:   ScopeSpec,
-		Action:  "implement",
-	},
-	{
-		ID:      "da-rivedere",
-		Label:   "Da rivedere",
-		Summary: "Ci sono spec in review: il passo successivo è rivederne una.",
-		Scope:   ScopeSpec,
-		Action:  "review",
 	},
 	{
 		ID:      "completo",
@@ -215,9 +185,9 @@ func TestActionsForReturnsOnlyTheActionsAdmittedInTheStatus(t *testing.T) {
 		want   []string
 	}{
 		{status: domain.StatusTodo, want: []string{"plan"}},
-		{status: domain.StatusPlanned, want: []string{"implement"}},
-		{status: domain.StatusInProgress, want: []string{"implement"}},
-		{status: domain.StatusReview, want: []string{"review"}},
+		{status: domain.StatusPlanned, want: []string{}},
+		{status: domain.StatusInProgress, want: []string{}},
+		{status: domain.StatusReview, want: []string{}},
 		{status: domain.StatusDone, want: []string{}},
 	}
 	for _, tc := range cases {

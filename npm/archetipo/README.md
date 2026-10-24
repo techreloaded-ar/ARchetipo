@@ -1,66 +1,23 @@
-# @techreloaded/archetipo
+# ARchetipo
 
-Global CLI for the ARchetipo workflow.
+A product workspace for chat, working app previews and enterprise traceability.
+Business users explore problems and test working solutions; developers receive a
+verified candidate through a pull request and decide how to integrate and deploy it.
 
-## Install
-
-```bash
-npm i -g @techreloaded/archetipo
-```
-
-The package ships a small Node shim plus a native Go binary delivered as an
-`optionalDependencies` per platform (darwin/linux/win32 × arm64/x64). npm will
-install only the binary that matches the host.
-
-**Alternatively:** if you cannot install npm packages globally, install
-ARchetipo as a local project dependency.
-
-```bash
-npm install @techreloaded/archetipo
-```
-
-Then add the local CLI to your session `PATH`:
-
-```bash
-# Windows PowerShell
-$env:PATH = "$(Get-Location)\node_modules\.bin;$env:PATH"
-
-# macOS / Linux
-export PATH="$PWD/node_modules/.bin/:$PATH"
-```
-
-After that, `archetipo init` works as usual.
-
-## Bootstrap a project
-
-```bash
+```sh
+npm install -g @techreloaded/archetipo
 cd my-project
-archetipo init                # interactive: pick tools + connector
-archetipo init --tool claude --connector file
+archetipo init --tool codex --connector file
+archetipo view
 ```
 
-`init` copies the ARchetipo skills (`archetipo-autopilot`, `archetipo-design`,
-`archetipo-implement`, `archetipo-inception`, `archetipo-plan`,
-`archetipo-spec`) under the tool-specific directory of the current project
-(e.g. `.claude/skills/`, `.cursor/skills/`) and creates `.archetipo/config.yaml` and
-`.archetipo/shared-runtime.md`.
+Configure Codex or Claude native sessions in the viewer. Optional backlog, product
+documents, story planning and Wiki tools preserve project history. The CLI manages
+artifacts, Git worktrees, local services and evidence; skills supply judgement.
 
-## Other commands
+Git worktrees are not operating-system security sandboxes. Remote execution and
+security isolation are not yet supplied by the local runtime. Preview may pause
+while the development turn uses the environment.
 
-```bash
-archetipo config              # connector handshake (auth + detect + metadata)
-archetipo uninstall --tool claude
-archetipo update              # npm i -g @techreloaded/archetipo@latest
-archetipo update --check      # compare installed vs latest on the registry
-archetipo --version
-```
-
-## Update notifications
-
-A passive update notifier checks the npm registry once every 24 hours (cached
-on disk) and prints a discreet banner on stderr when a newer version is
-available. Disable with `ARCHETIPO_NO_UPDATE_NOTIFIER=1`.
-
-## Documentation
-
-Full docs and skill reference: https://github.com/techreloaded-ar/ARchetipo
+See the repository README for the current branch, development builds, compatibility
+changes and the complete product-work contract.

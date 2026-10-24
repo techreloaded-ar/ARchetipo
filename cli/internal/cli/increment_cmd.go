@@ -54,7 +54,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment and its local files, retaining only committed work in Git")
 	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
 	root.AddCommand(deletionPlan, deletion)
-	for _, operation := range []string{"create", "show", "list", "propose", "approve", "ready", "feedback", "publish", "refresh", "learn", "conclude"} {
+	for _, operation := range []string{"create", "show", "dossier", "list", "propose", "link", "ready", "feedback", "publish", "refresh", "learn", "conclude"} {
 		var file string
 		cmd := &cobra.Command{Use: operation, Short: operation + " a product increment"}
 		if operation == "create" || operation == "list" {
@@ -92,8 +92,15 @@ func newIncrementCmd(s streams) *cobra.Command {
 			switch operation {
 			case "list":
 				value, err = service.List()
-			case "show":
-				value, err = service.Read(args[0])
+			case "show", "dossier":
+				record, readErr := service.Read(args[0])
+				if operation == "dossier" {
+					record, readErr = service.ReadDossier(args[0])
+				}
+				value, err = record, readErr
+				if operation == "dossier" && err == nil {
+					value = map[string]string{"id": record.ID, "markdown": increment.Dossier(record)}
+				}
 			case "refresh":
 				value, err = service.Refresh(cmd.Context(), args[0])
 			default:
@@ -133,8 +140,8 @@ func newIncrementCmd(s streams) *cobra.Command {
 						value, err = service.Learn(cmd.Context(), args[0], input.Observation, input.Decision, operation == "conclude")
 					case "create":
 						value, err = service.CreateWithMode(cmd.Context(), input.Title, input.Request, input.OriginConversationID, input.DevelopmentMode)
-					case "approve":
-						value, err = service.Approve(cmd.Context(), args[0], input.Revision)
+					case "link":
+						value, err = service.Link(cmd.Context(), args[0], input.StoryCodes)
 					case "feedback":
 						value, err = service.RequestChanges(cmd.Context(), args[0], increment.FeedbackRequest{Feedback: input.Feedback, Kind: input.Kind, StoryCodes: input.StoryCodes})
 					case "publish":
@@ -147,7 +154,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 			}
 			return iox.WriteOK(s.out, "increment", value)
 		}
-		if operation != "list" && operation != "show" && operation != "refresh" {
+		if operation != "list" && operation != "show" && operation != "dossier" && operation != "refresh" {
 			cmd.Flags().StringVar(&file, "file", "-", "JSON payload path, or - for stdin")
 		}
 		root.AddCommand(cmd)

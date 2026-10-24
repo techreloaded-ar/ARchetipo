@@ -23,6 +23,7 @@ type incrementStoryView struct {
 	Active      bool   `json:"active"`
 }
 type incrementView struct {
+	QuickActions     []incrementControl   `json:"quick_actions"`
 	PreviewAutoStart bool                 `json:"preview_auto_start"`
 	Stories          []incrementStoryView `json:"stories"`
 	ProgressLabel    string               `json:"progress_label,omitempty"`
@@ -43,7 +44,7 @@ func (s *Server) incrementService(ws *workspaceSession) *increment.Service {
 	return service
 }
 func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r increment.Record) incrementView {
-	view := incrementView{Record: r, Actions: []incrementControl{}, DeleteLabel: "Elimina incremento"}
+	view := incrementView{Record: r, Actions: []incrementControl{}, QuickActions: []incrementControl{}, DeleteLabel: "Elimina incremento"}
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
 		return view
@@ -54,47 +55,16 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 	}
 
 	view.Stories = []incrementStoryView{}
-	if len(r.Revisions) > 0 {
-		latest := r.Revisions[len(r.Revisions)-1]
-		byCode := map[string]domain.Spec{}
-		if latest.Approved {
-			live, readErr := s.incrementService(ws).Stories(ctx, r)
-			if readErr == nil {
-				for _, story := range live {
-					byCode[story.Code] = story
-				}
-			}
+	labels := map[domain.Status]string{domain.StatusTodo: tpl.Statuses.Todo, domain.StatusPlanned: tpl.Statuses.Planned, domain.StatusInProgress: tpl.Statuses.InProgress, domain.StatusReview: tpl.Statuses.Review, domain.StatusDone: tpl.Statuses.Done}
+	for _, linked := range r.LinkedStories {
+		story := incrementStoryView{Spec: domain.Spec{Code: linked.Code, Title: linked.Title, Body: linked.Body, URL: linked.URL}, StatusLabel: "Storia collegata"}
+		if current, readErr := ws.conn.ReadSpecDetail(ctx, linked.Code); readErr == nil {
+			story.StatusLabel = labels[current.Status]
 		}
-		completed, known := 0, 0
-		labels := map[domain.Status]string{domain.StatusTodo: tpl.Statuses.Todo, domain.StatusPlanned: tpl.Statuses.Planned, domain.StatusInProgress: tpl.Statuses.InProgress, domain.StatusReview: tpl.Statuses.Review, domain.StatusDone: tpl.Statuses.Done}
-		for _, proposed := range latest.Stories {
-			story := incrementStoryView{Spec: proposed, StatusLabel: "Stato non disponibile"}
-			if !latest.Approved {
-				story.StatusLabel = "Da approvare"
-			}
-			if current, ok := byCode[proposed.Code]; ok {
-				story.Spec = current
-				story.StatusLabel = labels[current.Status]
-				if story.StatusLabel == "" {
-					story.StatusLabel = string(current.Status)
-				}
-				story.Active = current.Status == domain.StatusInProgress
-				known++
-				if current.Status == domain.StatusDone {
-					completed++
-				}
-			}
-			view.Stories = append(view.Stories, story)
-		}
-		if known > 0 && known == len(view.Stories) {
-			view.ProgressLabel = fmt.Sprintf("%d/%d storie completate", completed, known)
-		}
+		view.Stories = append(view.Stories, story)
 	}
 	view.ActivityLabel = "In attesa"
-	view.Note = "Codice e storie lavorano nella sandbox. Pubblicazione nel backlog alla PR; consegna dopo il merge."
-	if r.DevelopmentMode == increment.Continuous {
-		view.Note = "Specifica, osservazioni e versioni del lavoro. La pubblicazione richiede l’approvazione della versione provata."
-	}
+	view.Note = "Specifiche, storie collegate, osservazioni e versioni del lavoro. L’approvazione riguarda il risultato provato; i developer decidono l’integrazione."
 	if r.ConversationID != "" {
 		if record, readErr := ws.conversationStore().GetMetadata(ctx, r.ConversationID); readErr == nil {
 			view.Busy = record.Work != "" && record.Work != execution.SessionIdle
@@ -121,6 +91,12 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		}
 	}
 	view.PreviewAutoStart = r.DevelopmentMode == increment.Continuous && r.Status == increment.Review && !view.Busy
+	if r.DevelopmentMode != increment.Continuous {
+		view.StatusLabel = "Lavoro storico"
+		view.Note = "Il percorso precedente è stato ritirato. Richiesta, specifiche e risultati restano consultabili ed esportabili; avvia un nuovo lavoro per continuare."
+		view.PreviewAutoStart = false
+		return view
+	}
 	for _, action := range tpl.IncrementActions {
 		allowed := false
 		for _, status := range action.Statuses {
@@ -131,10 +107,13 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		if !allowed {
 			continue
 		}
-		if action.ID == "approve-intent" && (len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Approved) {
+		if action.ID == "approve-intent" {
 			continue
 		}
 		view.Actions = append(view.Actions, incrementControl{ID: action.ID, Label: action.Label})
+		if action.ID == "publish" || action.ID == "refresh" {
+			view.QuickActions = append(view.QuickActions, incrementControl{ID: action.ID, Label: action.Label})
+		}
 	}
 	return view
 }
@@ -168,6 +147,7 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		DevelopmentMode      string            `json:"development_mode"`
+		StoryCodes           []string          `json:"story_codes"`
 		Title                string            `json:"title"`
 		Request              string            `json:"request"`
 		OriginConversationID string            `json:"origin_conversation_id"`
@@ -197,6 +177,14 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	if len(body.StoryCodes) > 0 {
+		created, err = service.Link(ctx, created.ID, body.StoryCodes)
+		if err != nil {
+			_ = service.RemoveUnused(context.WithoutCancel(ctx), created.ID)
+			writeError(w, err)
+			return
+		}
 	}
 	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{title: body.Title, workingDir: created.Workdir, incrementID: created.ID, model: body.Model, modelOptions: body.ModelOptions})
 	if err != nil {
@@ -285,11 +273,8 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 	}
 	message := ""
 	switch action {
-	case "approve-intent":
-		current, err = service.Approve(ctx, current.ID, body.Revision)
-		message = "L’utente ha approvato questa revisione dell’intento. Esegui lo sviluppo e le verifiche delle storie nella sandbox usando il workflow esistente. Fermati al risultato da provare; non pubblicare."
 	case "develop":
-		message = "Riprendi lo sviluppo delle storie dell’intento approvato. Conserva il lavoro già verificato e fermati al risultato da provare."
+		message = "Riprendi il lavoro dalla specifica e dalle decisioni registrate. Conserva il lavoro già verificato e fermati al risultato da provare."
 	case "discuss":
 		message = "Riprendi la definizione dell’intento con la persona. Richiesta iniziale: " + current.Request
 	case "publish":
@@ -315,7 +300,7 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 		send := func(sendCtx context.Context) error {
 			return s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: incrementPrompt(current, message) + "\nEnvironment preparation report: " + environmentReport(current.Workdir) + "\nL’ambiente è stato preparato separatamente. Usa la ricetta comune e i report esistenti; non ripetere configurazione o build di setup nella chat di sviluppo. Per modifiche ai requisiti dell’ambiente, segnala il blocco nel pannello ambiente.", display: message})
 		}
-		if action == "approve-intent" || action == "develop" {
+		if action == "develop" {
 			err = s.queueEnvironment(ctx, ws, current.Workdir, false, false, send)
 		} else {
 			err = send(ctx)
@@ -354,4 +339,13 @@ func (s *Server) prepareIncrementMessage(ctx context.Context, ws *workspaceSessi
 	body.display = body.Message
 	body.Message = incrementPrompt(current, body.Message)
 	return nil
+}
+
+func (s *Server) handleIncrementDossier(w http.ResponseWriter, r *http.Request) {
+	record, err := s.incrementService(s.session()).ReadDossier(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": record.ID, "markdown": increment.Dossier(record)})
 }

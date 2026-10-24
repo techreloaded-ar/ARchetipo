@@ -30,13 +30,14 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func (s *Service) Create(ctx context.Context, title, request, origin string) (Record, error) {
-	return s.CreateWithMode(ctx, title, request, origin, "")
+	return s.CreateWithMode(ctx, title, request, origin, Continuous)
 }
 
 func (s *Service) CreateWithMode(ctx context.Context, title, request, origin, mode string) (Record, error) {
 	if mode != "" && mode != Continuous {
 		return Record{}, iox.NewInvalidInput("unknown development mode", "use continuous or omit development_mode", nil)
 	}
+	mode = Continuous
 	return s.locked(ctx, func() (record Record, err error) {
 		title, request = strings.TrimSpace(title), strings.TrimSpace(request)
 		if title == "" || request == "" {
@@ -87,7 +88,7 @@ func (s *Service) CreateWithMode(ctx context.Context, title, request, origin, mo
 		if err = recordfile.WriteAtomic(filepath.Dir(marker), marker, ".increment-workspace-", config.IncrementWorkspace{ID: id, ParentRoot: s.Config.ProjectRoot}); err != nil {
 			return Record{}, err
 		}
-		if err = s.installRuntime(record.Workdir, mode); err != nil {
+		if err = s.installRuntime(record.Workdir); err != nil {
 			return Record{}, err
 		}
 		cfg, err := config.LoadExact(record.Workdir)
@@ -169,7 +170,7 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 	return os.WriteFile(path, []byte(text), 0o644)
 }
 
-func (s *Service) installRuntime(target string, mode string) error {
+func (s *Service) installRuntime(target string) error {
 	// Copy only workflow assets, never environment files or credentials.
 	// A project recipe declares commands and variable names. Never copy its
 	// resource checkpoint: every checkout prepares and owns its own environment.
@@ -213,14 +214,14 @@ func (s *Service) installRuntime(target string, mode string) error {
 		if installedErr != nil && !selected {
 			continue
 		}
-		names := []string{"archetipo-increment", "archetipo-environment"}
-		if mode != Continuous {
-			names = append(names, "archetipo-spec", "archetipo-plan", "archetipo-implement", "archetipo-review", "archetipo-autopilot", "archetipo-wiki")
+		names := []string{"archetipo-increment", "archetipo-environment", "archetipo-wiki"}
+		if err := workspace.RemoveRetiredSkills(filepath.Join(target, tool.SkillsDir)); err != nil {
+			return err
 		}
 		for _, name := range names {
-			from := filepath.Join(source, name)
-			if _, err := os.Stat(from); os.IsNotExist(err) && dataDir != "" {
-				from = filepath.Join(dataDir, "skills", name)
+			from := filepath.Join(dataDir, "skills", name)
+			if _, err := os.Stat(from); os.IsNotExist(err) || dataDir == "" {
+				from = filepath.Join(source, name)
 			}
 			if _, err := os.Stat(from); err != nil {
 				if selected {
@@ -229,10 +230,11 @@ func (s *Service) installRuntime(target string, mode string) error {
 				continue
 			}
 			dest := filepath.Join(target, tool.SkillsDir, name)
-			if _, err := os.Stat(dest); os.IsNotExist(err) {
-				if err = workspace.CopyTree(from, dest); err != nil {
-					return err
-				}
+			if err := os.RemoveAll(dest); err != nil {
+				return err
+			}
+			if err := workspace.CopyTree(from, dest); err != nil {
+				return err
 			}
 		}
 	}

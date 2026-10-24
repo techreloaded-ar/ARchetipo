@@ -271,7 +271,7 @@
 			variant: "cev-instruction",
 			technical: true,
 		},
-		error: { label: "errore", variant: "cev-error" },
+		error: { label: "interruzione dell’agente", variant: "cev-error", technical: true, failed: true },
 	};
 
 	// The affirmative/negative tone of an answer, keyed by the kind the provider
@@ -1293,7 +1293,7 @@
 		const environment = objectAt(metadata, "environment");
 		const location = textAt(environment, "location");
 		const work = objectAt(view, "increment");
-		const simple = !!textAt(work, "development_mode");
+		const simple = !!work;
 		const dirHtml = simple ? `<span class="conv-work-caption">Il tuo lavoro</span>` : dir
 			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
 			: "";
@@ -1564,18 +1564,18 @@
 		const section = (key, label, body) => '<details data-increment-section="' + escapeHtml(key) + '"' + (opened[key] ? " open" : "") + '><summary>' + escapeHtml(label) + '</summary>' + body + '</details>';
 		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
 		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
-		const active = stories.filter(story => story.active === true);
-		const quickActions = (increment.development_mode ? arrayAt(increment, "actions") : []).map(action => '<button type="button" class="ghost-btn" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
-		if (!panel) return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" aria-label="Incremento di prodotto"><header><strong title="' + escapeHtml(textAt(increment, "title")) + '">' + escapeHtml(textAt(increment, "title")) + '</strong><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="' + panelOpen + '">Dettagli incremento</button></header><div class="conv-increment-progress"><span>' + escapeHtml([textAt(increment, "activity_label"), textAt(increment, "progress_label")].filter(Boolean).join(" · ")) + '</span>' + active.map(story => '<button type="button" class="ghost-btn conv-increment-active" data-increment-story="' + escapeHtml(story.code) + '">In lavorazione: ' + escapeHtml(story.code + " · " + story.title) + '</button>').join("") + '</div><div class="conv-work-actions">' + quickActions + '</div></section>';
+        const quickActions = arrayAt(increment, "quick_actions").map(action => '<button type="button" class="ghost-btn" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
+        if (!panel) return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><header><strong>'+escapeHtml(textAt(increment,"title"))+'</strong><span class="conv-increment-phase">'+escapeHtml(textAt(increment,"status_label"))+'</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'">Specifica e decisioni</button></header><div class="conv-work-actions">'+quickActions+'</div></section>';
 		if (!panelOpen) return "";
 		const renderChange = (change, feedback) => {
 			const codes = arrayAt(change, "story_codes");
 			return (feedback ? '<p class="conv-increment-feedback">' + escapeHtml(feedback) + '</p>' : "") + (codes.length ? '<p>Storie interessate: ' + codes.map(escapeHtml).join(", ") + '</p>' : "");
 		};
 		const renderRevision = revision => '<div class="markdown-rendered">' + parse(textAt(revision, "intent")) + '</div><ol class="conv-increment-stories">' + arrayAt(revision, "stories").map(story => '<li><strong>' + escapeHtml(textAt(story, "title")) + '</strong>' + section("story-" + revision.number + "-" + story.code, "Leggi la storia", '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
-		let contents = '<h3>Storie dell’incremento</h3><ol class="conv-increment-stories">' + stories.map(story => '<li' + (story.active ? ' class="is-active"' : '') + '>' + '<span class="conv-increment-story-status">' + escapeHtml(textAt(story, "status_label")) + '</span>' + section("current-story-" + story.code, story.code + " · " + story.title, '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
-		if (!stories.length) contents = latest ? "" : '<p>La specifica prenderà forma durante la conversazione.</p>';
-		if (latest) contents += section("intent", (increment.development_mode && !stories.length ? "Specifica evolutiva · versione " + latest.number : "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare")), '<div class="markdown-rendered">' + parse(textAt(latest, "intent")) + '</div>');
+        const trace = typeof window !== "undefined" ? window.StoryTrace : (typeof require === "function" ? require("./story-trace.js") : null);
+        let contents = trace ? trace.renderStories(stories) : "";
+        if (latest) contents += section("intent", "Specifica · versione " + latest.number, '<div class="markdown-rendered">'+parse(textAt(latest,"intent"))+'</div>');
+        else contents += '<p>La specifica prenderà forma durante la conversazione.</p>';
 		const pendingChange = objectAt(increment, "pending_change");
 		const currentChange = pendingChange || objectAt(latest, "change");
 		const feedback = pendingChange ? textAt(pendingChange, "feedback") : textAt(latest, "feedback");
@@ -1587,7 +1587,7 @@
         if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
 		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
 		const remove = increment.delete_label ? '<button type="button" class="ghost-btn" data-increment-delete' + (ui.busy ? ' disabled' : '') + '>' + escapeHtml(increment.delete_label) + '</button>' : '';
-		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Dettagli incremento"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi dettagli incremento">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
+		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Specifica e decisioni"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi specifica e decisioni">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<button type="button" class="ghost-btn" data-increment-export>Esporta dossier</button><div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
 	}
 
 	function renderConversation(view, draft, ui) {

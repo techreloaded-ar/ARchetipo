@@ -109,10 +109,8 @@ func TestIncrementCLIInsideNativeWriteBoundary(t *testing.T) {
 				t.Fatalf("wrong sandbox setup: %s", setup)
 			}
 			child(r.Workdir, profile, "", "increment", "show", r.ID)
-			proposal := `{"intent":"Bicycle trips with dedicated information","stories":[{"code":"US-001","title":"Bicycle trips","epic":{"code":"EP-001","title":"Cycling"},"priority":"MEDIUM","points":3,"status":"TODO","scope":"MVP","body":"## User story\nAs a rider I want bicycle trips.\n## Demonstrates\nA bicycle trip.\n## Acceptance\n- [ ] Bicycle trips are available."}]}`
+			proposal := `{"intent":"Bicycle trips with dedicated information"}`
 			child(r.Workdir, profile, proposal, "increment", "propose", r.ID)
-			child(r.Workdir, profile, `{"revision":1}`, "increment", "approve", r.ID)
-			child(r.Workdir, profile, "", "spec", "show", "US-001")
 			shown := runCLI(t, "", "increment", "show", r.ID)
 			if shown.exit != 0 {
 				t.Fatal(shown.stderr.String())

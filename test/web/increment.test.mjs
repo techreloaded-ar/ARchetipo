@@ -15,7 +15,7 @@ test("l’incremento usa le azioni e lo stato del server, preservando il composi
  assert.match(html,/Comando fornito/);
  assert.match(html,/Nota fornita/);
  assert.match(html,/la mia bozza/);
- assert.match(html,/Intento e storie/);
+ assert.match(html,/Specifica/);
  assert.match(html,/Esportare i clienti/);
 });
 test("la conversazione ordinaria non acquisisce pannelli o approvazioni di incremento", () => {
@@ -59,13 +59,13 @@ test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
  const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",progress_label:"1/2 storie completate",activity_label:"Agente al lavoro",revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
  const compact = renderConversation(view,"bozza",{});
  assert.match(compact,/Fase fornita/);
- assert.match(compact,/1\/2 storie completate/);
- assert.match(compact,/data-increment-story="US-002"/);
+ assert.doesNotMatch(compact,/storie completate/);
+ assert.match(compact,/Specifica e decisioni/);
  assert.doesNotMatch(compact,/Risultato molto lungo|Criteri completi|<aside id="increment-details"/);
  const open = renderConversation(view,"bozza",{incrementSections:{"panel-compact":true,"current-story-US-002":true}});
  assert.match(open,/has-increment-open/);
- assert.match(open,/data-increment-section="current-story-US-002" open/);
+ assert.match(open,/data-linked-story="US-002"/);
  assert.match(open,/Stato fornito/);
- assert.match(open,/Criteri completi/);
+ assert.match(open,/US-002 · Filtro/);
  assert.match(open,/Risultato molto lungo/);
 });

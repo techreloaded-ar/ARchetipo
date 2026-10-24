@@ -325,6 +325,7 @@ async function exercisePage(browser, url, runDir) {
   // temporal dead zone. Una modale che si apre è la prova che quella `const` è
   // stata inizializzata.
   phase = "click su Nuova spec";
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click()`);
   const pressed = await page.evaluate(
     `(() => {
       const btn = document.getElementById("new-spec-btn");
@@ -373,7 +374,7 @@ async function exercisePage(browser, url, runDir) {
 
 
   phase = "creazione manuale di una storia";
-  await page.evaluate(`document.getElementById('new-spec-btn').click()`);
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click();document.getElementById('new-spec-btn').click()`);
   await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden')`, 10000, "il form della nuova storia");
   const storyTitle = "Storia creata dal form nel browser";
   const body = "**User Story**\nCome revisore voglio creare una storia.\n\n**Dimostrazione**\nCompilo il form e osservo la storia nella board.\n\n**Criteri di accettazione**\n- [ ] AC-1 — La storia compare in TODO.\n";
@@ -595,13 +596,13 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.evaluate('window.showIncrement = true');
   await page.waitFor(`!!document.querySelector('[data-run-approval-id="scroll-approval"]')`, 10000, 'la decisione nella conversazione di incremento');
   const compactIncrement = await page.evaluate(`({height:document.querySelector('.conv-increment').getBoundingClientRect().height,open:!!document.querySelector('.conv-increment-panel'),text:document.querySelector('.conv-increment').textContent})`);
-  if (compactIncrement.open || compactIncrement.height > 150 || !compactIncrement.text.includes('1/2 storie completate')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
-  await page.evaluate(`document.querySelector('[data-increment-story="US-801"]').click()`);
-  await page.waitFor(`document.querySelector('[data-increment-section="current-story-US-801"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
+  if (compactIncrement.open || compactIncrement.height > 150 || !compactIncrement.text.includes('Specifica e decisioni')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
+  await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click(); document.querySelector('[data-increment-section="intent"]>summary').click()`);
+  await page.waitFor(`document.querySelector('[data-increment-section="intent"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
   const drawer = await page.evaluate(`(() => {const body=document.querySelector('.conv-increment-body');body.scrollTop=120;return {reads:window.historyCursors.length,top:body.scrollTop,width:document.querySelector('.conv-increment-panel').getBoundingClientRect().width};})()`);
   if (drawer.width > 390 || drawer.width < 250) throw new Error('Laterale mobile fuori schermo: '+JSON.stringify(drawer));
   await page.waitFor(`window.historyCursors.length > ${drawer.reads}`,10000,'un aggiornamento con il laterale aperto');
-  const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="current-story-US-801"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
+  const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="intent"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
   if (!drawerAfter.open || Math.abs(drawerAfter.top-drawer.top)>2) throw new Error('Il polling perde il laterale: '+JSON.stringify({drawer,drawerAfter}));
   await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-mobile.png'),Buffer.from(result.data,'base64')));
   await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
@@ -920,7 +921,7 @@ async function exerciseEmptyWorkspace(browser, url) {
   await page.once("Page.loadEventFired", 30000, "il caricamento del workspace vuoto");
   await page.waitFor(`document.getElementById('new-spec-btn').title.includes('epica') && !document.getElementById('new-spec-btn').disabled`,
     20000, "Nuova spec raggiungibile senza epiche");
-  await page.evaluate(`document.getElementById('new-spec-btn').click()`);
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click();document.getElementById('new-spec-btn').click()`);
   await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden')
     && !document.getElementById('new-spec-no-epics').classList.contains('hidden')
     && !document.getElementById('new-spec-submit').disabled

@@ -31,7 +31,7 @@ const (
 // fabbricaVersion is the revision of the built-in process, deliberately not
 // version.Version: that value identifies the CLI binary, defaults to "dev" on
 // local builds, and would therefore record something that is not the process.
-const fabbricaVersion = "1.0.0"
+const fabbricaVersion = "2.0.0"
 
 // Action is a step the process offers on a spec. ID is stable and is what a
 // program keys on; Label is what a person reads; Skill is the capability that
@@ -194,8 +194,7 @@ func (t Template) clone() Template {
 func builtin() Template {
 	return Template{
 		IncrementActions: []IncrementAction{
-			{ID: "discuss", Label: "Riprendi la definizione", Statuses: []string{"DISCOVERY"}},
-			{ID: "approve-intent", Label: "Approva intento e avvia sviluppo", Statuses: []string{"DISCOVERY"}},
+			{ID: "discuss", Label: "Riprendi il lavoro", Statuses: []string{"DISCOVERY"}},
 			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}},
 			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}},
 			{ID: "refresh", Label: "Aggiorna stato PR", Statuses: []string{"PROPOSED"}},
@@ -207,8 +206,7 @@ func builtin() Template {
 			{ID: "increment", Kind: "increment", Label: "Sviluppa un incremento", Description: "Chiarisci l’intento, prova il risultato e affinalo in una sandbox dedicata.", Result: "Incremento approvato e PR", Placeholder: "Racconta il risultato che vuoi ottenere e per chi…"},
 			{ID: "product", Label: "Definisci un prodotto", Description: "Chiarisci obiettivi, utenti e perimetro.", Result: "Documento di prodotto", Placeholder: "Descrivi la tua idea: problema, utenti e risultato che vuoi ottenere…", Action: "inception"},
 			{ID: "story", Label: "Nuova storia", Description: "Descrivi il bisogno, rispondi alle domande e rivedi la proposta.", Result: "Storia per il backlog", Placeholder: "Descrivi la tua proposta: chi ne ha bisogno, cosa deve poter fare e perché…", Action: "spec-draft"},
-			{ID: "design", Label: "Nuovo mockup", Description: "Indica la schermata o il flusso che vuoi rappresentare.", Result: "Prototipo consultabile", Placeholder: "Descrivi la schermata o il flusso che vuoi rappresentare…", Skill: "archetipo-design"},
-			{ID: "autopilot", Label: "Avvia il workflow autonomo", Description: "Pianifica, implementa e verifica le storie del backlog in autonomia.", Placeholder: "Indica le storie o le epiche da completare, oppure chiedi di elaborare tutto il backlog…", Skill: "archetipo-autopilot"},
+			{ID: "wiki", Label: "Consulta la documentazione", Description: "Esplora le conoscenze del progetto e registra le informazioni utili.", Placeholder: "Cosa vuoi capire o documentare?", Skill: "archetipo-wiki"},
 			{ID: "conversation", Label: "Conversazione libera", Description: "Fai domande sul progetto o su una storia.", Placeholder: "Scrivi all’agente…"},
 		},
 		DocumentationActions: []DocumentationAction{
@@ -218,12 +216,8 @@ func builtin() Template {
 			{WorkspaceAction: WorkspaceAction{ID: "wiki-query", Label: "Chiedi su questa pagina", Skill: "archetipo-wiki"}, Placement: "page", RequiresWiki: true},
 		},
 		Skills: []string{
-			"archetipo-autopilot",
-			"archetipo-design",
-			"archetipo-implement",
 			"archetipo-inception",
 			"archetipo-plan",
-			"archetipo-review",
 			"archetipo-spec",
 			"archetipo-wiki",
 			"archetipo-increment",
@@ -235,18 +229,6 @@ func builtin() Template {
 				Label:    "Pianifica",
 				Skill:    "archetipo-plan",
 				Statuses: []domain.Status{domain.StatusTodo},
-			},
-			{
-				ID:       "implement",
-				Label:    "Implementa",
-				Skill:    "archetipo-implement",
-				Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
-			},
-			{
-				ID:       "review",
-				Label:    "Rivedi",
-				Skill:    "archetipo-review",
-				Statuses: []domain.Status{domain.StatusReview},
 			},
 		},
 		WorkspaceActions: []WorkspaceAction{
@@ -289,20 +271,6 @@ func builtin() Template {
 				Action:  "plan",
 			},
 			{
-				ID:      "da-implementare",
-				Label:   "Da implementare",
-				Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
-				Scope:   ScopeSpec,
-				Action:  "implement",
-			},
-			{
-				ID:      "da-rivedere",
-				Label:   "Da rivedere",
-				Summary: "Ci sono spec in review: il passo successivo è rivederne una.",
-				Scope:   ScopeSpec,
-				Action:  "review",
-			},
-			{
 				ID:      "completo",
 				Label:   "Nessun passo in sospeso",
 				Summary: "Nessuna spec attende un passo del processo: aggiungi una spec quando serve.",
@@ -334,7 +302,7 @@ func Resolve(id string) (Template, error) {
 
 // IncrementStatusLabel belongs to the process vocabulary, like action labels.
 func (t Template) IncrementStatusLabel(status string) string {
-	labels := map[string]string{"DISCOVERY": "Intento da concordare", "DEVELOPING": "Sviluppo nella sandbox", "REVIEW": "Risultato da provare", "PUBLISHING": "Pubblicazione da completare", "PROPOSED": "Proposta in PR", "DELIVERED": "Integrato nel prodotto"}
+	labels := map[string]string{"DISCOVERY": "Comprensione del problema", "DEVELOPING": "Lavoro in corso", "REVIEW": "Risultato da provare", "PUBLISHING": "Apertura della PR", "PROPOSED": "In revisione ai developer", "DELIVERED": "Integrato dai developer"}
 	if label, ok := labels[status]; ok {
 		return label
 	}

@@ -202,10 +202,10 @@ describe("renderWorkspaceRuns", () => {
 		}
 	});
 
-	it("senza run in corso lo dichiara", () => {
+	it("senza run in corso lascia spazio al prodotto", () => {
 		const view = { runs: [] };
 		const text = visibleText(renderWorkspaceRuns(view)).replace(/<[^>]*>/g, " ").trim();
-		assert.ok(text.length > 0, "l'elenco vuoto deve dichiarare l'assenza, non sparire");
+		assert.equal(text, "", "una lista vuota non aggiunge una barra permanente");
 		assert.equal(awaitingCount(view), 0, "nessuna run in attesa su elenco vuoto");
 	});
 

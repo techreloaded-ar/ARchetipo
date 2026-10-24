@@ -282,7 +282,7 @@ Wiki commands act on the code of a spec, so they follow the **Worktree Working D
 
 The Living Wiki is opt-in. `archetipo config show` reports the gate as `data.wiki.enabled` — it is `false` unless the project set `wiki.enabled: true` in `.archetipo/config.yaml`, and it is the only place to read it: never infer the gate by looking for the config file, for `paths.wiki`, or for an existing Wiki directory, because a project can maintain a Wiki by hand with the automatic maintenance off.
 
-When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, `archetipo-implement`, `archetipo-review`, including delegated invocations — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
+When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, including delegated invocations — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
 
 The gate never applies to the Wiki itself. `archetipo wiki ...` invoked by the user and the `archetipo-wiki` skill invoked explicitly always run in full, gate or no gate: a project with the automatic Wiki off can still bootstrap, query, refresh, and lint one on demand. Only the automatic maintenance inside the workflow is switched off.
 
@@ -315,24 +315,14 @@ Required pages are the ones the spec is answerable for: implementation leaves th
 
 ## Conversation Rules
 
-- Each agent speaks in character
-- Never mention internal mode names, workflow names, or routing decisions in the conversation
-
-## Agent Persona
-
-When an agent speaks, always render the speaker as `icon + name`, for example:
-
-```text
-💎 Andrea: [content]
-
-🧭 Costanza: [content]
-```
-
-This rule applies to any skill that defines named agents with personas.
+Use concise, plain language about product behavior, decisions and what can be
+tried. Keep technical logs inspectable but out of the main conversation.
+Do not impersonate a virtual team or introduce a ceremony before useful work.
+Preserve the person's intent, explicit constraints and native session context.
 
 ## File Output Rules
 
 - Use the configured output path whenever present
 - Create parent directories if they do not exist
-- Overwrite the target generated artifact for the current run unless the active flow explicitly says otherwise
+- Preserve original requirements and history; update an existing artifact only within the requested scope
 - When a connector overrides write-output behavior, follow that connector for I/O and keep the domain logic unchanged
