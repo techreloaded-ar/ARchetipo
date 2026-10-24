@@ -85,7 +85,7 @@ async function main(){
   await fs.writeFile(path.join(sandbox,".gitignore"),".agents/\n");
   const git=async(args,cwd=sandbox)=>(await run("git","git",args,{cwd})).stdout.trim();
   await git(["init","-b","main"]);await git(["config","user.email","tests@example.test"]);await git(["config","user.name","Tests"]);
-  await git(["add",".gitignore","hello.txt",".archetipo/config.yaml",".archetipo/shared-runtime.md",".archetipo/backlog.yaml"]);
+  await git(["add",".gitignore","hello.txt",".archetipo/config.yaml",".archetipo/shared-runtime.md",".archetipo/backlog.yaml",".archetipo/environment.json",".archetipo/preview.json"]);
   await git(["commit","-m","initial"]);
   const baseline=await git(["rev-parse","HEAD"]);
   const bare=path.join(runDir,"origin.git");await fs.mkdir(bare);await git(["init","--bare"],bare);
@@ -131,15 +131,15 @@ async function main(){
 
   assert.equal(inc.development_mode,"continuous");
   assert.equal(await page.evaluate('document.getElementById("workspace-inspector").hidden'),false);
-  const proposal={intent:"Esportare i clienti selezionati",stories:[story("CSV")]};
+  const proposal={intent:"Problema: condividere i clienti selezionati. Comportamento: esportazione CSV con i soli clienti scelti."};
   const proposed=await cliJSON(["increment","propose",inc.id],proposal);
   assert.equal(proposed.status,"DEVELOPING");
   assert.equal(proposed.revisions[0].approval_source,"request");
-  assert.equal((await cliJSON(["spec","show","US-001"])).spec.status,"TODO");
-  await cliJSON(["spec","move","US-001","--to","in_progress"]);
+  assert.notEqual(proposed.revisions[0].approved,true,"request is not business acceptance");
+  assert.equal((await cliJSON(["spec","list"])).items.length,0,"created a synthetic backlog");
   await fs.writeFile(path.join(inc.workdir,"hello.txt"),"Clienti in CSV\n");
-  await cliJSON(["spec","review","US-001"]);
-  await cliJSON(["spec","move","US-001","--to","done"]);
+  await git(["add","hello.txt"],inc.workdir);
+  await git(["commit","-m","feat: customer export"],inc.workdir);
   await cliJSON(["increment","ready",inc.id],{summary:"Esportazione pronta",checks:["File CSV verificato"]});
   await finish(1,"La pagina è pronta da provare.");
   await page.waitFor('!!document.querySelector("#browser-preview iframe")',timeout,"automatic managed preview");
@@ -159,14 +159,17 @@ async function main(){
   await page.evaluate('(()=>{const input=document.querySelector(".conv-composer-input");input.value="Aggiungi anche il formato Excel";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()');
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=2,"feedback delivered in same session");
   await cliJSON(["increment","feedback",inc.id],{feedback:"Aggiungi Excel"});
-  const revised=await cliJSON(["increment","propose",inc.id],{intent:"Esportare CSV ed Excel",stories:[story("CSV ed Excel")]});
+  const revised=await cliJSON(["increment","propose",inc.id],{intent:"Esportare CSV ed Excel"});
   assert.equal(revised.status,"DEVELOPING");assert.equal(revised.ready_sha,undefined);
   assert.equal((await cliJSON(["increment","list"],undefined,sandbox)).length,1);
+  await cliJSON(["increment","learn",inc.id],{observation:"L’esportazione deve essere leggibile da Excel",decision:"Manteniamo entrambi i formati"});
   await finish(2,"Aggiorno l’esportazione nello stesso lavoro.");
   await page.send("Page.reload");await page.once("Page.loadEventFired",timeout,"reload");
   await page.waitFor('!!document.querySelector(".conv-increment")',timeout,"durable work after reload");
   assert.equal((await read()).session.session.native.id,native);
   assert.equal((await read()).increment.id,inc.id);
+  assert.equal((await read()).increment.learning.length,1);
+  assert.equal((await cliJSON(["spec","list"])).items.length,0);
   assert.deepEqual(exceptions,[],"uncaught browser exceptions");
   ok("Primo messaggio → worktree e sessione; specifica senza conferma aggiuntiva; preview automatica; feedback e reload nello stesso lavoro; PR protetta.");
  } catch(error) {failure=error;console.error(error.stack || error);}

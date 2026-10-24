@@ -23,12 +23,15 @@ test("Autopilot composes technical phases without an increment dependency",async
   assert.ok(!body.includes(dependency),`Autopilot depends on ${dependency}`);
 });
 
-test("Increment owns delivery through portable internal methods",async()=>{
+test("Product work is direct; legacy methods remain isolated",async()=>{
  const entry=await readFile(new URL("archetipo-increment/SKILL.md",root),"utf8");
  assert.ok(!entry.includes("/archetipo-autopilot"),"Increment still invokes Autopilot");
  for(const name of ["implementation","technical-review"]) {
   const path=`references/${name}.md`;
-  assert.ok(entry.includes(`](${path})`),`unreachable method ${path}`);
+  const legacy=await readFile(new URL("archetipo-increment/references/legacy.md",root),"utf8");
+  assert.ok(legacy.includes(`](${path})`),`unreachable legacy method ${path}`);
+  assert.ok(!entry.includes(`](${path})`),"product work still requires delivery methods");
+  assert.ok(entry.includes("increment learn") && entry.includes("increment conclude"));
   const body=await readFile(new URL(`archetipo-increment/${path}`,root),"utf8");
   assert.ok(!body.startsWith("---"),"internal method has skill frontmatter");
   for(const dependency of ["archetipo-increment","increment ready","increment publish","data.increment","archetipo-autopilot"])

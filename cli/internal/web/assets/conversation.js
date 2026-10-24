@@ -1574,15 +1574,17 @@
 		};
 		const renderRevision = revision => '<div class="markdown-rendered">' + parse(textAt(revision, "intent")) + '</div><ol class="conv-increment-stories">' + arrayAt(revision, "stories").map(story => '<li><strong>' + escapeHtml(textAt(story, "title")) + '</strong>' + section("story-" + revision.number + "-" + story.code, "Leggi la storia", '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
 		let contents = '<h3>Storie dell’incremento</h3><ol class="conv-increment-stories">' + stories.map(story => '<li' + (story.active ? ' class="is-active"' : '') + '>' + '<span class="conv-increment-story-status">' + escapeHtml(textAt(story, "status_label")) + '</span>' + section("current-story-" + story.code, story.code + " · " + story.title, '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
-		if (!stories.length) contents += '<p>Le storie appariranno quando saranno definite.</p>';
-		if (latest) contents += section("intent", "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare"), '<div class="markdown-rendered">' + parse(textAt(latest, "intent")) + '</div>');
+		if (!stories.length) contents = latest ? "" : '<p>La specifica prenderà forma durante la conversazione.</p>';
+		if (latest) contents += section("intent", (increment.development_mode && !stories.length ? "Specifica evolutiva · versione " + latest.number : "Intento e storie · versione " + latest.number + (latest.approved ? " · approvata" : " · da approvare")), '<div class="markdown-rendered">' + parse(textAt(latest, "intent")) + '</div>');
 		const pendingChange = objectAt(increment, "pending_change");
 		const currentChange = pendingChange || objectAt(latest, "change");
 		const feedback = pendingChange ? textAt(pendingChange, "feedback") : textAt(latest, "feedback");
 		if (currentChange || feedback) contents += section("feedback", "Modifiche richieste", renderChange(currentChange, feedback));
 		if (result) contents += '<div class="conv-increment-result"><h3>Risultato e come provarlo</h3><p>' + escapeHtml(textAt(result, "summary")) + '</p>' + section("checks", "Verifiche eseguite", '<ul>' + arrayAt(result, "checks").map(check => "<li>" + escapeHtml(check) + "</li>").join("") + "</ul>") + link(textAt(result, "preview_url"), "Apri anteprima ↗") + '</div>';
 		if (revisions.length > 1) contents += section("history", "Revisioni precedenti · " + (revisions.length - 1), revisions.slice(0, -1).reverse().map(revision => section("revision-" + revision.number, "Versione " + revision.number, renderRevision(revision) + renderChange(objectAt(revision, "change"), textAt(revision, "feedback")))).join(""));
-		if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
+		if (arrayAt(increment, "learning").length) contents += section("learning", "Osservazioni e decisioni", arrayAt(increment, "learning").map(item => '<article><p>' + escapeHtml(textAt(item, "observation")) + '</p><p><strong>' + escapeHtml(textAt(item, "decision")) + '</strong></p></article>').join(""));
+        if (increment.conclusion) contents += '<p class="conv-increment-note">' + escapeHtml(increment.conclusion) + '</p>';
+        if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
 		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
 		const remove = increment.delete_label ? '<button type="button" class="ghost-btn" data-increment-delete' + (ui.busy ? ' disabled' : '') + '>' + escapeHtml(increment.delete_label) + '</button>' : '';
 		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Dettagli incremento"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi dettagli incremento">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
@@ -1638,7 +1640,7 @@
 			if (startWork && !local.openingSpecCode) {
 				const enabled = offered && startWork.runnable === true;
 				return `<section class="conv-panel conv-empty-panel conv-work-home" aria-label="Nuovo lavoro">
-					<div class="conv-work-welcome"><span class="conv-work-eyebrow">Dall’idea alla tua app</span><h1>Cosa vuoi costruire?</h1><p>Descrivi la tua idea o una modifica. Sviluppiamo insieme, mentre provi il risultato.</p></div>
+					<div class="conv-work-welcome"><span class="conv-work-eyebrow">Dal problema al prodotto</span><h1>Quale problema vuoi risolvere?</h1><p>Racconta cosa vuoi migliorare. Costruiamo una soluzione, la proviamo e impariamo insieme.</p></div>
 					${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}
 					${!enabled ? `<p role="status">${escapeHtml(textAt(startWork, "unavailable_reason"))}</p>` : ""}
 					${renderComposer(false, typed, Object.assign({}, local, {writable: enabled, activitySelection: {placeholder: startWork.placeholder}}), enabled, false, renderConversationModelChoice(value, local, false))}

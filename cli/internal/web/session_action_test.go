@@ -40,25 +40,33 @@ func newActionSessionServer(t *testing.T) (*Server, *persistentFakeNativeProvide
 // something the test injected into the record.
 func (p *persistentFakeNativeProvider) completeCurrentTurn(t *testing.T, message string, state execution.TurnState) {
 	t.Helper()
-	p.store.mu.Lock()
-	defer p.store.mu.Unlock()
-	for _, session := range p.store.sessions {
-		if session.snapshot.CurrentTurn == nil || session.snapshot.Work != execution.SessionTurnActive {
-			continue
+	// The journal publishes the intended turn before the native adapter has
+	// accepted it. Wait for that acceptance rather than completing a turn that
+	// has not started yet. This also covers delivery fallback after stale steer.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.store.mu.Lock()
+		for _, session := range p.store.sessions {
+			if session.snapshot.CurrentTurn == nil || session.snapshot.Work != execution.SessionTurnActive {
+				continue
+			}
+			turn := session.snapshot.CurrentTurn
+			session.events = append(session.events, execution.RunEvent{
+				ID: int64(len(session.events) + 1), Kind: "text", Text: message,
+				TurnID: turn.ID, At: time.Now().UTC(),
+			})
+			completed := time.Now().UTC()
+			turn.State, turn.CompletedAt = state, &completed
+			session.snapshot.Work = execution.SessionIdle
+			select {
+			case session.notify <- struct{}{}:
+			default:
+			}
+			p.store.mu.Unlock()
+			return
 		}
-		turn := session.snapshot.CurrentTurn
-		session.events = append(session.events, execution.RunEvent{
-			ID: int64(len(session.events) + 1), Kind: "text", Text: message,
-			TurnID: turn.ID, At: time.Now().UTC(),
-		})
-		completed := time.Now().UTC()
-		turn.State, turn.CompletedAt = state, &completed
-		session.snapshot.Work = execution.SessionIdle
-		select {
-		case session.notify <- struct{}{}:
-		default:
-		}
-		return
+		p.store.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("no active turn to complete")
 }

@@ -4,9 +4,9 @@
 
 **English** · [Italiano](README.it.md)
 
-**From a rough product idea to reviewed code, with an AI product team that follows a real process.**
+**Understand a product problem, build a working solution, learn from use, and adapt.**
 
-ARchetipo is a spec-driven workflow for AI coding agents. It gives your assistant a shared method, persistent project artifacts, and specialized roles for discovery, requirements, architecture, design, implementation, testing, and review.
+ARchetipo is evolving into a shared product workspace for people and coding agents. Describe a problem in chat, work in a dedicated local environment, try the app, and keep the specification, observations and decisions with the work. A tested version can be handed to developers through a pull request. A useful investigation can also conclude without code.
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
@@ -21,13 +21,15 @@ ARchetipo is a spec-driven workflow for AI coding agents. It gives your assistan
 
 ## Why ARchetipo
 
-AI coding agents are fast, but a fast answer to an isolated prompt is not the same as a product process. **ARchetipo turns the agent into a disciplined product development squad**: it captures intent, writes specs, builds a backlog, plans each slice, implements it, tests it, and leaves durable artifacts behind.
+The product loop is **problem → working solution → observation → decision → adaptation**.
+A specification captures behavior and assumptions as they evolve. Stories, estimates,
+formal plans and a delivery backlog are not prerequisites of the new chat path.
+The CLI keeps artifacts and Git operations deterministic; the agent owns judgment.
 
-- **A workflow, not prompt lore.** Every phase has a skill, a role, a contract, and an output that feeds the next step.
-- **Spec-driven by default.** The `spec -> plan -> implement` loop repeats for each valuable slice until the product is done.
-- **Persistent project memory.** PRD, backlog, spec files, plans, mockups, and test results live in your repo or in the configured connector.
-- **Tool-agnostic.** The same product method works with Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and GitHub Copilot.
-- **Language-aware.** Skills automatically follow the language of the conversation: write in English, get English artifacts; write in Italian, get Italian artifacts.
+This branch implements the new core while the older workflow remains available.
+The product-work contract and current limits are described in [Product work](docs/increments.md).
+The delivery-oriented sections below document those retained workflows; they are
+not mandatory steps of the new product path.
 
 ---
 

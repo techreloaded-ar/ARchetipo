@@ -49,6 +49,10 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		return view
 	}
 	view.StatusLabel = tpl.IncrementStatusLabel(r.Status)
+	if r.Status == increment.Concluded {
+		view.StatusLabel = "Apprendimento registrato"
+	}
+
 	view.Stories = []incrementStoryView{}
 	if len(r.Revisions) > 0 {
 		latest := r.Revisions[len(r.Revisions)-1]
@@ -88,6 +92,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 	}
 	view.ActivityLabel = "In attesa"
 	view.Note = "Codice e storie lavorano nella sandbox. Pubblicazione nel backlog alla PR; consegna dopo il merge."
+	if r.DevelopmentMode == increment.Continuous {
+		view.Note = "Specifica, osservazioni e versioni del lavoro. La pubblicazione richiede l’approvazione della versione provata."
+	}
 	if r.ConversationID != "" {
 		if record, readErr := ws.conversationStore().GetMetadata(ctx, r.ConversationID); readErr == nil {
 			view.Busy = record.Work != "" && record.Work != execution.SessionIdle

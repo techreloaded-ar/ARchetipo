@@ -1,3 +1,35 @@
+# Direzione del nuovo prodotto
+
+Il percorso principale è ora un lavoro sul problema: specifica evolutiva,
+soluzione funzionante, osservazioni e decisioni. Non occorre creare un backlog
+interno. In modalità `continuous`, `increment propose` accetta il solo `intent`
+Markdown e rende la specifica lavorabile senza registrare un’approvazione umana.
+Il documento conserva problema e persone, esempi verificabili, ipotesi, decisioni,
+esclusioni e domande. Le storie rimangono leggibili per i lavori precedenti.
+
+`increment learn <id> --file -` registra `observation` e un’eventuale `decision`.
+L’osservazione non invalida le prove tecniche del candidato; modifiche a specifica
+e codice richiedono invece un nuovo risultato verificato. `increment conclude`
+usa lo stesso payload con decisione obbligatoria e permette di concludere senza
+codice né PR. Non va dichiarata una validazione business senza osservazioni reali.
+
+La consegna di un lavoro senza storie apre una PR con specifica e verifiche e non
+crea epiche o storie nel backlog ufficiale. Le successive modifiche dei developer
+sono ammesse: `approved_sha` conserva la versione provata dal business e
+`integration_sha` registra il commit effettivo della PR quando risulta integrata.
+Le prove precedenti non certificano le modifiche dei developer.
+
+La skill di ingresso è stata ridotta a un metodo diretto. Le istruzioni storiche
+sono caricate soltanto per record senza modalità continua. Nei nuovi worktree
+continui si installano le sole skill del lavoro e dell’ambiente; pianificazione,
+implementazione, review e autopilot non sono prerequisiti. I vecchi moduli del
+viewer e del CLI sono ancora presenti: questa è la separazione del nuovo nucleo,
+non la conclusione della rimozione del vecchio prodotto. Rimangono da affrontare
+la disponibilità dell’anteprima durante il lavoro, la navigazione completamente
+centrata sul prodotto e prove con persone e agenti reali.
+
+---
+
 # Lavorare su un’app dalla chat
 
 La schermata iniziale offre direttamente il campo «Cosa vuoi costruire?».

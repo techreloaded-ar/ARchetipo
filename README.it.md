@@ -4,9 +4,16 @@
 
 [English](README.md) · **Italiano**
 
-**Da un'idea ancora grezza a codice revisionato, con un team AI che segue un processo vero.**
+**Comprendere un problema di prodotto, costruire una soluzione funzionante, imparare e adattarla.**
 
-ARchetipo è un workflow spec-driven per AI coding agent. Dà al tuo assistente un metodo condiviso, artefatti persistenti e ruoli specializzati per discovery, requisiti, architettura, design, implementazione, test e review.
+ARchetipo sta evolvendo in uno spazio di lavoro sul prodotto per persone e agenti.
+Descrivi un problema in chat, provi una soluzione in un ambiente dedicato e conservi
+specifica, osservazioni e decisioni. Puoi consegnare una versione verificata ai
+developer tramite PR, oppure concludere un’indagine senza produrre codice.
+
+Questo branch introduce il nuovo nucleo; i percorsi storici descritti più avanti
+restano disponibili, ma non sono prerequisiti del nuovo percorso dalla chat.
+Vedi [Lavoro sul prodotto](docs/increments.md) per contratto e limiti attuali.
 
 [![Status](https://img.shields.io/badge/status-beta-orange.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#licenza)

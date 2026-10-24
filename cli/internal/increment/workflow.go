@@ -53,12 +53,12 @@ func (s *Service) Stories(ctx context.Context, r Record) ([]domain.Spec, error) 
 }
 
 func frozen(r Record) bool {
-	return r.Status == Publishing || r.Status == Proposed || r.Status == Delivered
+	return r.Status == Publishing || r.Status == Proposed || r.Status == Delivered || r.Status == Concluded
 }
 
 func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, error) {
 	r, err := s.propose(ctx, id, p)
-	if err != nil || r.DevelopmentMode != Continuous {
+	if err != nil || r.DevelopmentMode != Continuous || len(p.Stories) == 0 {
 		return r, err
 	}
 	// The creator explicitly authorized local development. Reconcile through
@@ -91,9 +91,11 @@ func (s *Service) propose(ctx context.Context, id string, p Proposal) (Record, e
 			p.Stories[i] = st
 			known[st.Code] = true
 		}
-		valid := validation.ValidateSpecs(id, p.Stories)
-		if !valid.OK {
-			return r, iox.NewInvalidInput("invalid increment stories", fmt.Sprintf("%+v", valid.Findings), nil)
+		if r.DevelopmentMode != Continuous || len(p.Stories) > 0 {
+			valid := validation.ValidateSpecs(id, p.Stories)
+			if !valid.OK {
+				return r, iox.NewInvalidInput("invalid increment stories", fmt.Sprintf("%+v", valid.Findings), nil)
+			}
 		}
 		for _, st := range p.Stories {
 			for _, dependency := range st.BlockedBy {
@@ -133,6 +135,10 @@ func (s *Service) propose(ctx context.Context, id string, p Proposal) (Record, e
 		r.Revisions = append(r.Revisions, revision)
 		r.PendingChange = nil
 		r.Status = Discovery
+		if r.DevelopmentMode == Continuous && len(p.Stories) == 0 {
+			r.Status = Developing
+			r.Revisions[len(r.Revisions)-1].ApprovalSource = "request"
+		}
 		r.ReadySHA = ""
 		r.ReadyStories = ""
 		r.ApprovedSHA = ""
@@ -268,6 +274,9 @@ func (s *Service) completedStories(ctx context.Context, r Record) ([]domain.Spec
 	if r.PendingChange != nil && r.PendingChange.Kind == "correction" {
 		return nil, iox.NewConflict("correction story reopening is incomplete", "retry increment feedback with the same classified request", nil)
 	}
+	if len(r.Revisions) > 0 && r.DevelopmentMode == Continuous && len(r.Revisions[len(r.Revisions)-1].Stories) == 0 {
+		return []domain.Spec{}, nil
+	}
 	if len(r.Revisions) == 0 || !r.Revisions[len(r.Revisions)-1].Approved {
 		return nil, iox.NewConflict("the latest intent is not approved", "approve it before development", nil)
 	}
@@ -355,7 +364,7 @@ func (s *Service) RequestChanges(ctx context.Context, id string, change Feedback
 		if (change.Kind == "correction" || change.Kind == "refinement") && len(change.StoryCodes) == 0 {
 			return r, iox.NewInvalidInput("affected stories are required", "link the request to existing story codes", nil)
 		}
-		if len(r.Revisions) == 0 || !r.Revisions[len(r.Revisions)-1].Approved {
+		if len(r.Revisions) == 0 || (!r.Revisions[len(r.Revisions)-1].Approved && (r.DevelopmentMode != Continuous || len(r.Revisions[len(r.Revisions)-1].Stories) != 0)) {
 			return r, iox.NewConflict("feedback requires an approved intent", "read the current increment", nil)
 		}
 		latest := r.Revisions[len(r.Revisions)-1]

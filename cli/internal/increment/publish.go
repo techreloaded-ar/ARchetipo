@@ -61,14 +61,17 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if _, err = git(ctx, r.Workdir, "remote", "get-url", "origin"); err != nil {
 			return r, err
 		}
-		existing, err := s.Connector.FetchBacklogItems(ctx, "")
+		existing := []domain.Spec{}
+		if len(stories) > 0 {
+			existing, err = s.Connector.FetchBacklogItems(ctx, "")
+		}
 		if err != nil {
 			if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
 				return r, err
 			}
 			existing = []domain.Spec{}
 		}
-		if len(r.Published) == 0 {
+		if len(stories) > 0 && len(r.Published) == 0 {
 			summary, summaryErr := s.Connector.ReadExistingBacklog(ctx)
 			if summaryErr != nil {
 				if ce, ok := summaryErr.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
@@ -204,11 +207,12 @@ func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
 		if err != nil {
 			return r, err
 		}
-		if pr.HeadSHA != r.ApprovedSHA {
+		if pr.HeadSHA != r.ApprovedSHA && r.DevelopmentMode != Continuous {
 			return r, iox.NewConflict("PR changed after business approval", "verify the changed result before marking it delivered", nil)
 		}
 		r.PR = pr
 		if pr.State == "MERGED" {
+			r.IntegrationSHA = pr.HeadSHA
 			// Each transition is repeatable. A crash partway through never invents a
 			// merge, creates another story, or marks the increment delivered early.
 			for _, local := range r.Revisions[len(r.Revisions)-1].Stories {

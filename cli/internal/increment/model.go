@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	Concluded  = "CONCLUDED"
 	Discovery  = "DISCOVERY"
 	Developing = "DEVELOPING"
 	Review     = "REVIEW"
@@ -51,7 +52,16 @@ type Result struct {
 	PreviewURL string   `json:"preview_url,omitempty"`
 	Checks     []string `json:"checks"`
 }
+type Learning struct {
+	Observation string    `json:"observation"`
+	Decision    string    `json:"decision,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type Record struct {
+	Learning             []Learning        `json:"learning,omitempty"`
+	Conclusion           string            `json:"conclusion,omitempty"`
+	IntegrationSHA       string            `json:"integration_sha,omitempty"`
 	ID                   string            `json:"id"`
 	DevelopmentMode      string            `json:"development_mode,omitempty"`
 	Title                string            `json:"title"`

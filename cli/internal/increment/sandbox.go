@@ -87,7 +87,7 @@ func (s *Service) CreateWithMode(ctx context.Context, title, request, origin, mo
 		if err = recordfile.WriteAtomic(filepath.Dir(marker), marker, ".increment-workspace-", config.IncrementWorkspace{ID: id, ParentRoot: s.Config.ProjectRoot}); err != nil {
 			return Record{}, err
 		}
-		if err = s.installRuntime(record.Workdir); err != nil {
+		if err = s.installRuntime(record.Workdir, mode); err != nil {
 			return Record{}, err
 		}
 		cfg, err := config.LoadExact(record.Workdir)
@@ -169,7 +169,7 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 	return os.WriteFile(path, []byte(text), 0o644)
 }
 
-func (s *Service) installRuntime(target string) error {
+func (s *Service) installRuntime(target string, mode string) error {
 	// Copy only workflow assets, never environment files or credentials.
 	// A project recipe declares commands and variable names. Never copy its
 	// resource checkpoint: every checkout prepares and owns its own environment.
@@ -213,7 +213,11 @@ func (s *Service) installRuntime(target string) error {
 		if installedErr != nil && !selected {
 			continue
 		}
-		for _, name := range append([]string{"archetipo-increment"}, "archetipo-spec", "archetipo-plan", "archetipo-implement", "archetipo-review", "archetipo-autopilot", "archetipo-wiki") {
+		names := []string{"archetipo-increment", "archetipo-environment"}
+		if mode != Continuous {
+			names = append(names, "archetipo-spec", "archetipo-plan", "archetipo-implement", "archetipo-review", "archetipo-autopilot", "archetipo-wiki")
+		}
+		for _, name := range names {
 			from := filepath.Join(source, name)
 			if _, err := os.Stat(from); os.IsNotExist(err) && dataDir != "" {
 				from = filepath.Join(dataDir, "skills", name)
