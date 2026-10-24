@@ -149,6 +149,16 @@ synthetic service ownership and cleanup; never put secret values in argv/config.
 Do not infer a framework or reuse an ancestor's dependencies. A readiness probe
 must verify usable local outputs and owned services, not merely that a port opens.
 
+A check can explicitly declare `during_preview: true` only if it is safe beside
+its development server: no dependency installation, build-output collision or
+reset of shared demonstration data. Such a check uses existing valid preparation
+and is canceled when its preview/environment owner stops. Preparation and cleanup
+remain exclusive; stop the preview before changing dependencies or repairing setup.
+`execution environment evidence` reads the current original machine reports; all
+declared checks are required for product readiness. Narrative summaries do not
+replace evidence. Ready and publication require intact reports and logs matching
+the candidate's inputs; a fresh failed check revokes an earlier pass.
+
 The CLI probes readiness on reuse, serializes setup, keeps immutable full logs,
 and can reuse a passing check only for identical declared inputs. Include all
 relevant code, tests, configuration, lockfiles and toolchain files in its inputs;

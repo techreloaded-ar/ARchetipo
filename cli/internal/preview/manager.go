@@ -213,7 +213,7 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 		}
 	}()
 	defer i.cancel()
-	service := verification.New(root, "")
+	service := verification.New(root, "").ForOwnedPreview()
 	if r.PrepareEnvironment && !prepareOnly {
 		lifetime, err := verification.OwnLifetime(root, i)
 		if err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 func hash(value any) string {
@@ -110,6 +111,20 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 		if diff == "" {
 			return r, iox.NewConflict("increment has no committed product changes", "complete and commit the development before review", nil)
 		}
+		result.Evidence, err = verification.New(r.Workdir, s.Config.Paths.TestResults).Evidence(ctx)
+		if err != nil {
+			return r, err
+		}
+		if err = s.requireClean(ctx, r); err != nil {
+			return r, err
+		}
+		verifiedHead, headErr := git(ctx, r.Workdir, "rev-parse", "HEAD")
+		if headErr != nil {
+			return r, headErr
+		}
+		if verifiedHead != head {
+			return r, iox.NewConflict("candidate changed during verification", "verify the current committed candidate", nil)
+		}
 		r.Result = &result
 		r.ReadySHA = head
 		r.ReadyScope = candidateScope(r)
@@ -164,4 +179,39 @@ func (s *Service) RequestChanges(ctx context.Context, id string, change Feedback
 		r.ReadySHA, r.ReadyScope, r.ApprovedSHA = "", "", ""
 		return r, s.save(r)
 	})
+}
+
+// VerifyCandidate is shared by presentation and publication. A label is never
+// sufficient authorization: publication repeats this check at its boundary.
+func (s *Service) VerifyCandidate(ctx context.Context, r Record) error {
+	if r.ReadySHA == "" || len(r.Revisions) == 0 || candidateScope(r) != r.ReadyScope {
+		return iox.NewPrecondition("candidate specification changed", "verify the current specification", nil)
+	}
+	if err := s.requireClean(ctx, r); err != nil {
+		return err
+	}
+	head, err := git(ctx, r.Workdir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if head != r.ReadySHA {
+		return iox.NewConflict("candidate code changed", "verify the current code", nil)
+	}
+	if r.Result == nil {
+		return iox.NewPrecondition("candidate has no result", "verify the candidate", nil)
+	}
+	if err = verification.New(r.Workdir, s.Config.Paths.TestResults).VerifyEvidence(ctx, r.Result.Evidence); err != nil {
+		return err
+	}
+	if err = s.requireClean(ctx, r); err != nil {
+		return err
+	}
+	currentHead, err := git(ctx, r.Workdir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if currentHead != head {
+		return iox.NewConflict("candidate changed during verification", "verify the current committed candidate", nil)
+	}
+	return nil
 }

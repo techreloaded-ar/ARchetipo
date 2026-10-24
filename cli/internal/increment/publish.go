@@ -22,15 +22,8 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if r.ReadySHA == "" || expectedSHA != r.ReadySHA || len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Number != revision {
 			return r, iox.NewConflict("the result changed after it was displayed", "read and approve the current result", nil)
 		}
-		if err = s.requireClean(ctx, r); err != nil {
+		if err = s.VerifyCandidate(ctx, r); err != nil {
 			return r, err
-		}
-		head, err := git(ctx, r.Workdir, "rev-parse", "HEAD")
-		if err != nil {
-			return r, err
-		}
-		if head != r.ReadySHA || candidateScope(r) != r.ReadyScope {
-			return r, iox.NewConflict("code or specification changed after verification", "verify the current result before approval", nil)
 		}
 		if s.Hosting == nil {
 			return r, iox.NewPrecondition("publication is not configured", "configure the Git hosting adapter", nil)

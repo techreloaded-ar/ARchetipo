@@ -108,6 +108,49 @@ try {
   rows.push({ label: 'hard-kill-no-orphan', elapsed_ms: Math.round(performance.now() - crashStart), envelope: { data: { passed: true, reused: false } } });
   invoke('cleanup', ['cleanup']);
   r = check('after-cleanup'); assert(r.passed && !r.reused); assert.equal(counts().prepare, 4);
+  // A real parent dies while a compatible check uses its service. Its private
+  // pipe must cancel the command tree before the guard runs registered cleanup.
+  recipe.checks.functional.during_preview = true;
+  recipe.checks.slow.during_preview = true;
+  recipe.checks.slow.timeout_seconds = 30;
+  writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
+  const liveOwner = spawn(process.execPath, ['-e', `
+    const {spawn}=require('node:child_process');
+    const guard=spawn(process.argv[1],['execution','environment','_guard'],{stdio:['pipe','pipe','inherit']});
+    guard.stdin.write(JSON.stringify({root:process.argv[2]})+'\\n');
+    guard.stdout.pipe(process.stdout); guard.on('exit',code=>process.exit(code||0));
+  `, bin, project], {cwd:project, stdio:['ignore','pipe','pipe']});
+  const ownerExit = new Promise(resolve => liveOwner.once('exit',resolve));
+  let ownerReady=''; liveOwner.stdout.on('data',data=>{ownerReady+=data;});liveOwner.stderr.resume();
+  const waitFor = async (predicate,label,start=performance.now()) => {
+    while(!predicate()) {
+      assert(performance.now()-start<10000,label);
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+  };
+  let live;
+  try {
+    await waitFor(()=>ownerReady.includes('\n'),'live owner did not start');
+    assert.deepEqual(JSON.parse(ownerReady.trim()),{});
+    const installed=counts().prepare;
+    r=check('live-preview-check');assert(r.passed && r.stable);assert.equal(counts().prepare,installed);
+    const descendantFile=join(project,'.archetipo/environment/descendant.pid');
+    if(existsSync(descendantFile))unlinkSync(descendantFile);
+    live=spawn(bin,['-C',project,'execution','environment','check','slow','--fresh'],{stdio:['ignore','pipe','pipe']});
+    let liveOutput='',ended=false;
+    live.stdout.on('data',data=>{liveOutput+=data;});live.stderr.resume();live.once('exit',()=>{ended=true;});
+    const liveStart=performance.now();
+    await waitFor(()=>existsSync(descendantFile),'live check did not start',liveStart);
+    const pid=Number(readFileSync(descendantFile,'utf8'));
+    liveOwner.kill('SIGKILL');await ownerExit;
+    await waitFor(()=>ended,'live check survived owner death',liveStart);
+    const outcome=JSON.parse(liveOutput).data;assert.equal(outcome.passed,false);
+    await waitFor(()=>!existsSync(join(project,'.archetipo/environment/owned-server.json')),'guard cleanup did not finish',liveStart);
+    assert.throws(()=>process.kill(pid,0),'live descendant survived owner death');
+    assert.equal(JSON.parse(readFileSync(join(project,'.archetipo/environment/state.json'),'utf8')).preparation_id,'');
+    rows.push({label:'live-check-owner-hard-death',elapsed_ms:Math.round(performance.now()-liveStart),exit:0,envelope:{data:outcome}});
+  } finally {liveOwner.kill('SIGTERM');live?.kill('SIGTERM');}
+
 } catch (error) { failure = error; }
 finally {
   try { invoke('final-cleanup', ['cleanup']); } catch (error) { failure ||= error; }

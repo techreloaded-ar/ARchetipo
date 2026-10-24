@@ -13,6 +13,11 @@ First read the existing environment recipe. If a valid common recipe already
 exists and repair was not requested, run only preparation and retain its report;
 do not regenerate configuration for another branch. Inspect existing project
 scripts and dependency manifests before choosing missing setup.
+Use locked, reproducible dependency installation. Never fall back silently from
+`npm ci` to unlocked resolution, disable lockfile updates to hide a mismatch, or
+change dependency versions merely to make setup pass. Report an inconsistent
+manifest/lockfile and repair it explicitly in the working branch; record the
+resulting lockfile change. Do not copy installed packages from another checkout.
 Use one common workspace recipe. There are no branch overrides. Keep every
 non-secret setup helper under `scripts/archetipo/`, with relative paths and local
 synthetic data. Declare all persistent services through managed `resources` with
@@ -21,6 +26,13 @@ synthetic data. Declare all persistent services through managed `resources` with
 `ARCHETIPO_RESOURCE_OWNER` plus `ARCHETIPO_RESOURCE_NAME` before reuse/stop.
 Never adopt unrelated services or copy credentials, installed dependencies,
 resource ownership records or data from another checkout.
+
+Declare checks with complete source/configuration inputs and finite timeouts.
+All declared checks are required for a product candidate. `during_preview: true`
+is an explicit promise that a check can run beside the development server, without
+rewriting its build output, resetting shared data or changing dependencies. Leave
+it false for production builds or destructive integration checks. Do not enable it
+merely to bypass ownership. Keep tests' scratch outputs separate from the preview.
 
 Revision rounds reuse this checkout's services and demonstration data. Make
 preparation and synthetic-data seeding idempotent: preserve existing demo rows

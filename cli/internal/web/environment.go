@@ -96,7 +96,7 @@ func (s *Server) prepareEnvironment(ctx context.Context, ws *workspaceSession, r
 	// A preview started during discovery may still own the environment. Release
 	// our own preview before development prepares/checks that same checkout,
 	// retaining its dependency services and synthetic data across revisions.
-	if !needPreview && !repair {
+	if !needPreview || repair {
 		if err := ws.previews.SuspendOwned(root); err != nil {
 			return err
 		}

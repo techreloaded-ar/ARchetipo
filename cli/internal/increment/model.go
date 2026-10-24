@@ -9,6 +9,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 const (
@@ -57,9 +58,10 @@ type Revision struct {
 	Change         *FeedbackRequest `json:"change,omitempty"`
 }
 type Result struct {
-	Summary    string   `json:"summary"`
-	PreviewURL string   `json:"preview_url,omitempty"`
-	Checks     []string `json:"checks"`
+	Evidence   []verification.Result `json:"evidence,omitempty"`
+	Summary    string                `json:"summary"`
+	PreviewURL string                `json:"preview_url,omitempty"`
+	Checks     []string              `json:"checks"`
 }
 type Learning struct {
 	Observation string    `json:"observation"`

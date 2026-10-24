@@ -27,6 +27,12 @@ func Dossier(r Record) string {
 		}
 		if revision.Result != nil {
 			fmt.Fprintf(&body, "\n### Verified candidate `%s`\n\n%s\n", revision.HeadSHA, revision.Result.Summary)
+			for _, report := range revision.Result.Evidence {
+				fmt.Fprintf(&body, "\nMachine check: `%s` · passed · inputs `%s` · report `%s` · %s\n", report.Operation, report.InputKey, report.ID, report.StartedAt.Format("2006-01-02T15:04:05Z"))
+				for _, step := range report.Steps {
+					fmt.Fprintf(&body, "- `%s` · exit %d · log SHA256 `%s`\n", step.Name, step.ExitCode, step.LogSHA256)
+				}
+			}
 			for _, check := range revision.Result.Checks {
 				fmt.Fprintf(&body, "- %s\n", check)
 			}

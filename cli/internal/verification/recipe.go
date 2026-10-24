@@ -27,8 +27,9 @@ type Command struct {
 
 type Check struct {
 	Command
-	Inputs []string `json:"inputs"`
-	Cache  bool     `json:"cache"`
+	Inputs        []string `json:"inputs"`
+	Cache         bool     `json:"cache"`
+	DuringPreview bool     `json:"during_preview,omitempty"`
 }
 
 // Resource commands are finite project adapters. Start must register/create only

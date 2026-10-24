@@ -64,6 +64,7 @@ type Service struct {
 	Runner        Runner
 	env           []string
 	lifetimeOwner bool
+	previewOwner  bool
 }
 
 func New(root, results string) *Service {
@@ -117,6 +118,8 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		}
 		recipe = Recipe{}
 	}
+	liveCheck := false
+	watched := []string{}
 	if !s.lifetimeOwner {
 		leaseStore, leaseErr := conversationlog.NewFileStore(s.Root)
 		if leaseErr != nil {
@@ -124,9 +127,34 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		}
 		lease, leaseErr := leaseStore.TryLock(ctx, "environment-lifetime")
 		if leaseErr != nil {
-			return result, iox.NewConflict("an active preview or environment run owns these services", "stop its owning preview or terminal before operating on these services", leaseErr)
+			if !errors.Is(leaseErr, conversationlog.ErrLockHeld) || operation != "check" || !recipe.Checks[name].DuringPreview {
+				return result, iox.NewConflict("an active preview or environment run owns these services", "use a check explicitly declared during_preview, or stop the owning preview before changing its environment", leaseErr)
+			}
+			liveCheck = true
+			watched = append(watched, "environment-lifetime")
+		} else {
+			defer func() { _ = lease.Unlock() }()
 		}
-		defer func() { _ = lease.Unlock() }()
+		previewLease, previewErr := leaseStore.TryLock(ctx, "preview-environment")
+		if previewErr == nil {
+			_ = previewLease.Unlock()
+		} else if errors.Is(previewErr, conversationlog.ErrLockHeld) && s.previewOwner {
+			// The caller already holds the preview lease.
+		} else if errors.Is(previewErr, conversationlog.ErrLockHeld) {
+			if operation != "check" || !recipe.Checks[name].DuringPreview {
+				return result, iox.NewConflict("a preview owns this checkout", "stop the preview before preparing or cleaning its environment", previewErr)
+			}
+			liveCheck = true
+			watched = append(watched, "preview-environment")
+		} else {
+			return result, previewErr
+		}
+		if liveCheck {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			go monitorLifetime(ctx, cancel, leaseStore, s.Root, watched)
+		}
 	}
 	store, err := conversationlog.NewFileStore(s.Root)
 	if err != nil {
@@ -152,7 +180,7 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if err = commandLock.Unlock(); err != nil {
 		return result, err
 	}
-	if operation != "cleanup" {
+	if operation != "cleanup" && !liveCheck {
 		if err = environmentrecipe.Sync(s.Root); err != nil {
 			return result, err
 		}
@@ -195,7 +223,16 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if resourceErr != nil {
 		return result, resourceErr
 	}
-	if len(recipe.Resources) > 0 || len(resources.Resources) > 0 {
+	if liveCheck {
+		s.env = resourceEnv(resources, "")
+		if len(recipe.Resources) == 0 {
+			s.env = nil
+		}
+		if err = s.prepared(recipe, value); err != nil {
+			return result, err
+		}
+	}
+	if !liveCheck && (len(recipe.Resources) > 0 || len(resources.Resources) > 0) {
 		result, err = s.newResult("resources", "")
 		if err != nil {
 			return result, err
@@ -208,7 +245,10 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 			return result, err
 		}
 	}
-	preparation, err := s.prepare(ctx, recipe, &value)
+	preparation := Result{Passed: true, Stable: true}
+	if !liveCheck {
+		preparation, err = s.prepare(ctx, recipe, &value)
+	}
 	if (err != nil || !preparation.Passed) && len(recipe.Resources) > 0 {
 		// Compensate a failed install/project probe as well as a failed resource start.
 		cleanup, cleanupErr := s.newResult("prepare-rollback", "")
@@ -504,3 +544,7 @@ func preparationFingerprint(root string, env []string) (string, error) {
 	recipe.Checks, recipe.Cleanup = nil, nil
 	return fingerprint(root, recipe, recipe.Inputs, env)
 }
+
+// ForOwnedPreview is for a caller already holding preview-environment, such as
+// the preview manager or confirmed removal. It never bypasses the lifetime lease.
+func (s *Service) ForOwnedPreview() *Service { s.previewOwner = true; return s }

@@ -206,3 +206,24 @@ func gitForIncrementCleanup(root, workdir string) ([]byte, error) {
 	cmd.Dir = root
 	return cmd.CombinedOutput()
 }
+
+func TestIncrementReportsRequirementDriftWithoutRewritingSnapshot(t *testing.T) {
+	p := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, conn := newRunServer(t, p, true)
+	items, err := conn.FetchBacklogItems(context.Background(), "")
+	if err != nil || len(items) == 0 {
+		t.Fatal("fixture backlog", err)
+	}
+	current, err := conn.ReadSpecDetail(context.Background(), items[0].Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := increment.Record{Status: increment.Developing, DevelopmentMode: increment.Continuous, LinkedStories: []increment.StoryLink{{Code: current.Code, Title: "Earlier request", Body: "Original acceptance"}}}
+	view := srv.incrementView(context.Background(), srv.session(), record)
+	if len(view.Stories) != 1 || !view.Stories[0].RequirementsChanged || view.Stories[0].Body != "Original acceptance" {
+		t.Fatalf("lost requirement drift/snapshot: %+v", view.Stories)
+	}
+	if view.CandidateLabel != "In lavorazione" {
+		t.Fatal(view.CandidateLabel)
+	}
+}

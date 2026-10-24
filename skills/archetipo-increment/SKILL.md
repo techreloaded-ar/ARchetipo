@@ -52,7 +52,9 @@ Use a short internal plan only when useful. Do not invoke delivery skills or cre
 an internal backlog merely to satisfy a workflow. Give concise progress updates
 about behavior and what can be tried; keep logs in original evidence files.
 
-Prepare/reuse the project's environment recipe; delegate `/archetipo-environment`
+Reuse an already running preview through compatible checks directly; do not
+prepare again merely because a new turn started. Prepare the project's environment
+recipe when setup is missing or changed; delegate `/archetipo-environment`
 when configuration or repair is needed, preserving its technical session identity.
 Use managed resources, assigned ports and synthetic data. Never touch production
 services, copy secrets, start unowned background processes or reset demo data just
@@ -70,6 +72,20 @@ Respect existing ownership and retry budgets; never replace the native session
 with a transcript. For a small change, work directly in this session.
 
 Verify changed behavior with appropriate real browser, API and database checks.
+Run EVERY declared recipe check with `archetipo execution environment check <name>`
+(kind `verification_result`, require `data.passed && data.stable`). Reuse only the
+CLI's retained original evidence. `--fresh` deliberately reruns a check; a failure
+revokes its previous pass. Use `execution environment evidence` to inspect all
+current reports (`kind: verification_result`, `data` is the original report array).
+No declared checks, missing reports, changed inputs or missing logs block readiness.
+Do not remove or narrow a failing check to claim a verified candidate. Explain
+existing application failures and fix the relevant cause before readiness.
+
+Keep the preview running during questions and ordinary edits. Checks explicitly
+marked `during_preview: true` can use its prepared services without reinstalling
+or stopping them. Other operations remain exclusive. For dependency/setup changes,
+stop the preview, repair/prepare through the environment method, and restart it;
+never take over another process's services. A check is canceled if its owner stops.
 Reuse evidence only when its inputs remain valid. Review the combined change;
 use independent assessment for material risk such as permissions, migrations,
 concurrency or data loss. Keep unrelated failures distinct from regressions.
@@ -89,7 +105,9 @@ Call `increment ready <id> --file -`:
 The preview URL is optional and must be observed, never invented. Configure a
 managed preview recipe through the environment method for a web app. The viewer
 launches the app through that same deterministic contract. Readiness freezes a
-clean committed candidate and the current specification; no story state is needed.
+clean committed candidate, current specification and machine reports. Text in
+`checks` explains the result; it cannot substitute for those reports. Publication
+revalidates the code and evidence. No story state is needed.
 
 ## Learn, adapt and hand over
 

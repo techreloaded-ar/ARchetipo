@@ -118,6 +118,11 @@ timeout and hard process death. Preserve its timing reports under the ignored
 run directory. Do not present these timings as end-to-end LLM/application speed.
 A cached check is valid only for its complete declared inputs and retained original
 evidence; a fresh failure revokes an older pass of the same candidate.
+Checks explicitly declared `during_preview` may use retained preparation while the
+app runs; setup and cleanup remain exclusive. Owner death cancels those checks
+before guard cleanup. `environment evidence` inspects original reports. Product
+readiness and publication require every declared check and preserve the exact
+reports shown with the approved candidate; agent text never substitutes for them.
 
 ## Native harness sessions (`archetipo view`)
 

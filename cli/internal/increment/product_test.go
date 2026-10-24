@@ -254,3 +254,37 @@ func TestPublicationRecoversUnknownOutcomeWithoutAnotherPR(t *testing.T) {
 		t.Fatal("retry duplicated PR or changed human approval", err)
 	}
 }
+
+func TestCandidateRequiresMachineEvidenceAndRetainsApprovalReports(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	r := specify(t, s, create(t, s))
+	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, r.Workdir, "add", "hello.txt")
+	runGit(t, r.Workdir, "commit", "-m", "feat: change")
+	if _, err := s.Ready(ctx, r.ID, Result{Summary: "Looks ready", Checks: []string{"Agent says tests pass"}}); err == nil {
+		t.Fatal("narrative certified committed code")
+	}
+	verifyProduct(t, r)
+	var err error
+	r, err = s.Ready(ctx, r.ID, Result{Summary: "Verified", Checks: []string{"Diff check"}})
+	if err != nil || len(r.Result.Evidence) != 1 {
+		t.Fatal("machine reports missing", err)
+	}
+	if err = s.VerifyCandidate(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	original := r.Result.Evidence[0]
+	if err = os.Remove(original.Steps[0].LogPath); err != nil {
+		t.Fatal(err)
+	}
+	verifyProduct(t, r) // A new pass must not rewrite the approval's frozen reports.
+	if err = s.VerifyCandidate(ctx, r); err == nil {
+		t.Fatal("new report silently replaced approval evidence")
+	}
+	if _, err = s.Publish(ctx, r.ID, r.ReadySHA, 1); err == nil {
+		t.Fatal("published without original approval evidence")
+	}
+}

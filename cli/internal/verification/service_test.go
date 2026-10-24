@@ -359,3 +359,129 @@ func TestPreparationLogsAreBoundedAndConfinedToCheckout(t *testing.T) {
 		t.Fatal("accepted a log outside the checkout's environment reports")
 	}
 }
+
+func TestEvidenceRequiresCurrentOriginalReports(t *testing.T) {
+	s, _, _ := fixture(t)
+	ctx := context.Background()
+	if _, err := s.Evidence(ctx); err == nil {
+		t.Fatal("accepted narrative without reports")
+	}
+	first := execute(t, s, "check")
+	evidence, err := s.Evidence(ctx)
+	if err != nil || len(evidence) != 1 || evidence[0].ID != first.ID {
+		t.Fatalf("original evidence: %+v %v", evidence, err)
+	}
+	execute(t, s, "check") // Reuse must still reference the original.
+	evidence, err = s.Evidence(ctx)
+	if err != nil || evidence[0].ID != first.ID {
+		t.Fatal("reuse replaced original evidence", err)
+	}
+	mustWrite(t, filepath.Join(s.Root, "src", "app.txt"), "changed")
+	if _, err = s.Evidence(ctx); err == nil {
+		t.Fatal("accepted stale sources")
+	}
+	current := execute(t, s, "check")
+	mustWrite(t, current.Steps[0].LogPath, "tampered")
+	if _, err = s.Evidence(ctx); err == nil {
+		t.Fatal("accepted missing/tampered original logs")
+	}
+}
+
+func TestLiveCheckDoesNotRepairOrStopPreviewEnvironment(t *testing.T) {
+	s, runner, recipe := fixture(t)
+	check := recipe.Checks["focused"]
+	check.DuringPreview = true
+	recipe.Checks["focused"] = check
+	writeRecipe(t, s.Root, recipe)
+	execute(t, s, "prepare")
+	store, _ := conversationlog.NewFileStore(s.Root)
+	owner, err := store.TryLock(context.Background(), "preview-environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Unlock() }()
+	runner.calls = nil
+	result := execute(t, s, "check")
+	if !result.Passed || strings.Join(runner.calls, ",") != "test" {
+		t.Fatalf("live check changed preparation: %+v %v", result, runner.calls)
+	}
+	if _, err = s.Evidence(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Execute(context.Background(), "prepare", "", "", false); err == nil {
+		t.Fatal("prepared during preview")
+	}
+	mustWrite(t, filepath.Join(s.Root, "lock.json"), "dependency changed")
+	runner.calls = nil
+	if _, err = s.Execute(context.Background(), "check", "focused", "", false); err == nil || len(runner.calls) != 0 {
+		t.Fatal("live check repaired dependencies", err, runner.calls)
+	}
+}
+
+func TestLiveCheckCancellationWhenPreviewOwnerStops(t *testing.T) {
+	s, runner, recipe := fixture(t)
+	check := recipe.Checks["focused"]
+	check.DuringPreview = true
+	recipe.Checks["focused"] = check
+	writeRecipe(t, s.Root, recipe)
+	execute(t, s, "prepare")
+	store, _ := conversationlog.NewFileStore(s.Root)
+	owner, err := store.TryLock(context.Background(), "preview-environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	runner.run = func(ctx context.Context, _ string, c Command) error {
+		if c.Name == "test" {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = s.Execute(context.Background(), "check", "focused", "", true) }()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("check did not start")
+	}
+	_ = owner.Unlock()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("preview stopped but check kept running")
+	}
+	if _, err = s.Evidence(context.Background()); err == nil {
+		t.Fatal("canceled check certified candidate")
+	}
+}
+
+func TestLiveCheckRequiresExplicitCompatibility(t *testing.T) {
+	s, runner, _ := fixture(t)
+	execute(t, s, "prepare")
+	store, _ := conversationlog.NewFileStore(s.Root)
+	owner, err := store.TryLock(context.Background(), "environment-lifetime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Unlock() }()
+	runner.calls = nil
+	if _, err = s.Execute(context.Background(), "check", "focused", "", false); err == nil || len(runner.calls) != 0 {
+		t.Fatal("undeclared check ran alongside preview", err)
+	}
+}
+
+func TestEvidenceReadersDoNotMasqueradeAsRunningCommands(t *testing.T) {
+	s, _, _ := fixture(t)
+	execute(t, s, "check")
+	results := make(chan error, 4)
+	for range 4 {
+		go func() { _, err := s.Evidence(context.Background()); results <- err }()
+	}
+	for range 4 {
+		if err := <-results; err != nil {
+			t.Fatal("read-only polling blocked candidate validation", err)
+		}
+	}
+}

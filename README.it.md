@@ -73,8 +73,10 @@ Le sessioni sono native e durevoli: cambiare schermata non chiude il lavoro.
 I worktree separano codice e dati di lavoro; **non sono sandbox di sicurezza del
 sistema operativo**. La base locale non richiede Kubernetes, Docker o servizi a
 pagamento. La ricetta del progetto può usare gli strumenti che servono all’app.
-La preview viene sospesa quando il turno necessita dell’ambiente e riparte dal
-candidato verificato; non è ancora una preview continua durante ogni compilazione.
+La preview resta aperta durante chat, modifiche e check dichiarati compatibili.
+Setup, build incompatibili e cleanup richiedono di fermarla. La versione verificata
+richiede report reali e integri per tutti i check, legati al codice corrente;
+la pubblicazione li ricontrolla prima di aprire la PR.
 L’esecuzione remota e l’isolamento di sicurezza richiedono un ulteriore livello runtime.
 
 Questo branch rimuove le skill `archetipo-autopilot`, `archetipo-design`,

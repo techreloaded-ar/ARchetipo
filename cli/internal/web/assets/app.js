@@ -1392,6 +1392,9 @@
 			return;
 		}
 		clearDocumentationLocation(view);
+        if (view === "conversation" && historySupported() && specCodeInLocation()) {
+            window.history.pushState({archetipoView: view}, "", locationWithSpec(""));
+        }
 		if (view === "board" && specOpen && previousView === "documentation") {
 			closeModal();
 			return;

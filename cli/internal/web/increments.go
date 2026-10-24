@@ -19,10 +19,13 @@ type incrementControl struct {
 }
 type incrementStoryView struct {
 	domain.Spec
-	StatusLabel string `json:"status_label"`
-	Active      bool   `json:"active"`
+	RequirementsChanged bool   `json:"requirements_changed,omitempty"`
+	StatusLabel         string `json:"status_label"`
+	Active              bool   `json:"active"`
 }
 type incrementView struct {
+	CandidateLabel   string               `json:"candidate_label,omitempty"`
+	VerificationNote string               `json:"verification_note,omitempty"`
 	QuickActions     []incrementControl   `json:"quick_actions"`
 	PreviewAutoStart bool                 `json:"preview_auto_start"`
 	Stories          []incrementStoryView `json:"stories"`
@@ -60,6 +63,10 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		story := incrementStoryView{Spec: domain.Spec{Code: linked.Code, Title: linked.Title, Body: linked.Body, URL: linked.URL}, StatusLabel: "Storia collegata"}
 		if current, readErr := ws.conn.ReadSpecDetail(ctx, linked.Code); readErr == nil {
 			story.StatusLabel = labels[current.Status]
+			story.RequirementsChanged = current.Title != linked.Title || current.Body != linked.Body
+			if story.RequirementsChanged {
+				story.StatusLabel += " · requisiti aggiornati nel backlog"
+			}
 		}
 		view.Stories = append(view.Stories, story)
 	}
@@ -90,9 +97,24 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 			view.Note = environment.Error
 		}
 	}
-	view.PreviewAutoStart = r.DevelopmentMode == increment.Continuous && r.Status == increment.Review && !view.Busy
+	view.PreviewAutoStart = r.DevelopmentMode == increment.Continuous && (r.Status == increment.Review || r.Status == increment.Developing) && !view.Busy
+	view.CandidateLabel = view.StatusLabel
+	if r.Status == increment.Developing || r.Status == increment.Review {
+		view.CandidateLabel = "In lavorazione"
+	}
+	candidateValid := false
+	if r.Status == increment.Review && !view.Busy {
+		if verifyErr := s.incrementService(ws).VerifyCandidate(ctx, r); verifyErr == nil {
+			candidateValid = true
+			view.CandidateLabel = "Versione verificata"
+		} else {
+			view.CandidateLabel = "Da verificare"
+			view.VerificationNote = "La versione corrente richiede nuove verifiche prima dell’approvazione."
+		}
+	}
 	if r.DevelopmentMode != increment.Continuous {
 		view.StatusLabel = "Lavoro storico"
+		view.CandidateLabel = view.StatusLabel
 		view.Note = "Il percorso precedente è stato ritirato. Richiesta, specifiche e risultati restano consultabili ed esportabili; avvia un nuovo lavoro per continuare."
 		view.PreviewAutoStart = false
 		return view
@@ -105,6 +127,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 			}
 		}
 		if !allowed {
+			continue
+		}
+		if action.ID == "publish" && !candidateValid {
 			continue
 		}
 		if action.ID == "approve-intent" {
@@ -324,14 +349,6 @@ func (s *Server) prepareIncrementMessage(ctx context.Context, ws *workspaceSessi
 	current, err := service.Read(record.IncrementID)
 	if err != nil {
 		return err
-	}
-	// The picker declares an explicit change request, without deciding which
-	// story or requirement it changes. Release only our app/proxy so the skill
-	// can run standalone verification against the existing dependency data.
-	if (body.PreviewFeedback || current.DevelopmentMode == increment.Continuous) && (current.Status == increment.Review || current.Status == increment.Developing) {
-		if err := ws.previews.SuspendOwned(current.Workdir); err != nil {
-			return err
-		}
 	}
 
 	// The person's message stays readable; only the harness sees the method and

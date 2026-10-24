@@ -76,7 +76,7 @@ async function main(){
   await fs.copyFile(path.join(repoRoot,"test/e2e/support/managed-resource.mjs"),path.join(sandbox,"scripts/archetipo/managed-resource.mjs"));
   const resourceCommand=action=>({name:action,argv:[process.execPath,"scripts/archetipo/managed-resource.mjs",action],timeout_seconds:10});
   const environmentInput=path.join(runDir,"environment.json");
-  await fs.writeFile(environmentInput,JSON.stringify({version:1,ports:["DATABASE"],resources:[{name:"database",start:resourceCommand("start"),probe:resourceCommand("probe"),stop:resourceCommand("stop"),stopped:resourceCommand("stopped")}],probe:[{name:"ready",argv:[process.execPath,"--version"],timeout_seconds:10}],checks:{}}));
+  await fs.writeFile(environmentInput,JSON.stringify({version:1,ports:["DATABASE"],resources:[{name:"database",start:resourceCommand("start"),probe:resourceCommand("probe"),stop:resourceCommand("stop"),stopped:resourceCommand("stopped")}],probe:[{name:"ready",argv:[process.execPath,"--version"],timeout_seconds:10}],checks:{export:{name:"export",argv:[process.execPath,"-e","const fs=require('fs');if(!fs.readFileSync('hello.txt','utf8').includes('Clienti in CSV'))process.exit(1)"],timeout_seconds:10,inputs:["hello.txt"],cache:true,during_preview:true}}}));
   await run("environment-configure",cli,["execution","environment","configure","--file",environmentInput],{cwd:sandbox});
   await fs.writeFile(path.join(sandbox,"scripts/archetipo/preview.mjs"),'import http from "node:http"; http.createServer((req,res)=>res.end("Preview fixture")).listen(Number(process.argv[2]),"127.0.0.1");\n');
   const previewInput=path.join(runDir,"preview.json");
@@ -167,6 +167,7 @@ async function main(){
   await fs.writeFile(path.join(inc.workdir,"hello.txt"),"Clienti in CSV\n");
   await git(["add","hello.txt"],inc.workdir);
   await git(["commit","-m","feat: customer export"],inc.workdir);
+  await cliJSON(["execution","environment","check","export"]);
   await cliJSON(["increment","ready",inc.id],{summary:"Esportazione pronta",checks:["File CSV verificato"]});
   if(workflow)await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:{...workflow.state,phase:"ready"}});
   await finish(1,"La pagina è pronta da provare.");
@@ -183,9 +184,12 @@ async function main(){
   await page.waitFor(`!!document.querySelector("#browser-preview iframe")`,timeout,"explicit preview restart");
   const publication=await fetch(view.url+"/api/increments/"+inc.id+"/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:1,head_sha:"wrong"})});
   assert.equal(publication.status,409,"stale candidate published");
+  const livePreview=(await (await fetch(convURL+"/preview")).json());
   await page.waitFor(`!!document.querySelector(".conv-composer-input:not(:disabled)")`,timeout,"feedback composer");
   await page.evaluate(`(()=>{const input=document.querySelector(".conv-composer-input");input.value="Aggiungi anche il formato Excel";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()`);
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=(enterprise?3:2),"feedback delivered in same session");
+  const afterChat=(await (await fetch(convURL+"/preview")).json());
+  assert.equal(afterChat.state,"ready","chat stopped the preview");assert.equal(afterChat.url,livePreview.url,"chat replaced the preview");
   await cliJSON(["increment","feedback",inc.id],{feedback:"Aggiungi Excel"});
   const revised=await cliJSON(["increment","propose",inc.id],{intent:"Esportare CSV ed Excel"});
   assert.equal(revised.status,"DEVELOPING");assert.equal(revised.ready_sha,undefined);
@@ -194,7 +198,8 @@ async function main(){
   if(enterprise){
    await fs.writeFile(path.join(inc.workdir,"hello.txt"),"Clienti in CSV ed Excel\n");
    await git(["add","hello.txt"],inc.workdir);await git(["commit","-m","feat: Excel export"],inc.workdir);
-   await cliJSON(["increment","ready",inc.id],{summary:"Esporta CSV ed Excel",checks:["Entrambi i formati verificati"]});
+   await cliJSON(["execution","environment","check","export"]);
+  await cliJSON(["increment","ready",inc.id],{summary:"Esporta CSV ed Excel",checks:["Entrambi i formati verificati"]});
   }
   await finish(2,"Aggiorno l’esportazione nello stesso lavoro.");
   await page.send("Page.reload");await page.once("Page.loadEventFired",timeout,"reload");
@@ -204,10 +209,10 @@ async function main(){
   assert.equal((await read()).increment.learning.length,1);
   assert.equal((await cliJSON(["spec","list"])).items.length,0);
   if(enterprise){
-   await page.waitFor(`!!document.querySelector('[data-increment-action="publish"]:not(:disabled)')`,timeout,"tested version awaiting business approval");
+   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('[data-increment-action="publish"]:not(:disabled)')`,timeout,"tested version awaiting business approval in the work view");
    const approved=(await read()).increment.ready_sha;
    await page.evaluate(`document.querySelector('[data-increment-action="publish"]').click()`);
-   await until(async()=>(await read()).increment.status==="PROPOSED","one PR after human approval");
+   await until(async()=>(await read()).increment.status==="PROPOSED","one PR after human approval").catch(async error=>{throw new Error(error.message+"; "+await page.evaluate("document.body.innerText.slice(-2000)"));});
    let published=(await read()).increment;
    const repeated=await fetch(view.url+"/api/increments/"+inc.id+"/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:2,head_sha:approved})});
    assert.equal(repeated.status,200);

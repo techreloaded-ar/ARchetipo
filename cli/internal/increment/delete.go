@@ -211,7 +211,9 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				_, stateErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json"))
 				_, resourceErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "resources.json"))
 				if stateErr == nil || resourceErr == nil {
-					cleanup, cleanupErr := verification.New(r.Workdir, "").Execute(ctx, "cleanup", "", "", false)
+					// The deletion locks above already hold preview-environment,
+					// excluding every preview while registered cleanup runs.
+					cleanup, cleanupErr := verification.New(r.Workdir, "").ForOwnedPreview().Execute(ctx, "cleanup", "", "", false)
 					if cleanupErr != nil {
 						return r, cleanupErr
 					}

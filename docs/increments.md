@@ -11,6 +11,11 @@ alle storie originali, feedback, osservazioni, decisioni e risultati delle verif
 Ogni risultato è legato a un commit pulito e alla specifica provata. Una modifica
 esplicita revoca il candidato corrente, conservando prove e versione precedenti.
 Una domanda o un’osservazione non riscrivono i requisiti e non approvano codice.
+`ready` richiede i report originali di **tutti** i check dichiarati nella ricetta:
+comandi conclusi con successo, input correnti, preparazione valida e log integri.
+`checks` è una spiegazione leggibile, non una prova. Report, impronte degli input,
+exit code e hash dei log vengono congelati con il commit; la pubblicazione li
+ricontrolla. Una verifica fallita successiva revoca un precedente successo.
 
 La sessione nativa e il worktree rimangono gli stessi nelle revisioni e nei recuperi.
 L’indice vive in `.archetipo/increments/`; il record e il lock del lavoro nel suo
@@ -54,7 +59,9 @@ sintetiche delle storie.
 Il primo messaggio della home avvia direttamente il lavoro. In alternativa,
 **Backlog → storia → Lavora su questa storia** porta gli stessi requisiti in un
 nuovo lavoro. Nel dettaglio della storia si trovano lavori e PR collegati;
-nel lavoro si torna alle storie originali.
+nel lavoro si torna alle storie originali. Se titolo o criteri della storia sono
+cambiati nel backlog, il lavoro segnala lo scostamento e conserva la specifica
+originalmente usata: aggiornare i requisiti richiede una nuova revisione esplicita.
 
 **Specifica e decisioni** apre il pannello del dossier. Il pannello conserva
 revisioni, criteri, feedback e prove; **Esporta dossier** scarica il Markdown.
@@ -76,12 +83,29 @@ porte, preparazione, verifiche e cleanup. Lavori distinti hanno risorse e dati
 separati; le revisioni riusano quelli del lavoro corrente. Le configurazioni
 portabili si propagano dal progetto; checkpoint e possesso dei processi no.
 
-La preview si apre automaticamente quando il candidato è verificato e il turno è
-terminato. Ferma resta esplicito anche dopo reload. Durante un nuovo turno può
-essere sospesa per permettere l’uso esclusivo della ricetta; servizi e dati vengono
-conservati. Non è ancora una preview continua durante ogni modifica. Il worktree
-non è una sandbox di sicurezza: esecuzione remota e isolamento OS sono livelli
-runtime ulteriori, non capacità già offerte da questa versione.
+La preview si apre quando l’app è configurata e il turno termina, anche durante
+lo sviluppo. Rimane aperta durante domande, feedback e modifiche; i server con
+ricaricamento automatico mostrano gli aggiornamenti senza creare un altro ambiente.
+**In lavorazione** distingue l’app corrente dalla **Versione verificata**: quest’ultima
+richiede commit pulito e prove valide. Solo il server abilita l’approvazione.
+**Ferma** resta esplicito anche dopo reload.
+
+Un check può dichiarare `during_preview: true` se non reinstalla dipendenze,
+non riscrive gli output del server e non azzera dati condivisi. Il check usa la
+preparazione esistente; se cambia, richiede di fermare la preview e preparare di
+nuovo. Quando il proprietario dell’ambiente termina, il check viene annullato e
+il supervisore procede al cleanup. Build incompatibili, setup e pulizia restano
+esclusivi. `execution environment evidence` legge le prove senza eseguire comandi.
+
+La ricetta comune include gli helper espliciti e si riusa nei worktree; installazioni,
+porte, dati e report rimangono locali a ciascuno. Gli installer devono rispettare il
+lockfile: un lock incoerente si corregge esplicitamente, senza fallback silenziosi
+a versioni risolte nuovamente. Questo rende ripetibile l’ambiente nei futuri worker.
+
+Worktree e porte separate non costituiscono isolamento di sicurezza del sistema
+operativo. Runtime remoto e sandbox di sicurezza sono fasi successive. Anche il
+ciclo di modifica e riapprovazione dopo l’apertura della PR resta a una fase
+successiva: la consegna corrente rimane congelata per i developer.
 
 ## Rimozione e storico
 

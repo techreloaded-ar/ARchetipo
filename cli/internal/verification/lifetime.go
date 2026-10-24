@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
@@ -122,6 +123,10 @@ func Guard(parent context.Context, input io.Reader, output io.Writer) error {
 		return err
 	}
 	defer func() { _ = lock.Unlock() }()
+	stopping := filepath.Join(request.Root, ".archetipo", "environment", "stopping")
+	if err = os.Remove(stopping); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	if err = json.NewEncoder(output).Encode(lifetimeReady{}); err != nil {
 		return err
 	}
@@ -139,6 +144,12 @@ func Guard(parent context.Context, input io.Reader, output io.Writer) error {
 			return nil
 		}
 	case <-parent.Done():
+	}
+	if err = os.MkdirAll(filepath.Dir(stopping), 0o700); err != nil {
+		return err
+	}
+	if err = os.WriteFile(stopping, []byte("stopping\n"), 0o600); err != nil {
+		return err
 	}
 	// A command's own supervisor might still be terminating after parent death.
 	// Retry only lock conflicts, bounded by the command supervisor's exit window.

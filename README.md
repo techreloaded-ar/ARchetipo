@@ -59,8 +59,10 @@ contracts. Native conversations survive tab changes and runtime reconnections.
 Local project recipes manage ports, services and test data. Git worktrees provide
 working separation, not an operating-system security sandbox. The local baseline
 requires neither Kubernetes nor Docker. Remote execution and security isolation
-need a further runtime layer. Preview currently pauses for environment use and
-restarts from a verified candidate; it is not continuously available during every build.
+need a further runtime layer. Preview remains open during chat, edits and checks
+explicitly declared safe beside the app. Setup, incompatible builds and cleanup
+remain exclusive. Readiness and publication require intact machine reports for
+every declared check, matching the current candidate.
 
 This branch retires the `autopilot`, `design`, `implement` and `review` skills,
 internal increment delivery backlogs, intent approval and viewer branch integration.

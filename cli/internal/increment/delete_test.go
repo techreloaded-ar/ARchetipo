@@ -12,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 func TestDeleteIncrementRetainsOnlyCommitsAndPreservesNativeSession(t *testing.T) {
@@ -205,6 +206,9 @@ func TestDeleteIncrementPreservesWorkWhenCleanupCannotRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = os.Remove(filepath.Join(r.Workdir, verification.RecipePath)); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(r.Workdir, ".archetipo", "environment")
 	if err = os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -280,5 +284,25 @@ func TestDeleteIncrementRefusesPreviewOwnedByAnotherViewer(t *testing.T) {
 	}
 	if _, err = os.Stat(r.Workdir); err != nil {
 		t.Fatal("lost worktree", err)
+	}
+}
+
+func TestDeletePreparedEnvironmentUsesItsOwnPreviewLease(t *testing.T) {
+	s := fixture(t)
+	r := create(t, s)
+	ctx := context.Background()
+	environment := verification.New(r.Workdir, "")
+	environment.Runner = productRunner{}
+	prepared, err := environment.Execute(ctx, "prepare", "", "", false)
+	if err != nil || !prepared.Passed {
+		t.Fatal("fixture preparation", err, prepared)
+	}
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.Delete(ctx, r.ID, DeletionOptions{HeadSHA: plan.HeadSHA, Confirm: true})
+	if err != nil || !result.Deleted {
+		t.Fatal("cleanup mistook deletion's lease for a running preview", err, result)
 	}
 }

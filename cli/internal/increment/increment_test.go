@@ -2,6 +2,7 @@ package increment
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -32,7 +34,7 @@ func fixture(t *testing.T) *Service {
 	if err := os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{config.RelativePath: "connector: file\n", ".archetipo/shared-runtime.md": "test runtime\n", "hello.txt": "original\n"} {
+	for name, body := range map[string]string{config.RelativePath: "connector: file\n", ".archetipo/shared-runtime.md": "test runtime\n", "hello.txt": "original\n", verification.RecipePath: `{"version":1,"probe":[{"name":"git","argv":["git","--version"],"timeout_seconds":5}],"checks":{"diff":{"name":"diff","argv":["git","diff","--check","HEAD~1","HEAD"],"timeout_seconds":5,"inputs":["hello.txt"],"cache":true,"during_preview":true}}}`} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -70,6 +72,8 @@ func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(`{"preparation_id":"parent-only"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	runGit(t, s.Config.ProjectRoot, "add", verification.RecipePath)
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: recipe")
 	r := create(t, s)
 	got, err := os.ReadFile(filepath.Join(r.Workdir, ".archetipo", "environment.json"))
 	if err != nil || string(got) != string(recipe) {
@@ -140,7 +144,8 @@ func ready(t *testing.T, s *Service, r Record) Record {
 	}
 	runGit(t, r.Workdir, "add", "hello.txt")
 	runGit(t, r.Workdir, "commit", "-m", "feat: export")
-	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try the customer export.", Checks: []string{"go test ./... — passed"}})
+	verifyProduct(t, r)
+	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try the customer export.", Checks: []string{"git diff --check HEAD~1 HEAD — passed"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,5 +424,27 @@ func TestContinuousRefusesUnversionedExistingCode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.Config.ProjectRoot, ".git")); !os.IsNotExist(err) {
 		t.Fatalf("created Git after refusal: %v", err)
+	}
+}
+
+// This runner executes real fixture checks without spawning the CLI supervisor
+// from a Go test binary (the supervisor itself has dedicated integration tests).
+type productRunner struct{}
+
+func (productRunner) Run(ctx context.Context, root string, env []string, c verification.Command, out io.Writer) error {
+	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	return cmd.Run()
+}
+func verifyProduct(t *testing.T, r Record) {
+	t.Helper()
+	service := verification.New(r.Workdir, "")
+	service.Runner = productRunner{}
+	result, err := service.Execute(context.Background(), "check", "diff", "", false)
+	if err != nil || !result.Passed || !result.Stable {
+		t.Fatalf("fixture verification: %+v %v", result, err)
 	}
 }
