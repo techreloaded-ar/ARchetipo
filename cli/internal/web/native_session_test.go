@@ -589,8 +589,26 @@ func TestRestoredReleasedNativeConversationIsWritableWithoutReopen(t *testing.T)
 	if !view.Available || view.Conversation.State != string(execution.RunActive) {
 		t.Fatalf("a released conversation this workspace holds reads as ended: available=%v state=%q", view.Available, view.Conversation.State)
 	}
-	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/reopen", map[string]any{}); w.Code != http.StatusConflict {
-		t.Fatalf("reopen of a held conversation = %d, want the refusal that says it is already open: %s", w.Code, w.Body.String())
+	released := metadataOf(t, restarted, id)
+	past := restarted.pastNativeConversationView(restarted.session(), released, restarted.conversationOpenabilityOf(context.Background(), restarted.session()), 0)
+	if past.Conversation.State != execution.RunActive {
+		t.Fatal("an open native record without a runtime was presented as closed")
+	}
+	released.Archive = execution.ArchiveArchived
+	past = restarted.pastNativeConversationView(restarted.session(), released, restarted.conversationOpenabilityOf(context.Background(), restarted.session()), 0)
+	if past.Conversation.State != execution.RunClosed {
+		t.Fatal("an archived record was presented as open")
+	}
+	resumesBefore, startsBefore := provider.store.resumes, provider.store.starts
+	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/reopen", map[string]any{}); w.Code != http.StatusOK {
+		t.Fatalf("idempotent reopen of a held conversation = %d: %s", w.Code, w.Body.String())
+	}
+	if provider.store.resumes != resumesBefore || provider.store.starts != startsBefore {
+		t.Fatal("reopening an already open thread resumed its runtime or started a turn")
+	}
+	index, indexBody := conversationsRouteTestReadIndex(t, restarted)
+	if !conversationsRouteTestEntryOf(t, index, id).Live {
+		t.Fatalf("released native conversation disappeared from open threads: %s", indexBody)
 	}
 	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "second"}); w.Code != http.StatusAccepted {
 		t.Fatalf("message into a restored released conversation = %d: %s", w.Code, w.Body.String())

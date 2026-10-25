@@ -38,7 +38,9 @@ import (
 // native session. It differs from the batch opening in the one way the two
 // situations differ: the session is already open, it stays open after the
 // action, and the person is reading it while the agent works.
-const sessionActionOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed. You are in a conversation a person is reading: ask them when you need something only they can decide, and keep the session open after you are done — the receipt closes the action, not this conversation. This client bridges blocking structured input requests. Do not use request_user_input_async, whose host UI is separate from this conversation; ask in ordinary conversation if blocking input is unavailable. When waiting for the person's answer, end the turn after the question. Never sleep or poll for their reply: their next message resumes this same session."
+const sessionInputGuidance = "This client bridges blocking structured input requests. Do not use request_user_input_async, whose host UI is separate from this conversation; ask in ordinary conversation if blocking input is unavailable. When waiting for the person's answer, end the turn after the question. Never sleep or poll for their reply: their next message resumes this same session. Do not treat silence as an answer or choose a product decision you have asked the person to make."
+
+const sessionActionOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed. You are in a conversation a person is reading: ask them when you need something only they can decide, and keep the session open after you are done — the receipt closes the action, not this conversation. " + sessionInputGuidance
 
 // actionInSession is everything starting one ARchetipo action inside a native
 // session needs to know, once the caller has already established that the

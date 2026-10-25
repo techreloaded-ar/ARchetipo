@@ -108,6 +108,7 @@ const CLAIMS = [
   "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
   "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
   "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
+  "una lettura della chat sospesa viene annullata e riprovata senza reload, perdite di messaggi o della bozza",
 ];
 
 // One entry per proved statement, for the report.
@@ -559,6 +560,11 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
     events.push({id:1001,seq:1001,at,kind:'text',message_id:'recent',text:'DOMANDA RECENTE OLTRE DUE PAGINE'});
     events.push({id:1002,seq:1002,at,kind:'text',message_id:'latest',text:'ULTIMO AGGIORNAMENTO DOPO IL RECUPERO'});
     window.historyCursors = [];
+    // Shorten only the read deadline, keeping the actual polling loop and DOM.
+    const originalTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, ms, ...args) => originalTimeout(callback, ms === 15000 ? 50 : ms, ...args);
+    window.hangNextHistoryRead = true;
+    window.historyReadAborted = false;
     window.fetch = async (input, options = {}) => {
       const parsed = new URL(typeof input === 'string' ? input : input.url, location.href);
       const path = parsed.pathname;
@@ -573,6 +579,16 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
       if (path === '/api/workspace/conversations/pagination-fixture') {
         const after = Number(parsed.searchParams.get('after_id') || 0);
         window.historyCursors.push(after);
+        if (after === 500 && window.hangNextHistoryRead) {
+          window.hangNextHistoryRead = false;
+          // Model a stalled network read, rather than an immediate HTTP error.
+          return new Promise((resolve, reject) => {
+            options.signal?.addEventListener('abort', () => {
+              window.historyReadAborted = true;
+              reject(new DOMException('Read aborted', 'AbortError'));
+            }, {once:true});
+          });
+        }
         const pending = events.filter(event => event.id > after && (after < 1001 ? event.id <= 1001 : true));
         const batch = pending.slice(0,500);
         const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',activity_label:'Agente al lavoro',progress_label:'1/2 storie completate',stories:[{code:'US-801',title:'Filtro per mezzo',body:'Criteri della storia attiva. '.repeat(100),status_label:'In lavorazione',active:true},{code:'US-802',title:'Scelta del mezzo',body:'Criteri della storia completata',status_label:'Completata',active:false}],revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}]} : undefined;
@@ -587,9 +603,13 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   `});
   await page.send('Page.navigate', {url});
   await page.once('Page.loadEventFired', 30000, 'la conversazione attiva con più pagine');
+  await page.waitFor(`document.querySelector('.conv-composer-input')`,10000,'il compositore durante il recupero');
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.value='BOZZA DURANTE LA LETTURA SOSPESA';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('ULTIMO AGGIORNAMENTO DOPO IL RECUPERO')`, 15000, 'gli ultimi messaggi raggiunti senza premere Carica altri messaggi', () => page.evaluate(`JSON.stringify({cursors:window.historyCursors,text:document.querySelector('.conv-timeline')?.textContent.slice(-500)})`));
   const result = await page.evaluate(`({cursors:window.historyCursors,initial:document.querySelector('.conv-timeline').textContent.includes('DOMANDA INIZIALE PAGINATA'),recent:document.querySelector('.conv-timeline').textContent.split('DOMANDA RECENTE OLTRE DUE PAGINE').length-1,more:!!document.querySelector('[data-conversation-history-more]')})`);
   if (!result.initial || result.recent !== 1 || result.more || ![0,500,1000,1001].every(cursor => result.cursors.includes(cursor))) throw new Error('Cronologia incompleta o duplicata: ' + JSON.stringify(result));
+  if (!await page.evaluate(`window.historyReadAborted && window.historyCursors.filter(cursor=>cursor===500).length===2 && document.querySelector('.conv-composer-input').value==='BOZZA DURANTE LA LETTURA SOSPESA'`)) throw new Error('La lettura sospesa non è stata riprovata o ha perso la bozza');
+  ok(CLAIMS[22], 'richiesta sospesa annullata, stesso cursore riprovato e nuovi messaggi ricevuti conservando la bozza');
   if (exceptions.length) throw new Error('Eccezioni durante il recupero della cronologia: ' + JSON.stringify(exceptions));
   ok(CLAIMS[18], 'la chat attiva legge automaticamente tre pagine, conserva il passato e continua a ricevere messaggi senza duplicati');
   await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});

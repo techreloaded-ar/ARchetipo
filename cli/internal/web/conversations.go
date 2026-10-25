@@ -202,11 +202,9 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 		alive[snapshot.id] = true
 	}
 	running := runningExecutionIDs(ctx, ws)
-	// Holding a thread is not the same as running it. A viewer that has just
-	// started holds every native conversation of the workspace, so it can be
-	// written to again without changing identity; the ones whose runtime was
-	// released have no process behind them, and answering "live" about those
-	// would tell a person that something is going on where nothing is.
+	// Native conversation lifetime follows its archive flag, independently of
+	// the runtime connection. Work and connection describe activity separately;
+	// releasing a runtime must not hide an open thread or offer a new identity.
 	views := make([]conversationEntryView, 0, min(len(records), closedLimit+len(alive)))
 	closedCount := 0
 	hasMoreClosed := false
@@ -215,6 +213,9 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 			continue
 		}
 		live := alive[record.ID] && record.Connection != execution.ConnectionReleased
+		if record.Native() {
+			live = record.Archive != execution.ArchiveArchived
+		}
 		if !live {
 			if closedCount >= closedLimit {
 				hasMoreClosed = true

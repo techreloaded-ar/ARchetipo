@@ -79,12 +79,13 @@ function working(state) {
 		conversationPendingMessage: state.pending || "",
 		conversationWorkingSince: state.since || 0,
 		conversationView: state.view || null,
+		conversationPollFailures: state.readFailures || 0,
 		Date,
 		Math,
 		out: null,
 	});
 	runInContext(
-		`${ACTIVITY_KINDS}\n${CONVERSATION_WORKING}\nout = conversationWorking();`,
+		`${js.match(/const CONVERSATION_POLL_FAILURE_LIMIT = \d+;/)[0]}\n${ACTIVITY_KINDS}\n${CONVERSATION_WORKING}\nout = conversationWorking();`,
 		ctx,
 	);
 	return ctx.out;
@@ -233,6 +234,10 @@ describe("la regola del turno", () => {
 			stato.seconds >= 6 && stato.seconds <= 9,
 			`l'attesa dovrebbe essere di circa 7 secondi, è ${stato.seconds}`,
 		);
+	});
+	it("un vecchio stato attivo non fa scorrere il contatore quando la lettura è fallita", () => {
+		assert.equal(working({ view: {session: {work: "TURN_ACTIVE"}}, readFailures: 3 }).active, false);
+		assert.equal(working({ view: {session: {work: "TURN_ACTIVE"}}, readFailures: 1 }).active, true);
 	});
 });
 

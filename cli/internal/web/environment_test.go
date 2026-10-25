@@ -121,10 +121,17 @@ func TestMissingRecipeUsesSeparateDurableTechnicalSession(t *testing.T) {
 		t.Fatal("no separate technical identity")
 	}
 	record := awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool {
-		return r.CurrentTurn != nil && r.Work == execution.SessionTurnActive
+		// The journal reserves the turn before StartTurn reaches the provider.
+		// Wait for delivery as well before inspecting the captured prompt.
+		provider.store.mu.Lock()
+		defer provider.store.mu.Unlock()
+		return r.CurrentTurn != nil && r.Work == execution.SessionTurnActive && provider.lastStart.Session.ConversationID == technicalID
 	}, "technical setup turn")
 	if record.Purpose != "environment" || record.Session.Native.ID == metadataOf(t, srv, productID).Session.Native.ID {
 		t.Fatal("setup reused product native session")
+	}
+	if !strings.Contains(provider.lastStart.Message, sessionInputGuidance) {
+		t.Fatal("technical session bypassed native conversation input guidance")
 	}
 	provider.completeCurrentTurn(t, "Serve una decisione sul requisito mancante.", execution.TurnCompleted)
 	awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool { return r.Work == execution.SessionIdle }, "technical question")

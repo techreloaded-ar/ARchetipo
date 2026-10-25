@@ -228,6 +228,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("POST /api/increments", s.handleCreateIncrement)
 	s.handleWorkspace("GET /api/increments/{id}", s.handleGetIncrement)
 	s.handleWorkspace("GET /api/increments/{id}/dossier", s.handleIncrementDossier)
+	s.handleWorkspace("GET /docs/test-results/{id}/{path...}", s.handleIncrementReport)
 	s.handleWorkspace("GET /api/increments/{id}/deletion-plan", s.handleIncrementDeletionPlan)
 	s.handleWorkspace("DELETE /api/increments/{id}", s.handleDeleteIncrement)
 	s.handleWorkspace("POST /api/increments/{id}/{action}", s.handleIncrementAction)

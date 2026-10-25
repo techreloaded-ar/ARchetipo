@@ -161,7 +161,7 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	view.Increment = &current
 }
 func incrementPrompt(r increment.Record, message string) string {
-	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork only in the dedicated sandbox %s. Read the persisted increment before acting. Never modify the parent backlog or open a PR before the business approval.\nWorkflow conversation: %s", r.ID, message, r.Workdir, r.ConversationID)
+	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork in the dedicated worktree %s. Read the persisted increment before acting. Keep product changes in this worktree; never modify the parent backlog or open a PR before the business approval. This worktree is local working separation, not an OS security sandbox. Environment configuration and repair belong to /archetipo-environment in its separate technical session. That session may publish the common recipe and its non-secret helpers through archetipo execution environment publish from this worktree; this does not publish product code or require manual edits in the parent checkout. Respect the harness's actual permissions and report missing capabilities.\n%s\nWorkflow conversation: %s", r.ID, message, r.Workdir, sessionInputGuidance, r.ConversationID)
 }
 func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()

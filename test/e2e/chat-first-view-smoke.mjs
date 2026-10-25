@@ -242,6 +242,15 @@ async function main(){
    assert.equal((await cliJSON(["spec","list"],undefined,sandbox)).items.length,1);
    ok("Storia originale ↔ lavoro ↔ PR; dossier esportabile; recupero dopo crash; approvazione umana e un’unica PR; merge dei developer senza falsare il backlog.");
   }
+  const reportDir=path.join(inc.workdir,"docs/test-results",inc.id);
+  await fs.mkdir(reportDir,{recursive:true});
+  await fs.writeFile(path.join(reportDir,"README.md"),"# Evidenza della versione locale\n<script>throw new Error('must stay inert')</script>\n");
+  const report=await fetch(view.url+"/docs/test-results/"+inc.id+"/README.md");
+  assert.equal(report.status,200);assert.match(report.headers.get("content-type"),/^text\/plain/);
+  assert.match(await report.text(),/Evidenza della versione locale/);
+  const reopened=await fetch(convURL+"/reopen",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+  assert.equal(reopened.status,200);assert.equal((await reopened.json()).session.session.native.id,native);
+  ok("Report letto dal worktree come testo inerte; riapertura ripetuta conserva la stessa sessione nativa.");
   assert.deepEqual(exceptions,[],"uncaught browser exceptions");
   ok("Primo messaggio → worktree e sessione; specifica senza conferma aggiuntiva; preview automatica; feedback e reload nello stesso lavoro; PR protetta.");
  } catch(error) {failure=error;console.error(error.stack || error);}

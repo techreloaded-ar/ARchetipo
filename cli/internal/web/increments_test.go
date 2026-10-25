@@ -92,6 +92,8 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if !strings.Contains(p.lastStart.Message, "/archetipo-increment "+r.ID) || p.lastStart.Session.Environment.WorkingDir != r.Workdir {
 		t.Fatal("initial turn lost the increment context")
 	}
+	assertIncrementSessionGuidance(t, p.lastStart.Message)
+	assertIncrementReportScope(t, srv, r.ID, r.Workdir)
 	service := increment.New(cfg, conn)
 	proposal := increment.Proposal{Intent: "Esportare i clienti in Excel."}
 	if _, err := service.Propose(context.Background(), r.ID, proposal); err != nil {
@@ -191,6 +193,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		if last.Session.Native.ID != view.Session.Session.Native.ID || last.Session.Environment.WorkingDir != r.Workdir || !strings.Contains(last.Message, "/archetipo-increment "+r.ID) {
 			t.Fatalf("resume changed the increment context: %#v", last)
 		}
+		assertIncrementSessionGuidance(t, last.Message)
 	}
 	// A restarted viewer holds the durable conversation without having an
 	// in-memory Codex connection. The action must resume before checking idle.
@@ -201,6 +204,19 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	p.store.loseRuntime()
 	resumeAction()
 }
+
+// Check the prompt actually delivered to the native provider, both on creation
+// and recovery: these paths used to bypass the ordinary action's input bridge.
+func assertIncrementSessionGuidance(t *testing.T, prompt string) {
+	t.Helper()
+	if !strings.Contains(prompt, sessionInputGuidance) {
+		t.Fatal("increment bypassed native conversation input guidance")
+	}
+	if strings.Contains(prompt, "Work only in the dedicated sandbox") || !strings.Contains(prompt, "archetipo execution environment publish") || !strings.Contains(prompt, "never modify the parent backlog") {
+		t.Fatal("increment lost the distinction between product edits and common environment publication")
+	}
+}
+
 func gitForIncrementCleanup(root, workdir string) ([]byte, error) {
 	cmd := exec.Command("git", "worktree", "remove", "--force", workdir)
 	cmd.Dir = root

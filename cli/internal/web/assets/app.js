@@ -5432,6 +5432,7 @@
 	// cursor survives and the loop keeps trying, and it gives up only after this
 	// many consecutive failures rather than polling forever.
 	const CONVERSATION_POLL_MS = 2000;
+	const CONVERSATION_READ_TIMEOUT_MS = 15000;
 	const CONVERSATION_POLL_FAILURE_LIMIT = 3;
 	// Ogni quanto scorre il contatore dell'attesa, e dove resta scritto che il
 	// dettaglio tecnico va tenuto aperto.
@@ -5466,6 +5467,8 @@
 	let conversationLink = ""; // note about the reading loop itself
 	let conversationPollTimer = null; // interval following the open conversation
 	let conversationPollBusy = false; // a poll is in flight: ticks never overlap
+	let conversationPollController = null;
+	let conversationPollGeneration = 0; // obsolete reads cannot change a newer loop
 	let conversationPollFailures = 0; // consecutive failed reads, for the give-up threshold
 	// The model choice belongs to the conversation that is about to start. It is
 	// deliberately separate from modelChoiceSelection above, which belongs to a
@@ -5646,6 +5649,9 @@
 	// consegna — non sta aspettando: sta aspettando *chi scrive*.
 	function conversationWorking() {
 		if (!conversationIsActive()) return { active: false };
+		// Once updates are unavailable, the old snapshot cannot substantiate a
+		// live elapsed counter. The agent's native turn itself is left alone.
+		if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) return { active: false };
 		const sessionWork = typeof conversationView !== "undefined" && conversationView && conversationView.session
 			? conversationView.session.work
 			: "";
@@ -7138,9 +7144,12 @@
 	}
 
 	function stopConversationPolling() {
-		if (conversationPollTimer === null) return;
-		clearInterval(conversationPollTimer);
+		conversationPollGeneration += 1;
+		if (conversationPollTimer !== null) clearInterval(conversationPollTimer);
 		conversationPollTimer = null;
+		conversationPollController?.abort();
+		conversationPollController = null;
+		conversationPollBusy = false;
 	}
 
 	// resetConversationState forgets the conversation of the workspace being
@@ -7339,8 +7348,10 @@
 		// that comes back for a conversation the page has since left is dropped
 		// instead of being drawn over the one now on screen (AC-2).
 		const followed = conversationsCurrentId;
+		const generation = conversationPollGeneration;
 		if (!followed) return;
 		conversationPollTimer = setInterval(async () => {
+			if (generation !== conversationPollGeneration) return;
 			if (noWorkspaceMode()) {
 				stopConversationPolling();
 				return;
@@ -7357,29 +7368,39 @@
 			// reopens a long timeline. Waiting for the history button here hides
 			// current work and questions behind the first page indefinitely.
 			conversationPollBusy = true;
+			const controller = new AbortController();
+			conversationPollController = controller;
+			// Only this read has a deadline; it never interrupts the native turn.
+			const deadline = setTimeout(() => controller.abort(), CONVERSATION_READ_TIMEOUT_MS);
 			let view;
 			try {
 				view = await apiGet(
 					`/api/workspace/conversations/${encodeURIComponent(followed)}?after_id=${conversationAfterID}`,
+					{ signal: controller.signal },
 				);
 			} catch (err) {
-				conversationPollBusy = false;
-				if (conversationsCurrentId !== followed) return;
+				if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 				conversationPollFailures += 1;
+				conversationLink = "Aggiornamento chat interrotto; riprovo automaticamente. Il lavoro dell’agente può continuare.";
 				if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) {
 					stopConversationPolling();
 					// Nothing is reconnecting any more, so the panel must stop
 					// implying that it is.
-					conversationLink = TEXT.conversationUnreadable(err.message || err);
+					conversationLink = TEXT.conversationUnreadable(err.name === "AbortError" ? "il server non ha risposto entro 15 secondi" : err.message || err);
 				}
 				renderConversationPanel();
 				return;
+			} finally {
+				clearTimeout(deadline);
+				if (generation === conversationPollGeneration) {
+					conversationPollBusy = false;
+					conversationPollController = null;
+				}
 			}
-			conversationPollBusy = false;
 			// The read left for one conversation and came back for another: what
 			// it carries belongs to the conversation that was on screen when it
 			// started, and nothing of it may reach the one that is on screen now.
-			if (conversationsCurrentId !== followed) return;
+			if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 			conversationPollFailures = 0;
 			conversationLink = "";
 			const appended = applyConversationView(view);
@@ -7964,8 +7985,8 @@
 
 	// ---- API helpers --------------------------------------------------------
 
-	async function apiGet(url) {
-		const r = await fetch(url, { headers: { Accept: "application/json" } });
+	async function apiGet(url, options = {}) {
+		const r = await fetch(url, { headers: { Accept: "application/json" }, signal: options.signal });
 		return parseResponse(r);
 	}
 	async function apiPost(url, body) {

@@ -14,6 +14,12 @@ Read the request, current specification, learning and applicable repository
 instructions. Understand whose problem this is, the desired outcome, current
 behavior and relevant constraints. Ask only questions needed to make the next
 useful decision. Do not assume that a proposed feature is the best solution.
+Respect requests to explore or discuss an idea before implementing it. When a
+product choice needs the person's answer, ask and wait before implementing the
+behavior that depends on it. Use blocking input when available; otherwise end
+the turn with the question so the next message resumes this work. Silence is not
+a choice. State reversible implementation assumptions without presenting them
+as decisions the person made.
 
 Persist the evolving specification with `increment propose <id> --file -`:
 
@@ -56,6 +62,12 @@ Reuse an already running preview through compatible checks directly; do not
 prepare again merely because a new turn started. Prepare the project's environment
 recipe when setup is missing or changed; delegate `/archetipo-environment`
 when configuration or repair is needed, preserving its technical session identity.
+Keep product edits in this worktree. The technical environment session can publish
+the common recipe and non-secret helpers through the CLI from this worktree;
+this is environment configuration, not product publication or a manual parent
+checkout edit. Worktrees do not override actual harness permissions. When View's
+environment controls are available, direct repair there rather than asking the
+person to create and coordinate a replacement session manually.
 Use managed resources, assigned ports and synthetic data. Never touch production
 services, copy secrets, start unowned background processes or reset demo data just
 because a revision starts. A missing capability is a concrete blocker.

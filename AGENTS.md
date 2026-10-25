@@ -266,6 +266,8 @@ product work is covered by the browser smokes below and the increment Go suite.
 ### Standalone smoke tests
 
 - `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome with only the agent and GitHub simulated. It starts from an original enterprise story, develops and revises a specification, recovers the same native session after process death while preserving a checkpoint, tests preview and reload, requires business approval for a single PR, reconciles later developer commits and verifies bidirectional story/work/PR links and dossier export. Reports and desktop/mobile screenshots remain ignored.
+  It also reads an increment report from its own worktree as inert text and
+  verifies that reopening an already open thread preserves its native identity.
 
 - `npm run test:view-wiki-smoke`: drives the real Documentation page in headless Chrome against the real viewer and native Codex adapter, with only the agent binary simulated. It presses Create, Refresh, Check and Ask about this page; validates the generated bootstrap through the CLI; verifies persisted changed-page lists, exact selected-page context, separate native conversations, hidden technical receipts, history after reload and a 390px viewport. It uses no credentials or non-local traffic, reports missing Chrome as failure, skips Windows explicitly because the fake uses a POSIX shebang, and writes screenshots plus HTML/JSON reports into the ignored run directory.
 
@@ -304,6 +306,8 @@ When adding or modifying E2E tests, prefer explicit fixtures with a complete `.a
 The page-load smoke also follows a live conversation across three 500-event
 pages without clicking the history control. It verifies that old messages remain,
 the current question appears exactly once, and subsequent updates still arrive.
+It also stalls one browser read until its abort signal fires, then verifies an
+automatic retry at the same cursor, continued updates and a preserved draft.
 This covers the recovery path after an increment action reopens a long timeline;
 the deterministic provider fixture uses no agent or credentials. At 390px it also
 adds a long increment and a pending permission, verifies that the decision and

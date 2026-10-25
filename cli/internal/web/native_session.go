@@ -941,6 +941,9 @@ func (s *Server) pastNativeConversationView(ws *workspaceSession, record convers
 			ExecutionIDs: append([]string(nil), record.ExecutionIDs...)},
 	}
 	view.NextTurn = record.NextTurn
+	if record.Archive != execution.ArchiveArchived {
+		view.Conversation.State = execution.RunActive
+	}
 	if history, readErr := ws.conversationStore().ReadEvents(context.Background(), record.ID, 0, 0); readErr == nil {
 		view.SpecDrafts = ws.specDraftsView(context.Background(), record.ID, history.Events)
 		s.attachIncrement(context.Background(), ws, record, &view)
@@ -1022,8 +1025,10 @@ func (s *Server) handleArchiveNativeConversation(w http.ResponseWriter, r *http.
 func (s *Server) handleReopenNativeConversation(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
 	id := strings.TrimSpace(r.PathValue("id"))
-	if _, live := ws.conversation.get(id); live {
-		writeError(w, iox.NewConflict("the conversation "+id+" is already open", "continue it directly", nil))
+	if snapshot, live := ws.conversation.get(id); live {
+		// A stale tab may still offer resume after another tab or a restart
+		// restored this same thread. Return it without starting another turn.
+		writeJSON(w, http.StatusOK, s.nativeConversationView(r.Context(), ws, snapshot, 0))
 		return
 	}
 	snapshot, err := s.reopenNativeConversation(r.Context(), ws, id, true)
