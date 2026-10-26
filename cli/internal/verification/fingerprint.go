@@ -49,7 +49,8 @@ func fingerprint(root string, recipe Recipe, inputs []string, extra any) (string
 		}
 		_, _ = fmt.Fprintln(h, path, info.Size(), info.ModTime().UnixNano())
 	}
-	paths := append([]string{}, inputs...)
+	// A changed local file (for example a rotated .env.local) invalidates reuse.
+	paths := append(append([]string{}, inputs...), recipe.LocalFiles...)
 	sort.Strings(paths)
 	for _, rel := range paths {
 		path, err := localPath(root, rel)

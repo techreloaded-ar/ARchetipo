@@ -306,6 +306,9 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 	// its own inputs, outputs, commands, toolchain and environment keys only.
 	preparationRecipe := recipe
 	preparationRecipe.Checks, preparationRecipe.Cleanup = nil, nil
+	if err := copyLocalFiles(ctx, s.Root, recipe.LocalFiles); err != nil {
+		return Result{}, err
+	}
 	key, err := fingerprint(s.Root, preparationRecipe, recipe.Inputs, s.env)
 	if err != nil {
 		return Result{}, err

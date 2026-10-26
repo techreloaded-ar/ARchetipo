@@ -4,10 +4,12 @@ package verification
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -43,16 +45,19 @@ type Resource struct {
 }
 
 type Recipe struct {
-	Ports     []string         `json:"ports,omitempty"`
-	Resources []Resource       `json:"resources,omitempty"`
-	Version   int              `json:"version"`
-	Inputs    []string         `json:"inputs"`
-	Outputs   []string         `json:"outputs"`
-	EnvKeys   []string         `json:"env_keys,omitempty"`
-	Prepare   []Command        `json:"prepare"`
-	Probe     []Command        `json:"probe"`
-	Cleanup   []Command        `json:"cleanup,omitempty"`
-	Checks    map[string]Check `json:"checks"`
+	Ports     []string   `json:"ports,omitempty"`
+	Resources []Resource `json:"resources,omitempty"`
+	Version   int        `json:"version"`
+	Inputs    []string   `json:"inputs"`
+	Outputs   []string   `json:"outputs"`
+	EnvKeys   []string   `json:"env_keys,omitempty"`
+	// LocalFiles are untracked files (for example .env.local) the person chose
+	// to make available in every checkout, copied from the original workspace.
+	LocalFiles []string         `json:"local_files,omitempty"`
+	Prepare    []Command        `json:"prepare"`
+	Probe      []Command        `json:"probe"`
+	Cleanup    []Command        `json:"cleanup,omitempty"`
+	Checks     map[string]Check `json:"checks"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
@@ -100,7 +105,7 @@ func parseRecipe(root string, raw []byte) (Recipe, error) {
 	if recipe.Version != 1 || len(recipe.Probe) == 0 {
 		return recipe, invalid("environment recipe requires version 1 and at least one readiness probe")
 	}
-	for _, paths := range [][]string{recipe.Inputs, recipe.Outputs} {
+	for _, paths := range [][]string{recipe.Inputs, recipe.Outputs, recipe.LocalFiles} {
 		for _, path := range paths {
 			if _, err = localPath(root, path); err != nil {
 				return recipe, err
@@ -210,4 +215,54 @@ func validateResources(recipe Recipe) error {
 		return invalid("named ports require managed resources")
 	}
 	return nil
+}
+
+// copyLocalFiles brings the declared local files from the original checkout.
+// Their values are never read into reports; a file Git would commit is refused,
+// so credentials cannot reach a commit.
+func copyLocalFiles(ctx context.Context, root string, files []string) error {
+	source := environmentrecipe.Workspace(root)
+	if same, _ := sameDir(source, root); same {
+		return nil
+	}
+	for _, rel := range files {
+		from, err := localPath(source, rel)
+		if err != nil {
+			return err
+		}
+		target, err := localPath(root, rel)
+		if err != nil {
+			return err
+		}
+		if err = exec.CommandContext(ctx, "git", "-C", root, "check-ignore", "-q", "--", rel).Run(); err != nil {
+			return invalid("local file is not ignored by Git: " + rel)
+		}
+		info, err := os.Stat(from)
+		if os.IsNotExist(err) {
+			return iox.NewPrecondition("declared local file is missing: "+rel, "create it in "+source+" or remove it from local_files", err)
+		}
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(from)
+		if err != nil {
+			return err
+		}
+		if err = os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err = os.WriteFile(target, raw, info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sameDir(a, b string) (bool, error) {
+	left, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false, err
+	}
+	right, err := filepath.EvalSymlinks(b)
+	return left == right, err
 }

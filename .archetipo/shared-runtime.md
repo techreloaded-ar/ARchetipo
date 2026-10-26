@@ -110,6 +110,23 @@ these guarantees: migrate their services into resources and remove fixed ports.
 Never erase `.archetipo` to stop services: stop/reconcile resources first.
 Required real browser/API/database checks cannot be replaced with mocks.
 
+Keep each checkout's data across stops, restarts and revision rounds: a database
+resource stores data in a persistent location owned by the checkout (for example a
+named volume), never in a container or directory that `stop` removes. When it is
+first created and the person has declared their local development database as the
+data source (for example a connection variable in a declared local file), copy it
+read-only into the checkout's own database (dump/restore or the engine's
+equivalent); otherwise start empty. Apply pending migrations on every preparation.
+Seed synthetic data automatically only into an empty database. Never reseed, reset
+or drop a database that holds data without the person's explicit request, and never
+point a checkout at the developer's own database or migrate it.
+
+The recipe's `local_files` lists untracked files (for example `.env.local`) the
+person chose to make available in every checkout; `prepare` copies them from the
+original workspace. Preserve that list whenever you reconfigure the recipe. Never
+add entries yourself: propose them and wait for the person's choice. Never print,
+summarize or copy their values elsewhere.
+
 Reuse a service only when it was explicitly supplied for this verification or its
 ownership by this working directory and test scope can be verified. A familiar
 name, a spec-code prefix, a loopback port or synthetic-looking data is not proof

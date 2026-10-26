@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -357,5 +358,51 @@ func TestPreparationLogsAreBoundedAndConfinedToCheckout(t *testing.T) {
 	result.Steps[0].LogPath = filepath.Join(t.TempDir(), "unrelated.log")
 	if _, err = s.Logs(result, 32); err == nil {
 		t.Fatal("accepted a log outside the checkout's environment reports")
+	}
+}
+
+func TestLocalFilesComeFromTheOriginalCheckoutAndInvalidateReuse(t *testing.T) {
+	git := func(dir string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	parent := t.TempDir()
+	git(parent, "init", "-b", "main")
+	git(parent, "config", "user.email", "tests@example.test")
+	git(parent, "config", "user.name", "Tests")
+	mustWrite(t, filepath.Join(parent, ".gitignore"), ".env.local\n.archetipo/\n")
+	git(parent, "add", ".gitignore")
+	git(parent, "commit", "-m", "initial")
+	mustWrite(t, filepath.Join(parent, ".env.local"), "FIRST=1")
+	mustWrite(t, filepath.Join(parent, "tracked.env"), "SECRET=1")
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	git(parent, "worktree", "add", "-b", "feature", checkout)
+	recipe := Recipe{Version: 1, LocalFiles: []string{".env.local"}, Probe: []Command{{Name: "ready", Argv: []string{"go", "version"}, TimeoutSeconds: 1}}}
+	writeRecipe(t, checkout, recipe)
+	s := New(checkout, "evidence")
+	s.Runner = &testRunner{}
+	read := func() string {
+		raw, err := os.ReadFile(filepath.Join(checkout, ".env.local"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if first := execute(t, s, "prepare"); !first.Passed || read() != "FIRST=1" {
+		t.Fatalf("local file not copied: %+v", first)
+	}
+	if again := execute(t, s, "prepare"); !again.Reused {
+		t.Fatal("unchanged local file forced another setup")
+	}
+	mustWrite(t, filepath.Join(parent, ".env.local"), "SECOND=1")
+	if changed := execute(t, s, "prepare"); changed.Reused || read() != "SECOND=1" {
+		t.Fatalf("changed local file reused stale setup: %+v", changed)
+	}
+	recipe.LocalFiles = []string{"tracked.env"}
+	writeRecipe(t, checkout, recipe)
+	if _, err := s.Execute(context.Background(), "prepare", "", "", false); err == nil {
+		t.Fatal("copied a file Git would commit")
 	}
 }

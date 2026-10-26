@@ -20,13 +20,22 @@ synthetic data. Declare all persistent services through managed `resources` with
 `timeout_seconds <= 30`; use named `ports`, `ARCHETIPO_PORT_<NAME>`, and verify
 `ARCHETIPO_RESOURCE_OWNER` plus `ARCHETIPO_RESOURCE_NAME` before reuse/stop.
 Never adopt unrelated services or copy credentials, installed dependencies,
-resource ownership records or data from another checkout.
+resource ownership records or data from another checkout. The only exceptions are
+the person's declared `local_files` and the read-only initial copy of a declared
+local development database. When the application reads untracked configuration
+present in the original workspace (for example `.env.local`), propose declaring
+it in `local_files` and wait for the person's choice; until then use synthetic
+configuration.
 
 Revision rounds reuse this checkout's services and demonstration data. Make
 preparation and synthetic-data seeding idempotent: preserve existing demo rows
-and user edits, apply needed migrations, and add only missing fixtures. Never
-reset a database or create a replacement service just because development or a
-preview resumes. Destructive resets require an explicit request. Readiness
+and user edits, apply needed migrations, and add only missing fixtures. Keep a
+database's data in a persistent location the checkout owns (for example a named
+volume): `stop` must never discard it. On first creation, copy the declared local
+development database read-only when one is declared; seed only an empty database.
+Never reset a database or create a replacement service just because development or a
+preview resumes. Destructive resets and reseeding a database that holds data
+require an explicit request. Readiness
 failure and recipe changes follow the managed recovery contract and must be
 reported if their recovery loses demonstration data.
 
@@ -35,7 +44,8 @@ Call only these operations:
 - `archetipo execution environment show`: `kind: verification_result`, recipe in
   `data`. Existing local projects work until their first common publication.
 - `archetipo execution environment configure --file -`: stdin version 1 JSON
-  with real `inputs`, `outputs`, optional `env_keys`, bounded idempotent `prepare`,
+  with real `inputs`, `outputs`, optional `env_keys`, `local_files` (only those the
+  person chose; preserve existing entries), bounded idempotent `prepare`,
   readiness `probe`, optional `cleanup`, `checks`, `ports` and `resources`.
   Returns `kind: verification_result`, configured recipe in `data`.
 - For a web application, `archetipo execution preview configure --file -`: stdin

@@ -16,6 +16,7 @@ owned cleanup commands and invalidates setup and checks before doing so.
   "inputs": ["package.json", "package-lock.json", "prisma/schema.prisma", "test/support/setup.mjs"],
   "outputs": ["node_modules/.package-lock.json", "node_modules/.prisma/client/index.js"],
   "env_keys": ["NODE_OPTIONS"],
+  "local_files": [".env.local"],
   "prepare": [{"name":"setup", "argv":["node","test/support/setup.mjs"], "timeout_seconds":120}],
   "probe": [{"name":"ready", "argv":["node","test/support/setup.mjs","status"], "timeout_seconds":5}],
   "cleanup": [{"name":"cleanup", "argv":["node","test/support/setup.mjs","stop"], "timeout_seconds":10}],
@@ -36,6 +37,13 @@ to label resources and refuse unknown owners. Service endpoints, synthetic
 fixtures and cleanup belong in idempotent project tooling. Never store real
 secrets in the recipe or argv. Environment input values are hashed, not recorded.
 Declare every environment variable affecting validity in `env_keys`.
+
+`local_files` names untracked local configuration (for example `.env.local`)
+that the person chose to make available in every checkout. `prepare` copies each
+file from the original workspace before setup, refuses a file Git would commit,
+and hashes its content, so a change invalidates reuse; values are never recorded.
+A recipe that declares `local_files`, even empty, replaces the legacy copy of
+every root `.env*` file into new spec worktrees. Only the person adds entries.
 
 All recipe paths are project-relative; symlinks are rejected so a worktree cannot
 silently certify a parent's installation. Inputs are files or directories, not

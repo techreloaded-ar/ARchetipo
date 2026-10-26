@@ -10,6 +10,7 @@ package gitwt
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -233,6 +235,16 @@ func Resolve(repoRoot string, cfg domain.WorktreeConfig, code string) (rel strin
 }
 
 func copyRootEnvFiles(repoRoot, worktreeAbs string) error {
+	// A recipe that names its local files owns the choice: preparation copies
+	// exactly those, so the legacy copy of every .env* file stays out of it.
+	if raw, readErr := environmentrecipe.Read(repoRoot, environmentrecipe.Environment); readErr == nil {
+		var recipe struct {
+			LocalFiles *[]string `json:"local_files"`
+		}
+		if json.Unmarshal(raw, &recipe) == nil && recipe.LocalFiles != nil {
+			return nil
+		}
+	}
 	matches, err := filepath.Glob(filepath.Join(repoRoot, ".env*"))
 	if err != nil {
 		return fmt.Errorf("copying env files into worktree: %w", err)
