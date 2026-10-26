@@ -187,6 +187,7 @@ type InputQuestion struct {
 	Prompt    string        `json:"prompt"`
 	Options   []InputOption `json:"options,omitempty"`
 	AllowText bool          `json:"allow_text"`
+	Multiple  bool          `json:"multiple,omitempty"`
 	Secret    bool          `json:"secret,omitempty"`
 }
 

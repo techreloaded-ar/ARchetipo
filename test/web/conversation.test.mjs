@@ -2060,6 +2060,13 @@ describe('runtime input questions', () => {
   assert.match(html, /type="password"[^>]* disabled/);
   assert.match(html, /type="submit"[^>]* disabled/);
  });
+ it('renders multiple choices as checkboxes and preserves the selected cards', () => {
+  const html = renderConversation(pending([{ id: 'people', header: 'Livia', prompt: 'Per chi?', multiple: true, allow_text: true, options: [{ value: 'clients', label: 'Clienti' }, { value: 'staff', label: 'Colleghi' }] }]), '', { inputDrafts: { 'input-1': { people: { options: ['clients', 'staff'], text: '' } } } });
+  assert.equal((html.match(/type="checkbox"[^>]* checked/g) || []).length, 2);
+  assert.match(html, /Puoi scegliere più risposte/);
+  assert.match(html, /<legend>Livia<\/legend>/);
+  assert.doesNotMatch(html, /type="radio"/);
+ });
  it('retains the native response fallback for an unknown schema', () => {
   const html = renderConversation(pending([]), '', {});
   assert.match(html, /<details><summary>Dettaglio della richiesta/);

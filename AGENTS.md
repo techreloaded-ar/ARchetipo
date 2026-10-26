@@ -372,3 +372,9 @@ preserve the live iframe across Preview/Increment tab changes.
   native identities, Git recovery refs without environment archives and a 390px confirmation dialog. No AI
   credentials or remote traffic; missing Chrome fails. Reports and screenshots
   remain under ignored `test/workspaces/increment-deletion-smoke/` paths.
+
+The page-load smoke also exercises discovery question cards with named personality
+headers, single and multiple choices and free text. It checks that polling and a
+failed delivery preserve the selection, retries send the same answer, and the
+next question stays in the same conversation at desktop and 390px widths.
+Screenshots remain in the ignored run directory.

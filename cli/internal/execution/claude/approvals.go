@@ -55,6 +55,10 @@ func (s *streamSession) ask(f frame) {
 	if request.Subtype != subtypeCanUseTool {
 		return
 	}
+	if request.ToolName == "AskUserQuestion" {
+		s.askInput(id, request.Input)
+		return
+	}
 	approval := execution.PendingApproval{
 		ID:        id,
 		ToolName:  toolNameOf(request),
@@ -108,6 +112,7 @@ func (s *streamSession) withdraw(requestID string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.inputs, id)
 	s.forgetAskedLocked(id)
 }
 
@@ -118,6 +123,7 @@ func (s *streamSession) withdrawAll() {
 	defer s.mu.Unlock()
 	s.asked = make(map[string]execution.PendingApproval)
 	s.askedIn = nil
+	s.inputs = make(map[string]execution.PendingInput)
 }
 
 // forgetAskedLocked removes one question from both the lookup and the order.

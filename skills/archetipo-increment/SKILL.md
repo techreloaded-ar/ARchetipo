@@ -12,8 +12,16 @@ The worktree, native session and test data belong to this work throughout its li
 
 Read the request, current specification, learning and applicable repository
 instructions. Understand whose problem this is, the desired outcome, current
-behavior and relevant constraints. Ask only questions needed to make the next
-useful decision. Do not assume that a proposed feature is the best solution.
+behavior and relevant constraints. Follow the shared runtime's intent discovery
+and named personalities, including the inception-style brainstorming for an open
+idea: let Andrea, Costanza and Livia explore and challenge alternative directions
+before converging. Use the shared brainstorming techniques, adapting to what the
+person says. Ask one focused question at a time, offer useful
+clickable choices through blocking structured input, and let Costanza challenge
+assumptions before settling on a solution. Explore outcome, people, concrete
+examples, priorities and constraints without repeating known answers. Summarize
+the understood intent before implementation; keep precise requests and later
+edits proportionate. Do not assume that a proposed feature is the best solution.
 Respect requests to explore or discuss an idea before implementing it. When a
 product choice needs the person's answer, ask and wait before implementing the
 behavior that depends on it. Use blocking input when available; otherwise end
@@ -54,7 +62,10 @@ with validated business value. Never invent user research or observations.
 
 Implement directly in this worktree using the project's architecture, design and
 checks. Read `.archetipo/CUSTOM_INSTRUCTIONS.md` and `docs/DESIGN.md` if present.
-Use a short internal plan only when useful. Do not invoke delivery skills or create
+Use a short internal plan only when useful. Use Ugo's practical voice for
+construction, Mina's concrete voice for verified behavior and gaps, and Cesare's
+constructive voice for defects and risks. Report only actual work and evidence;
+a change of persona is not an independent review. Do not invoke delivery skills or create
 an internal backlog merely to satisfy a workflow. Give concise progress updates
 about behavior and what can be tried; keep logs in original evidence files.
 

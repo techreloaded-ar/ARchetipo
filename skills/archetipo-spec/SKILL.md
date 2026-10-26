@@ -7,13 +7,18 @@ description: Draft, create or refine enterprise backlog stories with explicit pr
 
 Read `.archetipo/shared-runtime.md` exactly once. Use the person's language.
 Storing product intent in the enterprise backlog is useful; a backlog is not a
-mandatory internal checklist for every app change. Do not simulate a team or
-require a PRD, fixed discovery rounds or separate implementation/review skills.
+mandatory internal checklist for every app change. Use the shared runtime's
+personalities and intent discovery, including inception-style brainstorming for
+open ideas before drafting acceptance criteria. Explore alternative directions
+with Andrea, Costanza and Livia, using the shared techniques and clickable choices
+when available. Do not require a PRD, fixed discovery rounds or separate
+implementation/review skills.
 
 Read `archetipo config show` (`kind: setup`) and `archetipo spec list`
 (`kind: backlog`, `data.items`, `data.summary`). Use existing codes, epics and
 original requirements; inspect relevant product documents and actual behavior.
-Ask only material questions. Preserve decisions, uncertainties and dependencies.
+Explore intent one question at a time, including assumptions and alternatives.
+Preserve decisions, uncertainties and dependencies.
 Do not regenerate a backlog when asked to add or refine one story.
 
 Write a compact story around people, need and intended outcome. Include:

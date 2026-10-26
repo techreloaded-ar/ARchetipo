@@ -108,6 +108,7 @@ const CLAIMS = [
   "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
   "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
   "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
+  "le domande delle personalità accettano scelte cliccabili, selezioni multiple e testo libero, conservando la risposta dopo un errore e il polling",
   "una lettura della chat sospesa viene annullata e riprovata senza reload, perdite di messaggi o della bozza",
 ];
 
@@ -177,6 +178,7 @@ async function main() {
     await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
+    await exerciseDiscoveryQuestions(browser, view.url, runDir);
     await exerciseLiveConversationPagination(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
@@ -686,6 +688,73 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.waitFor(`!document.querySelector('.conv-timeline')?.textContent.includes('DOMANDA INIZIALE PAGINATA')`,10000,'il nuovo spazio di conversazione');
   if (exceptions.length) throw new Error('Eccezioni durante archiviazione e nuova conversazione: '+JSON.stringify(exceptions));
   ok(CLAIMS[20], 'il controllo è disabilitato durante l’archiviazione e il primo click successivo apre una nuova conversazione');
+  await page.close();
+}
+
+async function exerciseDiscoveryQuestions(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {source: `
+    const originalFetch = window.fetch.bind(window);
+    window.discoveryAnswers = [];
+    window.discoveryReads = 0;
+    window.discoveryFail = true;
+    let step = 0;
+    const questions = [
+      {id:'outcome',header:'Costanza',prompt:'Quale risultato vuoi ottenere?',allow_text:true,options:[{value:'time',label:'Risparmiare tempo',description:'Ridurre il lavoro manuale'},{value:'errors',label:'Meno errori',description:'Aumentare la precisione'}]},
+      {id:'people',header:'Livia',prompt:'Chi userà il risultato?',multiple:true,allow_text:true,options:[{value:'clients',label:'Clienti'},{value:'staff',label:'Colleghi'}]},
+      {id:'example',header:'Emanuele',prompt:'Quale esempio concreto vuoi provare?',allow_text:true,options:[{value:'example',label:'Un caso tipico'}]},
+    ];
+    const view = () => ({available:true,provider_id:'fixture',conversation:{id:'discovery-fixture',state:'ACTIVE'},session:{work:step<3?'WAITING_INPUT':'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:step<3?[{id:'question-'+step,title:'Approfondiamo la tua idea',questions:[questions[step]]}]:[]},events:[],approvals:[],runs:[]});
+    const json = (body,status=200) => new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'discovery-fixture',title:'La tua idea',live:true,message_count:0}],closed_limit:20});
+      if (path === '/api/workspace/conversations/discovery-fixture') {window.discoveryReads++;return json(view());}
+      if (path.startsWith('/api/workspace/conversations/discovery-fixture/inputs/') && method === 'POST') {
+        window.discoveryAnswers.push({path,body:JSON.parse(options.body)});
+        if (window.discoveryFail) {window.discoveryFail=false;return json({error:'Risposta non consegnata, riprova',code:'E_CONFLICT'},409);}
+        step++;return json(view());
+      }
+      return originalFetch(input,options);
+    };
+  `});
+  await page.send("Page.navigate", {url});
+  await page.once("Page.loadEventFired",30000,"il caricamento delle domande");
+  await page.waitFor(`!!document.querySelector('[data-conversation-id="discovery-fixture"]')`,10000,'il thread di discovery');
+  await page.evaluate(`document.querySelector('[data-conversation-id="discovery-fixture"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-0"]')`,10000,'la domanda di Costanza');
+  await page.evaluate(`document.querySelector('[data-conversation-input-option][value="time"]').closest('label').click()`);
+  // Wait for a real subsequent polling read, not an arbitrary delay.
+  const reads = await page.evaluate('window.discoveryReads');
+  await page.waitFor(`window.discoveryReads > ${reads}`,10000,'un aggiornamento con la scelta ancora da inviare');
+  if (!await page.evaluate(`document.querySelector('[data-conversation-input-option][value="time"]').checked && !document.querySelector('[data-conversation-input-option][value="errors"]').checked`)) throw new Error('Il polling ha perso o cambiato la scelta');
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`window.discoveryAnswers.length===1 && !document.querySelector('[data-conversation-input-form] button').disabled`,10000,'la risposta fallita');
+  if (!await page.evaluate(`document.querySelector('[data-conversation-input-option][value="time"]').checked`)) throw new Error('La consegna fallita ha perso la selezione');
+  await page.send('Page.captureScreenshot',{format:'png'}).then(shot=>fs.writeFile(path.join(runDir,'discovery-desktop.png'),Buffer.from(shot.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-1"]')`,10000,'la domanda successiva di Livia');
+  await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await page.evaluate(`document.querySelectorAll('[data-conversation-input-option]').forEach(option=>option.closest('label').click())`);
+  if (!await page.evaluate(`document.querySelectorAll('[data-conversation-input-option]:checked').length===2`)) throw new Error('Le risposte multiple si escludono');
+  await page.send('Page.captureScreenshot',{format:'png'}).then(shot=>fs.writeFile(path.join(runDir,'discovery-mobile.png'),Buffer.from(shot.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-2"]')`,10000,'la domanda con risposta personale');
+  await page.evaluate(`(() => {document.querySelector('[data-conversation-input-option]').closest('label').click();const field=document.querySelector('[data-conversation-input-text]');field.value='Il mio esempio concreto';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  if (await page.evaluate(`!!document.querySelector('[data-conversation-input-option]:checked')`)) throw new Error('Il testo libero conserva una scelta incompatibile');
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`window.discoveryAnswers.length===4 && !document.querySelector('[data-conversation-input-form]')`,10000,'tutte le risposte consegnate');
+  const answers = await page.evaluate('window.discoveryAnswers');
+  const actual = answers.map(answer=>answer.body.answers);
+  const expected = [{outcome:['time']},{outcome:['time']},{people:['clients','staff']},{example:['Il mio esempio concreto']}];
+  if (JSON.stringify(actual)!==JSON.stringify(expected)) throw new Error('Risposte inviate alterate: '+JSON.stringify(actual));
+  if (exceptions.length) throw new Error('Eccezioni nelle domande cliccabili: '+JSON.stringify(exceptions));
+  ok('discovery-input','Le domande delle personalità conservano le scelte durante polling ed errori e inviano risposte singole, multiple e libere nello stesso thread, anche a 390px');
   await page.close();
 }
 

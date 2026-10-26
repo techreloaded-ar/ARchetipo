@@ -37,6 +37,7 @@ func ConversationPrompt(opening string, actions []ConversationAction, resumed st
 		questionGuidance,
 		"Work with the person on this ARchetipo workspace. You may inspect and modify it, use the installed tools, and invoke the skills available in your runtime when useful.",
 		"Follow the workspace instructions and the native permission policy of your harness.",
+		"Read .archetipo/shared-runtime.md once when available and follow its intent discovery and ARchetipo personality guidance. For a new open product idea, explore the problem, people, desired outcome, concrete examples and constraints one question at a time before implementing. Use Costanza to challenge assumptions and the other named perspectives when useful. Reuse information already supplied, keep precise requests proportionate and honor a request to proceed.",
 	}
 	// actions is no longer rendered. The prompt used to publish the process
 	// vocabulary so a read-only agent could *propose* a step instead of taking

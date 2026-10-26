@@ -1235,15 +1235,16 @@
 		const id = escapeHtml(textAt(question, "id"));
 		const saved = draft && draft[question.id] || {};
 		const disabled = busy ? " disabled" : "";
+		const selected = Array.isArray(saved.options) ? saved.options : [saved.option];
 		const options = arrayAt(question, "options").map((option) => `<label class="conv-input-option">
-			<input type="radio" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${saved.option === option.value ? " checked" : ""}${disabled}${question.allow_text ? "" : " required"}>
+			<input type="${question.multiple ? "checkbox" : "radio"}" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${selected.includes(option.value) ? " checked" : ""}${disabled}${question.allow_text || question.multiple ? "" : " required"}>
 			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}</span>
 		</label>`).join("");
 		const answer = question.allow_text ? `<label class="conv-input-text">${options ? "Oppure scrivi una risposta" : "La tua risposta"}
 			${question.secret ? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(saved.text || "")}"${disabled}${options ? "" : " required"}>`
 			: `<textarea data-conversation-input-text rows="2"${disabled}${options ? "" : " required"}>${escapeHtml(saved.text || "")}</textarea>`}
 		</label>` : "";
-		return `<fieldset data-conversation-input-question="${id}">${textAt(question, "header") ? `<legend>${escapeHtml(question.header)}</legend>` : ""}<p>${escapeHtml(textAt(question, "prompt"))}</p>${options}${answer}</fieldset>`;
+		return `<fieldset data-conversation-input-question="${id}">${textAt(question, "header") ? `<legend>${escapeHtml(question.header)}</legend>` : ""}<p>${escapeHtml(textAt(question, "prompt"))}</p>${options ? `<small class="conv-input-hint">${question.multiple ? "Puoi scegliere più risposte." : "Scegli una risposta."}</small>` : ""}${options}${answer}</fieldset>`;
 	}
 
 	function renderConversationInputs(view, ui) {

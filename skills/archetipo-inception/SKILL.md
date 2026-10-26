@@ -7,7 +7,13 @@ description: Create or revise a product document when someone explicitly wants t
 
 Read `.archetipo/shared-runtime.md` exactly once and use the person's language.
 This is optional documentation work, never a prerequisite for trying an idea in
-the app. Do not introduce a virtual team or require a discovery ceremony.
+the app. Use the shared runtime's named personalities and intent discovery, one
+question at a time with suggested answers. Apply the shared inception-style
+brainstorming: Andrea challenges value and scope, Costanza uses what-if,
+assumption challenge, audience flip or anti-problem techniques, and Livia explores
+journeys and inclusion. Let relevant voices build on or challenge each other's
+ideas; explore distinct directions before converging. Keep discovery proportionate
+to the request.
 
 Read `archetipo config show` (`kind: setup`) for configured paths, the existing
 product document and relevant code/documentation. Describe whose problem matters,
@@ -15,9 +21,9 @@ what outcome is sought, current evidence, assumptions, constraints, priorities,
 exclusions and open questions. Distinguish proposed behavior from implemented
 behavior and technical completion from observed product value.
 
-Ask only questions necessary to make a useful decision; otherwise proceed with
-explicit assumptions. Preserve earlier decisions when revising an existing
-product document. Do not invent user interviews, metrics or research.
+Explore the intended outcome, people, examples and material trade-offs before
+drafting; reuse known answers and proceed with explicit implementation assumptions.
+Preserve earlier decisions when revising an existing product document. Do not invent user interviews, metrics or research.
 
 Use `references/prd-template.md` for the supported document structure, adapting
 content to the actual product. Persist Markdown with `archetipo prd write --file -`.

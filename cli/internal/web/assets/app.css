@@ -4979,7 +4979,21 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .conv-input fieldset p { margin: 0 0 4px; }
-.conv-input-option { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.conv-input-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+.conv-input-option:hover { border-color: var(--accent); }
+.conv-input-option:has(input:checked) { border-color: var(--accent); background: var(--surface); }
+.conv-input-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.conv-input-option:has(input:disabled) { cursor: default; opacity: .65; }
+.conv-input-hint { color: var(--text-dim); }
 .conv-input-option input { margin-top: 4px; accent-color: var(--accent); }
 .conv-input-option span { display: grid; gap: 3px; }
 .conv-input-option small { color: var(--text-dim); }

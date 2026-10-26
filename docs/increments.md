@@ -4,6 +4,31 @@ Il termine tecnico `increment` identifica un lavoro durevole sul prodotto. Il su
 risultato può essere una soluzione funzionante da consegnare ai developer oppure
 una decisione motivata che non richiede altro codice.
 
+## Capire l’intento in chat
+
+Un nuovo lavoro parte dalla richiesta e approfondisce problema, persone, risultato
+atteso, esempi concreti e vincoli prima di costruire. La conversazione segue una
+domanda alla volta e riusa le risposte già date. Le prospettive ARchetipo rendono
+esplicito chi interviene: Andrea sul valore, Costanza sulle ipotesi e alternative,
+Livia sull’esperienza, Leonardo sulla fattibilità ed Emanuele sui requisiti.
+Sono voci dello stesso assistente; intervengono quando aggiungono qualcosa.
+Nella prima parte Andrea, Costanza e Livia fanno brainstorming nello stile di
+inception: brevi scambi, alternative concrete, ipotesi messe alla prova, tecniche
+«E se…», cambio di pubblico e anti-problema. La conversazione converge sulle
+scelte della persona senza imporre un numero fisso di turni. Durante la
+costruzione intervengono anche Ugo (sviluppo), Mina (test e prove) e Cesare
+(revisione e rischi). Le voci riferiscono solo attività effettive: una diversa
+personalità non costituisce una revisione indipendente.
+
+Quando il runtime offre input strutturato, le domande mostrano risposte suggerite
+selezionabili e, quando consentito, una risposta libera. Si sceglie e si invia;
+nessuna opzione viene scelta automaticamente. Le richieste native Codex e
+`AskUserQuestion` di Claude usano lo stesso modulo del viewer; le domande di Claude
+con `multiSelect` permettono più scelte. Una consegna fallita conserva la selezione
+per riprovare. Se lo strumento strutturato non è disponibile, la domanda continua
+nella chat. Una richiesta già precisa o l’invito a procedere abbreviano
+l’esplorazione; le modifiche successive non ricominciano un questionario.
+
 ## Contratto
 
 Un lavoro conserva richiesta originale, specifica Markdown versionata, riferimenti

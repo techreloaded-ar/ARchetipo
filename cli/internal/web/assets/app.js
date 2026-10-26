@@ -7083,7 +7083,7 @@
 	function conversationInputValues(form) {
 		return Object.fromEntries(Array.from(form.querySelectorAll("[data-conversation-input-question]")).map((question) => [
 			question.getAttribute("data-conversation-input-question"),
-			{ option: question.querySelector("[data-conversation-input-option]:checked")?.value || "", text: question.querySelector("[data-conversation-input-text]")?.value || "" },
+			{ options: Array.from(question.querySelectorAll("[data-conversation-input-option]:checked")).map((option) => option.value), text: question.querySelector("[data-conversation-input-text]")?.value || "" },
 		]));
 	}
 
@@ -7095,12 +7095,12 @@
 		if (form.querySelector("[data-conversation-input-question]")) {
 			const values = conversationInputValues(form);
 			conversationInputDrafts[inputID] = values;
-			if (Object.values(values).some((value) => !(value.option || value.text).trim())) {
+			if (Object.values(values).some((value) => !value.options.length && !value.text.trim())) {
 				conversationRefusal = "Rispondi a tutte le domande prima di inviare";
 				renderConversationPanel();
 				return;
 			}
-			body = { answers: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, [value.option || value.text]])) };
+			body = { answers: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.options.length ? value.options : [value.text]])) };
 		} else {
 			try {
 				body = { payload: JSON.parse(form.querySelector("[data-conversation-input-draft]").value) };

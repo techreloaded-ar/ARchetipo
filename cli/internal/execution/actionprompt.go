@@ -7,7 +7,7 @@ import (
 
 // questionGuidance prefers native input when offered without making a runtime
 // feature a prerequisite for any action or ordinary conversation.
-const questionGuidance = "When clarification is needed, prefer the runtime's structured user-input tool if available. Otherwise ask in ordinary conversation and wait for the answer. Both forms allow the same work to proceed."
+const questionGuidance = "When exploring intent or clarifying a choice, ask one focused question at a time. Offer 2-4 concise, distinct suggested answers with their implications using the runtime's blocking structured user-input tool (request_user_input or AskUserQuestion) when available, allowing a free-text alternative when supported. Name the speaking ARchetipo personality in the question header. Otherwise ask in ordinary conversation and wait for the answer. Never treat a suggestion or silence as the person's decision."
 
 // PlanPrompt renders the common planning request after a provider-specific opening.
 func PlanPrompt(opening string, req Request) string {
@@ -155,7 +155,7 @@ func SpecDraftPrompt(opening string, _ Request) string {
 		"/archetipo-spec",
 		"",
 		"Do NOT persist anything. You must not run `archetipo spec add`, must not write into the backlog and must not create any spec file: the spec will be reviewed, edited and created by a person, and writing it yourself would both take that decision for them and consume a spec code.",
-		"Follow the skill's discovery team before drafting: introduce Andrea, Costanza, Livia, Leonardo and Emanuele, and let the relevant personalities challenge value, assumptions, experience, feasibility and testability. Ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message.",
+		"Follow the shared runtime's discovery guidance before drafting: use Andrea, Costanza, Livia, Leonardo and Emanuele as relevant named perspectives on value, assumptions, experience, feasibility and testability. Ask a single question per message and wait for the answer before asking the next one. Never bundle several questions into one message.",
 		"Use proposal-only mode, even if this workspace has no PRD, backlog or epics. Use the repository and the person’s request as context; do not require inception or generate a full backlog. Explain a useful split into independently demonstrable stories and agree on the scope with the person. Respect an explicit request for just one story.",
 		"Read the existing epics when available. Use epic_code for a declared epic; if there are none or the story needs a new one, propose its name in epic_title and leave epic_code empty. Do not assign a new epic code: the creation route does that at confirmation.",
 		"Give each story a stable draft_id (for example story-1) and keep it across title changes, revisions and reordering. When revising a story already in the backlog, read its current content through `archetipo spec list` and include revises_spec with its existing US-XXX code. Revisions are proposals too: never run `archetipo spec update` before the person approves the changes. Never infer a target from its array position.",
