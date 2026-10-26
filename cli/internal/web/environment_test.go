@@ -120,8 +120,19 @@ func TestMissingRecipeUsesSeparateDurableTechnicalSession(t *testing.T) {
 	if technicalID == "" || technicalID == productID {
 		t.Fatal("no separate technical identity")
 	}
+	// The journal marks the turn active before the provider sees it (the durable
+	// boundary of sendNativeConversationMessage); the fake holds a turn to
+	// complete only once that delivery is confirmed.
 	record := awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool {
-		return r.CurrentTurn != nil && r.Work == execution.SessionTurnActive
+		if r.CurrentTurn == nil || r.Work != execution.SessionTurnActive {
+			return false
+		}
+		for _, delivery := range r.Deliveries {
+			if delivery.TurnID == r.CurrentTurn.ID && delivery.State == execution.DeliveryConfirmed {
+				return true
+			}
+		}
+		return false
 	}, "technical setup turn")
 	if record.Purpose != "environment" || record.Session.Native.ID == metadataOf(t, srv, productID).Session.Native.ID {
 		t.Fatal("setup reused product native session")
