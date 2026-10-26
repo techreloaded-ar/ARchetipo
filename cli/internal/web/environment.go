@@ -176,7 +176,12 @@ func (s *Server) configureEnvironment(ctx context.Context, ws *workspaceSession,
 		return err
 	}
 	if record.Work == "" || record.Work == execution.SessionIdle {
-		prompt := environmentSetupPrompt
+		contextJSON, _ := json.Marshal(map[string]string{
+			"working_directory": root, "workspace_directory": environmentrecipe.Workspace(root),
+			"provider": record.ProviderID, "requested_permission_profile": record.NextTurn.PermissionProfile,
+			"capability_status": "unverified: run environment capabilities inside this native session; viewer privileges are not evidence",
+		})
+		prompt := environmentSetupPrompt + "\nRuntime context (configuration, not a capability observation):\n" + string(contextJSON)
 		if repair {
 			prompt += "\nRipara la configurazione comune esistente; conserva i servizi e i dati di altri ambienti."
 		}
@@ -212,14 +217,34 @@ func (s *Server) configureEnvironment(ctx context.Context, ws *workspaceSession,
 				if _, err = verification.Load(root); err != nil {
 					return err
 				}
-				return nil
+				bundle, loadErr := environmentrecipe.Load(root)
+				if loadErr != nil {
+					return loadErr
+				}
+				assets := []string{}
+				for _, file := range bundle.Files {
+					if file.Path != environmentrecipe.Environment && file.Path != environmentrecipe.Preview {
+						assets = append(assets, file.Path)
+					}
+				}
+				service := verification.New(root, ws.cfg.Paths.TestResults)
+				if _, qualificationErr := service.VerifyQualification(assets); qualificationErr == nil {
+					local, collectErr := environmentrecipe.Collect(root, assets)
+					if collectErr == nil && environmentrecipe.Digest(local) == environmentrecipe.Digest(bundle) {
+						return nil
+					}
+				}
+				// A previous common bundle cannot certify a failed candidate repair.
+				value.Error = "Ricetta non qualificata o non pubblicata: apri Dettagli ambiente per completare il collaudo della candidata e la pubblicazione."
 			} else if !os.IsNotExist(err) {
 				return err
 			}
 			// A completed turn can be a question. Keep its native context and resume
 			// automatically after the person's answer in the technical details.
 			value.State = "waiting"
-			value.Error = "Configurazione incompleta: apri Dettagli ambiente per rispondere o risolvere il requisito mancante."
+			if value.Error == "" {
+				value.Error = "Configurazione incompleta: apri Dettagli ambiente per rispondere o risolvere il requisito mancante."
+			}
 			if err = saveEnvironmentOperation(root, *value); err != nil {
 				return err
 			}
@@ -244,7 +269,8 @@ const environmentSetupPrompt = `/archetipo-environment
 
 ` + sessionInputGuidance + `
 
-Sei nella sessione tecnica dell’ambiente, separata dalla chat di sviluppo. Leggi .archetipo/shared-runtime.md esattamente una volta. Esamina il codice corrente e la configurazione esistente senza indovinare il framework. Non sviluppare funzionalità e non modificare backlog, storie o approvazioni. Definisci la sola ricetta comune del workspace usando archetipo execution environment configure --file - con JSON version 1, inputs e outputs reali, prepare idempotente, probe di readiness, cleanup e checks espliciti. Usa dipendenze locali e dati sintetici per checkout, nessun segreto. Rendi prepare e seed idempotenti: conserva dati dimostrativi e modifiche della persona, applica migrazioni e aggiungi solo fixture mancanti; non azzerare il database a ogni revisione o ripresa. Registra ogni servizio esterno in resources con name e comandi start, probe, stop, stopped (name, argv, timeout_seconds <= 30), ports con nomi maiuscoli e ARCHETIPO_PORT_<NOME>. Verifica ARCHETIPO_RESOURCE_OWNER e ARCHETIPO_RESOURCE_NAME prima del riuso o stop; non adottare servizi sconosciuti. Se esiste un’app web, configura archetipo execution preview configure --file - con version 1, directory relativa alla directory di lavoro, argv esplicito con {port}, url http://127.0.0.1:{port}/ e prepare_environment true. Non avviare il server preview. Mantieni tutti gli helper non segreti sotto scripts/archetipo/. Pubblica la configurazione completa con archetipo execution environment publish ripetendo --asset scripts/archetipo/<file> per OGNI helper necessario, comprese le dipendenze degli helper. Questo comando registra il riferimento comune anche quando lavori in un incremento: non devi modificare a mano il checkout principale. Non copiare credenziali, checkpoint, dipendenze installate o dati da altri checkout. Esegui archetipo execution environment prepare e verifica passed e stable, leggendo il report originale su riuso. Se mancano servizi, credenziali o lo scheletro dell’app, dichiara il blocco concreto; non inventare una ricetta funzionante. Chiedi eventuali permessi attraverso il normale meccanismo dell’harness. Concludi con un esito sintetico. Il sistema verifica gli effetti persistiti e gestisce l’avvio della preview.`
+Sei nella sessione tecnica dell’ambiente, separata dalla chat di sviluppo. Applica /archetipo-environment anche nel primo avvio di un clone senza configurazione: scopri lo stack dai file e verifica le capacità eseguendo archetipo execution environment capabilities dentro questa sessione. Non attribuire alla sessione i permessi del viewer. Se una capacità necessaria è assente, usa il normale meccanismo di approvazione dell’harness o dichiara il blocco concreto; non ripetere comandi vietati e non aumentare automaticamente i permessi.
+Non sviluppare funzionalità e non modificare backlog, storie o approvazioni. Crea o ripara una candidata con archetipo execution environment configure --candidate --file - e, solo per una vera app web, archetipo execution preview configure --candidate --file -. Mantieni gli helper non segreti sotto scripts/archetipo/. Qualifica la candidata con archetipo execution environment qualify ripetendo --asset per OGNI helper necessario, poi pubblica lo stesso bundle con archetipo execution environment publish --qualified e gli stessi --asset. Non aggiornare la ricetta comune attraverso configure senza --candidate. Conserva report e log originali; passed e stable non certificano automaticamente la correttezza del prodotto. Esegui i checks dichiarati con check --candidate e riporta separatamente difetti prodotto e problemi setup senza indebolire i controlli. La skill sceglie e motiva copertura, readiness reale, installazione riproducibile, fixture conservative e verifica di stop/ripresa posseduti. Non avviare il server preview: il viewer continua dopo la verifica degli effetti persistiti. Concludi con un esito sintetico e i blocchi irrisolti.`
 
 func environmentReport(root string) string {
 	if value := readEnvironmentOperation(root); value.Preparation != nil {

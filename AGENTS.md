@@ -378,3 +378,12 @@ headers, single and multiple choices and free text. It checks that polling and a
 failed delivery preserve the selection, retries send the same answer, and the
 next question stays in the same conversation at desktop and 390px widths.
 Screenshots remain in the ignored run directory.
+
+
+The harness benchmark also exercises runtime capability reports without a known
+stack, candidate setup qualification (two real preparations and readiness on warm
+reuse), qualified common publication and rejection after helper mutation. Reports
+retain the original preparation logs and stay under ignored test/workspaces/.
+New technical sessions discover the project through archetipo-environment and
+publish qualified candidates; setup repeatability does not replace product checks
+or prove preservation of application data.

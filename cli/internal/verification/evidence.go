@@ -15,7 +15,7 @@ import (
 // prepared checks retained setup evidence without installing dependencies or
 // changing service ownership. Live checks must never repair a running app.
 func (s *Service) prepared(recipe Recipe, value state) error {
-	key, err := preparationFingerprint(s.Root, s.env)
+	key, err := s.preparationFingerprint()
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (s *Service) Evidence(ctx context.Context) ([]Result, error) {
 		return nil, iox.NewConflict("verification is still running", "wait for the current check to finish", err)
 	}
 	defer func() { _ = lock.Unlock() }()
-	recipe, err := Load(s.Root)
+	recipe, err := s.loadRecipe()
 	if err != nil {
 		return nil, err
 	}

@@ -1,79 +1,174 @@
 ---
 name: archetipo-environment
-description: Configure, publish or repair the single reusable workspace environment recipe in a technical session, separate from product development.
+description: Discover a project's real runtime, qualify a candidate recipe and publish or repair its reusable workspace environment in a separate technical session.
 ---
 
 # Workspace environment
 
 Read `.archetipo/shared-runtime.md` exactly once. Work in the current execution
-directory; do not assume View is running. Own setup choices, never product code,
-backlog changes, intent approval or publication of product increments.
+directory. This skill works standalone and in View; never assume View is running.
+Own setup and coverage choices, never product features, backlog or approvals.
 
-First read the existing environment recipe. If a valid common recipe already
-exists and repair was not requested, run only preparation and retain its report;
-do not regenerate configuration for another branch. Inspect existing project
-scripts and dependency manifests before choosing missing setup.
-Use locked, reproducible dependency installation. Never fall back silently from
-`npm ci` to unlocked resolution, disable lockfile updates to hide a mismatch, or
-change dependency versions merely to make setup pass. Report an inconsistent
-manifest/lockfile and repair it explicitly in the working branch; record the
-resulting lockfile change. Do not copy installed packages from another checkout.
-Use one common workspace recipe. There are no branch overrides. Keep every
-non-secret setup helper under `scripts/archetipo/`, with relative paths and local
-synthetic data. Declare all persistent services through managed `resources` with
-`start`, `probe`, `stop`, `stopped` commands, each with `name`, `argv` and
-`timeout_seconds <= 30`; use named `ports`, `ARCHETIPO_PORT_<NAME>`, and verify
-`ARCHETIPO_RESOURCE_OWNER` plus `ARCHETIPO_RESOURCE_NAME` before reuse/stop.
-Never adopt unrelated services or copy credentials, installed dependencies,
-resource ownership records or data from another checkout.
+## Discover before choosing
 
-Declare checks with complete source/configuration inputs and finite timeouts.
-All declared checks are required for a product candidate. `during_preview: true`
-is an explicit promise that a check can run beside the development server, without
-rewriting its build output, resetting shared data or changing dependencies. Leave
-it false for production builds or destructive integration checks. Do not enable it
-merely to bypass ownership. Keep tests' scratch outputs separate from the preview.
+A fresh clone has no known stack or environment. Inspect its tracked manifests,
+lockfiles, scripts, configuration, source, tests and documentation. Identify the
+actual install, generation/migration, readiness, verification and launch commands.
+Do not choose a framework, package manager, database or container technology from
+the product name or a fixed catalogue. Read existing recipes before replacing one.
+A healthy common recipe is reused, not regenerated for each branch.
 
-Revision rounds reuse this checkout's services and demonstration data. Make
-preparation and synthetic-data seeding idempotent: preserve existing demo rows
-and user edits, apply needed migrations, and add only missing fixtures. Never
-reset a database or create a replacement service just because development or a
-preview resumes. Destructive resets require an explicit request. Readiness
-failure and recipe changes follow the managed recovery contract and must be
-reported if their recovery loses demonstration data.
+Run `archetipo execution environment capabilities` INSIDE this session before
+setup. The report observes loopback binding and temporary file creation in the
+checkout/common workspace. It distinguishes available, unavailable and unknown;
+it does not certify network, Docker, credentials or all filesystem operations.
+The View process's access is never proof of the agent's access. The selected
+permission profile is configuration, not an observation of effective capabilities.
 
-Call only these operations:
+After inspecting the project, repeat capabilities with `--tool <executable>` for
+each actual tool required. Check its version, daemon access and any required
+endpoint with explicit non-destructive `--probe-file -` commands. An executable
+being found does not mean its daemon is usable. Never dump environment values,
+read another checkout's secrets, or store credentials in arguments/logs. Missing
+capabilities use the harness's normal approval policy; never change the policy,
+replace the runtime, bypass sandbox restrictions, or silently retry a forbidden
+operation. If it cannot be approved, report the exact missing capability and end
+the turn so the person can adjust the technical session and resume it.
 
-- `archetipo execution environment show`: `kind: verification_result`, recipe in
-  `data`. Existing local projects work until their first common publication.
-- `archetipo execution environment configure --file -`: stdin version 1 JSON
-  with real `inputs`, `outputs`, optional `env_keys`, bounded idempotent `prepare`,
-  readiness `probe`, optional `cleanup`, `checks`, `ports` and `resources`.
-  Returns `kind: verification_result`, configured recipe in `data`.
-- For a web application, `archetipo execution preview configure --file -`: stdin
-  `{"version":1,"directory":".","argv":["scripts/archetipo/preview.sh","{port}"],"url":"http://127.0.0.1:{port}/","prepare_environment":true}`,
-  adapted to the actual project. Bind strictly to the assigned loopback port.
-  Returns `kind: preview_recipe`. Do not invent a web interface for a CLI/library.
-- `archetipo execution environment publish --asset scripts/archetipo/<helper>`:
-  repeat `--asset` for EVERY required non-secret helper and its helper dependencies.
-  Returns `kind: environment_recipe` with the atomic common bundle in `data`.
-  The CLI resolves the owning workspace even from an increment or ordinary
-  worktree. No merge or manual write in the parent checkout is necessary.
-- `archetipo execution environment prepare`: returns `kind: verification_result`
-  with `data.passed`, `stable`, `reused`, `report_path`, `reused_report` and per-step
-  log paths. Require `passed && stable`, inspect original evidence on reuse.
+Record the inspected files, chosen commands, observed capability report, coverage
+rationale and missing prerequisites in the technical summary. Do not invent a
+working recipe if application scaffolding or required services are absent.
 
-All envelopes use `archetipo/v1`. Branch on `error.code`: `E_PRECONDITION` means
-missing configuration/prerequisite; `E_INVALID_INPUT` means fix the explicit
-payload/path; `E_CONFLICT` means another operation owns the environment or a helper
-has local changes, preserve its work; `E_INTERNAL` means persistence/runtime
-failure. A successful envelope with `passed:false` is a failed preparation.
-Report concrete missing services, credentials or application scaffolding instead
-of claiming readiness. Follow the harness's own approval policy.
+## Build a candidate, preserve the common revision
 
-In View this skill runs in a separate durable technical native session. Setup
-commands and logs belong there and in environment reports, never in the product
-conversation. Do not launch the preview server: View continues automatically
-through the same standalone preview contract after verifying persisted effects.
-Standalone callers can subsequently use `archetipo execution preview run` (kind:
-`preview`, foreground process until interrupted). End with a concise setup result.
+Use `environment configure --candidate` and, for an actual web app,
+`preview configure --candidate`. These write local candidate files without
+updating the shared bundle or acquiring a write lock in the parent checkout.
+Normal preparation continues to use the common revision until publication.
+During candidate testing always use `--candidate`; otherwise common sync may
+reject the edited helpers or restore the previous environment JSON.
+
+Use locked, reproducible installation. Never silently fall back from a failed
+locked install to unlocked resolution, swallow an exit status, hide an inconsistent
+lockfile or change dependency versions just to make setup pass. Repair an
+inconsistent manifest/lockfile explicitly in the working branch, preserve intended
+versions and record the diff. No installed dependencies from other checkouts.
+When outputs already exist, test installation in a separate explicitly owned
+scratch checkout with the relevant manifests and helpers; do not delete existing
+user installations to obtain a clean test. Qualification alone does not prove a
+pristine installation or semantic preservation of application data.
+
+Keep all non-secret helpers under `scripts/archetipo/`. Declare the complete
+helper dependencies explicitly as assets; include them and all setup manifests,
+lockfiles and migrations in setup inputs. Checks include their complete code,
+test and configuration inputs. Output paths must be real checkout-local files,
+not package-manager executable symlinks. Prefer installed tools over commands
+that silently download missing tools.
+
+Register persistent dependencies through managed resources, never a detached
+shell or an unrelated service. Each lifecycle command verifies
+`ARCHETIPO_RESOURCE_OWNER` and `ARCHETIPO_RESOURCE_NAME`; named ports come from
+`ARCHETIPO_PORT_<NAME>`. Distinguish a denied/unreachable daemon from an absent
+resource. Verify the owned endpoint as well as identity before reuse or stop.
+
+Readiness must exercise the actual requirements: e.g. usable generated artifacts,
+reachable owned dependencies and compatible schema. A successful version command
+or the existence of a dependency directory alone is insufficient for a database
+application. A CLI or library need not invent a web service or database.
+
+Preparation, migration and seeding must be idempotent and conservative. Add missing
+synthetic fixtures, preserve existing rows and the person's edits, and never reset
+data at each revision. Cleanup stops only declared owned resources and retains
+required demonstration data. Verify stop and subsequent restart against explicit
+project probes, plus fixture preservation checks where state exists. Destructive
+resets require an explicit request; test destructive scenarios on dedicated owned
+synthetic resources. Do not copy resource journals, checkpoints or secrets.
+
+## Qualify, publish, verify
+
+1. Run `environment qualify` with `--asset` repeated for EVERY helper and its
+   dependencies. It executes two real preparations, then a warm preparation that
+   must reuse the second report and rerun readiness. Require `data.passed: true`;
+   read every original report/log, including logs of commands returning zero.
+   A successful wrapper can still hide a failed child command. Stable inputs and
+   exit codes are machine evidence, not a semantic audit of arbitrary scripts.
+2. Repair concrete failures and retry the candidate, at most three attempts per
+   unchanged cause. Retain reports and identify permission/prerequisite failures
+   separately from setup defects and product defects. Never weaken checks to
+   obtain a pass. Ask for a missing decision and end the turn when needed.
+3. Publish with `environment publish --qualified` and exactly the same assets.
+   Publication requires current retained qualification evidence and atomically
+   adopts the exact bundle. A changed helper, recipe, declared setup input or
+   missing/tampered log requires requalification. Publish only non-secret setup
+   helpers and environment/preview configuration, never product code.
+4. Run every project check through `environment check <name>` and retain its
+   reports (or `check <name> --candidate` before publication). Select coverage from
+   the actual product: applicable compilation/static checks, tests and meaningful
+   runtime/persistence/integration checks. Explain absent coverage. Setup
+   qualification does not certify the product; all declared checks remain required
+   for a product candidate. Existing product failures remain visible and must not
+   cause an endless rewrite of a working recipe.
+
+`during_preview: true` promises no dependency changes, shared build-output writes
+or destructive data changes while the app runs. Leave it false otherwise. Tests'
+scratch outputs stay separate from preview output. Do not enable it to bypass an
+ownership conflict. Reuse healthy services and demo data across revision rounds.
+
+## CLI contract
+
+All envelopes use `schema: archetipo/v1`; success carries `kind` and `data`,
+failure carries `kind: error` and `error.code`.
+
+- `archetipo execution environment capabilities [--tool <executable> ...]
+  [--probe-file -]`: `kind: environment_capabilities`. Optional stdin is an array
+  of `{ "name":"tool-version", "argv":["<actual-tool>","<version-argument>"],
+  "timeout_seconds":10 }`. Names must be safe and unique; timeout <= 30 seconds.
+  Data includes directories, observed write/loopback capabilities, tool paths,
+  external network `unknown`, per-probe reports and `report_path`. Inspect each
+  probe's `passed`; a successful envelope does not imply every probe passed.
+- `archetipo execution environment show`: `kind: verification_result`, effective
+  recipe in `data`. Missing common publication retains legacy local recipes.
+- `archetipo execution environment configure --candidate --file -`: stdin version
+  1 JSON with real `inputs`, `outputs`, optional `env_keys`, bounded idempotent
+  `prepare`, readiness `probe`, optional `cleanup`, `checks`, `ports`, `resources`.
+  Each command has `name`, explicit `argv`, `timeout_seconds` (1..1800); each
+  resource has `name`, `start`, `probe`, `stop`, `stopped` (timeouts <= 30).
+  Checks have command fields, explicit `inputs`, `cache`, optional `during_preview`.
+  Returns `kind: verification_result`, configured local recipe in `data`.
+- `archetipo execution preview configure --candidate --file -`: for web apps only,
+  stdin `{ "version":1, "directory":".", "argv":["scripts/archetipo/preview.sh",
+  "{port}"], "url":"http://127.0.0.1:{port}/", "prepare_environment":true }`,
+  adapted to the actual product. Returns `kind: preview_recipe`. Bind strictly
+  to the assigned loopback port. Do not launch the preview server in this skill.
+- `archetipo execution environment qualify --asset scripts/archetipo/<file> ...`:
+  `kind: environment_qualification`, data `passed`, `bundle_digest`, `input_key`,
+  three original preparation `reports` and `report_path`. It does not certify a
+  clean dependency install, product checks or data preservation by itself.
+- `archetipo execution environment publish --qualified --asset
+  scripts/archetipo/<file> ...`: `kind: environment_recipe`, atomic common bundle
+  in `data`. Workspace resolution is through Git, including from a worktree.
+  A denied parent write requires harness approval, not manual edits elsewhere.
+- `archetipo execution environment prepare [--candidate] [--fresh]`:
+  `kind: verification_result`, `passed`, `stable`, `reused`, `report_path`,
+  `reused_report` and per-step log paths. Fresh executes preparation again.
+- `archetipo execution environment check <name> [--candidate] [--fresh]`:
+  `kind: verification_result` with the same evidence fields. A `passed:false`
+  result is a failure even when the envelope/command succeeds.
+- `archetipo execution environment cleanup`: `kind: verification_result`,
+  executes registered stop adapters. For stop/restart verification, publish the
+  qualified bundle first, stop only its resources, then prepare it again and
+  inspect real readiness and fixture-preservation checks.
+
+Branch on `error.code`: `E_PRECONDITION` means missing/stale qualification,
+configuration or prerequisite; `E_INVALID_INPUT` means fix the explicit payload
+or paths; `E_CONFLICT` means another owner, changed candidate or helper conflict,
+preserve its work; `E_INTERNAL` means persistence/runtime failure. Read the
+concrete original error/log to distinguish permission problems; do not branch on
+connector type or retry the same denied operation.
+
+In View, setup stays in the separate durable technical session. View verifies
+qualified publication, prepares and starts preview through the standalone CLI
+contracts. Standalone users can subsequently invoke
+`archetipo execution preview run` (`kind: preview`, foreground process).
+End with the setup result, original report references, coverage and unresolved
+blocks. Never call a product ready merely because its environment was prepared.

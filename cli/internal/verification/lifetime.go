@@ -19,20 +19,31 @@ import (
 // viewer. Its private control pipe closes even when the caller is SIGKILLed.
 // Only one preview/run may own a checkout's dependency services at a time.
 type Lifetime struct {
-	control io.WriteCloser
-	root    string
-	done    chan struct{}
-	err     error
+	control   io.WriteCloser
+	root      string
+	candidate bool
+	done      chan struct{}
+	err       error
 }
 type lifetimeRequest struct {
-	Root string `json:"root"`
+	Root      string `json:"root"`
+	Candidate bool   `json:"candidate,omitempty"`
 }
 type lifetimeReady struct {
 	Error string `json:"error,omitempty"`
 }
 
 func OwnLifetime(root string, output io.Writer) (*Lifetime, error) {
-	recipe, err := Load(root)
+	return ownLifetime(root, output, false)
+}
+
+func OwnCandidateLifetime(root string, output io.Writer) (*Lifetime, error) {
+	return ownLifetime(root, output, true)
+}
+func ownLifetime(root string, output io.Writer, candidate bool) (*Lifetime, error) {
+	service := New(root, "")
+	service.candidate = candidate
+	recipe, err := service.loadRecipe()
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +69,8 @@ func OwnLifetime(root string, output io.Writer) (*Lifetime, error) {
 		_ = control.Close()
 		return nil, err
 	}
-	lifetime := &Lifetime{control: control, root: root, done: make(chan struct{})}
-	if err = json.NewEncoder(control).Encode(lifetimeRequest{root}); err == nil {
+	lifetime := &Lifetime{control: control, root: root, candidate: candidate, done: make(chan struct{})}
+	if err = json.NewEncoder(control).Encode(lifetimeRequest{Root: root, Candidate: candidate}); err == nil {
 		var ready lifetimeReady
 		err = json.NewDecoder(status).Decode(&ready)
 		if err == nil && ready.Error != "" {
@@ -157,6 +168,7 @@ func Guard(parent context.Context, input io.Reader, output io.Writer) error {
 	defer cancel()
 	service := New(request.Root, "")
 	service.lifetimeOwner = true
+	service.candidate = request.Candidate
 	deadline := time.Now().Add(6 * time.Second)
 	for {
 		result, cleanupErr := service.Execute(ctx, "cleanup", "", "", false)
@@ -183,6 +195,7 @@ func Guard(parent context.Context, input io.Reader, output io.Writer) error {
 func (l *Lifetime) Service(results string) *Service {
 	service := New(l.root, results)
 	service.lifetimeOwner = true
+	service.candidate = l.candidate
 	return service
 }
 

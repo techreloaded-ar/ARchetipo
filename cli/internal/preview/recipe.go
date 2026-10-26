@@ -132,7 +132,18 @@ func parse(root string, raw []byte) (Recipe, error) {
 	_, err := r.Validate(root)
 	return r, err
 }
-func Configure(root string, raw []byte) (Recipe, error) {
+func Configure(root string, raw []byte) (Recipe, error)          { return configure(root, raw, false) }
+func ConfigureCandidate(root string, raw []byte) (Recipe, error) { return configure(root, raw, true) }
+
+func LoadLocal(root string) (Recipe, error) {
+	raw, err := os.ReadFile(filepath.Join(root, RecipePath))
+	if err != nil {
+		return Recipe{}, err
+	}
+	return parse(root, raw)
+}
+
+func configure(root string, raw []byte, candidate bool) (Recipe, error) {
 	r, err := parse(root, raw)
 	if err != nil {
 		return r, err
@@ -141,8 +152,10 @@ func Configure(root string, raw []byte) (Recipe, error) {
 	if err != nil {
 		return r, err
 	}
-	if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
-		return r, err
+	if !candidate {
+		if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
+			return r, err
+		}
 	}
 	dir := filepath.Join(root, ".archetipo")
 	if err = recordfile.WriteAtomic(dir, filepath.Join(root, RecipePath), ".preview-", r); err != nil {

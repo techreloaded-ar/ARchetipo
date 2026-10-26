@@ -65,6 +65,7 @@ type Service struct {
 	env           []string
 	lifetimeOwner bool
 	previewOwner  bool
+	candidate     bool
 }
 
 func New(root, results string) *Service {
@@ -107,7 +108,7 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if spec != "" && !regexpSpec(spec) {
 		return result, invalid("invalid verification spec code")
 	}
-	recipe, err := Load(s.Root)
+	recipe, err := s.loadRecipe()
 	if err != nil {
 		if operation != "cleanup" {
 			return result, err
@@ -180,13 +181,13 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if err = commandLock.Unlock(); err != nil {
 		return result, err
 	}
-	if operation != "cleanup" && !liveCheck {
+	if operation != "cleanup" && !liveCheck && !s.candidate {
 		if err = environmentrecipe.Sync(s.Root); err != nil {
 			return result, err
 		}
 	}
 	if operation != "cleanup" {
-		recipe, err = Load(s.Root)
+		recipe, err = s.loadRecipe()
 		if err != nil {
 			return result, err
 		}
@@ -247,6 +248,12 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	}
 	preparation := Result{Passed: true, Stable: true}
 	if !liveCheck {
+		if operation == "prepare" && fresh {
+			value = state{Checks: map[string]string{}}
+			if err = s.saveState(value); err != nil {
+				return result, err
+			}
+		}
 		preparation, err = s.prepare(ctx, recipe, &value)
 	}
 	if (err != nil || !preparation.Passed) && len(recipe.Resources) > 0 {
@@ -360,7 +367,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 		if err = s.run(ctx, &result, recipe.Probe); err != nil {
 			return result, err
 		}
-		after, hashErr := preparationFingerprint(s.Root, s.env)
+		after, hashErr := s.preparationFingerprint()
 		if hashErr != nil {
 			return result, hashErr
 		}
@@ -393,7 +400,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 	if err = s.run(ctx, &result, commands); err != nil {
 		return result, err
 	}
-	after, err := preparationFingerprint(s.Root, s.env)
+	after, err := s.preparationFingerprint()
 	if err != nil {
 		return result, err
 	}
@@ -520,9 +527,12 @@ func (s *Service) cached(path, key string) (Result, bool) {
 	return s.cachedEvidence(path, key, 1)
 }
 func (s *Service) cachedEvidence(path, key string, steps int) (Result, bool) {
+	return s.retainedEvidence(path, key, steps, false)
+}
+func (s *Service) retainedEvidence(path, key string, steps int, allowReuse bool) (Result, bool) {
 	var result Result
 	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &result) != nil || result.EnvironmentID != s.environmentID() || result.Status != "complete" || !result.Passed || !result.Stable || result.Reused || result.InputKey != key || len(result.Steps) != steps {
+	if err != nil || json.Unmarshal(raw, &result) != nil || result.EnvironmentID != s.environmentID() || result.Status != "complete" || !result.Passed || !result.Stable || (result.Reused && !allowReuse) || result.InputKey != key || len(result.Steps) != steps {
 		return result, false
 	}
 	for _, step := range result.Steps {
@@ -536,15 +546,24 @@ func (s *Service) cachedEvidence(path, key string, steps int) (Result, bool) {
 
 // A shared recipe can be updated from another checkout while a command runs.
 // Re-read its effective preparation contract before certifying the result.
-func preparationFingerprint(root string, env []string) (string, error) {
-	recipe, err := Load(root)
+// ForOwnedPreview is for a caller already holding preview-environment, such as
+// the preview manager or confirmed removal. It never bypasses the lifetime lease.
+func (s *Service) ForOwnedPreview() *Service { s.previewOwner = true; return s }
+
+// ForCandidate keeps the shared bundle untouched while testing local recipe files.
+// It retains the same checkout leases and resource ownership as normal execution.
+func (s *Service) ForCandidate() *Service { s.candidate = true; return s }
+func (s *Service) loadRecipe() (Recipe, error) {
+	if s.candidate {
+		return LoadLocal(s.Root)
+	}
+	return Load(s.Root)
+}
+func (s *Service) preparationFingerprint() (string, error) {
+	recipe, err := s.loadRecipe()
 	if err != nil {
 		return "", err
 	}
 	recipe.Checks, recipe.Cleanup = nil, nil
-	return fingerprint(root, recipe, recipe.Inputs, env)
+	return fingerprint(s.Root, recipe, recipe.Inputs, s.env)
 }
-
-// ForOwnedPreview is for a caller already holding preview-environment, such as
-// the preview manager or confirmed removal. It never bypasses the lifetime lease.
-func (s *Service) ForOwnedPreview() *Service { s.previewOwner = true; return s }

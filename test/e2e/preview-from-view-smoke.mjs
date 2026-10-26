@@ -390,6 +390,12 @@ async function main(){
   await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'standalone run death cleans external dependency');
   ok('Stop fallito conservato e riprovato; environment run standalone esclusivo e cleanup anche dopo SIGKILL.');
   // First use has one Preview button and a distinct durable technical session.
+  const managedQualification=JSON.parse((await run('managed-candidate-qualification',cli,['execution','environment','qualify'],{cwd:sandbox})).stdout).data;
+  assert.equal(managedQualification.passed,true);
+  assert.deepEqual(managedQualification.reports.map(report=>report.reused),[false,false,true]);
+  await run('managed-candidate-cleanup',cli,['execution','environment','cleanup'],{cwd:sandbox});
+  assert(JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(resource=>resource.state==='stopped'));
+  ok('La qualificazione usa anche risorse gestite reali, rilascia il lifetime e conserva stop verificabile.');
   // The fake agent chooses configuration; CLI, preparation and startup are real.
   {
    const bootstrap=path.join(dir,'bootstrap');await fs.mkdir(bootstrap);
@@ -420,9 +426,14 @@ async function main(){
    await fs.writeFile(path.join(bootstrap,'scripts/archetipo/prepare.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
    const setupInput=path.join(dir,'bootstrap-environment.json');
    await fs.writeFile(setupInput,JSON.stringify({version:1,inputs:['scripts/archetipo/prepare.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'scripts/archetipo/prepare.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(!require('node:fs').existsSync('dependency.ready'))process.exit(1)"],timeout_seconds:10}],checks:{}}));
-   await run('bootstrap-configure',cli,['execution','environment','configure','--file',setupInput],{cwd:bootstrap});
-   await run('bootstrap-preview',cli,['execution','preview','configure','--file',recipe],{cwd:bootstrap});
-   await run('bootstrap-publish',cli,['execution','environment','publish','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap});
+   await run('bootstrap-configure',cli,['execution','environment','configure','--candidate','--file',setupInput],{cwd:bootstrap});
+   await run('bootstrap-preview',cli,['execution','preview','configure','--candidate','--file',recipe],{cwd:bootstrap});
+   const observed=JSON.parse((await run('bootstrap-capabilities',cli,['execution','environment','capabilities','--tool',process.execPath],{cwd:bootstrap})).stdout).data;
+   assert.equal(observed.external_network.state,'unknown');assert.equal(observed.loopback_binding.state,'available');
+   const qualification=JSON.parse((await run('bootstrap-qualify',cli,['execution','environment','qualify','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap})).stdout).data;
+   assert.equal(qualification.passed,true);assert.deepEqual(qualification.reports.map(report=>report.reused),[false,false,true]);
+   assert.equal(await fs.stat(path.join(bootstrap,'.archetipo/environment-recipe.json')).then(()=>true,()=>false),false,'candidate was published before qualification');
+   await run('bootstrap-publish',cli,['execution','environment','publish','--qualified','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap});
    queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'setup-output',delta:'BUILD_ONLY_IN_TECHNICAL_SESSION'}});
    queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-1',status:'completed'}}});
    await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'first-use configuration continues automatically into preview');
@@ -430,7 +441,7 @@ async function main(){
    assert(!JSON.stringify(productHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log polluted product conversation');
    const technicalHistory=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
    assert(JSON.stringify(technicalHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log was not durable');
-   assert.equal(await fs.readFile(path.join(bootstrap,'setup-count'),'utf8'),'setup\n');
+   assert.equal(await fs.readFile(path.join(bootstrap,'setup-count'),'utf8'),'setup\nsetup\n');
    const startsBefore=received.filter(e=>e.kind==='turn/start').length;
    const inherited=JSON.parse((await run('early-increment-preparation',cli,['execution','environment','prepare'],{cwd:early.workdir})).stdout).data;
    assert(inherited.passed&&inherited.stable);assert.equal(await fs.readFile(path.join(early.workdir,'setup-count'),'utf8'),'setup\n');
@@ -442,7 +453,7 @@ async function main(){
    const shared=await (await fetch(viewer.url+'/api/workspace/conversations/'+another.conversation.id+'/preview',{method:'POST'})).json();
    const original=await (await fetch(productEndpoint+'/preview')).json();assert.equal(shared.url,original.url,'same checkout launched duplicate preview');
    await fetch(productEndpoint+'/preview',{method:'DELETE'});
-   ok('Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; nessun log nella chat di sviluppo. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
+   ok('Capacità osservate e candidata qualificata con due preparazioni e riuso prima della pubblicazione. Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; nessun log nella chat di sviluppo. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
   }
   assert.deepEqual(exceptions,[],'uncaught browser exceptions');
   await fs.writeFile(path.join(dir,'summary.json'),JSON.stringify({status:'pass',checks},null,2));

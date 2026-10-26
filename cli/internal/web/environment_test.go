@@ -151,7 +151,13 @@ func TestMissingRecipeUsesSeparateDurableTechnicalSession(t *testing.T) {
 	if _, err := verification.Configure(root, []byte(`{"version":1,"probe":[{"name":"ready","argv":["go","version"],"timeout_seconds":10}],"checks":{}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := environmentrecipe.Publish(root, nil); err != nil {
+	service := verification.New(root, "").ForCandidate()
+	service.Runner = directEnvironmentRunner{}
+	q, err := service.Qualify(context.Background(), nil)
+	if err != nil || !q.Passed {
+		t.Fatalf("qualification: %+v %v", q, err)
+	}
+	if _, err := environmentrecipe.PublishQualified(root, nil, q.BundleDigest); err != nil {
 		t.Fatal(err)
 	}
 	provider.completeCurrentTurn(t, "Ambiente configurato.", execution.TurnCompleted)
@@ -203,4 +209,54 @@ func TestFailedPreparationDoesNotStartDevelopment(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("failed preparation did not settle")
+}
+
+func TestRepairDoesNotAcceptPreviousCommonRecipeAsSuccess(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, _ := newRunServer(t, provider, true)
+	seedCommonEnvironment(t, srv)
+	t.Cleanup(func() { srv.session().stop(time.Second) })
+	root := srv.session().cfg.ProjectRoot
+	continued := make(chan struct{}, 1)
+	if err := srv.queueEnvironment(context.Background(), srv.session(), root, false, true, func(context.Context) error { continued <- struct{}{}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var technicalID string
+	for time.Now().Before(deadline) {
+		technicalID = readEnvironmentOperation(root).ConversationID
+		if technicalID != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if technicalID == "" {
+		t.Fatal("technical session did not open")
+	}
+	awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool {
+		provider.store.mu.Lock()
+		defer provider.store.mu.Unlock()
+		return r.Work == execution.SessionTurnActive && provider.lastStart.Session.ConversationID == technicalID
+	}, "repair turn")
+	if !strings.Contains(provider.lastStart.Message, "requested_permission_profile") || !strings.Contains(provider.lastStart.Message, "capabilities") {
+		t.Fatal("missing runtime context")
+	}
+	provider.completeCurrentTurn(t, "Impossibile pubblicare: permesso negato.", execution.TurnCompleted)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		operation := readEnvironmentOperation(root)
+		if operation.State == "ready" {
+			t.Fatal("old common recipe certified failed repair")
+		}
+		if operation.State == "waiting" && strings.Contains(operation.Error, "qualificata") {
+			select {
+			case <-continued:
+				t.Fatal("continued development after failed repair")
+			default:
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("repair did not expose missing qualification: %+v", readEnvironmentOperation(root))
 }

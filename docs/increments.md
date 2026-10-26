@@ -154,3 +154,30 @@ Le skill di implementazione, review, autopilot e mockup non sono distribuite;
 del processo, riferimenti bidirezionali, dossier, approvazione umana, PR unica e
 riconciliazione di modifiche dei developer. GitHub è simulato. Le prove su browser
 non attestano la qualità del codice prodotto da un modello reale.
+
+
+### Prima configurazione e riparazione della ricetta
+
+La skill `archetipo-environment` ricostruisce requisiti, strumenti e copertura dai
+file effettivi del progetto, anche in un clone appena inizializzato. Non esiste
+un catalogo di stack scelto dal viewer. Il contesto passato dal viewer indica
+provider, directory e profilo richiesto; le capacità reali si osservano nella
+sessione con `execution environment capabilities`, che funziona senza ricetta.
+Tool e probe aggiuntivi sono espliciti; rete e servizi non provati restano ignoti.
+I report non espongono valori delle variabili d'ambiente.
+
+`environment configure --candidate` e `preview configure --candidate` preparano
+file locali senza aggiornare il bundle comune. `environment qualify --asset ...`
+esegue due preparazioni effettive e una prova di riuso con readiness; conserva
+report e log originali e fallisce su input instabili. `publish --qualified` adotta
+atomicamente solo lo stesso bundle con evidenze ancora valide. Una nuova
+qualificazione revoca il risultato precedente prima di iniziare. I comandi legacy
+restano disponibili, ma la sessione tecnica del viewer richiede la pubblicazione
+qualificata: una vecchia ricetta comune non dimostra che una riparazione sia finita.
+
+La qualificazione riguarda la ripetibilità del setup: non certifica da sola
+installazione da zero, integrità semantica dei dati o correttezza del prodotto.
+La skill sceglie prove specifiche per installazione pulita in risorse dedicate,
+conservazione delle fixture e stop/ripresa. I check prodotto restano distinti e
+obbligatori per la readiness del candidato; non si indeboliscono per pubblicare
+una ricetta. I permessi restano quelli dell'harness, senza escalation automatica.

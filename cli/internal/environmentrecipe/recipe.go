@@ -6,12 +6,15 @@ package environmentrecipe
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -111,42 +114,22 @@ func Load(root string) (Recipe, error) {
 
 // Publish explicitly names every non-secret helper; there is no directory scan.
 // One atomic bundle is the authoritative revision, including before Git merge.
-func Publish(root string, assets []string) (Recipe, error) {
+func Publish(root string, assets []string) (Recipe, error) { return publish(root, assets, "") }
+func PublishQualified(root string, assets []string, digest string) (Recipe, error) {
+	return publish(root, assets, digest)
+}
+func publish(root string, assets []string, digest string) (Recipe, error) {
 	lease, err := writeLease(root)
 	if err != nil {
 		return Recipe{}, err
 	}
 	defer func() { _ = lease.Unlock() }()
-	r := Recipe{Version: 1, Files: []File{}}
-	names := append([]string{Environment, Preview}, assets...)
-	seen := map[string]bool{}
-	for _, name := range names {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		path, err := safe(root, name)
-		if err != nil {
-			return r, err
-		}
-		raw, err := os.ReadFile(path)
-		if os.IsNotExist(err) && name == Preview {
-			continue
-		}
-		if err != nil {
-			return r, err
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return r, err
-		}
-		if !info.Mode().IsRegular() {
-			return r, fmt.Errorf("recipe asset is not a regular file: %s", name)
-		}
-		r.Files = append(r.Files, File{Path: name, Content: raw, Executable: info.Mode()&0o111 != 0})
-	}
-	if err := validate(r); err != nil {
+	r, err := Collect(root, assets)
+	if err != nil {
 		return r, err
+	}
+	if digest != "" && Digest(r) != digest {
+		return r, iox.NewConflict("candidate bundle changed after qualification", "qualify the exact recipe and assets again", nil)
 	}
 	dir := filepath.Join(Workspace(root), ".archetipo")
 	raw, err := json.Marshal(r)
@@ -311,4 +294,48 @@ func writeLease(root string) (*conversationlog.ConversationLock, error) {
 		return nil, err
 	}
 	return store.Lock(context.Background(), "environment-recipe-write")
+}
+
+// Collect snapshots explicitly selected files without publishing them.
+func Collect(root string, assets []string) (Recipe, error) {
+	r := Recipe{Version: 1, Files: []File{}}
+	names := append([]string{Environment, Preview}, assets...)
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		path, err := safe(root, name)
+		if err != nil {
+			return r, err
+		}
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) && name == Preview {
+			continue
+		}
+		if err != nil {
+			return r, err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return r, err
+		}
+		if !info.Mode().IsRegular() {
+			return r, fmt.Errorf("recipe asset is not a regular file: %s", name)
+		}
+		r.Files = append(r.Files, File{Path: name, Content: raw, Executable: info.Mode()&0o111 != 0})
+	}
+	if err := validate(r); err != nil {
+		return r, err
+	}
+	return r, nil
+}
+
+func Digest(r Recipe) string {
+	files := append([]File(nil), r.Files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	raw, _ := json.Marshal(Recipe{Version: r.Version, Files: files})
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:])
 }

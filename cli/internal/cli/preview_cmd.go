@@ -19,9 +19,11 @@ func newPreviewCmd(s streams) *cobra.Command {
 	}})
 	for _, operation := range []string{"show", "configure", "prepare", "run"} {
 		var input string
+		var candidate bool
 		cmd := &cobra.Command{Use: operation, Args: cobra.NoArgs}
 		if operation == "configure" {
 			cmd.Flags().StringVar(&input, "file", "-", "version 1 preview recipe JSON, or - for stdin")
+			cmd.Flags().BoolVar(&candidate, "candidate", false, "configure only the local candidate without updating the common recipe")
 		}
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfigFor(cmd)
@@ -85,7 +87,11 @@ func newPreviewCmd(s streams) *cobra.Command {
 				if readErr != nil {
 					return readErr
 				}
-				recipe, err = preview.Configure(cfg.ProjectRoot, raw)
+				if candidate {
+					recipe, err = preview.ConfigureCandidate(cfg.ProjectRoot, raw)
+				} else {
+					recipe, err = preview.Configure(cfg.ProjectRoot, raw)
+				}
 			} else {
 				recipe, err = preview.Load(cfg.ProjectRoot)
 			}

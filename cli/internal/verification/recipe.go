@@ -71,7 +71,24 @@ func Load(root string) (Recipe, error) {
 	return parseRecipe(root, raw)
 }
 
+// LoadLocal reads a candidate without materializing or updating the common bundle.
+func LoadLocal(root string) (Recipe, error) {
+	raw, err := os.ReadFile(filepath.Join(root, RecipePath))
+	if err != nil {
+		return Recipe{}, err
+	}
+	return parseRecipe(root, raw)
+}
+
 func Configure(root string, raw []byte) (Recipe, error) {
+	return configure(root, raw, false)
+}
+
+func ConfigureCandidate(root string, raw []byte) (Recipe, error) {
+	return configure(root, raw, true)
+}
+
+func configure(root string, raw []byte, candidate bool) (Recipe, error) {
 	recipe, err := parseRecipe(root, raw)
 	if err != nil {
 		return recipe, err
@@ -81,8 +98,10 @@ func Configure(root string, raw []byte) (Recipe, error) {
 	if err != nil {
 		return recipe, err
 	}
-	if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
-		return recipe, err
+	if !candidate {
+		if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
+			return recipe, err
+		}
 	}
 	return recipe, recordfile.WriteAtomic(dir, filepath.Join(root, RecipePath), ".recipe-", recipe)
 }

@@ -28,7 +28,7 @@ const recipe = {
 };
 writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
 const rows = [];
-function invoke(label, args, expectedError) {
+function invoke(label, args, expectedError, expectedKind = 'verification_result') {
   const start = performance.now();
   let stdout, stderr, exit = 0;
   try { stdout = execFileSync(bin, ['-C', project, 'execution', 'environment', ...args], { encoding: 'utf8', timeout: 15000 }); }
@@ -36,7 +36,7 @@ function invoke(label, args, expectedError) {
   const elapsed_ms = Math.round(performance.now() - start);
   const envelope = JSON.parse(expectedError ? stderr : stdout);
   if (expectedError) assert.equal(envelope.error?.code, expectedError);
-  else { assert.equal(exit, 0, stderr); assert.equal(envelope.kind, 'verification_result'); }
+  else { assert.equal(exit, 0, stderr); assert.equal(envelope.kind, expectedKind); }
   const row = { label, elapsed_ms, exit, envelope };
   rows.push(row);
   console.log(`${label}: ${elapsed_ms} ms; passed=${envelope.data?.passed}; reused=${envelope.data?.reused}`);
@@ -150,6 +150,29 @@ try {
     assert.equal(JSON.parse(readFileSync(join(project,'.archetipo/environment/state.json'),'utf8')).preparation_id,'');
     rows.push({label:'live-check-owner-hard-death',elapsed_ms:Math.round(performance.now()-liveStart),exit:0,envelope:{data:outcome}});
   } finally {liveOwner.kill('SIGTERM');live?.kill('SIGTERM');}
+
+  // A real candidate is tested before it replaces the common bundle. No agent,
+  // package manager or stack assumption is involved in this contract test.
+  const capabilities = invoke('runtime-capabilities', ['capabilities', '--tool', process.execPath], undefined, 'environment_capabilities');
+  assert.equal(capabilities.external_network.state, 'unknown');
+  assert.equal(capabilities.loopback_binding.state, 'available');
+  const helper = 'scripts/archetipo/qualification.txt';
+  mkdirSync(join(project, 'scripts/archetipo'), { recursive: true });
+  writeFileSync(join(project, helper), 'candidate helper');
+  recipe.inputs.push(helper);
+  writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
+  const prepareCount = counts().prepare;
+  const qualified = invoke('candidate-repeatability', ['qualify', '--asset', helper], undefined, 'environment_qualification');
+  assert.equal(qualified.passed, true);
+  assert.equal(counts().prepare, prepareCount + 2);
+  assert.deepEqual(qualified.reports.map(report => report.reused), [false, false, true]);
+  assert.equal(existsSync(join(project, '.archetipo/environment-recipe.json')), false);
+  invoke('qualified-publication', ['publish', '--qualified', '--asset', helper], undefined, 'environment_recipe');
+  const common = readFileSync(join(project, '.archetipo/environment-recipe.json'), 'utf8');
+  writeFileSync(join(project, helper), 'later helper mutation');
+  invoke('reject-stale-qualification', ['publish', '--qualified', '--asset', helper], 'E_PRECONDITION');
+  assert.equal(readFileSync(join(project, '.archetipo/environment-recipe.json'), 'utf8'), common);
+  writeFileSync(join(project, helper), 'candidate helper');
 
 } catch (error) { failure = error; }
 finally {
