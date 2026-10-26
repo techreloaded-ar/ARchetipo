@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
@@ -61,34 +62,10 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if _, err = git(ctx, r.Workdir, "remote", "get-url", "origin"); err != nil {
 			return r, err
 		}
-		existing, err := s.Connector.FetchBacklogItems(ctx, "")
-		if err != nil {
-			if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
-				return r, err
-			}
-			existing = []domain.Spec{}
-		}
-		if len(r.Published) == 0 {
-			summary, summaryErr := s.Connector.ReadExistingBacklog(ctx)
-			if summaryErr != nil {
-				if ce, ok := summaryErr.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
-					return r, summaryErr
-				}
-			}
-			known := append([]domain.Spec(nil), existing...)
-			for _, code := range summary.Codes {
-				known = append(known, domain.Spec{Code: code})
-			}
-			for _, epic := range summary.Epics {
-				known = append(known, domain.Spec{Epic: epic})
-			}
-			r.Published = map[string]string{}
-			next := nextCode(known, "US-")
-			for _, st := range stories {
-				r.Published[st.Code] = fmt.Sprintf("US-%03d", next)
-				next++
-			}
-			r.PublishedEpic = fmt.Sprintf("EP-%03d", nextCode(known, "EP-"))
+		// Stories published at intent approval keep their codes; older increments
+		// approved before that get them here, persisted before any external write.
+		if err = s.allocate(ctx, &r, stories); err != nil {
+			return r, err
 		}
 		r.ApprovedSHA = r.ReadySHA
 		r.Status = Publishing
@@ -131,7 +108,7 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err = s.save(r); err != nil {
 			return r, err
 		}
-		if err = s.publishStories(ctx, r, stories); err != nil {
+		if err = s.mirror(ctx, &r, stories, domain.StatusReview); err != nil {
 			return r, err
 		}
 		r.Status = Proposed
@@ -149,41 +126,154 @@ func publishedStory(r Record, local domain.Spec) domain.Spec {
 	for i, dependency := range st.BlockedBy {
 		st.BlockedBy[i] = r.Published[dependency]
 	}
-	st.Body += "\n\n" + sourceMarker(r.ID, local.Code) + "\n\nProposta di incremento: " + r.PR.URL + "\n"
+	st.Body += "\n\n" + sourceMarker(r.ID, local.Code) + "\n"
+	if r.PR != nil {
+		st.Body += "\nProposta di incremento: " + r.PR.URL + "\n"
+	}
 	return canonical(st)
 }
-func (s *Service) publishStories(ctx context.Context, r Record, stories []domain.Spec) error {
+
+// officialBacklog reads the original backlog; a workspace without one is empty.
+func (s *Service) officialBacklog(ctx context.Context) ([]domain.Spec, error) {
+	existing, err := s.Connector.FetchBacklogItems(ctx, "")
+	if err != nil {
+		if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
+			return nil, err
+		}
+		existing = []domain.Spec{}
+	}
+	return existing, nil
+}
+
+// allocate assigns official codes to the local stories that have none yet and
+// persists them before any connector write, so a retry reuses the same codes.
+func (s *Service) allocate(ctx context.Context, r *Record, stories []domain.Spec) error {
+	missing := r.PublishedEpic == ""
+	for _, st := range stories {
+		missing = missing || r.Published[st.Code] == ""
+	}
+	if !missing {
+		return nil
+	}
+	existing, err := s.officialBacklog(ctx)
+	if err != nil {
+		return err
+	}
+	summary, err := s.Connector.ReadExistingBacklog(ctx)
+	if err != nil {
+		if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
+			return err
+		}
+	}
+	known := append([]domain.Spec(nil), existing...)
+	for _, code := range summary.Codes {
+		known = append(known, domain.Spec{Code: code})
+	}
+	for _, epic := range summary.Epics {
+		known = append(known, domain.Spec{Epic: epic})
+	}
+	for _, code := range r.Published {
+		known = append(known, domain.Spec{Code: code})
+	}
+	known = append(known, domain.Spec{Epic: domain.Epic{Code: r.PublishedEpic}})
+	if r.Published == nil {
+		r.Published = map[string]string{}
+	}
+	next := nextCode(known, "US-")
+	for _, st := range stories {
+		if r.Published[st.Code] == "" {
+			r.Published[st.Code] = fmt.Sprintf("US-%03d", next)
+			next++
+		}
+	}
+	if r.PublishedEpic == "" {
+		r.PublishedEpic = fmt.Sprintf("EP-%03d", nextCode(known, "EP-"))
+	}
+	return s.save(*r)
+}
+
+// mirror makes the original backlog show the current approved stories in the
+// given status. Until delivery the increment is the authority for their content.
+func (s *Service) mirror(ctx context.Context, r *Record, stories []domain.Spec, status domain.Status) error {
+	if err := s.allocate(ctx, r, stories); err != nil {
+		return err
+	}
+	existing, err := s.officialBacklog(ctx)
+	if err != nil {
+		return err
+	}
+	byCode := map[string]domain.Spec{}
+	for _, st := range existing {
+		byCode[st.Code] = st
+	}
+	keep := map[string]bool{}
 	for _, local := range stories {
-		st := publishedStory(r, local)
-		marker := sourceMarker(r.ID, local.Code)
-		existing, err := s.Connector.FetchBacklogItems(ctx, "")
-		if err != nil {
-			if ce, ok := err.(*iox.CodedError); !ok || ce.Code != iox.CodePreconditionMissing {
+		keep[local.Code] = true
+		st := publishedStory(*r, local)
+		previous, found := byCode[st.Code]
+		if found {
+			// List entries of some connectors (github) carry no body: the marker
+			// and the content can only be judged on the detail.
+			if previous, err = s.Connector.ReadSpecDetail(ctx, st.Code); err != nil {
 				return err
 			}
-			existing = []domain.Spec{}
 		}
-		found := false
-		for _, previous := range existing {
-			if previous.Code == st.Code {
-				if !strings.Contains(previous.Body, marker) || hash(canonical(previous)) != hash(canonical(st)) {
-					return iox.NewConflict("published story code changed or is already in use", "reconcile the existing story before retrying publication", nil)
-				}
-				found = true
-				break
+		switch {
+		case found && !strings.Contains(previous.Body, sourceMarker(r.ID, local.Code)):
+			return iox.NewConflict("published story code "+st.Code+" is already in use", "reconcile the existing story before retrying", nil)
+		case !found:
+			if len(byCode) == 0 {
+				_, err = s.Connector.SaveInitialBacklog(ctx, []domain.Spec{st})
+			} else {
+				_, err = s.Connector.AppendSpecs(ctx, []domain.Spec{st})
 			}
-		}
-		if found {
-			continue
-		}
-		if len(existing) == 0 {
-			_, err = s.Connector.SaveInitialBacklog(ctx, []domain.Spec{st})
-		} else {
-			_, err = s.Connector.AppendSpecs(ctx, []domain.Spec{st})
+			byCode[st.Code] = st
+			previous = st
+		case hash(canonical(previous)) != hash(st):
+			_, err = s.Connector.UpdateSpec(ctx, st.Code, domain.SpecUpdate{Title: &st.Title, Priority: &st.Priority, Points: &st.Points, Scope: &st.Scope, BlockedBy: &st.BlockedBy, Body: &st.Body, Epic: &st.Epic})
 		}
 		if err != nil {
 			return err
 		}
+		if previous.Status != status {
+			if _, err = s.Connector.TransitionStatus(ctx, st.Code, status); err != nil {
+				return err
+			}
+		}
+	}
+	if err = s.retire(ctx, r, byCode, keep); err != nil {
+		return err
+	}
+	return s.save(*r)
+}
+
+// retire removes the published stories this increment no longer contains. A
+// story is removed only when it still carries this increment's marker.
+func (s *Service) retire(ctx context.Context, r *Record, byCode map[string]domain.Spec, keep map[string]bool) error {
+	deleter, canDelete := s.Connector.(connector.SpecDeleter)
+	for local, code := range r.Published {
+		if keep[local] {
+			continue
+		}
+		if _, found := byCode[code]; found {
+			previous, err := s.Connector.ReadSpecDetail(ctx, code)
+			if err != nil {
+				return err
+			}
+			if strings.Contains(previous.Body, sourceMarker(r.ID, local)) {
+				// ponytail: connectors without deletion (github, jira) only put the
+				// retired story back to TODO; it is closed by hand.
+				if canDelete {
+					_, err = deleter.DeleteSpec(ctx, code)
+				} else {
+					_, err = s.Connector.TransitionStatus(ctx, code, domain.StatusTodo)
+				}
+				if err != nil {
+					return err
+				}
+			}
+		}
+		delete(r.Published, local)
 	}
 	return nil
 }

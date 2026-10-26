@@ -9,6 +9,9 @@ continuano a funzionare come prima.
 1. Scegli **Sviluppa un incremento** e racconta il risultato desiderato.
 2. L'agente chiarisce l'intento e propone storie piccole e verificabili.
 3. Apri **Dettagli incremento**, leggi **Intento e storie** e premi **Approva intento e avvia sviluppo**.
+   Le storie approvate entrano subito nel backlog ufficiale, con i codici
+   definitivi, in IN PROGRESS. Una revisione approvata le aggiorna, ne aggiunge
+   o ritira; eliminare l'incremento prima della PR le rimuove.
 4. Pianificazione, implementazione e verifica usano le skill esistenti dentro
    la sandbox. Il risultato comprende istruzioni di prova, verifiche eseguite
    e, quando il progetto la prevede, un'anteprima HTTP locale.
@@ -17,8 +20,8 @@ continuano a funzionare come prima.
    una nuova proposta da approvare. Codici locali, conversazione nativa e
    worktree restano gli stessi.
 6. **Approva risultato e apri PR** congela la versione provata, pubblica il
-   branch e apre una sola PR verso `main`. Le storie finali entrano nel backlog ufficiale
-   come proposte, in TODO e con il collegamento alla PR.
+   branch e apre una sola PR verso `main`. Le storie ufficiali passano a REVIEW
+   con il collegamento alla PR.
 7. **Aggiorna stato PR** riconcilia lo stato effettivo di GitHub. Solo un merge
    confermato del codice approvato porta le storie a DONE e l'incremento a
    consegnato. ARchetipo non esegue il merge.
@@ -69,6 +72,8 @@ isolato; percorsi configurati esterni al progetto sono rifiutati.
 
 I file runtime e le skill installate non entrano nei commit del prodotto.
 L'installazione copia soltanto gli asset del workflow, senza file .env.
+I file locali non versionati che la persona dichiara in `local_files` della
+ricetta (per esempio `.env.local`) arrivano nel checkout con la preparazione.
 Il worktree isola codice e processo, non costituisce una barriera di sicurezza
 del sistema operativo. L'agente conserva la politica di permessi del provider.
 L'anteprima deve usare dati e servizi di prova separati, seguendo il comando di
@@ -126,10 +131,14 @@ configurato nel workspace originale.
 Prima della pubblicazione la CLI verifica nuovamente il commit, la pulizia
 del checkout, il contenuto delle storie accettate e il completamento dei task.
 Una modifica dopo la prova richiede una nuova verifica. Il mapping fra codici
-locali e codici ufficiali viene salvato prima di pubblicare; una pubblicazione
-parziale si riprende con **Approva risultato e apri PR**, senza duplicare la PR
-o le storie già scritte. Un codice occupato da contenuti diversi viene
-rifiutato, senza sovrascriverli.
+locali e codici ufficiali viene salvato all'approvazione dell'intento, prima di
+scrivere; una pubblicazione parziale si riprende con **Approva risultato e apri PR**,
+senza duplicare la PR o le storie già scritte. Fino alla consegna l'incremento è
+l'autorità sul contenuto delle sue storie ufficiali. Un codice occupato da una
+storia che non appartiene all'incremento viene rifiutato, senza sovrascriverla.
+Eliminare un incremento la cui PR non è stata mergiata ritira le sue storie
+ufficiali. Con connector che non sanno cancellare (github, jira) una storia
+ritirata torna a TODO e va chiusa a mano.
 
 La PR rimane soggetta alla normale revisione tecnica. Una PR chiusa senza merge
 non consegna l'incremento. Se commit della PR o storie pubblicate cambiano dopo

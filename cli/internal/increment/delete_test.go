@@ -282,3 +282,20 @@ func TestDeleteIncrementRefusesPreviewOwnedByAnotherViewer(t *testing.T) {
 		t.Fatal("lost worktree", err)
 	}
 }
+
+func TestDeleteIncrementWithoutPRRemovesItsPublishedStories(t *testing.T) {
+	ctx := context.Background()
+	s := fixture(t)
+	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Delete(ctx, r.ID, DeletionOptions{HeadSHA: plan.HeadSHA, Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.Connector.FetchBacklogItems(ctx, "")
+	if err != nil || len(items) != 1 || items[0].Code != "US-010" {
+		t.Fatalf("abandoned increment left its stories: %v %v", items, err)
+	}
+}

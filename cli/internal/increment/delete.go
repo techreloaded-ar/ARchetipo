@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
@@ -296,6 +297,21 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 			}
 			result.BranchRemoved = true
 			if err = save(); err != nil {
+				return r, err
+			}
+		}
+		// Without a merged PR the abandoned work never reached the product: its
+		// stories leave the original backlog. A merged PR keeps them as its record.
+		if (r.PR == nil || r.PR.State != "MERGED") && len(r.Published) > 0 && s.Connector != nil {
+			existing, backlogErr := s.officialBacklog(ctx)
+			if backlogErr != nil {
+				return r, backlogErr
+			}
+			byCode := map[string]domain.Spec{}
+			for _, st := range existing {
+				byCode[st.Code] = st
+			}
+			if err = s.retire(ctx, &r, byCode, nil); err != nil {
 				return r, err
 			}
 		}

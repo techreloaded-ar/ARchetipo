@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"errors"
+	"os"
+
 	"github.com/spf13/cobra"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -130,6 +133,15 @@ func newIncrementCmd(s streams) *cobra.Command {
 						value, err = service.Create(cmd.Context(), input.Title, input.Request, input.OriginConversationID)
 					case "approve":
 						value, err = service.Approve(cmd.Context(), args[0], input.Revision)
+						if err == nil {
+							// An agent confined to the sandbox cannot write the original
+							// backlog; the viewer or publication mirrors the stories later.
+							if synced, syncErr := service.SyncStories(cmd.Context(), args[0]); syncErr == nil {
+								value = synced
+							} else if !errors.Is(syncErr, os.ErrPermission) {
+								err = syncErr
+							}
+						}
 					case "feedback":
 						value, err = service.RequestChanges(cmd.Context(), args[0], increment.FeedbackRequest{Feedback: input.Feedback, Kind: input.Kind, StoryCodes: input.StoryCodes})
 					case "publish":

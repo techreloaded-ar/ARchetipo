@@ -133,7 +133,11 @@ func proposeApprove(t *testing.T, s *Service, r Record, stories ...domain.Spec) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err = s.Approve(context.Background(), r.ID, len(r.Revisions))
+	if _, err = s.Approve(context.Background(), r.ID, len(r.Revisions)); err != nil {
+		t.Fatal(err)
+	}
+	// The viewer and the unconfined CLI mirror the approval into the original backlog.
+	r, err = s.SyncStories(context.Background(), r.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,8 +205,8 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 	}
 	r = proposeApprove(t, s, r, story("US-001", "Export Excel"))
 	items, err = s.Connector.FetchBacklogItems(context.Background(), "")
-	if err != nil || len(items) != 1 || items[0].Code != "US-010" {
-		t.Fatalf("parent backlog touched: %v %v", items, err)
+	if err != nil || len(items) != 2 || items[1].Code != "US-011" || items[1].Status != domain.StatusInProgress || !strings.Contains(items[1].Body, sourceMarker(r.ID, "US-001")) {
+		t.Fatalf("approved story not shown in progress in the original backlog: %v %v", items, err)
 	}
 	r = ready(t, s, r)
 	if got := runGit(t, s.Config.ProjectRoot, "rev-parse", "HEAD"); got != parentHEAD {
@@ -410,13 +414,13 @@ func (c trimmedConnector) ReadSpecDetail(ctx context.Context, ref string) (domai
 	return story, err
 }
 
-type failAfterAppend struct {
+type failAfterUpdate struct {
 	connector.Connector
 	failed bool
 }
 
-func (f *failAfterAppend) AppendSpecs(ctx context.Context, specs []domain.Spec) (domain.WriteResult, error) {
-	result, err := f.Connector.AppendSpecs(ctx, specs)
+func (f *failAfterUpdate) UpdateSpec(ctx context.Context, code string, patch domain.SpecUpdate) (domain.WriteResult, error) {
+	result, err := f.Connector.UpdateSpec(ctx, code, patch)
 	if err == nil && !f.failed {
 		f.failed = true
 		return result, errors.New("connection lost after write")
@@ -440,7 +444,7 @@ func TestPublicationRecoversPartialWritesAndDeliversOnlyAfterConfirmedMerge(t *t
 	r = ready(t, s, r)
 	hosting := &fakeHosting{}
 	s.Hosting = hosting
-	s.Connector = &failAfterAppend{Connector: trimmedConnector{Connector: s.Connector}}
+	s.Connector = &failAfterUpdate{Connector: trimmedConnector{Connector: s.Connector}}
 	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err == nil {
 		t.Fatal("injected partial publication did not fail")
 	}
@@ -463,8 +467,8 @@ func TestPublicationRecoversPartialWritesAndDeliversOnlyAfterConfirmedMerge(t *t
 		t.Fatalf("duplicated stories: %d", len(specs))
 	}
 	for _, st := range specs {
-		if st.Code != "US-010" && st.Status != domain.StatusTodo {
-			t.Fatal("story delivered before merge")
+		if st.Code != "US-010" && (st.Status != domain.StatusReview || !strings.Contains(st.Body, hosting.pr.URL)) {
+			t.Fatalf("story with an open PR is not in review: %+v", st)
 		}
 	}
 	if _, err = s.Refresh(context.Background(), r.ID); err != nil {
@@ -657,5 +661,99 @@ func TestIncrementWithoutMainDoesNotCreateWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".archetipo", "increments")); !os.IsNotExist(err) {
 		t.Fatalf("failed creation persisted increment state: %v", err)
+	}
+}
+
+func TestApprovedRevisionsKeepTheOriginalBacklogInStep(t *testing.T) {
+	s := fixture(t)
+	first, keep, retire := story("US-001", "CSV"), story("US-002", "Unchanged"), story("US-003", "Retire")
+	r := proposeApprove(t, s, create(t, s), first, keep, retire)
+	official := func() map[string]domain.Spec {
+		items, err := s.Connector.FetchBacklogItems(context.Background(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		byCode := map[string]domain.Spec{}
+		for _, st := range items {
+			byCode[st.Code] = st
+		}
+		return byCode
+	}
+	codes := map[string]string{"US-001": r.Published["US-001"], "US-002": r.Published["US-002"], "US-003": r.Published["US-003"]}
+	if codes["US-001"] != "US-011" || codes["US-003"] != "US-013" || len(official()) != 4 {
+		t.Fatalf("codes not allocated at approval: %v", codes)
+	}
+	first.Title = "Excel"
+	added := story("US-004", "Area filter")
+	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Excel replaces CSV.", Stories: []domain.Spec{first, keep, added}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if official()[codes["US-001"]].Title != "CSV" {
+		t.Fatal("an unapproved proposal changed the original backlog")
+	}
+	if _, err = s.Approve(context.Background(), r.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	if r, err = s.SyncStories(context.Background(), r.ID); err != nil {
+		t.Fatal(err)
+	}
+	byCode := official()
+	if byCode[codes["US-001"]].Title != "Excel" || byCode[codes["US-002"]].Status != domain.StatusInProgress {
+		t.Fatalf("approved revision not mirrored: %+v", byCode)
+	}
+	if _, found := byCode[codes["US-003"]]; found {
+		t.Fatal("retired story left in the original backlog")
+	}
+	if r.Published["US-004"] != "US-014" || byCode["US-014"].Status != domain.StatusInProgress {
+		t.Fatalf("added story not published with a fresh code: %v", r.Published)
+	}
+	if _, err = s.SyncStories(context.Background(), r.ID); err != nil || len(official()) != 4 {
+		t.Fatal("approval retry duplicated the official stories", err)
+	}
+}
+
+// Some connectors (github) list stories without their body: the increment must
+// recognise its own stories from the detail, or every retry would conflict.
+type bodylessListConnector struct{ connector.Connector }
+
+func (c bodylessListConnector) FetchBacklogItems(ctx context.Context, status domain.Status) ([]domain.Spec, error) {
+	stories, err := c.Connector.FetchBacklogItems(ctx, status)
+	for i := range stories {
+		stories[i].Body = ""
+	}
+	return stories, err
+}
+
+func TestMirroringRecognisesItsStoriesWhenListingsCarryNoBody(t *testing.T) {
+	s := fixture(t)
+	s.Connector = bodylessListConnector{Connector: s.Connector}
+	remote(t, s)
+	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"), story("US-002", "Retire"))
+	if _, err := s.SyncStories(context.Background(), r.ID); err != nil {
+		t.Fatalf("second sync conflicted with its own stories: %v", err)
+	}
+	r = ready(t, s, r)
+	s.Hosting = &fakeHosting{}
+	if r, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil || r.Status != Proposed {
+		t.Fatalf("publication conflicted with its own stories: %+v %v", r, err)
+	}
+	plan, err := s.DeletionPlan(context.Background(), r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Delete(context.Background(), r.ID, DeletionOptions{HeadSHA: plan.HeadSHA, Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	// The wrapper hides SpecDeleter too, like github: retired stories go back
+	// to TODO instead of being removed.
+	items, _ := s.Connector.FetchBacklogItems(context.Background(), "")
+	if len(items) != 3 {
+		t.Fatalf("stories of a deleted increment: %v", items)
+	}
+	for _, st := range items {
+		if st.Status != domain.StatusTodo {
+			t.Fatalf("an unmerged PR kept the story %s of a deleted increment %s", st.Code, st.Status)
+		}
 	}
 }

@@ -276,7 +276,9 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 	message := ""
 	switch action {
 	case "approve-intent":
-		current, err = service.Approve(ctx, current.ID, body.Revision)
+		if current, err = service.Approve(ctx, current.ID, body.Revision); err == nil {
+			current, err = service.SyncStories(ctx, current.ID)
+		}
 		message = "L’utente ha approvato questa revisione dell’intento. Esegui lo sviluppo e le verifiche delle storie nella sandbox usando il workflow esistente. Fermati al risultato da provare; non pubblicare."
 	case "develop":
 		message = "Riprendi lo sviluppo delle storie dell’intento approvato. Conserva il lavoro già verificato e fermati al risultato da provare."

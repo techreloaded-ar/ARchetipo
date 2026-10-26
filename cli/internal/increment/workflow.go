@@ -199,6 +199,20 @@ func (s *Service) Approve(ctx context.Context, id string, revision int) (Record,
 	})
 }
 
+// SyncStories shows the approved stories in the original backlog as in progress;
+// publication moves them to review and the confirmed merge to done. It is apart
+// from Approve so an agent confined to the sandbox can still approve: the next
+// caller allowed to write the workspace, or publication, catches up.
+func (s *Service) SyncStories(ctx context.Context, id string) (Record, error) {
+	return s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
+		r, err := s.Read(id)
+		if err != nil || s.Connector == nil || frozen(r) || len(r.Revisions) == 0 || !r.Revisions[len(r.Revisions)-1].Approved {
+			return r, err
+		}
+		return r, s.mirror(ctx, &r, r.Revisions[len(r.Revisions)-1].Stories, domain.StatusInProgress)
+	})
+}
+
 func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, error) {
 	return s.lockedRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)

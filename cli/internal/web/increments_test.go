@@ -161,8 +161,8 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		t.Fatalf("legacy content lost or progress invented: %+v", fallback)
 	}
 	untouched, err := conn.FetchBacklogItems(context.Background(), "")
-	if err != nil || len(untouched) != 2 {
-		t.Fatal("intent approval wrote stories to the parent")
+	if err != nil || len(untouched) != 3 || untouched[2].Status != domain.StatusInProgress {
+		t.Fatal("approved story not shown in progress in the original backlog")
 	}
 	// A separate free conversation can still execute a normal turn in the
 	// original workspace, while the increment is being developed.

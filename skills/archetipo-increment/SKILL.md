@@ -86,7 +86,13 @@ button calls `increment approve <id> --file -` with
 `{"revision":N}`. Standalone, call it only after the person explicitly
 approves that exact displayed revision. The CLI reconciles sandbox stories,
 preserving unchanged work and invalidating changed/retired work artifacts.
-It never updates the parent backlog.
+It also mirrors the approved stories into the original backlog with their
+official codes, in progress; publication moves them to review, the confirmed
+merge to done, and deleting an increment without a PR removes them. Never move
+or edit those official stories yourself: the increment is their authority.
+In proposal `body` fields omit the template heading and metadata line (code,
+epic, priority, points, status): they are structured fields, and the official
+backlog receives different codes.
 
 ## Develop and prepare the result
 
@@ -334,8 +340,8 @@ execution call `increment publish <id> --file -` with
 `{"head_sha":"ready_sha from the displayed record","revision":N}`.
 View performs this operation deterministically from its approval button.
 Never create a PR yourself with another command, publish early, or merge it.
-The CLI opens/reuses one GitHub PR targeting `main` using gh and publishes the current stories
-through the original connector as proposals. Retrying the same publication
+The CLI opens/reuses one GitHub PR targeting `main` using gh and moves the current
+official stories to review with the PR link. Retrying the same publication
 must use the same increment.
 
 For `PUBLISHING`, explain any publication failure and retry only after an

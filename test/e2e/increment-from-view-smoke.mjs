@@ -229,6 +229,8 @@ async function main(){
   assert.equal(blocked.error?.code,"E_CONFLICT","preview must hold the standalone environment lifetime");
   await click("approve-intent");
   await until(()=>control.received.filter(e=>e.kind==="turn/start").length>=2,"development turn");
+  const approved=(await cliJSON(["spec","list"],undefined,sandbox)).items;
+  assert.equal(approved.length,1);assert.equal(approved[0].status,"IN PROGRESS","approved story must be in progress in the original backlog");
   const releasedPreview=await (await fetch(previewURL)).json();
   assert.equal(releasedPreview.url,undefined,"development must release the preview proxy");
   assert.ok(releasedPreview.resources.resources.every(resource=>resource.state==="ready"),"development must reuse ready resources");
@@ -292,6 +294,7 @@ async function main(){
   await assertEnvironmentRetained();
   current=await read();assert.equal(current.session.session.native.id,native);assert.equal(current.increment.id,inc.id);assert.equal(current.increment.revisions.length,2);
   const localStories=await cliJSON(["spec","list"]);assert.equal(localStories.items.length,1);assert.equal(localStories.items[0].code,"US-001");
+  const revised=(await cliJSON(["spec","list"],undefined,sandbox)).items;assert.equal(revised.length,1);assert.match(revised[0].title,/Excel/);assert.equal(revised[0].status,"IN PROGRESS");
   ok("Il feedback aggiorna la stessa storia e conserva sessione, sandbox e revisioni.");
   const beforeCorrection=current.session.current_turn.native_id;
   await page.waitFor('!!document.querySelector(".conv-composer-input:not(:disabled)")',timeout,"correction delivery available");
@@ -317,12 +320,12 @@ async function main(){
   await page.send("Emulation.clearDeviceMetricsOverride");
   await click("publish");
   await until(async()=>(await read()).increment.status==="PROPOSED","PR publication");
-  const proposed=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(proposed.items.length,1);assert.equal(proposed.items[0].status,"TODO");assert.match(proposed.items[0].body,/Proposta di incremento/);
+  const proposed=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(proposed.items.length,1);assert.equal(proposed.items[0].status,"REVIEW");assert.match(proposed.items[0].body,/Proposta di incremento/);
   const frozen=(await read()).increment;
   await cliJSON(["increment","publish",inc.id],{revision:frozen.revisions.at(-1).number,head_sha:frozen.ready_sha},sandbox);
   let hosting=JSON.parse(await fs.readFile(ghState,"utf8"));assert.equal(hosting.creates,1);
   assert.equal((await cliJSON(["spec","list"],undefined,sandbox)).items.length,1);
-  ok("La PR pubblica solo la storia finale come proposta; un retry non duplica PR o storie.");
+  ok("La storia è IN PROGRESS dall’approvazione e passa a REVIEW con la PR; un retry non duplica PR o storie.");
   hosting.pr.state="MERGED";await fs.writeFile(ghState,JSON.stringify(hosting));
   await click("refresh");
   await until(async()=>(await read()).increment.status==="DELIVERED","merge reconciliation");
