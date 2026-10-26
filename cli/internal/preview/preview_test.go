@@ -30,6 +30,8 @@ func TestRecipeRejectsEscapesAndExternalTargets(t *testing.T) {
 		{Version: 1, Directory: ".", URL: "http://127.0.0.1:3000/{port}", Argv: []string{"server", "{port}"}},
 		{Version: 1, Directory: ".", URL: "http://127.0.0.1:1/{port}", Argv: []string{"server", "{port}"}},
 		{Version: 1, Directory: ".", URL: "http://127.0.0.1:3000", Argv: []string{"server", "{port}"}},
+		{Version: 1, Directory: ".", URL: "http://127.0.0.1:3000", Simulated: []string{" "}},
+		{Version: 1, Directory: ".", URL: "http://127.0.0.1:3000", Simulated: []string{"google", "google"}},
 	} {
 		if _, err := r.Validate(root); err == nil {
 			t.Fatalf("accepted unsafe recipe: %+v", r)

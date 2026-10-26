@@ -289,14 +289,18 @@ Payload:
 
 preview_url is optional and must be a real local HTTP preview. An unavailable
 interactive preview must be stated plainly in the summary; provide other
-appropriate observable evidence. Every story and every existing task must be
+appropriate observable evidence. The CLI copies the preview recipe's `simulated`
+list into the result; do not claim or hide a simulated integration yourself. Every story and every existing task must be
 complete (a plan is optional), the accepted story content must match, and the
 product working tree must be clean.
 The CLI freezes the verified code and story snapshot.
 
 ## Business review, another round, publication
 
-At `REVIEW`, present the result, its evidence and any limitations. Wait.
+At `REVIEW`, present the result, its evidence and any limitations. When the
+result's `simulated` list is not empty, say plainly which integrations were
+tried against local fakes and that the real trial happens after the merge;
+approval is still the person's choice. Wait.
 An ordinary question about the result does not invalidate it. When the
 person explicitly requests a change, both in View and standalone, call
 `archetipo -C <workdir> increment feedback <id> --file -` with one of:

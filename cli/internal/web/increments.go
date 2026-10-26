@@ -27,6 +27,7 @@ type incrementView struct {
 	ProgressLabel string               `json:"progress_label,omitempty"`
 	ActivityLabel string               `json:"activity_label,omitempty"`
 	Note          string               `json:"note"`
+	ResultNotice  string               `json:"result_notice,omitempty"`
 	increment.Record
 	StatusLabel string             `json:"status_label"`
 	Actions     []incrementControl `json:"actions"`
@@ -86,7 +87,10 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		}
 	}
 	view.ActivityLabel = "In attesa"
-	view.Note = "Codice e storie lavorano nella sandbox. Pubblicazione nel backlog alla PR; consegna dopo il merge."
+	view.Note = "Il codice lavora nella sandbox; le storie sono nel backlog in lavorazione, in revisione con la PR, consegnate dopo il merge."
+	if r.Result != nil {
+		view.ResultNotice = increment.SimulatedNotice(r.Result.Simulated)
+	}
 	if r.ConversationID != "" {
 		if record, readErr := ws.conversationStore().GetMetadata(ctx, r.ConversationID); readErr == nil {
 			view.Busy = record.Work != "" && record.Work != execution.SessionIdle

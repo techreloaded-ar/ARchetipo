@@ -31,6 +31,9 @@ Compare the combined behavior with the approved outcome, rather than reviewing
 each story in isolation. Check relevant correctness, architecture, security and
 regression risks; expand the scope if evidence reveals a concrete concern.
 Read the implementer's original reports and confirm they cover the final inputs.
+Confirm the shared fake-service rules: no test-mode switch, simulated branch or
+bypass route in product code, fakes declared as resources, and every simulated
+integration listed in the preview recipe. A violation is a blocker.
 Add focused real checks where evidence is missing or a risk needs reproduction,
 using the existing browser/API/database tools and owned environment. Independence
 means a separate assessment, not unconditional repetition of every test.

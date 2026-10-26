@@ -26,6 +26,10 @@ type Recipe struct {
 	Argv               []string `json:"argv,omitempty"`
 	URL                string   `json:"url"`
 	PrepareEnvironment bool     `json:"prepare_environment,omitempty"`
+	// Simulated names the third-party integrations the preview replaces with
+	// local fakes (for example "google-oauth"). It is a declared fact the
+	// increment result and the PR repeat, so the person approves knowingly.
+	Simulated []string `json:"simulated,omitempty"`
 }
 
 func invalid(message string) error {
@@ -80,6 +84,13 @@ func (r Recipe) Validate(root string) (string, error) {
 	}
 	if len(r.Argv) > 0 && strings.TrimSpace(r.Argv[0]) == "" {
 		return "", invalid("preview command is empty")
+	}
+	seen := map[string]bool{}
+	for _, name := range r.Simulated {
+		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || strings.ContainsAny(name, "\x00\n") || seen[name] {
+			return "", invalid("simulated integrations must be distinct non-empty names")
+		}
+		seen[name] = true
 	}
 	return actual, nil
 }

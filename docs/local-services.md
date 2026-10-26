@@ -81,6 +81,17 @@ Due incrementi possono girare insieme; due anteprime che vogliono possedere i
 servizi dello stesso checkout ricevono invece un conflitto, evitando che lo stop
 nell'una interrompa silenziosamente l'altra.
 
+## Integrazioni simulate
+
+Un servizio terzo irraggiungibile in locale (OAuth, calendari, API a pagamento)
+può essere sostituito da un finto locale: un servizio separato, registrato in
+`resources` con la propria porta, raggiunto dall'applicazione solo attraverso gli
+endpoint configurabili che usa anche per il servizio reale. Il codice di prodotto
+non contiene interruttori di test, rami simulati o route che saltano la login.
+`.archetipo/preview.json` dichiara in `simulated` i nomi delle integrazioni
+simulate; `increment ready` li copia nel risultato, il viewer li mostra accanto
+all'approvazione e la PR li ripete. La prova reale avviene dopo il merge.
+
 ## Uso e arresto
 
 - `archetipo execution environment configure --file recipe.json`: salva la ricetta.

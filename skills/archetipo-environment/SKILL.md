@@ -51,6 +51,9 @@ Call only these operations:
 - For a web application, `archetipo execution preview configure --file -`: stdin
   `{"version":1,"directory":".","argv":["scripts/archetipo/preview.sh","{port}"],"url":"http://127.0.0.1:{port}/","prepare_environment":true}`,
   adapted to the actual project. Bind strictly to the assigned loopback port.
+  List in `simulated` the integrations the preview replaces with local fakes
+  (for example `["google-oauth"]`), following the shared fake-service rules;
+  omit it when the preview uses the real services.
   Returns `kind: preview_recipe`. Do not invent a web interface for a CLI/library.
 - `archetipo execution environment publish --asset scripts/archetipo/<helper>`:
   repeat `--asset` for EVERY required non-secret helper and its helper dependencies.

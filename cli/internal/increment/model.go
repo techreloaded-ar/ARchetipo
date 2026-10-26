@@ -46,6 +46,9 @@ type Result struct {
 	Summary    string   `json:"summary"`
 	PreviewURL string   `json:"preview_url,omitempty"`
 	Checks     []string `json:"checks"`
+	// Simulated is read from the preview recipe at readiness, never from the
+	// agent: which integrations the person tried against local fakes.
+	Simulated []string `json:"simulated,omitempty"`
 }
 type Record struct {
 	ID                   string            `json:"id"`

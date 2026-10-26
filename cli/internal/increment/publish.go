@@ -92,6 +92,9 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 				for _, check := range r.Result.Checks {
 					fmt.Fprintf(&body, "- %s\n", check)
 				}
+				if notice := SimulatedNotice(r.Result.Simulated); notice != "" {
+					fmt.Fprintf(&body, "\n%s\n", notice)
+				}
 			}
 			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, r.Title, body.String())
 			if err != nil {
@@ -114,6 +117,15 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		r.Status = Proposed
 		return r, s.save(r)
 	})
+}
+
+// SimulatedNotice is the one sentence the viewer and the PR repeat when the
+// result was tried against local fakes instead of the real integrations.
+func SimulatedNotice(simulated []string) string {
+	if len(simulated) == 0 {
+		return ""
+	}
+	return "Provato con integrazioni simulate: " + strings.Join(simulated, ", ") + ". La prova con i servizi reali avviene dopo il merge."
 }
 
 func sourceMarker(id, code string) string {

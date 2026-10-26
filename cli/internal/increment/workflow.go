@@ -16,6 +16,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/validation"
 )
 
@@ -253,6 +254,10 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 		}
 		if diff == "" {
 			return r, iox.NewConflict("increment has no committed product changes", "complete and commit the development before review", nil)
+		}
+		result.Simulated = nil
+		if recipe, previewErr := preview.Load(r.Workdir); previewErr == nil {
+			result.Simulated = append([]string(nil), recipe.Simulated...)
 		}
 		r.Result = &result
 		r.ReadySHA = head

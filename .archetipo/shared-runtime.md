@@ -110,6 +110,21 @@ these guarantees: migrate their services into resources and remove fixed ports.
 Never erase `.archetipo` to stop services: stop/reconcile resources first.
 Required real browser/API/database checks cannot be replaced with mocks.
 
+A third-party integration the local environment cannot reach (OAuth providers,
+calendars, payment or AI APIs) may be replaced by a local fake, under these rules.
+The fake is a separate service: its code lives with the project tooling (for
+example under `scripts/archetipo/` or the test directory), it is declared as a
+`resources` entry with its own port, and the application reaches it only through
+the same configurable endpoints it uses for the real service (base URLs, client
+ids and callback URLs read from configuration, with the real values as defaults).
+Product code never contains a test-mode switch, a simulated branch or a service
+route that bypasses authentication: an application must not be able to tell it
+is being tested. Declare every integration the preview simulates in the preview
+recipe's `simulated` list, with a short stable name; the result and the pull
+request repeat that list, so the person approves knowing the real integration
+was not exercised. That trial happens after the merge, on a deployed preview or
+locally on the main branch.
+
 Keep each checkout's data across stops, restarts and revision rounds: a database
 resource stores data in a persistent location owned by the checkout (for example a
 named volume), never in a container or directory that `stop` removes. When it is

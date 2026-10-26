@@ -14,7 +14,10 @@ continuano a funzionare come prima.
    o ritira; eliminare l'incremento prima della PR le rimuove.
 4. Pianificazione, implementazione e verifica usano le skill esistenti dentro
    la sandbox. Il risultato comprende istruzioni di prova, verifiche eseguite
-   e, quando il progetto la prevede, un'anteprima HTTP locale.
+   e, quando il progetto la prevede, un'anteprima HTTP locale. Se la ricetta
+   dell'anteprima dichiara integrazioni simulate (`simulated`), il risultato e
+   il pulsante di approvazione lo dicono: l'approvazione è consapevole e la
+   prova con i servizi reali avviene dopo il merge.
 5. Scrivi in chat cosa cambiare. Una domanda sul risultato lascia valida la
    verifica; una richiesta esplicita di modifica avvia una breve esplorazione, seguita da
    una nuova proposta da approvare. Codici locali, conversazione nativa e

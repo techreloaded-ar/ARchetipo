@@ -376,6 +376,7 @@ func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
 }
 
 type fakeHosting struct {
+	createBody string
 	pr         *PullRequest
 	creates    int
 	findBase   string
@@ -386,8 +387,9 @@ func (f *fakeHosting) Find(_ context.Context, _, _, base string) (*PullRequest, 
 	f.findBase = base
 	return f.pr, nil
 }
-func (f *fakeHosting) Create(_ context.Context, dir, _, base, _, _ string) (*PullRequest, error) {
+func (f *fakeHosting) Create(_ context.Context, dir, _, base, _, body string) (*PullRequest, error) {
 	f.createBase = base
+	f.createBody = body
 	sha, err := git(context.Background(), dir, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err
@@ -755,5 +757,37 @@ func TestMirroringRecognisesItsStoriesWhenListingsCarryNoBody(t *testing.T) {
 		if st.Status != domain.StatusTodo {
 			t.Fatalf("an unmerged PR kept the story %s of a deleted increment %s", st.Code, st.Status)
 		}
+	}
+}
+
+func TestReadyRecordsSimulatedIntegrationsFromTheRecipeAndThePRRepeatsThem(t *testing.T) {
+	s := fixture(t)
+	remote(t, s)
+	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+	recipe := `{"version":1,"directory":".","argv":["server","{port}"],"url":"http://127.0.0.1:{port}","simulated":["google-oauth","google-calendar"]}`
+	if err := os.WriteFile(filepath.Join(r.Workdir, ".archetipo", "preview.json"), []byte(recipe), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	complete(t, s, r)
+	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("simulated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, r.Workdir, "add", "hello.txt", ".archetipo/preview.json")
+	runGit(t, r.Workdir, "commit", "-m", "feat: export")
+	// The agent cannot claim a real trial: the recipe is the only source.
+	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, Simulated: []string{}})
+	if err != nil || strings.Join(r.Result.Simulated, ",") != "google-oauth,google-calendar" {
+		t.Fatalf("simulated integrations not taken from the recipe: %+v %v", r.Result, err)
+	}
+	hosting := &fakeHosting{}
+	s.Hosting = hosting
+	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(hosting.createBody, SimulatedNotice(r.Result.Simulated)) {
+		t.Fatalf("PR body hides the simulated trial: %s", hosting.createBody)
+	}
+	if SimulatedNotice(nil) != "" {
+		t.Fatal("a real trial produced a notice")
 	}
 }

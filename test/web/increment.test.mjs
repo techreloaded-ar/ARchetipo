@@ -69,3 +69,11 @@ test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
  assert.match(open,/Criteri completi/);
  assert.match(open,/Risultato molto lungo/);
 });
+test("l’avviso sulle integrazioni simulate compare solo quando il server lo fornisce, accanto al risultato", () => {
+ const result = {summary:"Prova il risultato",checks:["18 verifiche passate"]};
+ const real = renderConversation({...base,increment:{id:"inc-1",revisions:[revision],result,actions:[{id:"publish",label:"Approva"}]}}, "", {incrementSections:{"panel-inc-1":true}});
+ assert.doesNotMatch(real,/simulat/i);
+ const simulated = renderConversation({...base,increment:{id:"inc-1",revisions:[revision],result,result_notice:"Provato con integrazioni simulate: <google>. La prova reale avviene dopo il merge.",actions:[{id:"publish",label:"Approva"}]}}, "", {incrementSections:{"panel-inc-1":true}});
+ assert.match(simulated,/conv-increment-result[\s\S]*Provato con integrazioni simulate: &lt;google&gt;[\s\S]*data-increment-action="publish"/);
+ assert.doesNotMatch(simulated,/<google>/);
+});
