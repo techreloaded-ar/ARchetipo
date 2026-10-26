@@ -27,7 +27,10 @@ continuano a funzionare come prima.
    con il collegamento alla PR.
 7. **Aggiorna stato PR** riconcilia lo stato effettivo di GitHub. Solo un merge
    confermato del codice approvato porta le storie a DONE e l'incremento a
-   consegnato. ARchetipo non esegue il merge.
+   consegnato. ARchetipo non esegue il merge. A quel punto il viewer rimuove da
+   solo la sandbox (worktree, branch e servizi), conserva il ref Git di
+   recupero e archivia la conversazione, che resta leggibile. Se la rimozione
+   fallisce, l'incremento resta consegnato e la nota ne spiega il motivo.
 
 L'interfaccia riusa il pannello di conversazione e le sue approvazioni native.
 Non introduce una seconda board, una chat diversa o nuovi stati delle storie.

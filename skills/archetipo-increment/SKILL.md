@@ -353,7 +353,11 @@ explicit user request; never automatically retry uncertain native deliveries.
 For `PROPOSED`, answer questions without changing the approved code/stories.
 Call `increment refresh <id>` when requested to reconcile the actual PR:
 stories become delivered only after GitHub confirms its merge and approved
-head. `DELIVERED` is complete; keep the history inspectable.
+head. `DELIVERED` is complete; keep the history inspectable. In View the
+sandbox (worktree, branch, services) is then removed automatically and the
+conversation archived. Standalone, tell the person the sandbox can be removed
+with `increment deletion-plan <id>` and `increment delete <id>` from the
+original workspace; never run that deletion from inside the sandbox.
 
 ## CLI errors and output
 

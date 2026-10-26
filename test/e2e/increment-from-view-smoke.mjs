@@ -332,8 +332,19 @@ async function main(){
   assert.equal((await cliJSON(["spec","list"],undefined,sandbox)).items[0].status,"DONE");
   assert.equal(await git(["rev-parse","HEAD"]),baseline);
   ok("Le storie sono consegnate solo dopo il merge confermato; il viewer non esegue il merge.");
+  // Refresh persists DELIVERED before the removal that follows in the same request: the note is written last.
+  await until(async()=>/eliminato/.test((await read()).increment.note||""),"sandbox removal after delivery");
+  assert.ok(!(await git(["worktree","list","--porcelain"])).includes(inc.workdir),"increment worktree survived delivery");
+  assert.ok(!(await git(["branch","--list",inc.branch])).trim(),"increment branch survived delivery");
+  assert.equal(await git(["rev-parse","--verify","refs/archetipo/deleted/"+inc.id]),frozen.ready_sha,"recovery ref missing after delivery");
+  const delivered=await read();
+  assert.equal(delivered.increment.status,"DELIVERED");
+  assert.equal(delivered.conversation.id,id,"delivered conversation unreadable");
+  ok("Dopo il merge confermato il viewer rimuove da solo worktree, branch e servizi, conserva il ref di recupero e lascia leggibile la conversazione.");
   assert.deepEqual(exceptions,[]);
-  await page.waitFor('!!document.querySelector(".conv-composer button[type=submit]:not(:disabled)")',timeout,"conversation available after reconciliation");
+  // The delivered conversation is archived: its composer stays closed, the rail still offers a new one.
+  assert.equal(delivered.session.archive,"ARCHIVED","delivered conversation not archived");
+  await page.waitFor('!!document.querySelector("[data-conversation-new]:not(:disabled)")',timeout,"new conversation control after delivery");
   await page.evaluate('document.querySelector("[data-conversation-new]").click()');
   await page.waitFor('!!document.querySelector(\'[data-conversation-activity="conversation"]:not(:disabled), [data-conversation-open]:not(:disabled)\')',timeout,"free conversation entry");
   await page.evaluate('document.querySelector(\'[data-conversation-activity="conversation"]:not(:disabled), [data-conversation-open]:not(:disabled)\').click()');

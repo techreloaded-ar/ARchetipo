@@ -133,6 +133,10 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 	}
 	return view
 }
+func (s *Server) deletedIncrementView(receipt increment.DeletionResult) incrementView {
+	return incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
+}
+
 func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, record conversationlog.Record, view *conversationView) {
 	if record.IncrementID == "" {
 		return
@@ -141,7 +145,8 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	r, err := s.incrementService(ws).Read(record.IncrementID)
 	if err != nil {
 		if receipt, receiptErr := s.incrementService(ws).DeletionReceipt(record.IncrementID); receiptErr == nil && receipt.Deleted {
-			view.Increment = &incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
+			deleted := s.deletedIncrementView(receipt)
+			view.Increment = &deleted
 			return
 		}
 		view.Notice = "Incremento non disponibile: " + err.Error()
@@ -292,6 +297,22 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 		current, err = service.Publish(ctx, current.ID, body.HeadSHA, body.Revision)
 	case "refresh":
 		current, err = service.Refresh(ctx, current.ID)
+		if err == nil && current.Status == increment.Delivered {
+			// A merged increment has nothing left to do in its sandbox: archive
+			// the conversation and remove worktree, branch and services, as the
+			// explicit "archive with removal" choice does. The record stays
+			// readable; a failed removal leaves the delivered increment intact.
+			if removeErr := s.removeDeliveredIncrement(ctx, ws, current.ID); removeErr != nil {
+				view := s.incrementView(ctx, ws, current)
+				view.Note = "Incremento consegnato; ambiente non rimosso: " + removeErr.Error()
+				writeJSON(w, http.StatusOK, view)
+				return
+			}
+			if receipt, receiptErr := service.DeletionReceipt(current.ID); receiptErr == nil {
+				writeJSON(w, http.StatusOK, s.deletedIncrementView(receipt))
+				return
+			}
+		}
 	default:
 		err = iox.NewInvalidInput("azione incremento sconosciuta", "usa un’azione restituita dal server", nil)
 	}

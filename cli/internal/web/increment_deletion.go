@@ -175,6 +175,17 @@ func (s *Server) deleteIncrementEnvironment(ctx context.Context, ws *workspaceSe
 	return service.Delete(ctx, id, increment.DeletionOptions{HeadSHA: head, Confirm: true, PreserveConversations: archive})
 }
 
+// removeDeliveredIncrement is the archive-with-removal choice taken on the
+// person's behalf once GitHub confirmed the merge: the work is on main.
+func (s *Server) removeDeliveredIncrement(ctx context.Context, ws *workspaceSession, id string) error {
+	plan, err := s.incrementService(ws).DeletionPlan(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, err = s.deleteIncrementEnvironment(ctx, ws, id, plan.HeadSHA, true)
+	return err
+}
+
 func (s *Server) handleDeleteIncrement(w http.ResponseWriter, r *http.Request) {
 	if !sameOriginRemoval(w, r) {
 		return
