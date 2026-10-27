@@ -76,6 +76,7 @@
 		boardGoConversation: "Vai alla conversazione",
 		cardActions: "Azioni",
 		cardDiscuss: "Conversa",
+		cardOpenReview: "Decidi sulla revisione",
 		cardActionsFor: (code) => `Azioni per ${code}`,
 		cardDiscussFor: (code) => `Conversa su ${code}`,
 		stepNotStartable: "Questo passo non si può avviare adesso",
@@ -831,9 +832,11 @@
 	// container the panel can be mounted on is bound once, here: which of them
 	// is live at any moment is decided by the mounted context, not by the
 	// listeners.
-	bindActionsPanel(storyActions);
-	bindActionsPanel(inceptionActions);
-	bindActionsPanel(specDraftActions);
+	// Il dettaglio di una spec non sta dentro nessuna conversazione: la sua
+	// azione apre un thread suo invece di accodarsi a quello aperto nel rail.
+	bindActionsPanel(storyActions, false);
+	bindActionsPanel(inceptionActions, true);
+	bindActionsPanel(specDraftActions, true);
 	bindExecutionPanel(storyExecution);
 	bindExecutionPanel(inceptionExecution);
 	bindExecutionPanel(specDraftExecution);
@@ -844,11 +847,11 @@
 	bindRunPanel(inceptionRun);
 	bindRunPanel(specDraftRun);
 
-	function bindActionsPanel(container) {
+	function bindActionsPanel(container, inheritsConversation) {
 		container.addEventListener("click", (e) => {
 			const btn = e.target.closest(".action-chip-run");
 			if (!btn) return;
-			startPanelAction(btn.dataset.actionId, btn, conversationsCurrentId);
+			startPanelAction(btn.dataset.actionId, btn, inheritsConversation ? conversationsCurrentId : "");
 		});
 	}
 
@@ -2393,6 +2396,15 @@
 						group.appendChild(note);
 					}
 				});
+				if (view.spec && view.spec.status === "REVIEW") {
+					const decide = document.createElement("button");
+					decide.type = "button";
+					decide.className = "ghost-btn";
+					decide.textContent = TEXT.cardOpenReview;
+					decide.dataset.cardOpenReview = spec.code;
+					decide.addEventListener("click", () => openSpecReview(spec.code).catch((err) => showToast(err.message || String(err), "err")));
+					group.appendChild(decide);
+				}
 				controls.appendChild(group);
 			} catch (err) { showToast(err.message || String(err), "err"); }
 			finally { actionsButton.disabled = false; }
@@ -3285,6 +3297,18 @@
 	}
 
 	// ---- Review (diff + inline comments) -----------------------------------
+
+	// openSpecReview porta al tab Revisione della spec con il dossier già letto,
+	// così chi decide da fuori del dettaglio — la conversazione, la board —
+	// passa per la stessa domanda e gli stessi pulsanti del tab. Risponde false
+	// quando la spec non è più in revisione.
+	async function openSpecReview(code) {
+		await openEditor(code);
+		if (currentSpecCode !== code || !currentSpecSnapshot || currentSpecSnapshot.status !== "REVIEW") return false;
+		if (!reviewLoaded) await loadReview();
+		activateTab("review");
+		return currentSpecCode === code && reviewLoaded;
+	}
 
 	function updateReviewTabVisibility(spec) {
 		const inReview = spec && spec.status === "REVIEW";
@@ -4746,7 +4770,9 @@
 		try {
 			const body = { action: target.action };
 			if (target.user_input) body.user_input = target.user_input;
-			const from = conversationsCurrentId;
+			// Solo un gesto fatto dentro la conversazione aperta la nomina: la
+			// board non sta in nessun thread, e la sua azione ne apre uno suo.
+			const from = target.fromConversation ? conversationsCurrentId : "";
 			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
 				body.conversation_id = from;
 			}
@@ -6518,6 +6544,19 @@
 			// Un passo che si legge in una conversazione sua si raggiunge
 			// andandoci: non c'è nessun pannello da montare, perché quella
 			// conversazione è il passo.
+			// La decisione su una revisione pronta passa dal tab Revisione: lì
+			// stanno il dossier, il diff e la conferma che vale per ogni strada.
+			const reviewDecision = e.target.closest("[data-conversation-review-decision]");
+			if (reviewDecision) {
+				const code = reviewDecision.getAttribute("data-spec-code") || "";
+				const decision = reviewDecision.getAttribute("data-conversation-review-decision");
+				openSpecReview(code).then((ready) => {
+					if (!ready) return;
+					if (decision === "approve") onApprove();
+					else if (decision === "request-changes") onRequestChanges();
+				}).catch((err) => showToast(err.message || String(err), "err"));
+				return;
+			}
 			const reachThread = e.target.closest("[data-conversation-reach-thread]");
 			if (reachThread) {
 				const target = reachThread.getAttribute("data-conversation-reach-thread");
@@ -8087,7 +8126,7 @@
 			try {
 				const started = activity.kind === "increment"
 					? await startIncrementFromConversation(typed)
-					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
+					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed, fromConversation: true }, null);
 				if (started) {
 					conversationDraft = "";
 					conversationActivitySelection = null;

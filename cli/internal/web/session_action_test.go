@@ -297,6 +297,73 @@ func TestASecondActionIsRefusedWhileOneIsRunningInTheThread(t *testing.T) {
 	}
 }
 
+// TestAnActionOnAnotherSpecGetsItsOwnThread covers the step of a second spec
+// pressed while the thread of the first is still working: it is neither refused
+// nor appended to that thread, it opens a thread of its own.
+func TestAnActionOnAnotherSpecGetsItsOwnThread(t *testing.T) {
+	srv, provider, _ := newActionSessionServer(t)
+	status, started := startSpecActionIn(t, srv, "US-901", "plan", "")
+	if status != http.StatusCreated {
+		t.Fatalf("start plan = %d: %v", status, started)
+	}
+	first, _ := started["id"].(string)
+	firstThread := conversationOfExecution(t, srv, first)
+
+	status, other := startSpecActionIn(t, srv, "US-902", "plan", firstThread)
+	if status != http.StatusCreated {
+		t.Fatalf("the plan of another spec answered %d, want 201: %v", status, other)
+	}
+	second, _ := other["id"].(string)
+	if thread := conversationOfExecution(t, srv, second); thread == firstThread {
+		t.Fatalf("the plan of US-902 was appended to the thread of US-901")
+	}
+	if len(provider.store.sessions) != 2 {
+		t.Fatalf("the workspace holds %d native sessions, want one per spec", len(provider.store.sessions))
+	}
+}
+
+// TestAPreparedReviewAsksForTheVerdictInItsThread covers the decision a
+// prepared review leaves behind: the thread says a verdict is owed while the
+// spec waits in REVIEW, and stops saying it once the spec has left it.
+func TestAPreparedReviewAsksForTheVerdictInItsThread(t *testing.T) {
+	srv, provider, conn := newActionSessionServer(t)
+	seedSpecUnderReview(t, conn)
+	status, started := startSpecActionIn(t, srv, "US-901", "review", "")
+	if status != http.StatusCreated {
+		t.Fatalf("start review = %d: %v", status, started)
+	}
+	reviewID, _ := started["id"].(string)
+	thread := conversationOfExecution(t, srv, reviewID)
+	store, ok := conn.(connector.ReviewStore)
+	if !ok {
+		t.Fatal("the test connector keeps no review dossier")
+	}
+	if err := store.SaveReview(context.Background(), "US-901", domain.Review{Dossier: &domain.ReviewDossier{
+		ExecutionID: reviewID, Summary: "pronta", Criteria: []domain.ReviewCriterion{{ID: "AC-1", Verdict: "met"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		_, view, body := readConversation(t, srv, thread, 0)
+		if len(view.Runs) != 1 {
+			t.Fatalf("the thread shows %d actions, want the review: %s", len(view.Runs), body)
+		}
+		return view.Runs[0].ReviewDecisionPending
+	}
+	if pending() {
+		t.Fatalf("a review still running already asks for the verdict")
+	}
+	provider.completeCurrentTurn(t, "{\"spec_code\":\"US-901\",\"status\":\"REVIEW\",\"criteria\":1,\"blockers\":0}", execution.TurnCompleted)
+	awaitExecutionStatus(t, srv, reviewID, execution.StatusSucceeded)
+	if !pending() {
+		t.Fatalf("the prepared review does not ask for the verdict")
+	}
+	moveSpecTo(t, conn, "US-901", domain.StatusDone)
+	if pending() {
+		t.Fatalf("a spec already closed still asks for the verdict")
+	}
+}
+
 // TestCancellingAnActionWaitingForAnAnswerClosesItsRecord covers the other half
 // of the stop gesture: an action whose turn already ended, and which is waiting
 // for an answer nobody is going to give, is closed by the stop button while the

@@ -2087,3 +2087,30 @@ describe('process receipt presentation', () => {
   assert.doesNotMatch(html,/COMPLETED|&quot;artifact&quot;/);
  });
 });
+
+describe("renderConversation — decisione sulla revisione", () => {
+	const run = (pending) => ({
+		execution_id: "exec-rev",
+		action: "AZIONE-X",
+		spec_code: "XX-777",
+		status: "SUCCEEDED",
+		in_this_thread: true,
+		review_decision_pending: pending,
+	});
+
+	it("una revisione pronta offre in coda approvazione, modifiche e dossier", () => {
+		const html = renderConversation(withConversation({ runs: [run(true)] }), "");
+		assert.ok(visibleText(html).includes("La revisione di XX-777 è pronta"), "la decisione non è annunciata");
+		for (const decision of ["approve", "request-changes", "open"]) {
+			assert.ok(
+				html.includes(`data-conversation-review-decision="${decision}" data-spec-code="XX-777"`),
+				`manca il comando ${decision}`,
+			);
+		}
+	});
+
+	it("senza una decisione dovuta non disegna niente", () => {
+		const html = renderConversation(withConversation({ runs: [run(false)] }), "");
+		assert.ok(!html.includes("data-conversation-review-decision"), "una decisione non dovuta è offerta");
+	});
+});

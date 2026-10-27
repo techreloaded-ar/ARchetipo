@@ -208,12 +208,18 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 // A start that names no conversation is not a start with nowhere to run: it
 // opens its own thread, once, and the action then runs in that thread exactly
 // as it would in one the person already had open. What it never does is open a
-// second one beside a thread that was named.
+// second one beside a thread that was named — unless that thread is about
+// another spec: a step of US-002 does not belong in the thread of US-001, so it
+// gets its own thread exactly as if no thread had been named.
 func (s *Server) conversationForAction(ctx context.Context, ws *workspaceSession, plan actionInSession) (conversationSnapshot, error) {
 	if id := strings.TrimSpace(plan.conversationID); id != "" {
 		snapshot, live := ws.conversation.get(id)
 		if !live {
 			return conversationSnapshot{}, s.conversationGoneRefusal(ctx, ws, id, "start an action")
+		}
+		if snapshot.specCode != "" && plan.specCode != "" && snapshot.specCode != plan.specCode {
+			plan.conversationID = ""
+			return s.conversationForAction(ctx, ws, plan)
 		}
 		if snapshot.sessionProvider == nil {
 			return conversationSnapshot{}, iox.NewConflict(
@@ -568,9 +574,26 @@ func (s *Server) nativeConversationRuns(ctx context.Context, ws *workspaceSessio
 		view.Status = stored.Status
 		view.ProgressLabel, view.Working, view.AwaitingResponse = nativeActionProgress(stored, record)
 		view.CreatedAt = stored.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+		view.ReviewDecisionPending = s.reviewDecisionPending(ctx, ws, stored)
 		views = append(views, view)
 	}
 	return views
+}
+
+// reviewDecisionPending reports whether a prepared review still waits for the
+// person's verdict: it is the spec's latest execution, it succeeded, and the
+// spec has not left REVIEW. Any read that fails answers false, so a card is
+// never offered on a state the workspace cannot confirm.
+func (s *Server) reviewDecisionPending(ctx context.Context, ws *workspaceSession, stored execution.Execution) bool {
+	if stored.Action != execution.ActionReview || stored.Status != execution.StatusSucceeded || stored.SpecCode == "" {
+		return false
+	}
+	latest, err := s.latestExecution(ctx, ws, stored.SpecCode)
+	if err != nil || latest == nil || latest.ID != stored.ID {
+		return false
+	}
+	spec, err := ws.conn.ReadSpecDetail(ctx, stored.SpecCode)
+	return err == nil && spec.Status == domain.StatusReview
 }
 
 func nativeActionProgress(stored execution.Execution, record conversationlog.Record) (label string, working, awaiting bool) {

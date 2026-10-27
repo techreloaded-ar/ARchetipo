@@ -193,6 +193,10 @@ type conversationRunView struct {
 	// drawing the same turns twice on one page is exactly what the unification
 	// of runs and conversations exists to stop.
 	InThisThread bool `json:"in_this_thread"`
+	// ReviewDecisionPending says this is the latest review of its spec, it
+	// succeeded and the spec is still waiting in REVIEW: the dossier is ready
+	// and only a person's verdict is missing.
+	ReviewDecisionPending bool `json:"review_decision_pending,omitempty"`
 	// ThreadID names the conversation this run is read in, empty for a run that
 	// is read nowhere else.
 	//

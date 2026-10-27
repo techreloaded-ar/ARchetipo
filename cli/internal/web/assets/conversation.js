@@ -125,6 +125,10 @@
 		// Decisioni
 		approvalPending: "Decisione in attesa",
 		approvalTitle: "La run aspetta una decisione",
+		reviewDecisionTitle: (code) => `La revisione di ${code} è pronta: tocca a te decidere`,
+		reviewApprove: "Approva e chiudi",
+		reviewRequestChanges: "Chiedi modifiche",
+		reviewOpen: "Vedi dossier e diff",
 		// Chiusura della conversazione
 		close: "Archivia",
 		closeConversation: "Archivia la conversazione",
@@ -915,6 +919,26 @@
 		return `<div class="conv-approvals">${body}</div>`;
 	}
 
+	/**
+	 * The verdicts still owed on reviews this conversation prepared. Whether one
+	 * is owed is the server's fact (`review_decision_pending` on the run); this
+	 * only draws the three ways to give it.
+	 */
+	function renderReviewDecisions(view) {
+		const cards = arrayAt(view, "runs")
+			.filter((run) => run && run.review_decision_pending && textAt(run, "spec_code"))
+			.map((run) => {
+				const code = escapeHtml(textAt(run, "spec_code"));
+				const button = (decision, tone, label) =>
+					`<button type="button" class="approval-btn${tone}" data-conversation-review-decision="${decision}" data-spec-code="${code}">${escapeHtml(label)}</button>`;
+				return `<div class="run-approval conv-run-approval conv-review-decision" role="group" aria-label="${escapeHtml(TEXT.reviewDecisionTitle(textAt(run, "spec_code")))}">
+			<p class="run-approval-title">${escapeHtml(TEXT.reviewDecisionTitle(textAt(run, "spec_code")))}</p>
+			<div class="run-approval-options">${button("approve", " allow", TEXT.reviewApprove)}${button("request-changes", " deny", TEXT.reviewRequestChanges)}${button("open", "", TEXT.reviewOpen)}</div>
+		</div>`;
+			});
+		return cards.length ? `<div class="conv-approvals">${cards.join("")}</div>` : "";
+	}
+
 	// Whether anything in this conversation is waiting on a person: a run of it,
 	// or the agent of the conversation itself. The composer says so with one
 	// sentence, and it must say it for both — an agent stopped on a permission
@@ -1698,6 +1722,7 @@
 		// and it must be readable without scrolling past a step nobody can take
 		// while the agent is stopped.
 		blocks.push(renderConversationApprovals(value, local));
+		blocks.push(renderReviewDecisions(value));
 		blocks.push(renderConversationInputs(value, local));
 		// Il compositore chiude il pannello e nient'altro lo segue. Aprire una
 		// conversazione nuova si comanda dall'elenco delle conversazioni e
