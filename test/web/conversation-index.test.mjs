@@ -764,3 +764,19 @@ describe("il modulo dell'indice", () => {
 		}
 	});
 });
+
+describe("thread figli", () => {
+	it("il thread con parent_id sta subito sotto il genitore, anche se è in un altro gruppo", () => {
+		const html = renderConversationIndex({
+			conversations: [
+				{ id: "inc", title: "Incremento", native: true, work: "TURN_ACTIVE", live: true },
+				{ id: "altra", title: "Altra", native: true, work: "IDLE", live: true },
+				{ id: "env", title: "Ambiente di sviluppo", native: true, work: "WAITING_INPUT", live: true, parent_id: "inc" },
+				{ id: "orfano", title: "Senza genitore", native: true, work: "IDLE", parent_id: "assente" },
+			],
+		}, { currentId: "" });
+		assert.match(html, /data-conversation-id="inc"[\s\S]*?<div class="thread-row is-child">\s*<button type="button" class="thread is-waiting[^"]*" data-conversation-id="env"/);
+		assert.ok(html.indexOf('data-conversation-id="env"') < html.indexOf('data-conversation-id="altra"'), "il figlio segue il genitore, non il proprio gruppo");
+		assert.doesNotMatch(html, /orfano/);
+	});
+});

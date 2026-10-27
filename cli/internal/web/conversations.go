@@ -52,6 +52,9 @@ type conversationEntryView struct {
 	Resumable   bool   `json:"resumable"`
 	Archived    bool   `json:"archived"`
 	LegacyLimit string `json:"legacy_limit,omitempty"`
+	// ParentID nests the technical "Ambiente di sviluppo" thread of an
+	// increment under that increment's conversation in the rail.
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 // conversationsView is the index of the open workspace. Conversations is never
@@ -210,9 +213,15 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 	views := make([]conversationEntryView, 0, min(len(records), closedLimit+len(alive)))
 	closedCount := 0
 	hasMoreClosed := false
+	environments := []conversationlog.Record{}
+	incrementThreads := map[string]string{}
 	for _, record := range records {
 		if record.Purpose == "environment" {
+			environments = append(environments, record)
 			continue
+		}
+		if record.IncrementID != "" {
+			incrementThreads[record.WorkingDir] = record.ID
 		}
 		live := alive[record.ID] && record.Connection != execution.ConnectionReleased
 		if !live {
@@ -223,6 +232,18 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 			closedCount++
 		}
 		views = append(views, conversationEntryOf(record, live, running))
+	}
+	// An increment's environment thread is reachable from the rail, under the
+	// increment, instead of only from the preview menu. The workspace's own
+	// environment thread stays where it was.
+	for _, record := range environments {
+		parent, ok := incrementThreads[record.WorkingDir]
+		if !ok || record.Archive == execution.ArchiveArchived {
+			continue
+		}
+		entry := conversationEntryOf(record, alive[record.ID] && record.Connection != execution.ConnectionReleased, running)
+		entry.ParentID = parent
+		views = append(views, entry)
 	}
 	openability := s.conversationOpenabilityOf(ctx, ws)
 	writeJSON(w, http.StatusOK, conversationsView{

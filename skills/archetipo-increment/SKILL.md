@@ -348,6 +348,12 @@ a changed resource recipe still follow their existing cleanup/recovery contract.
 If another live owner refuses an operation with `E_CONFLICT`, report the actual
 owner conflict; do not bypass its lock or move work to another environment.
 
+Speak to the person in business terms: publication (pushing the code and
+opening the PR) is "preparing the release" («preparazione al rilascio»), and
+the confirmed merge is the release itself. Never describe it as sending work to
+a technical team. When the environment needs the person, name the technical
+conversation «Ambiente di sviluppo»; View shows how to open it.
+
 Only after explicit human approval of the verified result may standalone
 execution call `increment publish <id> --file -` with
 `{"head_sha":"ready_sha from the displayed record","revision":N}`.

@@ -1214,13 +1214,16 @@
 		const await_ = awaiting
 			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
-		// The prompt owns the full width. Its toolbar stays below as it grows.
+		const confirming = typeof ui.nextConfirmHtml === "string" && ui.nextConfirmHtml !== "";
+		// Una riga sola: il campo cresce mentre si scrive, modello e Invia gli
+		// restano accanto. I prossimi passi dell'incremento stanno sopra.
 		return `<form class="conv-composer">
 			${renderActivitySelection(objectAt(ui, "activitySelection"))}
 			<div class="conv-composer-surface">
-				<textarea class="conv-composer-input" rows="1" aria-label="Messaggio all’agente" placeholder="${escapeHtml(placeholder)}"${disabled}>${escapeHtml(draft)}</textarea>
-				${typeof ui.skillChoiceHtml === "string" ? ui.skillChoiceHtml : ""}
-				<div class="conv-composer-row">
+				${confirming ? ui.nextConfirmHtml : typeof ui.nextStepsHtml === "string" ? ui.nextStepsHtml : ""}
+				<textarea class="conv-composer-input" rows="1" aria-label="Messaggio all’agente" placeholder="${escapeHtml(placeholder)}"${disabled}${confirming ? " hidden" : ""}>${escapeHtml(draft)}</textarea>
+				${typeof ui.skillChoiceHtml === "string" && !confirming ? ui.skillChoiceHtml : ""}
+				<div class="conv-composer-row"${confirming ? " hidden" : ""}>
 					${typeof agentRow === "string" ? agentRow : ""}
 					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 				</div>
@@ -1316,9 +1319,17 @@
 		const metadata = objectAt(session, "session");
 		const environment = objectAt(metadata, "environment");
 		const location = textAt(environment, "location");
-		const dirHtml = dir
-			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
-			: "";
+		// In un incremento la testata dice a che punto è il lavoro, nelle fasi e
+		// negli stati che il server dichiara; il percorso resta nel title.
+		const phases = arrayAt(objectAt(view, "increment"), "phases").filter((phase) => phase && textAt(phase, "label"));
+		const dirHtml = phases.length
+			? `<ol class="conv-phases" aria-label="Fasi dell’incremento"${dir ? ` title="${escapeHtml(dir)}"` : ""}>${phases.map((phase) => {
+				const state = textAt(phase, "state");
+				return `<li class="conv-phase is-${escapeHtml(state || "todo")}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHtml(textAt(phase, "label"))}</li>`;
+			}).join("")}</ol>`
+			: dir
+				? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
+				: "";
 		const providerHtml = agent
 			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";
@@ -1573,6 +1584,54 @@
 	 *                            questo modulo.
 	 * @returns {string} HTML string.
 	 */
+	// I prossimi passi dell'incremento, nella riga sopra il campo di scrittura.
+	// Il server dichiara tipo, etichetta e destinazione di ogni passo: una
+	// decisione o un'azione prende l'azione nominata, un prompt riempie soltanto
+	// il campo, un'apertura mostra un pannello, una conversazione o un link.
+	function renderIncrementNext(increment, ui) {
+		const steps = arrayAt(increment, "next_steps").filter((step) => step && textAt(step, "label"));
+		const label = textAt(increment, "next_steps_label");
+		const note = textAt(increment, "next_steps_note");
+		if (!steps.length && !note) return "";
+		const locked = ui.busy || increment.busy ? " disabled" : "";
+		const chip = (step) => {
+			const kind = textAt(step, "kind");
+			const text = escapeHtml(textAt(step, "label"));
+			const target = textAt(step, "target");
+			const tone = textAt(step, "tone") === "warn" ? " is-warn" : "";
+			if (kind === "decision" || kind === "action") {
+				const confirm = objectAt(step, "confirm") ? ' data-increment-step-confirm="true"' : "";
+				const mark = kind === "decision" ? '<span aria-hidden="true">✓</span>' : "";
+				return `<button type="button" class="conv-step conv-step-${kind}${tone}" data-increment-step-action="${escapeHtml(textAt(step, "action"))}"${confirm}${locked}>${mark}${text}</button>`;
+			}
+			if (kind === "prompt") {
+				return `<button type="button" class="conv-step conv-step-prompt" data-increment-step-prompt="${escapeHtml(textAt(step, "prompt"))}"${ui.busy ? " disabled" : ""}><span aria-hidden="true">✎</span>${text}</button>`;
+			}
+			if (kind !== "open") return "";
+			const open = textAt(step, "open");
+			if (open === "url") {
+				return /^https?:\/\//.test(target) ? `<a class="conv-step conv-step-open" target="_blank" rel="noopener noreferrer" href="${escapeHtml(target)}">${text}</a>` : "";
+			}
+			if (open === "story") {
+				return `<button type="button" class="conv-step conv-step-open conv-increment-active" data-increment-story="${escapeHtml(target)}">${text}</button>`;
+			}
+			return `<button type="button" class="conv-step conv-step-open${tone}" data-increment-step-open="${escapeHtml(open)}" data-increment-step-target="${escapeHtml(target)}">${text}</button>`;
+		};
+		return `<section class="conv-increment conv-next" data-increment-id="${escapeHtml(textAt(increment, "id"))}" aria-label="Prossimi passi dell’incremento">${label ? `<span class="conv-next-label">${escapeHtml(label)}</span>` : ""}${note ? `<span class="conv-next-note">${escapeHtml(note)}</span>` : ""}${steps.map(chip).join("")}</section>`;
+	}
+
+	// La conferma di un passo che non si annulla prende il posto del campo, alla
+	// stessa altezza: niente finestra modale, e la bozza resta dov'era.
+	function renderIncrementConfirm(increment, ui) {
+		const armed = textAt(ui, "incrementConfirm");
+		if (!armed) return "";
+		const step = arrayAt(increment, "next_steps").find((candidate) => candidate && textAt(candidate, "action") === armed && objectAt(candidate, "confirm"));
+		if (!step) return "";
+		const confirm = objectAt(step, "confirm");
+		const locked = ui.busy || increment.busy ? " disabled" : "";
+		return `<div class="conv-next-confirm" role="group" aria-label="${escapeHtml(textAt(confirm, "title"))}"><p><strong>${escapeHtml(textAt(confirm, "title"))}</strong><small>${escapeHtml(textAt(confirm, "text"))}</small></p><button type="button" class="ghost-btn" data-increment-step-cancel>Annulla</button><button type="button" class="primary-btn" data-increment-step-run="${escapeHtml(armed)}"${locked}>${escapeHtml(textAt(confirm, "label"))}</button></div>`;
+	}
+
 	function renderIncrement(increment, ui, panel = false) {
 		if (!increment) return "";
 		const revisions = arrayAt(increment, "revisions");
@@ -1586,8 +1645,7 @@
 		const section = (key, label, body) => '<details data-increment-section="' + escapeHtml(key) + '"' + (opened[key] ? " open" : "") + '><summary>' + escapeHtml(label) + '</summary>' + body + '</details>';
 		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
 		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
-		const active = stories.filter(story => story.active === true);
-		if (!panel) return '<section class="conv-increment" data-increment-id="' + escapeHtml(textAt(increment, "id")) + '" aria-label="Incremento di prodotto"><header><strong title="' + escapeHtml(textAt(increment, "title")) + '">' + escapeHtml(textAt(increment, "title")) + '</strong><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="' + panelOpen + '">Dettagli incremento</button></header><div class="conv-increment-progress"><span>' + escapeHtml([textAt(increment, "activity_label"), textAt(increment, "progress_label")].filter(Boolean).join(" · ")) + '</span>' + active.map(story => '<button type="button" class="ghost-btn conv-increment-active" data-increment-story="' + escapeHtml(story.code) + '">In lavorazione: ' + escapeHtml(story.code + " · " + story.title) + '</button>').join("") + '</div></section>';
+		if (!panel) return renderIncrementNext(increment, ui);
 		if (!panelOpen) return "";
 		const renderChange = (change, feedback) => {
 			const codes = arrayAt(change, "story_codes");
@@ -1606,7 +1664,7 @@
 		if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
 		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
 		const remove = increment.delete_label ? '<button type="button" class="ghost-btn" data-increment-delete' + (ui.busy ? ' disabled' : '') + '>' + escapeHtml(increment.delete_label) + '</button>' : '';
-		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Dettagli incremento"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi dettagli incremento">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
+		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Dettagli incremento"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><span class="conv-increment-phase">' + escapeHtml(textAt(increment, "status_label")) + '</span><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi dettagli incremento">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
 	}
 
 	function renderConversation(view, draft, ui) {
@@ -1616,7 +1674,6 @@
 		const blocks = [];
 		const workflow = objectAt(value, "workflow");
 		if (workflow && textAt(workflow, "label")) blocks.push(renderNotice("info", textAt(workflow, "label"), textAt(workflow, "detail")));
-		if (objectAt(value, "increment")) blocks.push(renderIncrement(objectAt(value, "increment"), local));
 
 		const conversation = objectAt(value, "conversation");
 		// Not offered says a conversation cannot be *opened* here; it says nothing
@@ -1731,6 +1788,11 @@
 		// posto, e la conversazione è ciò che quello spazio deve avere.
 		const session = objectAt(value, "session");
 		const composerUI = Object.assign({}, local);
+		const increment = objectAt(value, "increment");
+		if (increment) {
+			composerUI.nextStepsHtml = renderIncrement(increment, local);
+			composerUI.nextConfirmHtml = renderIncrementConfirm(increment, local);
+		}
 		if (session && composerUI.writable === undefined) {
 			composerUI.writable =
 				textAt(session, "recovery") === "RESUMABLE" && textAt(session, "archive") !== "ARCHIVED";
@@ -1750,7 +1812,9 @@
 		// conversazione — con o senza il dettaglio tecnico — e, finche' e'
 		// viva, lasciarla andare. Il primo c'e' sempre, perche' una
 		// conversazione conclusa la si rilegge esattamente come una viva.
-		const controls = `${textAt(objectAt(value, "conversation"), "id") ? '<button type="button" class="conv-close-btn" data-conversation-preview>Preview</button><button type="button" class="conv-close-btn conv-panel-toggle" data-work-panel-toggle aria-controls="workspace-inspector" aria-expanded="false" aria-label="Apri pannello" title="Apri pannello"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>' : ""}${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
+		const detailsOpen = !!increment && (objectAt(local, "incrementSections") || {})["panel-" + textAt(increment, "id")] === true;
+		const detailsControl = increment ? `<button type="button" class="conv-close-btn conv-details-link" data-increment-panel="open" aria-controls="increment-details" aria-expanded="${detailsOpen}" title="Dettagli incremento">Dettagli ›</button>` : "";
+		const controls = `${detailsControl}${textAt(objectAt(value, "conversation"), "id") ? '<button type="button" class="conv-close-btn" data-conversation-preview>Preview</button><button type="button" class="conv-close-btn conv-panel-toggle" data-work-panel-toggle aria-controls="workspace-inspector" aria-expanded="false" aria-label="Apri pannello" title="Apri pannello"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>' : ""}${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
 		const drafts = objectAt(value, "spec_drafts");
 		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}${objectAt(value, "increment") && (objectAt(local, "incrementSections") || {})["panel-" + textAt(value.increment, "id")] ? " has-increment-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
 			<div class="conv-discussion">${renderHead(value, badge, variant, controls)}

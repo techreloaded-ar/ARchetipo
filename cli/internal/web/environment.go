@@ -219,13 +219,13 @@ func (s *Server) configureEnvironment(ctx context.Context, ws *workspaceSession,
 			// A completed turn can be a question. Keep its native context and resume
 			// automatically after the person's answer in the technical details.
 			value.State = "waiting"
-			value.Error = "Configurazione incompleta: apri Dettagli ambiente per rispondere o risolvere il requisito mancante."
+			value.Error = "Configurazione incompleta: rispondi nella conversazione «Ambiente di sviluppo» o risolvi il requisito mancante."
 			if err = saveEnvironmentOperation(root, *value); err != nil {
 				return err
 			}
 		}
 		if record.Connection == execution.ConnectionDisconnected || record.Connection == execution.ConnectionReleased {
-			return fmt.Errorf("sessione tecnica scollegata; riprendila dai dettagli ambiente")
+			return fmt.Errorf("sessione tecnica scollegata; riprendila dalla conversazione «Ambiente di sviluppo»")
 		}
 		select {
 		case <-ctx.Done():

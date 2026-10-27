@@ -58,6 +58,7 @@ type workspaceSession struct {
 	// write the threads of one project into the directory of another.
 	journal         *conversationJournal
 	nativeFollowers *nativeSessionFollowers
+	prChecks        incrementPRChecks
 
 	// nativeRuntime is which native sessions this View process owns. It is per
 	// session for the same reason the journal is — the locks live under this

@@ -9,12 +9,44 @@
    rami, log, YAML, diff. La gerarchia la fanno peso e dimensione.
    ========================================================================= */
 
-.conv-increment{flex:0 0 auto;min-width:0;margin:8px 0;padding:8px 14px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
-.conv-increment>header{display:flex;align-items:center;gap:10px;font-size:14px;min-width:0}
-.conv-increment>header>strong{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Prossimi passi dell'incremento: una riga di chip sopra il campo. Pieno è la
+   decisione attesa, tratteggiato è un prompt da completare, con bordo indaco
+   un'apertura; l'albicocca dice che qualcosa aspetta te. */
+.conv-next{display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:1 1 100%;min-width:0;padding:10px 10px 2px}
+.conv-next-label{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin:0 2px 0 6px}
+.conv-next-note{font-size:12px;color:var(--text-muted);margin-right:4px;overflow-wrap:anywhere}
+.conv-step{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:32px;padding:5px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-pill);background:var(--surface);color:var(--text);font:600 14px/1.3 var(--font-sans);text-decoration:none;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv-step:disabled{opacity:.55;cursor:not-allowed}
+.conv-step:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.conv-step-decision{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+.conv-step-open{border-color:var(--accent);color:var(--accent)}
+.conv-step-prompt{border-style:dashed;color:var(--text-muted)}
+.conv-step.is-warn{background:var(--attention-soft);border-color:var(--attention-border);color:var(--attention);font-weight:700}
+.conv-next-confirm{display:flex;flex-wrap:wrap;align-items:center;gap:12px;flex:1 1 100%;padding:12px 12px 12px 16px}
+.conv-next-confirm p{margin:0;flex:1 1 280px;min-width:0;font-size:15px;line-height:1.45}
+.conv-next-confirm small{display:block;color:var(--text-muted);font-size:13px}
+/* Il campo e la sua riga stanno affiancati: si scrive su una riga sola, che
+   cresce, e modello e Invia restano accanto. */
+.conv-composer-surface{display:flex;flex-wrap:wrap;align-items:flex-end}
+.conv-composer-surface>.conv-composer-input{flex:1 1 280px;width:auto}
+.conv-composer-surface>.conv-composer-row{flex:0 1 auto;padding:var(--space-2)}
+.conv-composer-surface [hidden]{display:none!important}
+/* Le fasi dell'incremento al posto del percorso, nella testata. */
+.conv-phases{display:flex;align-items:center;gap:4px;min-width:0;margin:0;padding:0;list-style:none;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden}
+.conv-phase{display:flex;align-items:center;gap:5px}
+.conv-phase+.conv-phase{padding-left:14px;background:linear-gradient(var(--border-strong),var(--border-strong)) no-repeat 0 50%/10px 1.5px}
+.conv-phase::before{content:"";flex:0 0 auto;width:9px;height:9px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--border-strong);background:var(--surface)}
+.conv-phase.is-done{color:var(--text-muted)}
+.conv-phase.is-done::before{background:var(--ok);border-color:var(--ok)}
+.conv-phase.is-current{color:var(--accent);font-weight:800}
+.conv-phase.is-current::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.conv-details-link{color:var(--accent);font-weight:700}
+/* Su un telefono la riga dei passi resta una: scorre in orizzontale invece di
+   andare a capo e togliere spazio alla conversazione. I dettagli si aprono dal
+   bottone del pannello di lavoro, che sulla testata c'è già. */
+@media (max-width:600px){.conv-next{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}.conv-next>*{flex:0 0 auto}.conv-next-note,.conv-head .conv-details-link{display:none}}
+@media (max-width:900px){.conv-phase:not(.is-current){font-size:0;gap:0}.conv-phase+.conv-phase{padding-left:16px}.conv-composer-surface>.conv-composer-input{flex-basis:100%}.conv-composer-surface>.conv-composer-row{flex-basis:100%}}
 .conv-increment-phase{font-size:12px;color:var(--accent);font-weight:700}
-.conv-increment-progress{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted)}
-.conv-increment-progress:empty{display:none}
 .conv-increment-active{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .conv-increment-panel details{margin:10px 0}
@@ -28,19 +60,19 @@
 .conv-increment-panel .conv-proposal-controls{flex-wrap:wrap;margin-top:14px}
 .conv-increment-result{padding:12px 0;border-top:1px solid var(--border)}
 .conv-increment-result li,.conv-increment-feedback{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
-@media(max-width:640px){.conv-increment>header{flex-wrap:wrap;gap:4px 8px}.conv-increment>header>strong{flex-basis:60%}.conv-increment>header>button{padding:3px 0;font-size:12px}.conv-increment-phase{font-size:11px}}
+@media(max-width:640px){.conv-increment-phase{font-size:11px}}
 
 /* Increment details and pending decisions can exceed a short conversation
    frame. Keep a readable timeline and allow the whole frame to scroll, so
    the composer and consent buttons remain reachable instead of being clipped. */
-.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) {
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-head [data-increment-panel]) {
 	overflow-y: auto;
 	overscroll-behavior: contain;
 }
-.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > .conv-timeline {
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-head [data-increment-panel]) > .conv-timeline {
 	flex: 1 0 min(220px, 30vh);
 }
-.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > :not(.conv-timeline) {
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-head [data-increment-panel]) > :not(.conv-timeline) {
 	flex-shrink: 0;
 }
 
@@ -7539,6 +7571,23 @@ body.no-workspace [data-workspace-scoped] {
    `relative` solo per dare al comando un angolo dove appoggiarsi. */
 .thread-row {
 	position: relative;
+}
+
+/* Il thread tecnico «Ambiente di sviluppo» sotto la conversazione del suo
+   incremento, legato da un raccordo. */
+.thread-row.is-child {
+	margin-left: 18px;
+}
+.thread-row.is-child::before {
+	content: "";
+	position: absolute;
+	left: -10px;
+	top: -4px;
+	height: 50%;
+	width: 8px;
+	border-left: 1.5px solid var(--border-strong);
+	border-bottom: 1.5px solid var(--border-strong);
+	border-bottom-left-radius: 6px;
 }
 
 /* Stessa gestualità della card della board: il comando resta invisibile finché

@@ -88,6 +88,31 @@ type IncrementAction struct {
 	ID       string   `json:"id"`
 	Label    string   `json:"label"`
 	Statuses []string `json:"statuses"`
+	// Primary marks the decision the process expects next. Confirm is asked
+	// before an action that cannot be taken back. Prompts are ready-made
+	// messages offered beside the action, never a way to take it.
+	Primary bool              `json:"primary,omitempty"`
+	Confirm *IncrementConfirm `json:"confirm,omitempty"`
+	Prompts []IncrementPrompt `json:"prompts,omitempty"`
+}
+
+type IncrementConfirm struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
+	Label string `json:"label"`
+}
+
+// IncrementPrompt fills the composer with Text; the person completes and sends it.
+type IncrementPrompt struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
+
+// IncrementPhase names a stretch of the increment as the person sees it: the
+// phase holding the current status is the current one, earlier ones are done.
+type IncrementPhase struct {
+	Label    string   `json:"label"`
+	Statuses []string `json:"statuses"`
 }
 
 const (
@@ -130,6 +155,7 @@ type Stage struct {
 // workflow labels that process works with.
 type Template struct {
 	IncrementActions       []IncrementAction      `json:"increment_actions,omitempty"`
+	IncrementPhases        []IncrementPhase       `json:"increment_phases,omitempty"`
 	ID                     string                 `json:"id"`
 	Version                string                 `json:"version"`
 	Label                  string                 `json:"label"`
@@ -176,7 +202,17 @@ func (e *RegistryError) Error() string {
 func (t Template) clone() Template {
 	t.IncrementActions = slices.Clone(t.IncrementActions)
 	for i := range t.IncrementActions {
-		t.IncrementActions[i].Statuses = slices.Clone(t.IncrementActions[i].Statuses)
+		action := &t.IncrementActions[i]
+		action.Statuses = slices.Clone(action.Statuses)
+		action.Prompts = slices.Clone(action.Prompts)
+		if action.Confirm != nil {
+			confirm := *action.Confirm
+			action.Confirm = &confirm
+		}
+	}
+	t.IncrementPhases = slices.Clone(t.IncrementPhases)
+	for i := range t.IncrementPhases {
+		t.IncrementPhases[i].Statuses = slices.Clone(t.IncrementPhases[i].Statuses)
 	}
 	t.Skills = slices.Clone(t.Skills)
 	t.ConversationActivities = slices.Clone(t.ConversationActivities)
@@ -195,10 +231,26 @@ func builtin() Template {
 	return Template{
 		IncrementActions: []IncrementAction{
 			{ID: "discuss", Label: "Riprendi la definizione", Statuses: []string{"DISCOVERY"}},
-			{ID: "approve-intent", Label: "Approva intento e avvia sviluppo", Statuses: []string{"DISCOVERY"}},
-			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}},
-			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}},
-			{ID: "refresh", Label: "Aggiorna stato PR", Statuses: []string{"PROPOSED"}},
+			{ID: "approve-intent", Label: "Approva la proposta e avvia lo sviluppo", Statuses: []string{"DISCOVERY"}, Primary: true, Prompts: []IncrementPrompt{
+				{Label: "Vorrei cambiare…", Text: "Vorrei cambiare: "},
+				{Label: "Spiegamela con un esempio", Text: "Spiegami la proposta con un esempio concreto."},
+			}},
+			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}, Prompts: []IncrementPrompt{
+				{Label: "A che punto sei?", Text: "A che punto sei con lo sviluppo? Spiegamelo in poche righe."},
+			}},
+			{ID: "publish", Label: "Va bene così, prepara il rilascio", Statuses: []string{"REVIEW", "PUBLISHING"}, Primary: true,
+				Confirm: &IncrementConfirm{Title: "Avviare la preparazione al rilascio?", Text: "Pubblichiamo il codice e apriamo la pull request su GitHub. Da qui in poi questo incremento non accetta modifiche: per altre richieste ne aprirai uno nuovo.", Label: "Sì, prepara il rilascio"},
+				Prompts: []IncrementPrompt{{Label: "Vorrei cambiare…", Text: "Vorrei cambiare: "}}},
+			{ID: "refresh", Label: "Controlla ora la PR", Statuses: []string{"PROPOSED"}, Prompts: []IncrementPrompt{
+				{Label: "Cosa succede adesso?", Text: "Cosa succede adesso con la preparazione al rilascio?"},
+			}},
+		},
+		IncrementPhases: []IncrementPhase{
+			{Label: "Definizione", Statuses: []string{"DISCOVERY"}},
+			{Label: "Sviluppo", Statuses: []string{"DEVELOPING"}},
+			{Label: "Preview", Statuses: []string{"REVIEW"}},
+			{Label: "Preparazione", Statuses: []string{"PUBLISHING", "PROPOSED"}},
+			{Label: "Rilascio", Statuses: []string{"DELIVERED"}},
 		},
 		ID:      FabbricaDelSoftware,
 		Version: fabbricaVersion,
@@ -334,7 +386,7 @@ func Resolve(id string) (Template, error) {
 
 // IncrementStatusLabel belongs to the process vocabulary, like action labels.
 func (t Template) IncrementStatusLabel(status string) string {
-	labels := map[string]string{"DISCOVERY": "Intento da concordare", "DEVELOPING": "Sviluppo nella sandbox", "REVIEW": "Risultato da provare", "PUBLISHING": "Pubblicazione da completare", "PROPOSED": "Proposta in PR", "DELIVERED": "Integrato nel prodotto"}
+	labels := map[string]string{"DISCOVERY": "Definizione dell’intento", "DEVELOPING": "In sviluppo", "REVIEW": "Preview da provare", "PUBLISHING": "Preparazione al rilascio da completare", "PROPOSED": "Preparazione al rilascio", "DELIVERED": "Rilasciato"}
 	if label, ok := labels[status]; ok {
 		return label
 	}

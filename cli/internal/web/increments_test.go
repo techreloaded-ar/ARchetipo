@@ -12,6 +12,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
@@ -107,6 +108,18 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	}
 	if len(draft.Stories) != 1 || draft.Stories[0].StatusLabel != "Da approvare" || draft.Stories[0].Active || draft.ProgressLabel != "" {
 		t.Fatalf("unapproved intent acquired sandbox progress: %s", draftResponse.Body.String())
+	}
+	// The proposal waits on the person: the phases say where, and the next steps
+	// lead with the decision, the proposal to read and the ready-made prompts.
+	if len(draft.Phases) != 5 || draft.Phases[0].State != "current" || draft.Phases[1].State != "todo" || draft.NextStepsLabel != "Prossimi passi" {
+		t.Fatalf("wrong phases: %s", draftResponse.Body.String())
+	}
+	kinds := map[string]incrementStepView{}
+	for _, step := range draft.NextSteps {
+		kinds[step.Kind+":"+step.Action+step.Open] = step
+	}
+	if _, ok := kinds["decision:approve-intent"]; !ok || kinds["open:details"].Target != "intent" || kinds["prompt:"].Prompt == "" {
+		t.Fatalf("wrong next steps: %+v", draft.NextSteps)
 	}
 	denied := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
 	if denied.Code != 409 {
@@ -255,4 +268,61 @@ func gitForIncrementCleanup(root, workdir string) ([]byte, error) {
 	cmd := exec.Command("git", "worktree", "remove", "--force", workdir)
 	cmd.Dir = root
 	return cmd.CombinedOutput()
+}
+
+func TestIncrementPhasesAndPRChecksFollowTheTemplate(t *testing.T) {
+	srv, _, _ := newRunServer(t, newPersistentFakeNativeProvider("native-fake", nil), true)
+	tpl, err := srv.resolveTemplate(srv.session())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var states []string
+	for _, phase := range incrementPhases(tpl, increment.Proposed) {
+		states = append(states, phase.Label+"="+phase.State)
+	}
+	if strings.Join(states, ",") != "Definizione=done,Sviluppo=done,Preview=done,Preparazione=current,Rilascio=todo" {
+		t.Fatalf("wrong phases: %v", states)
+	}
+	if incrementPhases(tpl, "UNKNOWN") != nil {
+		t.Fatal("an unknown status invented a phase")
+	}
+	var checks incrementPRChecks
+	if !checks.begin("inc", time.Minute) || checks.begin("inc", time.Minute) {
+		t.Fatal("a running check was started twice")
+	}
+	checks.end("inc", nil)
+	if checks.begin("inc", time.Minute) || !checks.begin("inc", 0) {
+		t.Fatal("checks ignore their interval")
+	}
+}
+
+// The increment's environment thread is listed under its increment; the
+// workspace's own environment thread and an orphan one stay out of the rail.
+func TestEnvironmentThreadIsNestedUnderItsIncrementInTheRail(t *testing.T) {
+	srv, _, dir := newFileTestServer(t)
+	ctx := context.Background()
+	sandbox := filepath.Join(dir, "sandbox")
+	for _, record := range []conversationlog.Record{
+		{ID: "inc-thread", Title: "Incremento", WorkingDir: sandbox, IncrementID: "inc-1", FinalState: "closed"},
+		{ID: "inc-env", Title: "Ambiente di sviluppo", WorkingDir: sandbox, Purpose: "environment", FinalState: "closed"},
+		{ID: "main-env", Title: "Ambiente di sviluppo", WorkingDir: dir, Purpose: "environment", FinalState: "closed"},
+	} {
+		if err := srv.session().conversationStore().Save(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var index conversationsView
+	if err := json.Unmarshal(doJSON(t, srv, "GET", conversationsRoute, nil).Body.Bytes(), &index); err != nil {
+		t.Fatal(err)
+	}
+	parents := map[string]string{}
+	for _, entry := range index.Conversations {
+		parents[entry.ID] = entry.ParentID
+	}
+	if parent, ok := parents["inc-env"]; !ok || parent != "inc-thread" {
+		t.Fatalf("environment thread not nested under its increment: %+v", index.Conversations)
+	}
+	if _, ok := parents["main-env"]; ok {
+		t.Fatal("the workspace environment thread entered the rail")
+	}
 }

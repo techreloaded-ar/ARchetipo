@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 type incrementControl struct {
@@ -22,6 +25,25 @@ type incrementStoryView struct {
 	StatusLabel string `json:"status_label"`
 	Active      bool   `json:"active"`
 }
+type incrementPhaseView struct {
+	Label string `json:"label"`
+	State string `json:"state"` // done, current, todo
+}
+
+// incrementStepView is one of the next steps offered beside the composer. A
+// decision or action takes the increment action named by Action; a prompt only
+// fills the composer with Prompt; an open shows Open (preview, details, story,
+// conversation or url) at Target.
+type incrementStepView struct {
+	Kind    string                     `json:"kind"`
+	Label   string                     `json:"label"`
+	Action  string                     `json:"action,omitempty"`
+	Prompt  string                     `json:"prompt,omitempty"`
+	Open    string                     `json:"open,omitempty"`
+	Target  string                     `json:"target,omitempty"`
+	Tone    string                     `json:"tone,omitempty"`
+	Confirm *template.IncrementConfirm `json:"confirm,omitempty"`
+}
 type incrementView struct {
 	Stories       []incrementStoryView `json:"stories"`
 	ProgressLabel string               `json:"progress_label,omitempty"`
@@ -29,10 +51,110 @@ type incrementView struct {
 	Note          string               `json:"note"`
 	ResultNotice  string               `json:"result_notice,omitempty"`
 	increment.Record
-	StatusLabel string             `json:"status_label"`
-	Actions     []incrementControl `json:"actions"`
-	Busy        bool               `json:"busy"`
-	DeleteLabel string             `json:"delete_label,omitempty"`
+	StatusLabel    string               `json:"status_label"`
+	Actions        []incrementControl   `json:"actions"`
+	Busy           bool                 `json:"busy"`
+	DeleteLabel    string               `json:"delete_label,omitempty"`
+	Phases         []incrementPhaseView `json:"phases,omitempty"`
+	NextSteps      []incrementStepView  `json:"next_steps"`
+	NextStepsLabel string               `json:"next_steps_label,omitempty"`
+	NextStepsNote  string               `json:"next_steps_note,omitempty"`
+}
+
+// incrementPRChecks remembers, per increment, when the viewer last asked
+// GitHub about its PR, so polling the conversation does not call gh each time.
+type incrementPRChecks struct {
+	mu   sync.Mutex
+	byID map[string]incrementPRCheck
+}
+type incrementPRCheck struct {
+	at      time.Time
+	running bool
+	err     string
+}
+
+func (c *incrementPRChecks) begin(id string, every time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byID == nil {
+		c.byID = map[string]incrementPRCheck{}
+	}
+	last := c.byID[id]
+	if last.running || time.Since(last.at) < every {
+		return false
+	}
+	last.running = true
+	c.byID[id] = last
+	return true
+}
+func (c *incrementPRChecks) end(id string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	check := incrementPRCheck{at: time.Now()}
+	if err != nil {
+		check.err = err.Error()
+	}
+	c.byID[id] = check
+}
+func (c *incrementPRChecks) last(id string) incrementPRCheck {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.byID[id]
+}
+
+const incrementPRCheckInterval = time.Minute
+
+// checkIncrementPR reconciles a published increment with GitHub in the
+// background, at most once a minute, exactly as the refresh action does.
+func (s *Server) checkIncrementPR(ws *workspaceSession, id string) {
+	if !ws.prChecks.begin(id, incrementPRCheckInterval) {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, removeErr, err := s.refreshIncrement(ctx, ws, id)
+		if err == nil {
+			err = removeErr
+		}
+		ws.prChecks.end(id, err)
+	}()
+}
+
+// refreshIncrement reads the PR; once GitHub confirms the merge the sandbox has
+// nothing left to do, so the conversation is archived and worktree, branch and
+// services removed, as the explicit "archive with removal" choice does. A
+// failed removal (removeErr) leaves the delivered increment intact.
+func (s *Server) refreshIncrement(ctx context.Context, ws *workspaceSession, id string) (current increment.Record, removeErr, err error) {
+	current, err = s.incrementService(ws).Refresh(ctx, id)
+	if err == nil && current.Status == increment.Delivered {
+		removeErr = s.removeDeliveredIncrement(ctx, ws, current.ID)
+	}
+	return current, removeErr, err
+}
+
+func incrementPhases(tpl template.Template, status string) []incrementPhaseView {
+	current := -1
+	for i, phase := range tpl.IncrementPhases {
+		for _, candidate := range phase.Statuses {
+			if candidate == status {
+				current = i
+			}
+		}
+	}
+	if current < 0 {
+		return nil
+	}
+	phases := make([]incrementPhaseView, len(tpl.IncrementPhases))
+	for i, phase := range tpl.IncrementPhases {
+		phases[i] = incrementPhaseView{Label: phase.Label, State: "todo"}
+		if i < current {
+			phases[i].State = "done"
+		} else if i == current {
+			phases[i].State = "current"
+		}
+	}
+	return phases
 }
 
 func (s *Server) incrementService(ws *workspaceSession) *increment.Service {
@@ -87,7 +209,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		}
 	}
 	view.ActivityLabel = "In attesa"
-	view.Note = "Il codice lavora nella sandbox; le storie sono nel backlog in lavorazione, in revisione con la PR, consegnate dopo il merge."
+	view.Note = "Il codice lavora in un ambiente separato; le storie sono nel backlog in lavorazione, in revisione durante la preparazione al rilascio, completate dopo il merge."
 	if r.Result != nil {
 		view.ResultNotice = increment.SimulatedNotice(r.Result.Simulated)
 	}
@@ -110,12 +232,13 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		case "waiting":
 			view.ActivityLabel = "Ambiente: serve il tuo intervento"
 			view.Busy = true
-			view.Note = "Apri Preview e Dettagli ambiente per rispondere nella sessione tecnica."
+			view.Note = "Rispondi nella conversazione «Ambiente di sviluppo»: la trovi tra i prossimi passi e nel rail, sotto questo incremento."
 		case "error":
 			view.ActivityLabel = "Ambiente da verificare"
 			view.Note = environment.Error
 		}
 	}
+	offered := []template.IncrementAction{}
 	for _, action := range tpl.IncrementActions {
 		allowed := false
 		for _, status := range action.Statuses {
@@ -129,12 +252,82 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		if action.ID == "approve-intent" && (len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Approved) {
 			continue
 		}
+		offered = append(offered, action)
 		view.Actions = append(view.Actions, incrementControl{ID: action.ID, Label: action.Label})
 	}
+	view.Phases = incrementPhases(tpl, r.Status)
+	s.incrementNextSteps(ws, r, offered, &view)
 	return view
 }
-func (s *Server) deletedIncrementView(receipt increment.DeletionResult) incrementView {
-	return incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
+
+// incrementNextSteps orders what the person can do now: what blocks the work,
+// what to look at, the process decisions, then the ready-made prompts.
+func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, offered []template.IncrementAction, view *incrementView) {
+	steps := []incrementStepView{}
+	if environment := readEnvironmentOperation(r.Workdir); environment.ConversationID != "" {
+		switch environment.State {
+		case "waiting":
+			steps = append(steps, incrementStepView{Kind: "open", Open: "conversation", Target: environment.ConversationID, Tone: "warn", Label: "L’ambiente di sviluppo ti chiede una risposta · Apri"})
+		case "error":
+			steps = append(steps, incrementStepView{Kind: "open", Open: "conversation", Target: environment.ConversationID, Tone: "warn", Label: "L’ambiente di sviluppo ha un problema · Apri"})
+		}
+	}
+	if r.Status == increment.Review {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "preview", Label: "Apri l’anteprima"})
+	}
+	if r.Status == increment.Proposed && r.PR != nil && r.PR.URL != "" {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "url", Target: r.PR.URL, Label: fmt.Sprintf("Apri la PR #%d su GitHub ↗", r.PR.Number)})
+	}
+	primary := false
+	for _, action := range offered {
+		kind := "action"
+		if action.Primary {
+			kind, primary = "decision", true
+		}
+		steps = append(steps, incrementStepView{Kind: kind, Action: action.ID, Label: action.Label, Confirm: action.Confirm})
+	}
+	if len(r.Revisions) > 0 && !r.Revisions[len(r.Revisions)-1].Approved {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "details", Target: "intent", Label: fmt.Sprintf("Leggi la proposta · v%d", r.Revisions[len(r.Revisions)-1].Number)})
+	}
+	for _, story := range view.Stories {
+		if story.Active {
+			steps = append(steps, incrementStepView{Kind: "open", Open: "story", Target: story.Code, Label: "In lavorazione: " + story.Code + " · " + story.Title})
+		}
+	}
+	for _, action := range offered {
+		for _, prompt := range action.Prompts {
+			steps = append(steps, incrementStepView{Kind: "prompt", Label: prompt.Label, Prompt: prompt.Text})
+		}
+	}
+	view.NextSteps = steps
+	view.NextStepsLabel = "Prossimi passi"
+	if !primary {
+		view.NextStepsLabel = view.StatusLabel
+	}
+	notes := []string{}
+	if r.Status == increment.Proposed {
+		notes = append(notes, "in attesa del merge della PR")
+		if check := ws.prChecks.last(r.ID); check.err != "" {
+			notes = append(notes, "ultimo controllo non riuscito: "+check.err)
+		} else if !check.at.IsZero() {
+			notes = append(notes, "controllata alle "+check.at.Format("15:04")+", in automatico")
+		}
+	} else if !primary {
+		notes = append(notes, view.ActivityLabel)
+		if view.ProgressLabel != "" {
+			notes = append(notes, view.ProgressLabel)
+		}
+	}
+	view.NextStepsNote = strings.Join(notes, " · ")
+}
+func (s *Server) deletedIncrementView(ws *workspaceSession, receipt increment.DeletionResult) incrementView {
+	view := incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, NextSteps: []incrementStepView{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
+	if receipt.Record.Status == increment.Delivered {
+		if tpl, err := s.resolveTemplate(ws); err == nil {
+			view.Phases = incrementPhases(tpl, receipt.Record.Status)
+		}
+	}
+	return view
 }
 
 func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, record conversationlog.Record, view *conversationView) {
@@ -145,7 +338,7 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	r, err := s.incrementService(ws).Read(record.IncrementID)
 	if err != nil {
 		if receipt, receiptErr := s.incrementService(ws).DeletionReceipt(record.IncrementID); receiptErr == nil && receipt.Deleted {
-			deleted := s.deletedIncrementView(receipt)
+			deleted := s.deletedIncrementView(ws, receipt)
 			view.Increment = &deleted
 			return
 		}
@@ -154,6 +347,9 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	}
 	view.RemovalChoiceRequired = true
 	current := s.incrementView(ctx, ws, r)
+	if r.Status == increment.Proposed && !current.Busy {
+		s.checkIncrementPR(ws, r.ID)
+	}
 	view.Increment = &current
 }
 func incrementPrompt(r increment.Record, message string) string {
@@ -282,34 +478,41 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	message := ""
+	message, display := "", ""
+	published := current.Status == increment.Review || current.Status == increment.Publishing
 	switch action {
 	case "approve-intent":
 		if current, err = service.Approve(ctx, current.ID, body.Revision); err == nil {
 			current, err = service.SyncStories(ctx, current.ID)
 		}
 		message = "L’utente ha approvato questa revisione dell’intento. Esegui lo sviluppo e le verifiche delle storie nella sandbox usando il workflow esistente. Fermati al risultato da provare; non pubblicare."
+		display = fmt.Sprintf("Approvo la versione %d della proposta: avvia lo sviluppo.", body.Revision)
 	case "develop":
 		message = "Riprendi lo sviluppo delle storie dell’intento approvato. Conserva il lavoro già verificato e fermati al risultato da provare."
+		display = "Riprendi lo sviluppo."
 	case "discuss":
 		message = "Riprendi la definizione dell’intento con la persona. Richiesta iniziale: " + current.Request
+		display = "Riprendiamo la definizione."
 	case "publish":
 		current, err = service.Publish(ctx, current.ID, body.HeadSHA, body.Revision)
+		// The conversation records the decision and the agent acknowledges it;
+		// a repeated press on a published increment says nothing again.
+		if err == nil && published && current.Status == increment.Proposed && current.PR != nil {
+			message = fmt.Sprintf("La persona ha approvato il risultato e la preparazione al rilascio è avviata: pull request #%d (%s). Confermalo in una frase, senza altre azioni.", current.PR.Number, current.PR.URL)
+			display = fmt.Sprintf("Ho avviato la preparazione al rilascio: PR #%d su GitHub.", current.PR.Number)
+		}
 	case "refresh":
-		current, err = service.Refresh(ctx, current.ID)
+		var removeErr error
+		current, removeErr, err = s.refreshIncrement(ctx, ws, current.ID)
 		if err == nil && current.Status == increment.Delivered {
-			// A merged increment has nothing left to do in its sandbox: archive
-			// the conversation and remove worktree, branch and services, as the
-			// explicit "archive with removal" choice does. The record stays
-			// readable; a failed removal leaves the delivered increment intact.
-			if removeErr := s.removeDeliveredIncrement(ctx, ws, current.ID); removeErr != nil {
+			if removeErr != nil {
 				view := s.incrementView(ctx, ws, current)
 				view.Note = "Incremento consegnato; ambiente non rimosso: " + removeErr.Error()
 				writeJSON(w, http.StatusOK, view)
 				return
 			}
 			if receipt, receiptErr := service.DeletionReceipt(current.ID); receiptErr == nil {
-				writeJSON(w, http.StatusOK, s.deletedIncrementView(receipt))
+				writeJSON(w, http.StatusOK, s.deletedIncrementView(ws, receipt))
 				return
 			}
 		}
@@ -325,17 +528,23 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 		if !live {
 			snapshot, live = s.reopenReleasedForMessage(ctx, ws, current.ConversationID)
 		}
-		if !live {
-			writeError(w, iox.NewConflict("la conversazione deve essere ripresa", "riapri la sessione dell’incremento; l’intento approvato è conservato", nil))
-			return
-		}
 		send := func(sendCtx context.Context) error {
-			return s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: incrementPrompt(current, message) + "\nEnvironment preparation report: " + environmentReport(current.Workdir) + "\nL’ambiente è stato preparato separatamente. Usa la ricetta comune e i report esistenti; non ripetere configurazione o build di setup nella chat di sviluppo. Per modifiche ai requisiti dell’ambiente, segnala il blocco nel pannello ambiente.", display: message})
+			return s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: incrementPrompt(current, message) + "\nEnvironment preparation report: " + environmentReport(current.Workdir) + "\nL’ambiente è stato preparato separatamente. Usa la ricetta comune e i report esistenti; non ripetere configurazione o build di setup nella chat di sviluppo. Per modifiche ai requisiti dell’ambiente, di’ che serve un intervento sulla conversazione «Ambiente di sviluppo»: View mostra alla persona come aprirla.", display: display})
 		}
-		if action == "approve-intent" || action == "develop" {
+		switch {
+		case !live:
+			err = iox.NewConflict("la conversazione deve essere ripresa", "riapri la sessione dell’incremento; l’intento approvato è conservato", nil)
+		case action == "approve-intent" || action == "develop":
 			err = s.queueEnvironment(ctx, ws, current.Workdir, false, false, send)
-		} else {
+		default:
 			err = send(ctx)
+		}
+		if err != nil && action == "publish" {
+			// The PR is open: only the acknowledgement in the conversation failed.
+			view := s.incrementView(ctx, ws, current)
+			view.Note = "Preparazione al rilascio avviata; il messaggio nella conversazione non è confermato: " + err.Error()
+			writeJSON(w, http.StatusOK, view)
+			return
 		}
 		if err != nil {
 			writeError(w, err)

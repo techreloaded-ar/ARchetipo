@@ -56,18 +56,44 @@ test("il renderer non contiene gli stati o i comandi del processo", () => {
 });
 
 test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
- const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",progress_label:"1/2 storie completate",activity_label:"Agente al lavoro",revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
+ const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",next_steps_label:"Etichetta passi",next_steps_note:"Agente al lavoro · 1/2 storie completate",phases:[{label:"Uno",state:"done"},{label:"Due",state:"current"},{label:"Tre",state:"todo"}],next_steps:[{kind:"open",open:"story",target:"US-002",label:"In lavorazione: US-002 · Filtro"}],revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
  const compact = renderConversation(view,"bozza",{});
- assert.match(compact,/Fase fornita/);
- assert.match(compact,/1\/2 storie completate/);
- assert.match(compact,/data-increment-story="US-002"/);
- assert.doesNotMatch(compact,/Risultato molto lungo|Criteri completi|<aside id="increment-details"/);
+ assert.match(compact,/class="conv-phases"[\s\S]*is-done[^>]*>Uno[\s\S]*aria-current="step">Due[\s\S]*is-todo[^>]*>Tre/);
+ assert.match(compact,/data-increment-panel="open"/);
+ assert.match(compact,/<form class="conv-composer">[\s\S]*class="conv-increment conv-next"[\s\S]*Etichetta passi[\s\S]*1\/2 storie completate[\s\S]*data-increment-story="US-002"[\s\S]*conv-composer-input/);
+ assert.doesNotMatch(compact,/Fase fornita|Risultato molto lungo|Criteri completi|<aside id="increment-details"|class="conv-dir"/);
  const open = renderConversation(view,"bozza",{incrementSections:{"panel-compact":true,"current-story-US-002":true}});
  assert.match(open,/has-increment-open/);
+ assert.match(open,/Fase fornita/);
  assert.match(open,/data-increment-section="current-story-US-002" open/);
  assert.match(open,/Stato fornito/);
  assert.match(open,/Criteri completi/);
  assert.match(open,/Risultato molto lungo/);
+});
+test("i prossimi passi rendono decisioni, prompt e aperture dichiarate dal server", () => {
+ const confirm = {title:"Titolo <conferma>",text:"Spiegazione fornita",label:"Sì, procedi"};
+ const steps = [
+  {kind:"open",open:"conversation",target:"conv-env",tone:"warn",label:"Ambiente fornito"},
+  {kind:"decision",action:"azione-attesa",label:"Decisione fornita",confirm},
+  {kind:"action",action:"altra-azione",label:"Azione fornita"},
+  {kind:"prompt",prompt:"Testo <pronto>: ",label:"Prompt fornito"},
+  {kind:"open",open:"url",target:"https://example.test/pr/1",label:"Link fornito"},
+  {kind:"open",open:"url",target:"javascript:bad()",label:"Link pericoloso"},
+ ];
+ const view = {...base, increment:{id:"steps",revisions:[revision],next_steps_label:"Prossimi passi",next_steps:steps}};
+ const html = renderConversation(view,"",{});
+ assert.match(html,/conv-step conv-step-open is-warn" data-increment-step-open="conversation" data-increment-step-target="conv-env"/);
+ assert.match(html,/conv-step-decision" data-increment-step-action="azione-attesa" data-increment-step-confirm="true"/);
+ assert.match(html,/conv-step-action" data-increment-step-action="altra-azione">Azione fornita/);
+ assert.match(html,/data-increment-step-prompt="Testo &lt;pronto&gt;: "/);
+ assert.match(html,/href="https:\/\/example.test\/pr\/1"/);
+ assert.doesNotMatch(html,/javascript:|Link pericoloso|data-increment-action=/);
+ assert.match(renderConversation({...view,increment:{...view.increment,busy:true}},"",{}),/data-increment-step-action="azione-attesa" data-increment-step-confirm="true" disabled/);
+ const armed = renderConversation(view,"la mia bozza",{incrementConfirm:"azione-attesa"});
+ assert.match(armed,/class="conv-next-confirm"[\s\S]*Titolo &lt;conferma&gt;[\s\S]*Spiegazione fornita[\s\S]*data-increment-step-cancel[\s\S]*data-increment-step-run="azione-attesa"[^>]*>Sì, procedi/);
+ assert.match(armed,/<textarea class="conv-composer-input"[^>]*hidden>la mia bozza<\/textarea>/);
+ assert.doesNotMatch(armed,/data-increment-step-action=/);
+ assert.doesNotMatch(renderConversation(view,"",{incrementConfirm:"altra-azione"}),/conv-next-confirm/);
 });
 test("l’avviso sulle integrazioni simulate compare solo quando il server lo fornisce, accanto al risultato", () => {
  const result = {summary:"Prova il risultato",checks:["18 verifiche passate"]};

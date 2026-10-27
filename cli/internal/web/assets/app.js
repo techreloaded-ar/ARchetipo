@@ -6111,6 +6111,7 @@
 	let conversationDraftDestinations = {};
 	let conversationProposalPreviousOpen = {};
 	let conversationIncrementSections = {};
+	let conversationIncrementConfirm = ""; // next-step action waiting for its inline confirmation
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -6379,6 +6380,7 @@
 				return;
 			}
 			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
+			if (onIncrementStep(e.target)) return;
 			if (e.target.closest("[data-increment-delete]")) { deleteCurrentIncrement(); return; }
 			const incrementAction = e.target.closest("[data-increment-action]");
 			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
@@ -7537,6 +7539,7 @@
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
 		conversationIncrementSections = {};
+		conversationIncrementConfirm = "";
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
@@ -8064,6 +8067,62 @@
 	}
 
 
+	// The next steps beside the composer. A decision with a confirmation first
+	// takes the field's place; a prompt only fills the field; an open shows the
+	// preview, the details, or the conversation the server names.
+	function onIncrementStep(target) {
+		const action = target.closest("[data-increment-step-action]");
+		if (action) {
+			const id = action.getAttribute("data-increment-step-action");
+			if (action.hasAttribute("data-increment-step-confirm")) {
+				conversationIncrementConfirm = id;
+				renderConversationPanel();
+				conversationEl.querySelector("[data-increment-step-run]")?.focus({preventScroll:true});
+			} else runIncrementAction(id);
+			return true;
+		}
+		const run = target.closest("[data-increment-step-run]");
+		if (run) {
+			conversationIncrementConfirm = "";
+			runIncrementAction(run.getAttribute("data-increment-step-run"));
+			return true;
+		}
+		if (target.closest("[data-increment-step-cancel]")) {
+			conversationIncrementConfirm = "";
+			renderConversationPanel();
+			conversationEl.querySelector(".conv-composer-input")?.focus({preventScroll:true});
+			return true;
+		}
+		const prompt = target.closest("[data-increment-step-prompt]");
+		if (prompt) {
+			// A ready-made prompt never discards what the person already wrote.
+			const text = prompt.getAttribute("data-increment-step-prompt") || "";
+			conversationDraft = conversationDraft.trim() ? conversationDraft.trimEnd() + "\n" + text : text;
+			renderConversationPanel();
+			const input = conversationEl.querySelector(".conv-composer-input");
+			if (input) {
+				input.focus({preventScroll:true});
+				input.setSelectionRange(input.value.length, input.value.length);
+				adattaAltezzaCompositore(input);
+			}
+			return true;
+		}
+		const open = target.closest("[data-increment-step-open]");
+		if (!open) return false;
+		const where = open.getAttribute("data-increment-step-open");
+		const destination = open.getAttribute("data-increment-step-target") || "";
+		if (where === "preview") window.WorkspacePanels?.open("preview");
+		else if (where === "conversation") window.dispatchEvent(new CustomEvent("archetipo:environment-open", {detail:{id:destination}}));
+		else if (where === "details" && conversationView?.increment) {
+			conversationIncrementSections["panel-" + conversationView.increment.id] = true;
+			if (destination) conversationIncrementSections[destination] = true;
+			window.WorkspacePanels?.open("details");
+			renderConversationPanel();
+			conversationEl.parentElement.querySelector(destination ? '[data-increment-section="' + cssEscape(destination) + '"] summary' : ".conv-increment-panel")?.focus({preventScroll:true});
+		}
+		return true;
+	}
+
 	async function runIncrementAction(action) {
 		const current = conversationView && conversationView.increment;
 		if (!current || conversationBusy) return;
@@ -8502,6 +8561,7 @@
 				draftDestinations: conversationDraftDestinations,
 				proposalPreviousOpen: conversationProposalPreviousOpen,
 				incrementSections: conversationIncrementSections,
+				incrementConfirm: conversationIncrementConfirm,
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:

@@ -318,8 +318,17 @@ async function main(){
   assert.ok(await page.evaluate("document.documentElement.scrollWidth<=document.documentElement.clientWidth"),"mobile overflow");
   await fs.writeFile(path.join(runDir,"mobile.png"),Buffer.from((await page.send("Page.captureScreenshot",{format:"png"})).data,"base64"));
   await page.send("Emulation.clearDeviceMetricsOverride");
-  await click("publish");
+  // Publication goes through the next step beside the composer and its inline
+  // confirmation, which keeps the draft and starts nothing until confirmed.
+  await page.waitFor('!!document.querySelector(\'[data-increment-step-action="publish"]:not(:disabled)\')',timeout,"publish next step");
+  await page.evaluate('document.querySelector(\'[data-increment-step-action="publish"]\').click()');
+  await page.waitFor('!!document.querySelector(\'[data-increment-step-run="publish"]\') && document.querySelector(".conv-composer-input").hidden',timeout,"inline publication confirmation");
+  assert.equal((await read()).increment.status,"REVIEW","the confirmation alone published");
+  await page.evaluate('document.querySelector(\'[data-increment-step-run="publish"]\').click()');
   await until(async()=>(await read()).increment.status==="PROPOSED","PR publication");
+  await until(async()=>(await read()).increment.busy,"publication acknowledgement turn");
+  await finish(90,"Fatto: il codice è pubblicato nella PR.");
+  assert.ok((await read()).increment.phases.find(phase=>phase.state==="current")?.label==="Preparazione","release preparation phase");
   const proposed=await cliJSON(["spec","list"],undefined,sandbox);assert.equal(proposed.items.length,1);assert.equal(proposed.items[0].status,"REVIEW");assert.match(proposed.items[0].body,/Proposta di incremento/);
   const frozen=(await read()).increment;
   await cliJSON(["increment","publish",inc.id],{revision:frozen.revisions.at(-1).number,head_sha:frozen.ready_sha},sandbox);

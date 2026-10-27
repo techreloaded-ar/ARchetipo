@@ -559,7 +559,7 @@ func (ws *workspaceSession) sendNativeConversationMessage(ctx context.Context, s
 		operation := readEnvironmentOperation(record.WorkingDir)
 		if operation.State == "preparing" || operation.State == "configuring" || operation.State == "waiting" {
 			if lease, leaseErr := environmentLease(ctx, record.WorkingDir); leaseErr != nil {
-				return iox.NewConflict("preparazione ambiente in corso", "consulta Preview e Dettagli ambiente; il messaggio non è stato inviato", leaseErr)
+				return iox.NewConflict("preparazione ambiente in corso", "segui la conversazione «Ambiente di sviluppo»; il messaggio non è stato inviato", leaseErr)
 			} else {
 				_ = lease.Unlock()
 			}
