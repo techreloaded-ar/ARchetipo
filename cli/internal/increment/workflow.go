@@ -231,6 +231,9 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 				return r, iox.NewInvalidInput("empty verification evidence", "name each completed check and its result", nil)
 			}
 		}
+		if commit := result.SquashCommit; commit != nil && (strings.TrimSpace(commit.Title) == "" || strings.ContainsAny(commit.Title, "\r\n")) {
+			return r, iox.NewInvalidInput("squash commit title must be one non-empty line", "describe what the increment introduces in a single line, or omit squash_commit", nil)
+		}
 		if result.PreviewURL != "" {
 			parsed, parseErr := url.Parse(result.PreviewURL)
 			if parseErr != nil || parsed.User != nil || parsed.Scheme != "http" || (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1") {

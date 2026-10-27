@@ -285,8 +285,17 @@ runtime journals and sandbox process files out of commits. Then call:
 
 Payload:
 
-    {"summary":"What the person can now try, with demonstration instructions","preview_url":"http://127.0.0.1:3000","checks":["Exact command — actual result"]}
+    {"summary":"What the person can now try, with demonstration instructions","preview_url":"http://127.0.0.1:3000","checks":["Exact command — actual result"],"squash_commit":{"title":"One line saying what the increment introduces","body":"What the product now does and why, in a few lines"}}
 
+`squash_commit` is the single commit the increment leaves on `main` after a
+squash merge: the PR is opened with its title, and its description holds only
+the body and the list of published stories. The CLI posts the increment,
+intent, summary and checks once as a PR comment. Follow the commit convention visible in `git log` of the base
+branch (for example `feat(scope): …`), in the workspace language. The title is
+one line, about 72 characters, naming the product capability introduced, never
+the increment ID, branch or "merge". The body explains the change for someone
+reading the history; omit story codes (the CLI lists them), checks and any
+co-author or tool attribution.
 preview_url is optional and must be a real local HTTP preview. An unavailable
 interactive preview must be stated plainly in the summary; provide other
 appropriate observable evidence. The CLI copies the preview recipe's `simulated`

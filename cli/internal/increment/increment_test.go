@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -376,19 +377,27 @@ func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
 }
 
 type fakeHosting struct {
-	createBody string
-	pr         *PullRequest
-	creates    int
-	findBase   string
-	createBase string
+	createBody  string
+	pr          *PullRequest
+	creates     int
+	findBase    string
+	createBase  string
+	createTitle string
+	comments    []string
+}
+
+func (f *fakeHosting) Comment(_ context.Context, _ string, _ int, body string) error {
+	f.comments = append(f.comments, body)
+	return nil
 }
 
 func (f *fakeHosting) Find(_ context.Context, _, _, base string) (*PullRequest, error) {
 	f.findBase = base
 	return f.pr, nil
 }
-func (f *fakeHosting) Create(_ context.Context, dir, _, base, _, body string) (*PullRequest, error) {
+func (f *fakeHosting) Create(_ context.Context, dir, _, base, title, body string) (*PullRequest, error) {
 	f.createBase = base
+	f.createTitle = title
 	f.createBody = body
 	sha, err := git(context.Background(), dir, "rev-parse", "HEAD")
 	if err != nil {
@@ -784,10 +793,43 @@ func TestReadyRecordsSimulatedIntegrationsFromTheRecipeAndThePRRepeatsThem(t *te
 	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
 		t.Fatal(err)
 	}
+	if hosting.createTitle != r.Title || !strings.HasPrefix(hosting.createBody, r.ID+"\n\n") {
+		t.Fatalf("a result without squash commit changed the PR: %q\n%s", hosting.createTitle, hosting.createBody)
+	}
 	if !strings.Contains(hosting.createBody, SimulatedNotice(r.Result.Simulated)) {
 		t.Fatalf("PR body hides the simulated trial: %s", hosting.createBody)
 	}
 	if SimulatedNotice(nil) != "" {
 		t.Fatal("a real trial produced a notice")
+	}
+}
+
+func TestPRTitleAndBodyLeadWithTheSquashCommitWrittenAtReadiness(t *testing.T) {
+	s := fixture(t)
+	remote(t, s)
+	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+	complete(t, s, r)
+	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("squash\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, r.Workdir, "commit", "-am", "wip")
+	if _, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, SquashCommit: &SquashCommit{Title: "feat: export\nsecond line"}}); err == nil {
+		t.Fatal("a multi-line squash title was accepted")
+	}
+	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, SquashCommit: &SquashCommit{Title: "feat(export): esporta i clienti per la revisione", Body: "Il commerciale scarica i clienti attivi in CSV."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosting := &fakeHosting{}
+	s.Hosting = hosting
+	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
+		t.Fatal(err)
+	}
+	// The description is the squash commit: message and stories, nothing else.
+	if hosting.createTitle != "feat(export): esporta i clienti per la revisione" || !regexp.MustCompile(`^Il commerciale scarica i clienti attivi in CSV\.\n\n- US-\d+ — Export\n$`).MatchString(hosting.createBody) {
+		t.Fatalf("PR does not carry only the squash commit: %q\n%s", hosting.createTitle, hosting.createBody)
+	}
+	if len(hosting.comments) != 1 || !strings.HasPrefix(hosting.comments[0], detailsMarker(r.ID)+"\n") || !strings.Contains(hosting.comments[0], "Incremento "+r.ID) || !strings.Contains(hosting.comments[0], "go test — passed") {
+		t.Fatalf("intent and checks are not in the details comment: %q", hosting.comments)
 	}
 }

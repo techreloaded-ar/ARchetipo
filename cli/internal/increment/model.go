@@ -49,6 +49,13 @@ type Result struct {
 	// Simulated is read from the preview recipe at readiness, never from the
 	// agent: which integrations the person tried against local fakes.
 	Simulated []string `json:"simulated,omitempty"`
+	// SquashCommit is written by the skill so that the PR title and the head of
+	// its body read as the single commit a squash merge leaves on main.
+	SquashCommit *SquashCommit `json:"squash_commit,omitempty"`
+}
+type SquashCommit struct {
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
 }
 type Record struct {
 	ID                   string            `json:"id"`
@@ -86,6 +93,7 @@ type Hosting interface {
 	Find(context.Context, string, string, string) (*PullRequest, error)
 	Create(context.Context, string, string, string, string, string) (*PullRequest, error)
 	Read(context.Context, string, int) (*PullRequest, error)
+	Comment(context.Context, string, int, string) error
 }
 
 type Service struct {

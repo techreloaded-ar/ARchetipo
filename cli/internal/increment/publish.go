@@ -81,22 +81,28 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err != nil {
 			return r, err
 		}
+		squash := r.Result != nil && r.Result.SquashCommit != nil
 		if pr == nil {
 			var body strings.Builder
-			fmt.Fprintf(&body, "%s\n\n%s\n\n", r.ID, r.Revisions[len(r.Revisions)-1].Intent)
+			title := r.Title
+			if squash {
+				// With squash merges the description becomes the commit kept on main:
+				// it carries only the squash message and the stories. The increment,
+				// its intent and the evidence go to the details comment below.
+				title = strings.TrimSpace(r.Result.SquashCommit.Title)
+				if text := strings.TrimSpace(r.Result.SquashCommit.Body); text != "" {
+					fmt.Fprintf(&body, "%s\n\n", text)
+				}
+			} else {
+				fmt.Fprintf(&body, "%s\n\n%s\n\n", r.ID, r.Revisions[len(r.Revisions)-1].Intent)
+			}
 			for _, st := range stories {
 				fmt.Fprintf(&body, "- %s — %s\n", r.Published[st.Code], st.Title)
 			}
-			if r.Result != nil {
-				fmt.Fprintf(&body, "\n%s\n\nVerifiche:\n", r.Result.Summary)
-				for _, check := range r.Result.Checks {
-					fmt.Fprintf(&body, "- %s\n", check)
-				}
-				if notice := SimulatedNotice(r.Result.Simulated); notice != "" {
-					fmt.Fprintf(&body, "\n%s\n", notice)
-				}
+			if !squash {
+				writeResult(&body, r.Result)
 			}
-			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, r.Title, body.String())
+			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, title, body.String())
 			if err != nil {
 				return r, err
 			}
@@ -111,12 +117,39 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err = s.save(r); err != nil {
 			return r, err
 		}
+		if squash {
+			// Hosting posts it once per PR, so a retried publication repeats nothing.
+			var details strings.Builder
+			fmt.Fprintf(&details, "%s\n\nIncremento %s\n\n%s\n", detailsMarker(r.ID), r.ID, r.Revisions[len(r.Revisions)-1].Intent)
+			writeResult(&details, r.Result)
+			if err = s.Hosting.Comment(ctx, r.Workdir, pr.Number, details.String()); err != nil {
+				return r, err
+			}
+		}
 		if err = s.mirror(ctx, &r, stories, domain.StatusReview); err != nil {
 			return r, err
 		}
 		r.Status = Proposed
 		return r, s.save(r)
 	})
+}
+
+// writeResult appends the verified result: summary, checks and simulated trial.
+func writeResult(out *strings.Builder, result *Result) {
+	if result == nil {
+		return
+	}
+	fmt.Fprintf(out, "\n%s\n\nVerifiche:\n", result.Summary)
+	for _, check := range result.Checks {
+		fmt.Fprintf(out, "- %s\n", check)
+	}
+	if notice := SimulatedNotice(result.Simulated); notice != "" {
+		fmt.Fprintf(out, "\n%s\n", notice)
+	}
+}
+
+func detailsMarker(id string) string {
+	return "<!-- archetipo-increment-details:" + id + " -->"
 }
 
 // SimulatedNotice is the one sentence the viewer and the PR repeat when the
