@@ -1303,6 +1303,21 @@
 		return value.charAt(0).toUpperCase() + value.slice(1);
 	}
 
+	// Le storie che il server appende sotto una fase, una per pallino: stato,
+	// titolo e conteggio arrivano dal payload, e il click apre la storia nei
+	// dettagli dell'incremento come faceva il chip accanto al compositore.
+	function renderPhaseStories(phase) {
+		const stories = arrayAt(phase, "stories").filter((story) => story && textAt(story, "code"));
+		if (!stories.length) return "";
+		const focus = textAt(phase, "stories_focus");
+		const note = textAt(phase, "stories_note");
+		return `<ol class="conv-phase-stories" aria-label="Storie">${stories.map((story) => {
+			const code = textAt(story, "code");
+			const label = `${code} · ${textAt(story, "title")} — ${textAt(story, "state_label")}`;
+			return `<li><button type="button" class="conv-phase-story is-${escapeHtml(textAt(story, "state") || "todo")}" data-increment-story="${escapeHtml(code)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${escapeHtml(code)}</button></li>`;
+		}).join("")}${focus ? `<li class="conv-phase-stories-focus" title="${escapeHtml(focus)}">${escapeHtml(focus)}</li>` : ""}${note ? `<li class="conv-phase-stories-note">· ${escapeHtml(note)}</li>` : ""}</ol>`;
+	}
+
 	// `controls` is whatever the caller wants at the right end of the band —
 	// today the close control, and only while the conversation is live. The head
 	// does not decide what belongs there and never builds it: it is handed the
@@ -1322,10 +1337,11 @@
 		// In un incremento la testata dice a che punto è il lavoro, nelle fasi e
 		// negli stati che il server dichiara; il percorso resta nel title.
 		const phases = arrayAt(objectAt(view, "increment"), "phases").filter((phase) => phase && textAt(phase, "label"));
+		const withStories = phases.some((phase) => arrayAt(phase, "stories").length) ? " has-stories" : "";
 		const dirHtml = phases.length
-			? `<ol class="conv-phases" aria-label="Fasi dell’incremento"${dir ? ` title="${escapeHtml(dir)}"` : ""}>${phases.map((phase) => {
+			? `<ol class="conv-phases${withStories}" aria-label="Fasi dell’incremento"${dir ? ` title="${escapeHtml(dir)}"` : ""}>${phases.map((phase) => {
 				const state = textAt(phase, "state");
-				return `<li class="conv-phase is-${escapeHtml(state || "todo")}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHtml(textAt(phase, "label"))}</li>`;
+				return `<li class="conv-phase is-${escapeHtml(state || "todo")}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHtml(textAt(phase, "label"))}${renderPhaseStories(phase)}</li>`;
 			}).join("")}</ol>`
 			: dir
 				? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
@@ -1611,9 +1627,6 @@
 			const open = textAt(step, "open");
 			if (open === "url") {
 				return /^https?:\/\//.test(target) ? `<a class="conv-step conv-step-open" target="_blank" rel="noopener noreferrer" href="${escapeHtml(target)}">${text}</a>` : "";
-			}
-			if (open === "story") {
-				return `<button type="button" class="conv-step conv-step-open conv-increment-active" data-increment-story="${escapeHtml(target)}">${text}</button>`;
 			}
 			return `<button type="button" class="conv-step conv-step-open${tone}" data-increment-step-open="${escapeHtml(open)}" data-increment-step-target="${escapeHtml(target)}">${text}</button>`;
 		};

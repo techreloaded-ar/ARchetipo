@@ -24,15 +24,29 @@ type incrementStoryView struct {
 	domain.Spec
 	StatusLabel string `json:"status_label"`
 	Active      bool   `json:"active"`
+	// Progress is done, current or todo during development, from the sandbox
+	// tasks; empty when the sandbox facts are not readable.
+	Progress string `json:"progress,omitempty"`
 }
 type incrementPhaseView struct {
 	Label string `json:"label"`
 	State string `json:"state"` // done, current, todo
+	// Stories, StoriesNote and StoriesFocus show the stories under the
+	// development phase while it is current.
+	Stories      []incrementPhaseStoryView `json:"stories,omitempty"`
+	StoriesNote  string                    `json:"stories_note,omitempty"`
+	StoriesFocus string                    `json:"stories_focus,omitempty"`
+}
+type incrementPhaseStoryView struct {
+	Code       string `json:"code"`
+	Title      string `json:"title"`
+	State      string `json:"state"` // done, current, todo
+	StateLabel string `json:"state_label"`
 }
 
 // incrementStepView is one of the next steps offered beside the composer. A
 // decision or action takes the increment action named by Action; a prompt only
-// fills the composer with Prompt; an open shows Open (preview, details, story,
+// fills the composer with Prompt; an open shows Open (preview, details,
 // conversation or url) at Target.
 type incrementStepView struct {
 	Kind    string                     `json:"kind"`
@@ -46,7 +60,6 @@ type incrementStepView struct {
 }
 type incrementView struct {
 	Stories       []incrementStoryView `json:"stories"`
-	ProgressLabel string               `json:"progress_label,omitempty"`
 	ActivityLabel string               `json:"activity_label,omitempty"`
 	Note          string               `json:"note"`
 	ResultNotice  string               `json:"result_notice,omitempty"`
@@ -157,6 +170,65 @@ func incrementPhases(tpl template.Template, status string) []incrementPhaseView 
 	return phases
 }
 
+// storyProgress tells whether a sandbox story is done, being worked on or still
+// to do. Its tasks decide when it has a plan: done only when all are DONE. A
+// story without a plan falls back to its own status.
+func storyProgress(story domain.Spec, tasks []domain.Task) string {
+	if len(tasks) == 0 {
+		switch story.Status {
+		case domain.StatusDone:
+			return "done"
+		case domain.StatusInProgress, domain.StatusReview:
+			return "current"
+		}
+		return "todo"
+	}
+	done, started := 0, false
+	for _, task := range tasks {
+		if task.Status == domain.StatusDone {
+			done++
+		}
+		started = started || task.Status == domain.StatusDone || task.Status == domain.StatusInProgress
+	}
+	if done == len(tasks) {
+		return "done"
+	}
+	if started {
+		return "current"
+	}
+	return "todo"
+}
+
+// attachDevelopmentStories puts the stories under the current phase while the
+// increment is in development, only when every story is readable.
+func attachDevelopmentStories(phases []incrementPhaseView, stories []incrementStoryView) {
+	labels := map[string]string{"done": "completata", "current": "in lavorazione", "todo": "da fare"}
+	steps := []incrementPhaseStoryView{}
+	completed, focus := 0, ""
+	for _, story := range stories {
+		if story.Progress == "" {
+			return
+		}
+		if story.Progress == "done" {
+			completed++
+		}
+		if story.Progress == "current" && focus == "" {
+			focus = "Ora: " + story.Title
+		}
+		steps = append(steps, incrementPhaseStoryView{Code: story.Code, Title: story.Title, State: story.Progress, StateLabel: labels[story.Progress]})
+	}
+	if len(steps) == 0 {
+		return
+	}
+	for i := range phases {
+		if phases[i].State == "current" {
+			phases[i].Stories = steps
+			phases[i].StoriesNote = fmt.Sprintf("%d/%d", completed, len(steps))
+			phases[i].StoriesFocus = focus
+		}
+	}
+}
+
 func (s *Server) incrementService(ws *workspaceSession) *increment.Service {
 	service := increment.New(ws.cfg, ws.conn)
 	if s.incrementHosting != nil {
@@ -175,15 +247,21 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 	if len(r.Revisions) > 0 {
 		latest := r.Revisions[len(r.Revisions)-1]
 		byCode := map[string]domain.Spec{}
+		tasks := map[string][]domain.Task{}
 		if latest.Approved {
-			live, readErr := s.incrementService(ws).Stories(ctx, r)
+			service := s.incrementService(ws)
+			live, readErr := service.Stories(ctx, r)
 			if readErr == nil {
+				codes := []string{}
 				for _, story := range live {
 					byCode[story.Code] = story
+					codes = append(codes, story.Code)
+				}
+				if read, taskErr := service.StoryTasks(ctx, r, codes); taskErr == nil {
+					tasks = read
 				}
 			}
 		}
-		completed, known := 0, 0
 		labels := map[domain.Status]string{domain.StatusTodo: tpl.Statuses.Todo, domain.StatusPlanned: tpl.Statuses.Planned, domain.StatusInProgress: tpl.Statuses.InProgress, domain.StatusReview: tpl.Statuses.Review, domain.StatusDone: tpl.Statuses.Done}
 		for _, proposed := range latest.Stories {
 			story := incrementStoryView{Spec: proposed, StatusLabel: "Stato non disponibile"}
@@ -196,16 +274,10 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 				if story.StatusLabel == "" {
 					story.StatusLabel = string(current.Status)
 				}
-				story.Active = current.Status == domain.StatusInProgress
-				known++
-				if current.Status == domain.StatusDone {
-					completed++
-				}
+				story.Progress = storyProgress(current, tasks[current.Code])
+				story.Active = story.Progress == "current"
 			}
 			view.Stories = append(view.Stories, story)
-		}
-		if known > 0 && known == len(view.Stories) {
-			view.ProgressLabel = fmt.Sprintf("%d/%d storie completate", completed, known)
 		}
 	}
 	view.ActivityLabel = "In attesa"
@@ -256,6 +328,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		view.Actions = append(view.Actions, incrementControl{ID: action.ID, Label: action.Label})
 	}
 	view.Phases = incrementPhases(tpl, r.Status)
+	if r.Status == increment.Developing {
+		attachDevelopmentStories(view.Phases, view.Stories)
+	}
 	s.incrementNextSteps(ws, r, offered, &view)
 	return view
 }
@@ -289,11 +364,6 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 	if len(r.Revisions) > 0 && !r.Revisions[len(r.Revisions)-1].Approved {
 		steps = append(steps, incrementStepView{Kind: "open", Open: "details", Target: "intent", Label: fmt.Sprintf("Leggi la proposta · v%d", r.Revisions[len(r.Revisions)-1].Number)})
 	}
-	for _, story := range view.Stories {
-		if story.Active {
-			steps = append(steps, incrementStepView{Kind: "open", Open: "story", Target: story.Code, Label: "In lavorazione: " + story.Code + " · " + story.Title})
-		}
-	}
 	for _, action := range offered {
 		for _, prompt := range action.Prompts {
 			steps = append(steps, incrementStepView{Kind: "prompt", Label: prompt.Label, Prompt: prompt.Text})
@@ -314,9 +384,6 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 		}
 	} else if !primary {
 		notes = append(notes, view.ActivityLabel)
-		if view.ProgressLabel != "" {
-			notes = append(notes, view.ProgressLabel)
-		}
 	}
 	view.NextStepsNote = strings.Join(notes, " · ")
 }

@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Storie in sviluppo</title>
+<style>
+/* Mockup isolato "storie-in-sviluppo": non è codice del viewer.
+   Riprende i token dark di cli/internal/web/assets/app.css. */
+@import url("https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap");
+:root {
+	--font-sans: "Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	--font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+	--bg: #131420; --bg-grid: rgba(162,166,232,.04);
+	--surface: #1b1c2b; --surface-3: #232438;
+	--border: #2e3047; --border-strong: #43466a;
+	--text: #e9e9f2; --text-strong: #fafaff; --text-muted: #a9a9be; --text-dim: #83839a;
+	--accent: #a2a6e8; --accent-soft: rgba(162,166,232,.16); --accent-ink: #16172a;
+	--work: #7fcbd4; --work-soft: rgba(127,203,212,.12);
+	--ok: #8dc894; --ok-soft: rgba(141,200,148,.12); --ok-border: rgba(141,200,148,.3);
+	--radius: 14px; --pill: 999px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 var(--font-sans); color: var(--text); background: #0d0e17; padding: 28px 32px 60px; }
+h1 { font-size: 20px; margin: 0 0 4px; color: var(--text-strong); }
+.lead { color: var(--text-muted); margin: 0 0 28px; max-width: 900px; }
+section.case { margin-bottom: 44px; }
+section.case > h2 { font-size: 15px; margin: 0 0 4px; color: var(--text-strong); }
+section.case > h2 small { font-weight: 600; color: var(--accent); margin-right: 8px; letter-spacing: .06em; }
+section.case > p { margin: 0 0 12px; color: var(--text-muted); max-width: 900px; font-size: 13px; }
+.frame { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--bg); max-width: 1180px; }
+.frame.narrow { max-width: 390px; }
+
+/* ---- Barra della conversazione (com'è oggi) ---- */
+.convbar { display: flex; align-items: center; gap: 18px; padding: 10px 24px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-muted); background: var(--bg); }
+.badge { color: var(--ok); background: var(--ok-soft); border: 1px solid var(--ok-border); border-radius: var(--pill); padding: 2px 10px; font-weight: 800; font-size: 12px; letter-spacing: .04em; }
+.spacer { flex: 1; }
+.links { display: flex; gap: 16px; white-space: nowrap; }
+.links .on { color: var(--accent); font-weight: 700; }
+
+/* Stepper delle fasi: stesso disegno di .conv-phases */
+.phases { display: flex; align-items: flex-start; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.phase { position: relative; display: flex; flex-direction: column; }
+.phase .row { display: flex; align-items: center; gap: 5px; height: 18px; }
+.phase + .phase { padding-left: 14px; background: linear-gradient(var(--border-strong),var(--border-strong)) no-repeat 0 9px/10px 1.5px; }
+.phase .row::before { content: ""; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--surface); flex: 0 0 auto; }
+.phase.done { color: var(--text-muted); }
+.phase.done .row::before { background: var(--ok); border-color: var(--ok); }
+.phase.current { color: var(--accent); font-weight: 800; }
+.phase.current .row::before { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ---- NUOVO: sotto-step delle storie, sotto "Sviluppo" ---- */
+.convbar.tall { align-items: flex-start; padding-bottom: 34px; }
+.convbar.tall > .badge, .convbar.tall > .links { margin-top: -2px; }
+.stories { position: absolute; top: 25px; left: 3px; display: flex; align-items: center; margin: 0; padding: 0; white-space: nowrap; list-style: none; font-weight: 600; font-size: 11px; }
+/* il gambo che scende dal pallino di Sviluppo */
+.stories::before { content: ""; position: absolute; left: 0; top: -9px; width: 1.5px; height: 9px; background: var(--border-strong); }
+.story { display: flex; align-items: center; gap: 4px; color: var(--text-dim); font-family: var(--font-mono); cursor: pointer; }
+.story + .story::before { content: ""; width: 10px; height: 1.5px; background: var(--border-strong); margin: 0 4px 0 2px; }
+.story .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--surface); flex: 0 0 auto; }
+.story.done { color: var(--text-muted); }
+.story.done .dot { background: var(--ok); border-color: var(--ok); }
+.story.active { color: var(--work); }
+.story.active .dot { background: var(--work); border-color: var(--work); box-shadow: 0 0 0 3px var(--work-soft); animation: pulse 1.6s ease-in-out infinite; }
+.story:hover { color: var(--text-strong); }
+@keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(127,203,212,.04); } }
+.now { margin-left: 12px; font-family: var(--font-sans); font-weight: 600; color: var(--text-muted); max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+.now b { color: var(--work); font-weight: 700; }
+.count { margin-left: 10px; color: var(--text-dim); font-family: var(--font-sans); }
+
+/* Variante B: segmenti */
+.segs { position: absolute; top: 26px; left: 0; display: flex; gap: 3px; margin: 0; list-style: none; padding: 0; font-size: 11px; }
+.seg { display: flex; flex-direction: column; gap: 3px; width: 64px; color: var(--text-dim); font-family: var(--font-mono); font-weight: 600; cursor: pointer; }
+.seg .bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.seg .bar i { display: block; height: 100%; background: var(--work); }
+.seg.done { color: var(--text-muted); }
+.seg.done .bar i { background: var(--ok); width: 100%; }
+.seg.active { color: var(--work); }
+
+/* Tooltip simulato */
+.tip { position: absolute; z-index: 2; top: 24px; left: 70px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 10px; padding: 8px 12px; font: 600 12.5px/1.4 var(--font-sans); color: var(--text); white-space: normal; width: 300px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.tip small { display: block; color: var(--work); font-weight: 700; letter-spacing: .04em; margin-bottom: 2px; }
+.tip span { display: block; color: var(--text-dim); font-weight: 400; margin-top: 4px; }
+
+/* ---- Timeline (fittizia) ---- */
+.timeline { height: 150px; padding: 16px 24px; background-image: radial-gradient(var(--bg-grid) 1px, transparent 1px); background-size: 14px 14px; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; }
+.msg { max-width: 760px; padding: 10px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 14.5px; }
+.msg .who { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--accent); margin-bottom: 2px; }
+
+/* ---- Composer ---- */
+.composer { padding: 8px 24px 14px; }
+.surface { border: 1.5px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); }
+.next { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 10px 0; }
+.next .label { font-size: 11px; font-weight: 800; letter-spacing: .1em; color: var(--text-dim); text-transform: uppercase; margin: 0 2px 0 6px; }
+.next .meta { font-size: 13px; color: var(--text-muted); margin-right: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--pill); padding: 5px 14px; font-size: 14px; font-weight: 600; border: 1.5px solid var(--border-strong); background: var(--surface); color: var(--text); }
+.chip.prompt { border-style: dashed; color: var(--text-muted); }
+.chip.gone { border-color: #8a4b4b; color: #c98a8a; text-decoration: line-through; opacity: .55; }
+.inputrow { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px 16px; }
+.inputrow .input { flex: 1; font-size: 15px; color: var(--text-dim); }
+.model { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; }
+.send { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: var(--pill); padding: 7px 18px; font-weight: 700; }
+
+.note { margin-top: 10px; max-width: 1180px; background: #2a2716; border: 1px solid #5b5326; border-radius: 10px; padding: 10px 14px; font-size: 12.5px; line-height: 1.5; color: #e6dcae; }
+.note ol { margin: 0; padding-left: 18px; }
+.narrow .convbar { padding: 8px 14px; padding-bottom: 34px; gap: 10px; flex-wrap: wrap; }
+.narrow .phase:not(.current) .row { font-size: 0; gap: 0; }
+.narrow .composer { padding: 8px 14px 12px; }
+</style></head>
+<body>
+<h1>Storie in sviluppo nella barra delle fasi</h1>
+<p class="lead">Oggi le storie in lavorazione sono chip «In lavorazione: US-00x · …» accanto al composer, mescolate ai prossimi passi. Proposta: mostrarle come sotto-step orizzontali sotto il pallino «Sviluppo», solo mentre la fase è corrente. Il composer torna a contenere soltanto azioni e prompt.</p>
+
+<!-- ============ A ============ -->
+<section class="case">
+<h2><small>A</small>Sotto-step a pallini sotto «Sviluppo» (consigliata)</h2>
+<p>La barra si alza di una riga solo in fase Sviluppo. Ogni storia è un pallino con il codice: verde = completata, ciano pulsante = in lavorazione ora, vuoto = da fare. A destra la storia corrente per esteso e il conteggio. Il titolo completo è nel tooltip; il click apre la storia nei Dettagli incremento (come fa oggi il chip).</p>
+<div class="frame">
+	<div class="convbar tall">
+		<span class="badge">APERTA</span>
+		<ol class="phases" aria-label="Fasi dell’incremento">
+			<li class="phase done"><span class="row">Definizione</span></li>
+			<li class="phase current" aria-current="step"><span class="row">Sviluppo</span>
+				<ol class="stories" aria-label="Storie dell’incremento">
+					<li class="story done" title="US-001 · Cliente e offerta suggeriti in modo plausibile, solo con confidenza alta — completata"><span class="dot"></span>US-001</li>
+					<li class="story active" title="US-002 · Esclusione degli impegni fuori sede e non lavorativi — in lavorazione"><span class="dot"></span>US-002</li>
+					<li class="story" title="US-003 · Pannello delle proposte chiuso con il numero di proposte — da fare"><span class="dot"></span>US-003</li>
+					<li class="story" title="US-004 · Diagnostica dell’associazione Gemini nei log del server — da fare"><span class="dot"></span>US-004</li>
+					<li class="now"><b>Ora:</b> Esclusione degli impegni fuori sede e non lavorativi</li>
+					<li class="count">· 1/4</li>
+				</ol>
+			</li>
+			<li class="phase"><span class="row">Preview</span></li>
+			<li class="phase"><span class="row">Preparazione</span></li>
+			<li class="phase"><span class="row">Rilascio</span></li>
+		</ol>
+		<span class="spacer"></span>
+		<span class="links"><span class="on">Dettagli incremento ›</span><span>Preview</span><span>Dettaglio tecnico</span><span>Archivia</span></span>
+	</div>
+	<div class="timeline"><div class="msg"><div class="who">AGENTE</div>US-001 completata e committata. Passo a US-002: escludo dagli slot gli impegni fuori sede e i giorni non lavorativi.</div></div>
+	<div class="composer"><div class="surface">
+		<div class="next"><span class="label">In sviluppo</span><span class="meta">Agente al lavoro</span><button class="chip">Riprendi lo sviluppo</button><button class="chip prompt">✎ A che punto sei?</button></div>
+		<div class="inputrow"><div class="input">Scrivi all’agente…</div><span class="model">Accesso completo ⌄</span><span class="model">Opus 5.5 · high ⌄</span><button class="send">Invia</button></div>
+	</div></div>
+</div>
+<div class="note"><ol>
+	<li>Il composer perde i quattro chip «In lavorazione» e anche «0/4 storie completate»: il progresso ora sta in alto.</li>
+	<li>Il sotto-step parte dal pallino di Sviluppo con un piccolo gambo, così si legge come figlio di quella fase.</li>
+	<li>«Ora: …» si tronca con ellissi; sotto i 900px sparisce e restano solo i pallini (vedi D).</li>
+</ol></div>
+</section>
+
+<!-- ============ A + tooltip ============ -->
+<section class="case">
+<h2><small>A′</small>Hover su una storia</h2>
+<p>Il tooltip dà titolo e stato senza aprire nulla. Il click porta alla storia nei Dettagli incremento.</p>
+<div class="frame">
+	<div class="convbar tall" style="position:relative">
+		<span class="badge">APERTA</span>
+		<ol class="phases">
+			<li class="phase done"><span class="row">Definizione</span></li>
+			<li class="phase current"><span class="row">Sviluppo</span>
+				<ol class="stories">
+					<li class="story done"><span class="dot"></span>US-001</li>
+					<li class="story done"><span class="dot"></span>US-002</li>
+					<li class="story active" style="color:var(--text-strong)"><span class="dot"></span>US-003</li>
+					<li class="story"><span class="dot"></span>US-004</li>
+					<li class="now"><b>Ora:</b> Pannello delle proposte chiuso con il numero di proposte</li>
+					<li class="count">· 2/4</li>
+				</ol>
+				<div class="tip" style="left:118px;top:46px"><small>US-003 · IN LAVORAZIONE</small>Pannello delle proposte chiuso con il numero di proposte<span>Clic per aprirla nei Dettagli incremento</span></div>
+			</li>
+			<li class="phase"><span class="row">Preview</span></li>
+			<li class="phase"><span class="row">Preparazione</span></li>
+			<li class="phase"><span class="row">Rilascio</span></li>
+		</ol>
+		<span class="spacer"></span>
+		<span class="links"><span class="on">Dettagli incremento ›</span><span>Preview</span><span>Dettaglio tecnico</span><span>Archivia</span></span>
+	</div>
+	<div class="timeline" style="height:110px"></div>
+</div>
+</section>
+
+<!-- ============ B ============ -->
+<section class="case">
+<h2><small>B</small>Alternativa: segmenti con avanzamento dei task</h2>
+<p>Stessa posizione, ma ogni storia è un segmento che si riempie con i task completati. Dice di più (US-002 è a metà), al prezzo di una barra più larga e di un dato in più da esporre dal server.</p>
+<div class="frame">
+	<div class="convbar tall">
+		<span class="badge">APERTA</span>
+		<ol class="phases">
+			<li class="phase done"><span class="row">Definizione</span></li>
+			<li class="phase current"><span class="row">Sviluppo</span>
+				<ol class="segs">
+					<li class="seg done"><span class="bar"><i></i></span>US-001</li>
+					<li class="seg active"><span class="bar"><i style="width:50%"></i></span>US-002</li>
+					<li class="seg"><span class="bar"><i style="width:0"></i></span>US-003</li>
+					<li class="seg"><span class="bar"><i style="width:0"></i></span>US-004</li>
+				</ol>
+			</li>
+			<li class="phase"><span class="row">Preview</span></li>
+			<li class="phase"><span class="row">Preparazione</span></li>
+			<li class="phase"><span class="row">Rilascio</span></li>
+		</ol>
+		<span class="spacer"></span>
+		<span class="links"><span class="on">Dettagli incremento ›</span><span>Preview</span><span>Dettaglio tecnico</span><span>Archivia</span></span>
+	</div>
+	<div class="timeline" style="height:110px"></div>
+</div>
+</section>
+
+<!-- ============ C ============ -->
+<section class="case">
+<h2><small>C</small>Sviluppo finito</h2>
+<p>Quando tutte le storie sono completate la fase Sviluppo diventa verde, i sotto-step spariscono e la barra torna alta una riga.</p>
+<div class="frame">
+	<div class="convbar">
+		<span class="badge">APERTA</span>
+		<ol class="phases">
+			<li class="phase done"><span class="row">Definizione</span></li>
+			<li class="phase done"><span class="row">Sviluppo</span></li>
+			<li class="phase current"><span class="row">Preview</span></li>
+			<li class="phase"><span class="row">Preparazione</span></li>
+			<li class="phase"><span class="row">Rilascio</span></li>
+		</ol>
+		<span class="spacer"></span>
+		<span class="links"><span>Dettagli incremento ›</span><span class="on">Preview</span><span>Dettaglio tecnico</span><span>Archivia</span></span>
+	</div>
+	<div class="timeline" style="height:110px"><div class="msg"><div class="who">AGENTE</div>Le quattro storie sono pronte. Apri l’anteprima e dimmi se va bene.</div></div>
+</div>
+</section>
+
+<!-- ============ D ============ -->
+<section class="case">
+<h2><small>D</small>Viewport stretto (390px)</h2>
+<p>Come oggi le fasi non correnti perdono l’etichetta; i sotto-step restano come soli pallini, con il codice della storia corrente e il conteggio.</p>
+<div class="frame narrow">
+	<div class="convbar tall">
+		<span class="badge">APERTA</span>
+		<ol class="phases">
+			<li class="phase done"><span class="row">Definizione</span></li>
+			<li class="phase current"><span class="row">Sviluppo</span>
+				<ol class="stories">
+					<li class="story done"><span class="dot"></span></li>
+					<li class="story active"><span class="dot"></span>US-002</li>
+					<li class="story"><span class="dot"></span></li>
+					<li class="story"><span class="dot"></span></li>
+					<li class="count">· 1/4</li>
+				</ol>
+			</li>
+			<li class="phase"><span class="row">Preview</span></li>
+			<li class="phase"><span class="row">Preparazione</span></li>
+			<li class="phase"><span class="row">Rilascio</span></li>
+		</ol>
+	</div>
+	<div class="timeline" style="height:90px"></div>
+	<div class="composer"><div class="surface">
+		<div class="next"><span class="label">In sviluppo</span><button class="chip">Riprendi lo sviluppo</button><button class="chip prompt">✎ A che punto sei?</button></div>
+		<div class="inputrow"><div class="input">Scrivi all’agente…</div><button class="send">Invia</button></div>
+	</div></div>
+</div>
+</section>
+
+<div class="note" style="max-width:900px"><b>Da decidere prima di implementare</b><ol>
+	<li>Cosa vuol dire «completata» durante lo sviluppo. Oggi tutte le storie sono IN PROGRESS dall’approvazione dell’intento e diventano DONE solo dopo il merge: per questo lo screenshot mostra 4 «In lavorazione» e 0/4. Propongo: completata = tutti i task DONE; in lavorazione = almeno un task DONE o IN PROGRESS e non tutti; da fare = nessun task iniziato. Il server lo calcola e lo espone per storia; il frontend disegna e basta.</li>
+	<li>Una sola storia «ora» per volta: la prima non completata con lavoro iniziato.</li>
+</ol></div>
+</body></html>

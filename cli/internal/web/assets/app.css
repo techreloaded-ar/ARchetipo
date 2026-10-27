@@ -40,14 +40,33 @@
 .conv-phase.is-done::before{background:var(--ok);border-color:var(--ok)}
 .conv-phase.is-current{color:var(--accent);font-weight:800}
 .conv-phase.is-current::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+/* Le storie dell'incremento sotto la fase corrente: la testata si alza di una
+   riga solo mentre il server le manda. */
+.conv-phases.has-stories{padding-bottom:22px}
+.conv-phase:has(.conv-phase-stories){position:relative}
+.conv-phase-stories{position:absolute;left:0;top:calc(100% + 6px);display:flex;align-items:center;margin:0;padding:0;list-style:none;font-weight:600;font-size:11px;color:var(--text-dim)}
+.conv-phase+.conv-phase>.conv-phase-stories{left:14px}
+.conv-phase-stories::before{content:"";position:absolute;left:4px;top:-6px;width:1.5px;height:5px;background:var(--border-strong)}
+.conv-phase-stories>li{display:flex;align-items:center}
+.conv-phase-stories>li+li:not(.conv-phase-stories-focus):not(.conv-phase-stories-note)::before{content:"";width:10px;height:1.5px;margin:0 4px 0 2px;background:var(--border-strong)}
+.conv-phase-story{display:flex;align-items:center;gap:4px;padding:0;border:0;background:none;font:inherit;font-family:var(--font-mono);color:var(--text-dim);cursor:pointer}
+.conv-phase-story::before{content:"";flex:0 0 auto;width:7px;height:7px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--border-strong);background:var(--surface)}
+.conv-phase-story:hover,.conv-phase-story:focus-visible{color:var(--text-strong)}
+.conv-phase-story.is-done{color:var(--text-muted)}
+.conv-phase-story.is-done::before{background:var(--ok);border-color:var(--ok)}
+.conv-phase-story.is-current{color:var(--work)}
+.conv-phase-story.is-current::before{background:var(--work);border-color:var(--work);box-shadow:0 0 0 3px var(--work-soft);animation:conv-story-pulse 1.6s ease-in-out infinite}
+@keyframes conv-story-pulse{50%{box-shadow:0 0 0 5px transparent}}
+@media (prefers-reduced-motion:reduce){.conv-phase-story.is-current::before{animation:none}}
+.conv-phase-stories-focus{margin-left:12px;max-width:240px;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)}
+.conv-phase-stories-note{margin-left:8px}
 .conv-details-link{color:var(--accent);font-weight:700}
 /* Su un telefono la riga dei passi resta una: scorre in orizzontale invece di
    andare a capo e togliere spazio alla conversazione. I dettagli si aprono dal
    bottone del pannello di lavoro, che sulla testata c'è già. */
 @media (max-width:600px){.conv-next{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}.conv-next>*{flex:0 0 auto}.conv-next-note,.conv-head .conv-details-link{display:none}}
-@media (max-width:900px){.conv-phase:not(.is-current){font-size:0;gap:0}.conv-phase+.conv-phase{padding-left:16px}.conv-composer-surface>.conv-composer-input{flex-basis:100%}.conv-composer-surface>.conv-composer-row{flex-basis:100%}}
+@media (max-width:900px){.conv-phase+.conv-phase>.conv-phase-stories{left:16px}.conv-phase-story:not(.is-current){font-size:0;gap:0}.conv-phase-stories-focus{display:none}.conv-phase:not(.is-current){font-size:0;gap:0}.conv-phase+.conv-phase{padding-left:16px}.conv-composer-surface>.conv-composer-input{flex-basis:100%}.conv-composer-surface>.conv-composer-row{flex-basis:100%}}
 .conv-increment-phase{font-size:12px;color:var(--accent);font-weight:700}
-.conv-increment-active{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .conv-increment-panel details{margin:10px 0}
 .conv-increment-panel summary{cursor:pointer;font-size:14px;font-weight:700;color:var(--accent);overflow-wrap:anywhere}

@@ -53,6 +53,24 @@ func (s *Service) Stories(ctx context.Context, r Record) ([]domain.Spec, error) 
 	return local.FetchBacklogItems(ctx, "")
 }
 
+// StoryTasks reads the sandbox tasks of each story; a story without a plan has
+// none. The view derives development progress from them.
+func (s *Service) StoryTasks(ctx context.Context, r Record, codes []string) (map[string][]domain.Task, error) {
+	local, err := s.local(r)
+	if err != nil {
+		return nil, err
+	}
+	tasks := map[string][]domain.Task{}
+	for _, code := range codes {
+		list, readErr := local.ReadSpecTasks(ctx, code)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return nil, readErr
+		}
+		tasks[code] = list
+	}
+	return tasks, nil
+}
+
 func frozen(r Record) bool {
 	return r.Status == Publishing || r.Status == Proposed || r.Status == Delivered
 }

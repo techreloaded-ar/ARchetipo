@@ -106,7 +106,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if err := json.Unmarshal(draftResponse.Body.Bytes(), &draft); err != nil {
 		t.Fatal(err)
 	}
-	if len(draft.Stories) != 1 || draft.Stories[0].StatusLabel != "Da approvare" || draft.Stories[0].Active || draft.ProgressLabel != "" {
+	if len(draft.Stories) != 1 || draft.Stories[0].StatusLabel != "Da approvare" || draft.Stories[0].Active || draft.Phases[0].Stories != nil {
 		t.Fatalf("unapproved intent acquired sandbox progress: %s", draftResponse.Body.String())
 	}
 	// The proposal waits on the person: the phases say where, and the next steps
@@ -145,32 +145,59 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, step := range []struct {
-		column   string
-		active   bool
-		progress string
-	}{
-		{"in_progress", true, "0/1 storie completate"},
-		{"done", false, "1/1 storie completate"},
-	} {
-		if _, err = local.MoveBoardCard(context.Background(), "US-001", step.column, domain.ReorderAnchor{}); err != nil {
-			t.Fatal(err)
-		}
+	project := func() incrementView {
+		t.Helper()
 		response := doJSON(t, srv, "GET", "/api/increments/"+r.ID, nil)
 		var projected incrementView
 		if err = json.Unmarshal(response.Body.Bytes(), &projected); err != nil {
 			t.Fatal(err)
 		}
-		if len(projected.Stories) != 1 || projected.Stories[0].Active != step.active || projected.ProgressLabel != step.progress || projected.Revisions[0].Stories[0].Status != domain.StatusTodo {
+		if len(projected.Stories) != 1 || projected.Revisions[0].Stories[0].Status != domain.StatusTodo {
 			t.Fatalf("wrong sandbox projection: %s", response.Body.String())
 		}
+		return projected
 	}
+	// Under the current development phase each story says whether it is done,
+	// being worked on or still to do; the composer no longer lists them.
+	expectProgress := func(projected incrementView, state, note string) {
+		t.Helper()
+		phase := projected.Phases[1]
+		if phase.State != "current" || len(phase.Stories) != 1 || phase.Stories[0].Code != "US-001" || phase.Stories[0].State != state || phase.StoriesNote != note || projected.Stories[0].Active != (state == "current") {
+			t.Fatalf("wrong development progress, want %s %s: %+v", state, note, projected.Phases)
+		}
+		for _, step := range projected.NextSteps {
+			if step.Open == "story" {
+				t.Fatalf("story still offered beside the composer: %+v", projected.NextSteps)
+			}
+		}
+	}
+	if _, err = local.MoveBoardCard(context.Background(), "US-001", "in_progress", domain.ReorderAnchor{}); err != nil {
+		t.Fatal(err)
+	}
+	expectProgress(project(), "current", "0/1")
+	// With a plan the tasks decide, whatever the story status says.
+	if _, err = local.SavePlan(context.Background(), "US-001", domain.PlanInput{PlanBody: "Piano", Tasks: []domain.Task{{ID: "TASK-01", Title: "Uno", Type: domain.TaskImpl, Status: domain.StatusTodo}, {ID: "TASK-02", Title: "Due", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
+		t.Fatal(err)
+	}
+	expectProgress(project(), "todo", "0/1")
+	if _, err = local.CompleteTask(context.Background(), "US-001", "TASK-01"); err != nil {
+		t.Fatal(err)
+	}
+	working := project()
+	expectProgress(working, "current", "0/1")
+	if working.Phases[1].StoriesFocus != "Ora: "+working.Stories[0].Title {
+		t.Fatalf("the story being worked on is not named: %q", working.Phases[1].StoriesFocus)
+	}
+	if _, err = local.CompleteTask(context.Background(), "US-001", "TASK-02"); err != nil {
+		t.Fatal(err)
+	}
+	expectProgress(project(), "done", "1/1")
 	// An old record with no readable sandbox still exposes the original
 	// stories and result; it does not invent completion or activity.
 	current.Workdir = t.TempDir()
 	current.Result = &increment.Result{Summary: "Risultato precedente"}
 	fallback := srv.incrementView(context.Background(), srv.session(), current)
-	if len(fallback.Stories) != 1 || fallback.Stories[0].Active || fallback.ProgressLabel != "" || fallback.Stories[0].Body != proposal.Stories[0].Body || fallback.Result.Summary != "Risultato precedente" {
+	if len(fallback.Stories) != 1 || fallback.Stories[0].Active || fallback.Stories[0].Progress != "" || fallback.Stories[0].Body != proposal.Stories[0].Body || fallback.Result.Summary != "Risultato precedente" {
 		t.Fatalf("legacy content lost or progress invented: %+v", fallback)
 	}
 	untouched, err := conn.FetchBacklogItems(context.Background(), "")

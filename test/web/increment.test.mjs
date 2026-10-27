@@ -56,11 +56,13 @@ test("il renderer non contiene gli stati o i comandi del processo", () => {
 });
 
 test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
- const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",next_steps_label:"Etichetta passi",next_steps_note:"Agente al lavoro · 1/2 storie completate",phases:[{label:"Uno",state:"done"},{label:"Due",state:"current"},{label:"Tre",state:"todo"}],next_steps:[{kind:"open",open:"story",target:"US-002",label:"In lavorazione: US-002 · Filtro"}],revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
+ const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",next_steps_label:"Etichetta passi",next_steps_note:"Agente al lavoro",phases:[{label:"Uno",state:"done"},{label:"Due",state:"current",stories:[{code:"US-001",title:"Base",state:"done",state_label:"completata"},{code:"US-002",title:"Filtro",state:"current",state_label:"in lavorazione"}],stories_note:"1/2",stories_focus:"Ora: Filtro"},{label:"Tre",state:"todo"}],next_steps:[{kind:"prompt",label:"A che punto sei?",prompt:"A che punto sei?"}],revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
  const compact = renderConversation(view,"bozza",{});
- assert.match(compact,/class="conv-phases"[\s\S]*is-done[^>]*>Uno[\s\S]*aria-current="step">Due[\s\S]*is-todo[^>]*>Tre/);
+ assert.match(compact,/class="conv-phases[^"]*"[\s\S]*is-done[^>]*>Uno[\s\S]*aria-current="step">Due<ol class="conv-phase-stories"[\s\S]*is-done" data-increment-story="US-001"[\s\S]*is-current" data-increment-story="US-002" title="US-002 · Filtro — in lavorazione"[\s\S]*Ora: Filtro[\s\S]*1\/2<\/li><\/ol><\/li>[\s\S]*is-todo[^>]*>Tre/);
+ assert.match(compact,/class="conv-phases has-stories"/);
  assert.match(compact,/data-increment-panel="open"/);
- assert.match(compact,/<form class="conv-composer">[\s\S]*class="conv-increment conv-next"[\s\S]*Etichetta passi[\s\S]*1\/2 storie completate[\s\S]*data-increment-story="US-002"[\s\S]*conv-composer-input/);
+ assert.match(compact,/<form class="conv-composer">[\s\S]*class="conv-increment conv-next"[\s\S]*Etichetta passi[\s\S]*Agente al lavoro[\s\S]*conv-composer-input/);
+ assert.doesNotMatch(compact.slice(compact.indexOf('<form class="conv-composer">')),/data-increment-story/);
  assert.doesNotMatch(compact,/Fase fornita|Risultato molto lungo|Criteri completi|<aside id="increment-details"|class="conv-dir"/);
  const open = renderConversation(view,"bozza",{incrementSections:{"panel-compact":true,"current-story-US-002":true}});
  assert.match(open,/has-increment-open/);
