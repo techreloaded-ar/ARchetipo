@@ -29,7 +29,7 @@
   splitter.setAttribute("aria-valuenow",String(width));
   splitter.setAttribute("aria-valuemax",String(Math.max(300,primary.clientWidth-300)));
  }
- function remember(){if(key)states.set(key,{selected,opened,expanded});}
+ function remember(){if(key){const state={selected,opened,expanded};states.set(key,state);try{sessionStorage.setItem("archetipo.panel:"+key,JSON.stringify(state));}catch{}}}
  const expandButton=inspector.querySelector("[data-inspector-expand]");
  const shortcut=/Mac|iPhone|iPad/.test(navigator.platform)?"⌘⌥B":"Ctrl+Alt+B";
  function syncControls(){
@@ -78,7 +78,7 @@
  }
  window.WorkspacePanels={
   configure(value){
-   if(key!==value.key){remember();key=value.key||"";const state=states.get(key);selected=state?.selected||"preview";opened=state?.opened ?? value.openPreview===true;expanded=state?.expanded||false;}
+   if(key!==value.key){remember();key=value.key||"";let state=states.get(key);if(!state){try{state=JSON.parse(sessionStorage.getItem("archetipo.panel:"+key)||"null");}catch{}}selected=state?.selected||"preview";opened=state?.opened ?? value.openPreview===true;expanded=state?.expanded||false;}
    hasDetails=value.hasDetails===true;detailsLabel=value.detailsLabel||"Storie";
    if(!hasDetails&&selected==="details")selected="preview";
    if(!key)opened=false;

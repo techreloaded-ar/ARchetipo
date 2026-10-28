@@ -58,6 +58,7 @@ type conversationEntryView struct {
 // nil: a workspace nobody has talked to yet answers with an empty array, so the
 // rail reads "there are none" from the list itself and never from a missing key.
 type conversationsView struct {
+	WorkspaceRoot string                  `json:"workspace_root"`
 	Conversations []conversationEntryView `json:"conversations"`
 	HasMoreClosed bool                    `json:"has_more_closed"`
 	ClosedLimit   int                     `json:"closed_limit"`
@@ -226,7 +227,7 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 		views = append(views, conversationEntryOf(record, live, running))
 	}
 	openability := s.conversationOpenabilityOf(ctx, ws)
-	writeJSON(w, http.StatusOK, conversationsView{
+	writeJSON(w, http.StatusOK, conversationsView{WorkspaceRoot: ws.cfg.ProjectRoot,
 		Conversations:     views,
 		HasMoreClosed:     hasMoreClosed,
 		ClosedLimit:       closedLimit,

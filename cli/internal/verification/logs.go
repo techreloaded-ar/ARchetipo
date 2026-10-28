@@ -23,7 +23,20 @@ func (s *Service) Logs(result Result, limit int) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if !strings.HasPrefix(filepath.ToSlash(rel), ".archetipo/environment/runs/") {
+		allowed := strings.HasPrefix(filepath.ToSlash(rel), ".archetipo/environment/runs/")
+		if !allowed && strings.HasPrefix(result.Operation, "check:") && s.Results != "" {
+			results := s.Results
+			if !filepath.IsAbs(results) {
+				results = filepath.Join(s.Root, results)
+			}
+			resultsRel, resultsErr := filepath.Rel(s.Root, results)
+			if resultsErr == nil {
+				if _, pathErr := localPath(s.Root, filepath.ToSlash(resultsRel)); pathErr == nil {
+					allowed = strings.HasPrefix(filepath.ToSlash(rel), filepath.ToSlash(resultsRel)+"/")
+				}
+			}
+		}
+		if !allowed {
 			return "", invalid("environment log is outside this checkout's reports")
 		}
 		path, err := localPath(s.Root, filepath.ToSlash(rel))

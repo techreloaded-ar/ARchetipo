@@ -5452,6 +5452,7 @@
 
 	let conversationView = null; // last read of GET /api/workspace/conversation
 	let conversationAfterID = 0; // highest event id already rendered — the only cursor
+	let conversationReportsCache = null;
 	let conversationEvents = []; // timeline, appended to and never rebuilt
 	let conversationDraft = ""; // composer text, preserved across re-renders
 	// Il messaggio consegnato all'agente e non ancora tornato indietro come
@@ -5766,6 +5767,7 @@
 				if (incrementStory) target?.scrollIntoView({block:"nearest"});
 				return;
 			}
+   if (e.target.closest("[data-workspace-preview]")) { window.BrowserPreview?.start(); return; }
 			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
             if (e.target.closest("[data-increment-export]") && conversationView?.increment) {
                 const id = conversationView.increment.id;
@@ -6882,8 +6884,9 @@
 	function prepareConversationOpen(specCode) {
 		if (conversationBusy) return;
 		stopConversationPolling();
-		conversationsCurrentId = "";
-		conversationView = null;
+  try{if(conversationsIndex?.workspace_root)sessionStorage.removeItem("archetipo.last-chat:"+conversationsIndex.workspace_root);}catch{}
+  conversationsCurrentId = "";
+  conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
 		conversationPendingMessage = "";
@@ -6970,8 +6973,9 @@
 			// would draw one conversation under the name of another.
 			if (conversationsCurrentId !== id) return;
 		}
-		applyConversationView(view);
-		if (view && view.session) loadConversationModelChoice(id);
+  applyConversationView(view);
+  try{if(conversationsIndex?.workspace_root && view?.conversation?.id===id)sessionStorage.setItem("archetipo.last-chat:"+conversationsIndex.workspace_root,id);}catch{}
+  if (view && view.session) loadConversationModelChoice(id);
 		renderConversationPanel();
 		renderConversationsRail();
 		if (conversationIsActive()) startConversationPolling();
@@ -7323,7 +7327,14 @@
 		resetConversationState();
 		await loadConversationsIndex();
 		const live = liveConversationEntries();
-		const first = live.length ? live[0].id || "" : "";
+  let remembered="";
+  try{remembered=sessionStorage.getItem("archetipo.last-chat:"+conversationsIndex?.workspace_root)||"";}catch{}
+  if(remembered){
+   await switchToConversation(remembered);
+   if(conversationView?.conversation?.id===remembered)return;
+   try{sessionStorage.removeItem("archetipo.last-chat:"+conversationsIndex?.workspace_root);}catch{}
+  }
+  const first = live.length ? live[0].id || "" : "";
 		if (!first) {
 			// A viewer that cannot answer, or a workspace holding nothing alive:
 			// either way the panel draws the home of a workspace with no
@@ -7790,10 +7801,52 @@
 	// It never fetches and never derives a state the server did not report, and
 	// it preserves the two things a re-render would otherwise steal: the text
 	// being typed and the reading position in the timeline.
+	// The server names permitted report links; the browser never turns a local
+	// filesystem path into a request. Cache by journal cursor, including reload.
+	async function bindConversationReports(view) {
+		const id = view?.conversation?.id;
+		if (!id) return;
+		const anchors = Array.from(conversationEl.querySelectorAll(".conv-event-markdown a[href]"));
+		const local = anchors.filter(anchor => {
+			const href = anchor.getAttribute("href");
+			return href && !href.startsWith("#") && (!/^[a-z][a-z0-9+.-]*:/i.test(href) || /^file:/i.test(href) || anchor.origin === location.origin);
+		});
+		if (!local.length) return;
+		for (const anchor of local) {
+			anchor.dataset.reportHref = anchor.getAttribute("href");
+			anchor.removeAttribute("href");
+			anchor.title = "Collegamento locale non disponibile";
+		}
+		const key = `${id}:${view.last_id || 0}`;
+		if (conversationReportsCache?.key !== key) {
+			conversationReportsCache = {key, promise: apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/reports`)};
+		}
+		try {
+			const links = await conversationReportsCache.promise;
+			for (const anchor of local) {
+				const link = links.find(item => item.href === anchor.dataset.reportHref);
+				if (!link) continue;
+				if (!link.available) {
+					anchor.title = "Report non più disponibile";
+					anchor.append(" · Report non più disponibile");
+					continue;
+				}
+				anchor.href = link.url;
+				anchor.target = "_blank";
+				anchor.rel = "noopener noreferrer";
+				anchor.title = "Apri report";
+			}
+		} catch (_) {
+			conversationReportsCache = null;
+			for (const anchor of local) anchor.append(" · Report non disponibile");
+		}
+	}
+
 	function renderConversationPanel() {
-		const currentConversation = conversationView?.conversation;
-		window.WorkspacePanels?.configure({
-			key: currentConversation ? currentConversation.working_dir + ":" + currentConversation.id : "",
+  const currentConversation = conversationView?.conversation;
+  const previewTarget = currentConversation ? {id: currentConversation.id, root: currentConversation.working_dir, scope:"conversation", writable: conversationIsActive() && !conversationBusy, commentable:conversationIsActive() && !conversationBusy, compact: !!conversationView?.increment?.development_mode, autoStart: conversationView?.increment?.preview_auto_start === true, candidate: (conversationView?.increment?.ready_sha || "") + ":" + (conversationView?.session?.current_turn?.id || "")} : conversationActivitiesView?.workspace_preview?.target || null;
+  window.WorkspacePanels?.configure({
+			key: previewTarget ? previewTarget.root + ":" + previewTarget.id : "",
 			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
 			detailsLabel: conversationView?.increment ? "Specifica e verifiche" : "Storie",
 			openPreview: !!conversationView?.increment?.development_mode,
@@ -7802,7 +7855,7 @@
 			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
 			else conversationProposalsOpen = true;
 		}
-		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsActive() && !conversationBusy, compact: !!conversationView?.increment?.development_mode, autoStart: conversationView?.increment?.preview_auto_start === true, candidate: (conversationView?.increment?.ready_sha || "") + ":" + (conversationView?.session?.current_turn?.id || "")} : null);
+		window.BrowserPreview?.select(previewTarget);
 		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
 		if (newConversation) {
 			newConversation.disabled = conversationBusy;
@@ -7926,6 +7979,8 @@
 						: null,
 			},
 		);
+
+		void bindConversationReports(view);
 
 		// Delivery details share the work panel with the persistent preview.
 		// Move only these nodes; the discussion keeps its original render path.

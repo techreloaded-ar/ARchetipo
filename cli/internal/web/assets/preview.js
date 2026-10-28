@@ -25,7 +25,27 @@
   if(Number.isFinite(action.height))state.height=action.height;
   return state;
  }
- const api={commentMessage,cleanElement,panelLimits,panelHeight,panelState};
+
+ const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+ function renderAttention(value) {
+  if(!value)return "";
+  let body=`<h3>${esc(value.title)}</h3>${value.message?`<p class="environment-message">${esc(value.message)}</p>`:""}`;
+  for(const approval of value.approvals||[]) {
+   body+=`<section><p>${esc(approval.title)}</p><details><summary>Dettagli del comando</summary><pre>${esc(JSON.stringify(approval.args||{},null,2))}</pre></details><div class="environment-actions">${(approval.options||[]).map(option=>`<button type="button" data-environment-approval="${esc(approval.id)}" data-option="${esc(option.id)}" title="${esc(option.description||"")}">${esc(option.label)}</button>`).join("")}</div></section>`;
+  }
+  for(const input of value.inputs||[]) {
+   if(!input.questions?.length){body+='<p>Apri la chat ambiente per rispondere a questa richiesta.</p>';continue;}
+   body+=`<form data-environment-input="${esc(input.id)}"><strong>${esc(input.title||"")}</strong>${input.questions.map((q,index)=>`<fieldset data-question="${esc(q.id)}"><legend>${esc(q.header||"")}</legend><p>${esc(q.prompt)}</p>${(q.options||[]).map(o=>`<label><input type="${q.multiple?"checkbox":"radio"}" name="q-${index}" value="${esc(o.value)}"><span>${esc(o.label)}${o.description?`<small>${esc(o.description)}</small>`:""}</span></label>`).join("")}${q.allow_text?`<label>La tua risposta<input data-answer-text type="${q.secret?"password":"text"}" autocomplete="off"></label>`:""}</fieldset>`).join("")}<button type="submit">Invia risposta</button></form>`;
+  }
+  if(value.kind==="message")body+='<form data-environment-message><label>Rispondi all’agente<textarea required rows="3" data-environment-answer></textarea></label><button type="submit">Invia risposta</button></form>';
+  if(value.conversation_id)body+='<button type="button" data-environment-chat>Apri chat ambiente</button>';
+  return body;
+ }
+ function renderChecks(value) {
+  const rows=(value.checks||[]).map(check=>`<li><strong>${esc(check.name)}</strong> · ${esc(check.label)}${check.report?`<button type="button" data-environment-log="${esc(check.name)}">Leggi report</button>`:""}</li>`).join("");
+  return `<p>${esc(value.checks_label||"")}</p>${value.checks_error?`<p>${esc(value.checks_error)}</p>`:""}<ul>${rows}</ul>${value.environment?.previous_error?`<details><summary>Errore di un tentativo precedente</summary><p>${esc(value.environment.previous_error)}</p></details>`:""}${value.environment?.conversation_id?'<button type="button" data-environment-chat>Apri chat ambiente</button>':""}<pre class="environment-report" hidden></pre>`;
+ }
+ const api={renderAttention,renderChecks,commentMessage,cleanElement,panelLimits,panelHeight,panelState};
  if(typeof module!=="undefined" && module.exports) module.exports=api;
  else root.Preview=api;
 })(typeof window!=="undefined"?window:globalThis);

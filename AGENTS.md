@@ -387,3 +387,16 @@ retain the original preparation logs and stay under ignored test/workspaces/.
 New technical sessions discover the project through archetipo-environment and
 publish qualified candidates; setup repeatability does not replace product checks
 or prove preservation of application data.
+
+
+The preview smoke also starts directly from the empty work home, with no product
+conversation. It verifies workspace preview routes, native technical setup,
+branch/directory identity on desktop and 390px, qualified publication and reuse
+without remounting the live iframe. Server tests cover real Git worktrees,
+changing branches, detached HEAD and workspace-scoped route isolation.
+
+The preview smoke answers native approvals, structured inputs and ordinary technical
+questions directly in Preview, then reopens the technical history and verifies it
+survives reload with the same identity. The harness benchmark also inspects a failed
+check through `environment checks` without changing its evidence. Check observation
+is read-only and does not replace the product readiness/publication evidence gate.

@@ -1208,6 +1208,11 @@
 
 	// Presentazione pura del catalogo di attività fornito dal server. Il modulo
 	// non interpreta identificatori, stati, skill o regole del processo.
+ function renderWorkspacePreviewEntry(entry) {
+  if(!entry || !textAt(entry,"label"))return "";
+  return `<div class="conv-work-preview"><button type="button" class="ghost-btn" data-workspace-preview>${escapeHtml(textAt(entry,"label"))}</button><div><strong>${escapeHtml(textAt(objectAt(entry,"context"),"label"))}</strong><p>${escapeHtml(textAt(entry,"description"))}</p></div></div>`;
+ }
+
 	function renderActivities(view, ui) {
 		const items = arrayAt(view, "items").filter((item) => item && textAt(item, "id") && item.primary === true);
 		if (!items.length) return "";
@@ -1630,7 +1635,7 @@
 				${renderHead(value, TEXT.badgeNotOffered, "conv-off")}
 				${dismissed["not-offered"] === true ? "" : renderNotice("refused", TEXT.markNotOffered, refusal, "not-offered")}
 				${local.openingSpecCode ? `<p class="conv-empty-context">${escapeHtml(TEXT.openingSpec(String(local.openingSpecCode)))}</p>` : ""}
-				${!local.openingSpecCode ? renderActivities(objectAt(local, "activities"), local) : ""}
+				${!local.openingSpecCode ? renderWorkspacePreviewEntry(objectAt(objectAt(local,"activities"),"workspace_preview")) + renderActivities(objectAt(local, "activities"), local) : ""}
 			</section>`;
 		}
 
@@ -1646,6 +1651,7 @@
 					${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}
 					${!enabled ? `<p role="status">${escapeHtml(textAt(startWork, "unavailable_reason"))}</p>` : ""}
 					${renderComposer(false, typed, Object.assign({}, local, {writable: enabled, activitySelection: {placeholder: startWork.placeholder}}), enabled, false, renderConversationModelChoice(value, local, false))}
+     ${renderWorkspacePreviewEntry(objectAt(objectAt(local,"activities"),"workspace_preview"))}
 					<details class="conv-work-other"><summary>Conversazione e altre attività</summary>${renderActivities(objectAt(local, "activities"), local)}</details>
 				</section>`;
 			}

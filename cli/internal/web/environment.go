@@ -21,6 +21,7 @@ import (
 )
 
 type environmentOperation struct {
+	PreviousError  string               `json:"previous_error,omitempty"`
 	State          string               `json:"state"`
 	Error          string               `json:"error,omitempty"`
 	Log            string               `json:"log,omitempty"`

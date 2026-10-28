@@ -106,7 +106,12 @@ synthetic resources. Do not copy resource journals, checkpoints or secrets.
    the actual product: applicable compilation/static checks, tests and meaningful
    runtime/persistence/integration checks. Explain absent coverage. Setup
    qualification does not certify the product; all declared checks remain required
-   for a product candidate. Existing product failures remain visible and must not
+   for a product candidate. Check-specific runtime modes must follow the actual runner contract. Do not
+   leak the preview's development mode, credentials or live endpoints into test
+   commands. Validate the test runner's effective mode and mock configuration;
+   isolate external side effects using explicit local doubles or owned services.
+   A setup mistake in the test launcher is not a product defect.
+   Existing product failures remain visible and must not
    cause an endless rewrite of a working recipe.
 
 `during_preview: true` promises no dependency changes, shared build-output writes

@@ -20,6 +20,17 @@ test('unavailable work entry preserves the draft and explains the refusal',()=>{
  assert.match(html,/<textarea[^>]*disabled>Keep this/);
 });
 
+test('home preview entry uses server labels and escapes checkout metadata',()=>{
+ const activities={start_work:{runnable:true},workspace_preview:{label:'Apri <app>',description:'Checkout <attuale>',context:{label:'Worktree · feature/<x>'}},items:[]};
+ const html=renderConversation({available:true},'Bozza preservata',{activities});
+ assert.match(html,/data-workspace-preview/);
+ assert.match(html,/Apri &lt;app&gt;/);
+ assert.match(html,/feature\/&lt;x&gt;/);
+ assert.match(html,/>Bozza preservata<\/textarea>/);
+ const offline=renderConversation({available:false},'',{activities});
+ assert.match(offline,/data-workspace-preview/,'preview remains available independently of agent conversations');
+});
+
 test('product details show specification and learning without synthetic stories or approval',()=>{
  const html=renderConversation({available:true,conversation:{id:'c',state:'ACTIVE'},increment:{id:'work',development_mode:'continuous',title:'Booking',status_label:'Da provare',stories:[],revisions:[{number:1,intent:'Problema e comportamento',stories:[],approved:false}],learning:[{observation:'Osservazione <reale>',decision:'Semplificare'}],actions:[]}},'',{incrementSections:{'panel-work':true}});
  assert.match(html,/Specifica/);

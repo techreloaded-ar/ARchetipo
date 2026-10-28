@@ -181,3 +181,45 @@ La skill sceglie prove specifiche per installazione pulita in risorse dedicate,
 conservazione delle fixture e stop/ripresa. I check prodotto restano distinti e
 obbligatori per la readiness del candidato; non si indeboliscono per pubblicare
 una ricetta. I permessi restano quelli dell'harness, senza escalation automatica.
+
+
+### Preview prima di un nuovo lavoro
+
+La schermata iniziale offre «Apri l’app attuale» senza creare una conversazione
+prodotto o un incremento. Le route `/api/workspace/preview` usano il checkout
+servito dal viewer e gli stessi contratti standalone di configurazione,
+preparazione e preview delle conversazioni. Se manca la ricetta viene avviata
+soltanto la sessione tecnica. Un'app già configurata può essere esplorata anche
+senza un agente disponibile. I commenti diretti richiedono una conversazione
+aperta; la preview iniziale consente navigazione e gestione dell'ambiente.
+
+Il server legge da Git branch o commit effettivo e distingue un worktree dal
+checkout principale. Il contesto, sempre visibile anche a preview ferma, espone
+la directory e, se presenti, lavoro e conversazione aperta. `main` non è imposto:
+la preview esegue i file del checkout selezionato, incluse modifiche locali. Più
+conversazioni sulla stessa directory condividono il processo; il nome della chat
+indica il contesto aperto, non un secondo proprietario del servizio.
+
+
+### Richieste e cronologia dell’ambiente
+
+La Preview mostra una sezione permanente Ambiente: stato di preparazione,
+esiti delle verifiche e collegamento alla chat tecnica. Domande strutturate,
+richieste di autorizzazione e messaggi da completare restano rispondibili nel
+pannello, usando gli stessi endpoint e la stessa sessione nativa della chat.
+Le opzioni vengono dall’harness; il viewer non decide autorizzazioni. Il polling
+non ricrea un modulo invariato, così mantiene testo, scelta e focus. Una risposta
+fallita conserva il modulo; dopo una consegna riuscita il controllo resta disabilitato
+finché il runtime non annuncia la richiesta successiva.
+
+Il browser conserva per workspace l’ultima chat selezionata, incluse quelle
+tecniche, e lo stato del pannello nella sessione del browser. Ricaricare legge
+la stessa cronologia senza avviare un turno. La chat tecnica resta separata
+dall’elenco prodotto, ma è sempre raggiungibile dall’Ambiente.
+
+`execution environment checks` legge gli ultimi report originali, compresi quelli
+falliti. Una nuova preparazione non li elimina: li presenta da riconfermare quando
+non corrispondono più agli input e alla preparazione correnti. Report/log mancanti
+o alterati non diventano successi. I log sono consultabili come testo inerte dal
+pannello. Gli errori di tentativi precedenti restano storici quando la preview
+attuale ha una preparazione verificata; non descrivono più lo stato corrente.

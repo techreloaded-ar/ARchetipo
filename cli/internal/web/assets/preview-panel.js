@@ -13,8 +13,10 @@
  const monitor=icon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>');
  host.innerHTML=`<div class="preview-toolbar">
   <div class="preview-location"><span class="preview-state-dot"></span><span class="preview-location-text">Anteprima locale</span></div>
-  <div class="preview-toolbar-actions"><button type="button" class="preview-pick" data-preview="reopen" hidden>Apri pannello</button><button type="button" class="preview-launch" data-preview="start">${play}<span>Preview</span></button><button type="button" class="preview-icon" data-preview="reload" aria-label="Ricarica preview" title="Ricarica">${refreshIcon}</button><button type="button" class="preview-icon" data-preview="fullscreen" aria-label="Preview a schermo intero" title="Schermo intero" aria-pressed="false">${expand}</button><a class="preview-icon" data-preview="external" target="_blank" rel="noopener noreferrer" aria-label="Apri preview nel browser" title="Apri nel browser">${external}</a><details class="preview-menu"><summary class="preview-icon" aria-label="Altre opzioni preview" title="Altre opzioni">···</summary><div><button type="button" data-preview="reconfigure">Ripara configurazione</button><button type="button" data-preview="environment" hidden>Dettagli ambiente</button><button type="button" class="preview-stop" data-preview="stop">Ferma ambiente</button></div></details></div>
+  <div class="preview-toolbar-actions"><button type="button" class="preview-pick" data-preview="reopen" hidden>Apri pannello</button><button type="button" class="preview-launch" data-preview="start">${play}<span>Preview</span></button><button type="button" class="preview-icon" data-preview="reload" aria-label="Ricarica preview" title="Ricarica">${refreshIcon}</button><button type="button" class="preview-icon" data-preview="fullscreen" aria-label="Preview a schermo intero" title="Schermo intero" aria-pressed="false">${expand}</button><a class="preview-icon" data-preview="external" target="_blank" rel="noopener noreferrer" aria-label="Apri preview nel browser" title="Apri nel browser">${external}</a><button type="button" class="preview-pick" data-preview="environment">Ambiente</button><details class="preview-menu"><summary class="preview-icon" aria-label="Altre opzioni preview" title="Altre opzioni">···</summary><div><button type="button" data-preview="reconfigure">Ripara configurazione</button><button type="button" class="preview-stop" data-preview="stop">Ferma ambiente</button></div></details></div>
  </div>
+ <div class="preview-context"><details><summary><span class="preview-context-label">Checkout</span></summary><dl><dt>Directory</dt><dd class="preview-context-directory"></dd><dt class="preview-context-work-heading">Lavoro</dt><dd class="preview-context-work"></dd><dt class="preview-context-chat-heading">Conversazione aperta</dt><dd class="preview-context-chat"></dd></dl><p>La preview usa i file di questa directory, comprese le modifiche locali.</p></details></div>
+ <section class="preview-environment"><details class="environment-overview"><summary><strong class="environment-headline">Ambiente</strong><span class="environment-checks-label"></span></summary><div class="environment-checks"></div></details><div class="environment-attention" hidden></div><p class="environment-notice" role="status"></p></section>
  <div class="preview-tools"><label class="preview-viewport">${monitor}<span class="sr-only">Dimensioni schermo</span><select data-preview="width" aria-label="Dimensioni schermo"><option value="100%">Adatta</option><option value="820px">Tablet · 820</option><option value="390px">Mobile · 390</option></select></label><button type="button" class="preview-pick" data-preview="pick">${pointer}<span>Commenta un elemento</span></button></div>
  <div class="preview-stage"><div class="preview-placeholder"><svg width="64" height="54" viewBox="0 0 64 54" fill="none" aria-hidden="true"><rect x="5" y="5" width="54" height="43" rx="7" stroke="currentColor" stroke-width="1.4"/><path d="M5 17h54M13 11h1m4 0h1m4 0h1M25 27l-5 5 5 5m14-10 5 5-5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><h3>Il tuo lavoro, qui.</h3><p>Avvia l’applicazione per esplorare il risultato e indicare cosa cambiare.</p></div></div>
  <div class="preview-separator" role="separator" tabindex="0" aria-label="Altezza pannello inferiore" aria-orientation="horizontal"><span></span></div>
@@ -24,15 +26,16 @@
  const find=k=>host.querySelector(`[data-preview="${k}"]`);
  const stage=host.querySelector(".preview-stage"), status=host.querySelector(".preview-status"), list=host.querySelector(".preview-comment-list");
  let current=null, key="", open=false, frame=null, view=null, ready=false, picking=false, busy=false, poll=null, request=0;
+ let attentionSignature="", checksSignature="", environmentBusy=false;
  let comments=[], notice="", panel=window.Preview.panelState({},{}), activeComment=null, drag=null;
  const states=new Map();
  const autoStarted=new Set();
  const candidateKey=()=>key+":"+(current?.candidate || "");
  function manuallyStopped(candidate){try{return sessionStorage.getItem("preview-stopped:"+key)===candidate;}catch{return false;}}
- const route=()=>`/api/workspace/conversations/${encodeURIComponent(current.id)}/preview`;
- async function api(url,method="GET") {
-  const response=await fetch(url,{method,headers:method==="GET"?{}:{"Content-Type":"application/json"},body:method==="POST"?"{}":undefined});
-  const value=await response.json();if(!response.ok)throw new Error(value.error || value.message || "Preview non disponibile");return value;
+ const route=()=>current.scope==="workspace"?"/api/workspace/preview":`/api/workspace/conversations/${encodeURIComponent(current.id)}/preview`;
+ async function api(url,method="GET",payload={}) {
+  const response=await fetch(url,{method,headers:method==="GET"?{}:{"Content-Type":"application/json"},body:method==="POST"?JSON.stringify(payload):undefined});
+  const value=await response.json();if(!response.ok)throw new Error(value.error?.message || value.error || value.message || "Preview non disponibile");return value;
  }
  function persist(){
   if(!key)return;
@@ -101,7 +104,7 @@
  }
  const separator=host.querySelector(".preview-separator"), bottom=host.querySelector(".preview-bottom");
  function limits(){
-  const available=host.clientHeight-host.querySelector(".preview-toolbar").offsetHeight-host.querySelector(".preview-tools").offsetHeight-8-141;
+  const available=host.clientHeight-host.querySelector(".preview-toolbar").offsetHeight-host.querySelector(".preview-tools").offsetHeight-host.querySelector(".preview-context").offsetHeight-host.querySelector(".preview-environment").offsetHeight-8-141;
   return window.Preview.panelLimits(available);
  }
  function layoutPanel(){
@@ -127,13 +130,13 @@
   if(!["ArrowUp","ArrowDown","Home","End"].includes(event.key))return;event.preventDefault();const bounds=limits(),height=bottom.getBoundingClientRect().height;
   changePanel({height:window.Preview.panelHeight(event.key==="Home"?bounds.min:event.key==="End"?bounds.max:height+(event.key==="ArrowUp"?20:-20),bounds)});
  });
- host.querySelector('[role="tablist"]').addEventListener("keydown",event=>{if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;event.preventDefault();const tab=event.key==="Home"?"comments":event.key==="End"?"output":panel.tab==="comments"?"output":"comments";changePanel({tab});find(tab).focus();});
- new ResizeObserver(layoutPanel).observe(host);
+ host.querySelector('[role="tablist"]').addEventListener("keydown",event=>{if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;event.preventDefault();const tab=current?.commentable===false?"output":event.key==="Home"?"comments":event.key==="End"?"output":panel.tab==="comments"?"output":"comments";changePanel({tab});find(tab).focus();});
+ const panelResize=new ResizeObserver(layoutPanel);panelResize.observe(host);panelResize.observe(host.querySelector(".preview-context"));panelResize.observe(host.querySelector(".preview-environment"));
  function updateButtons(){
   list.querySelectorAll("textarea,button").forEach(node=>{node.disabled=busy;});
-  find("send").disabled=busy || !current?.writable || !comments.length || comments.some(c=>!c.note.trim());
+  find("send").disabled=busy || !current?.writable || current?.commentable===false || !comments.length || comments.some(c=>!c.note.trim());
   find("send").textContent=`Invia tutti${comments.length ? " ("+comments.length+")" : ""}`;
-  find("pick").disabled=!ready || busy || !current?.writable || comments.length>=30;
+  find("pick").disabled=!ready || busy || !current?.writable || current?.commentable===false || comments.length>=30;
   find("add").disabled=find("pick").disabled;
   for(const [index,row] of Array.from(list.children).entries()){
    const complete=!!comments[index].note.trim();
@@ -149,24 +152,88 @@
   find("reload").disabled=!frame;
   const state=view?.state || "unconfigured";
   host.dataset.state=state;
-  find("environment").hidden=!view?.environment?.conversation_id;
+  find("environment").hidden=false;
   find("start").hidden=state==="ready";
   find("start").querySelector("span").textContent=state==="configuring"?"Configurazione…":state==="waiting"?"Serve il tuo intervento":state==="preparing"?"Preparazione…":state==="starting"?"Avvio…":"Preview";
-  find("pick").hidden=state!=="ready";
+  find("pick").hidden=state!=="ready" || current?.commentable===false;
+  find("comments").hidden=current?.commentable===false;
+  find("add").hidden=current?.commentable===false;
+  find("send").hidden=current?.commentable===false;
   find("reload").hidden=state!=="ready";
   find("external").hidden=state!=="ready";
   host.querySelector(".preview-tools").hidden=state!=="ready";
 
   host.querySelector(".preview-comments-count").textContent=String(comments.length);
   host.querySelector(".preview-comments-hint").dataset.notice=String(!!notice);
-  host.querySelector(".preview-comments-hint").textContent=notice || (comments.some(c=>!c.note.trim())?"Completa il commento vuoto":`${comments.length} richieste da inviare`);
+  host.querySelector(".preview-comments-hint").textContent=notice || (current?.commentable===false?"Apri un lavoro per inviare richieste sulla preview.":comments.some(c=>!c.note.trim())?"Completa il commento vuoto":`${comments.length} richieste da inviare`);
   host.querySelector(".preview-placeholder").hidden=!!frame;
   layoutPanel();
   host.querySelector(".preview-location-text").textContent=view?.recipe?.url || "Anteprima locale";
   host.querySelector(".preview-location-text").title=view?.recipe?.url || "";
  }
+
+ function drawEnvironment(value){
+  host.querySelector(".environment-headline").textContent=value.headline||"Ambiente";
+  host.querySelector(".environment-checks-label").textContent=value.checks_label||"";
+  const checkKey=JSON.stringify([value.checks,value.checks_label,value.checks_error,value.environment?.previous_error,value.environment?.conversation_id]);
+  if(checkKey!==checksSignature){checksSignature=checkKey;host.querySelector(".environment-checks").innerHTML=window.Preview.renderChecks(value);}
+  const signature=JSON.stringify(value.attention||null);
+  const attention=host.querySelector(".environment-attention");
+  if(signature!==attentionSignature){attentionSignature=signature;attention.innerHTML=window.Preview.renderAttention(value.attention);if(!environmentBusy)environmentNotice.textContent="";}
+  attention.hidden=!value.attention;
+ }
+ const environmentNotice=host.querySelector(".environment-notice");
+ async function environmentAnswer(url,payload){
+  const selected=key;let delivered=false;
+  environmentBusy=true;environmentNotice.textContent="Invio della risposta…";
+  host.querySelectorAll(".environment-attention button,.environment-attention input,.environment-attention textarea").forEach(node=>node.disabled=true);
+  try{
+   await api(url,"POST",payload);
+   if(key===selected){environmentNotice.textContent="Risposta inviata alla sessione tecnica.";delivered=true;}
+  }catch(error){if(key===selected)environmentNotice.textContent=error.message;}
+  finally{if(key===selected){environmentBusy=false;if(!delivered)host.querySelectorAll(".environment-attention button,.environment-attention input,.environment-attention textarea").forEach(node=>node.disabled=false);void refresh();}}
+ }
+ host.addEventListener("click",async event=>{
+  const chat=event.target.closest("[data-environment-chat]");
+  if(chat){const id=view?.environment?.conversation_id;if(id)window.dispatchEvent(new CustomEvent("archetipo:environment-open",{detail:{id}}));return;}
+  const approval=event.target.closest("[data-environment-approval]");
+  if(approval && !environmentBusy){const id=view?.attention?.conversation_id;if(id)void environmentAnswer(`/api/workspace/conversations/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approval.dataset.environmentApproval)}`,{option_id:approval.dataset.option});return;}
+  const log=event.target.closest("[data-environment-log]");
+  if(log){const selected=key;try{const response=await fetch(route()+"/checks/"+encodeURIComponent(log.dataset.environmentLog));if(!response.ok)throw new Error("Report non disponibile");const text=await response.text();if(key===selected){const output=host.querySelector(".environment-report");output.textContent=text;output.hidden=false;}}catch(error){if(key===selected)environmentNotice.textContent=error.message;}}
+ });
+ host.addEventListener("change",event=>{
+  const question=event.target.closest("[data-question]");if(!question)return;
+  if(event.target.matches('input[type="radio"]')){const text=question.querySelector("[data-answer-text]");if(text)text.value="";}
+ });
+ host.addEventListener("input",event=>{
+  if(!event.target.matches("[data-answer-text]") || !event.target.value)return;
+  const question=event.target.closest("[data-question]");question?.querySelectorAll('input[type="radio"]').forEach(node=>node.checked=false);
+ });
+ host.addEventListener("submit",event=>{
+  const form=event.target.closest("[data-environment-input],[data-environment-message]");if(!form)return;
+  event.preventDefault();if(environmentBusy)return;
+  const id=view?.attention?.conversation_id;if(!id)return;
+  const base=`/api/workspace/conversations/${encodeURIComponent(id)}`;
+  if(form.hasAttribute("data-environment-message")){void environmentAnswer(base+"/messages",{message:form.querySelector("[data-environment-answer]").value.trim()});return;}
+  const answers={};
+  for(const question of form.querySelectorAll("[data-question]")){
+   const selected=Array.from(question.querySelectorAll("input:checked")).map(node=>node.value);
+   const text=question.querySelector("[data-answer-text]")?.value.trim();if(text)selected.push(text);
+   if(!selected.length){environmentNotice.textContent="Rispondi a ogni domanda prima di inviare.";return;}
+   answers[question.dataset.question]=selected;
+  }
+  void environmentAnswer(base+"/inputs/"+encodeURIComponent(form.dataset.environmentInput),{answers});
+ });
  function apply(value){
   view=value;
+  drawEnvironment(value);
+  const context=value.context || {};
+  host.querySelector(".preview-context-label").textContent=context.label || "Checkout non disponibile";
+  host.querySelector(".preview-context-directory").textContent=context.working_directory || "";
+  host.querySelector(".preview-context-work").textContent=context.work_title || context.increment_id || "";
+  host.querySelector(".preview-context-chat").textContent=context.conversation_title || context.conversation_id || "";
+  for(const name of ["work","chat"]){const node=host.querySelector(".preview-context-"+name);node.hidden=!node.textContent;host.querySelector(".preview-context-"+name+"-heading").hidden=node.hidden;}
+
   // One automatic attempt per verified candidate; Stop and errors never loop.
   const candidate=candidateKey();
   if(current?.autoStart && current.writable && value.configured && value.state==="stopped" && !autoStarted.has(candidate) && !manuallyStopped(candidate)) {
@@ -193,7 +260,7 @@
   updateButtons();
  }
  async function refresh(){
-  if(!current || !open || busy)return;
+  if(!current || !open || busy || environmentBusy)return;
   const generation=++request,url=route();
   try{const value=await api(url);if(generation===request)apply(value);}catch(error){if(generation===request)showError(error);}
  }
@@ -210,11 +277,12 @@
    const next=value?"archetipo-preview:"+value.root+":"+value.id:"";
    if(key===next){current=value;updateButtons();return;}
    if(document.fullscreenElement===host)void document.exitFullscreen().catch(showError);
-   stopDrag();persist();request++;clearFrame();current=value;key=next;view=null;ready=false;busy=false;notice="";
+   stopDrag();persist();request++;clearFrame();current=value;key=next;view=null;ready=false;busy=false;notice="";attentionSignature="";checksSignature="";environmentBusy=false;host.querySelector(".environment-attention").replaceChildren();host.querySelector(".environment-attention").hidden=true;
    let saved=states.get(key);
    if(!saved){let drafts=[];try{drafts=JSON.parse(localStorage.getItem(key)||"[]");}catch{/* Invalid drafts are ignored. */}saved={open:false,comments:Array.isArray(drafts)?drafts.filter(c=>window.Preview.cleanElement(c?.element) && typeof c.note==="string").slice(0,30):[]};}
-   open=window.WorkspacePanels?.isPreviewActive() || false;comments=saved.comments;panel=window.Preview.panelState(saved.panel || (value?.compact?{mode:"collapsed"}:{}),{});activeComment=saved.activeComment || null;drawComments();visibility();
+   open=window.WorkspacePanels?.isPreviewActive() || false;comments=saved.comments;panel=window.Preview.panelState(saved.panel || (value?.compact?{mode:"collapsed"}:{}),{});if(value?.commentable===false)panel.tab="output";activeComment=saved.activeComment || null;host.querySelector(".preview-context-label").textContent="Lettura del checkout…";drawComments();visibility();
   },
+  start(){if(!current)return;window.WorkspacePanels?.open("preview");find("start").click();},
   setActive(active){if(open===active)return;open=active;persist();visibility();},
   toggle(){if(!current)return;if(window.WorkspacePanels){window.WorkspacePanels.toggle("preview");return;}open=!open;persist();visibility();}
  };
@@ -222,7 +290,7 @@
   const button=event.target.closest("[data-preview]");if(!button || button.disabled)return;
   const action=button.dataset.preview==="reconfigure"?"setup":button.dataset.preview;
   host.querySelector(".preview-menu").open=false;
-  if(action==="environment"){window.dispatchEvent(new CustomEvent("archetipo:environment-open",{detail:{id:view?.environment?.conversation_id}}));return;}
+  if(action==="environment"){const details=host.querySelector(".environment-overview");details.open=!details.open;return;}
   if(action==="close"){open=false;persist();visibility();return;}
   if(action==="fullscreen"){
    try{if(document.fullscreenElement===host)await document.exitFullscreen();else await host.requestFullscreen();}catch(error){showError(error);}return;

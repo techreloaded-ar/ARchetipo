@@ -280,6 +280,13 @@ func (s *Server) registerRoutes() {
 	// this process is holding and for one that ended and lives on disk, with the
 	// same payload. Two routes would leave the client to choose between them
 	// from an id alone, which is a choice an id does not carry.
+	s.handleWorkspace("GET /api/workspace/preview/checks/{name}", s.handlePreviewCheckLog)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/preview/checks/{name}", s.handlePreviewCheckLog)
+	s.handleWorkspace("GET /api/workspace/preview", s.handleConversationPreview)
+	s.handleWorkspace("POST /api/workspace/preview", s.handleStartConversationPreview)
+	s.handleWorkspace("POST /api/workspace/preview/prepare", s.handlePrepareConversationPreview)
+	s.handleWorkspace("POST /api/workspace/preview/configure", s.handleConfigureConversationPreview)
+	s.handleWorkspace("DELETE /api/workspace/preview", s.handleStopConversationPreview)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}/preview", s.handleConversationPreview)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview", s.handleStartConversationPreview)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/preview/prepare", s.handlePrepareConversationPreview)
@@ -288,6 +295,8 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversations", s.handleListWorkspaceConversations)
 	s.handleWorkspace("POST /api/workspace/conversations", s.handleOpenWorkspaceConversation)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}", s.handleGetWorkspaceConversation)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/reports", s.handleConversationReports)
+	s.handleWorkspace("GET /api/workspace/conversations/{id}/reports/{report}", s.handleConversationReports)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}/model-choice", s.handleGetNativeConversationModelChoice)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/messages", s.handleSendWorkspaceConversationMessage)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/proposal", s.handleDecideWorkspaceConversationProposal)

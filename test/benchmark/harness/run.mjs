@@ -61,6 +61,7 @@ try {
   writeFileSync(join(project, 'src/fail.txt'), 'force a real failed assertion');
   r = check('failed-check'); assert(!r.passed && !r.reused); assert.equal(r.steps[0].exit_code, 7);
   const failedLog = r.steps[0].log_path;
+  const observations=invoke('observe-failed-check',['checks']);assert.equal(observations.find(check=>check.name==='functional').state,'failed');assert.equal(observations.find(check=>check.name==='functional').current,true);
   r = check('failed-check-repeated'); assert(!r.passed && !r.reused); assert(existsSync(failedLog));
   unlinkSync(join(project, 'src/fail.txt'));
   r = check('fixed-check'); assert(r.passed && !r.reused);

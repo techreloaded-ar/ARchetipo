@@ -74,7 +74,7 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 	root.AddCommand(&cobra.Command{Use: "_guard", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return verification.Guard(cmd.Context(), s.in, s.out)
 	}})
-	for _, operation := range []string{"show", "configure", "prepare", "check", "cleanup", "status", "evidence", "run"} {
+	for _, operation := range []string{"show", "configure", "prepare", "check", "cleanup", "status", "evidence", "checks", "run"} {
 		var spec string
 		var input string
 		var fresh bool
@@ -114,6 +114,8 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 						result, err = verification.Configure(cfg.ProjectRoot, raw)
 					}
 				}
+			case "checks":
+				result, err = verification.New(cfg.ProjectRoot, cfg.Paths.TestResults).ObserveChecks(ctx)
 			case "evidence":
 				result, err = verification.New(cfg.ProjectRoot, cfg.Paths.TestResults).Evidence(ctx)
 			case "status":

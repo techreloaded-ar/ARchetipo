@@ -23,10 +23,11 @@ type conversationActivityView struct {
 }
 
 type conversationActivitiesView struct {
-	StartWork      *conversationActivityView  `json:"start_work,omitempty"`
-	ConversationID string                     `json:"conversation_id"`
-	SkillsKnown    bool                       `json:"skills_known"`
-	Items          []conversationActivityView `json:"items"`
+	WorkspacePreview *workspacePreviewEntry     `json:"workspace_preview,omitempty"`
+	StartWork        *conversationActivityView  `json:"start_work,omitempty"`
+	ConversationID   string                     `json:"conversation_id"`
+	SkillsKnown      bool                       `json:"skills_known"`
+	Items            []conversationActivityView `json:"items"`
 }
 
 // This read does not open a session or start a turn. Process actions retain
@@ -111,8 +112,14 @@ func (s *Server) handleGetConversationActivities(w http.ResponseWriter, r *http.
 			}
 		}
 	}
+	var workspacePreview *workspacePreviewEntry
+	if id == "" {
+		entry := s.workspacePreviewEntry(ctx, ws)
+		workspacePreview = &entry
+	}
 	writeJSON(w, http.StatusOK, conversationActivitiesView{
-		StartWork: startWork, ConversationID: id, SkillsKnown: discovery.SkillsKnown, Items: items,
+		WorkspacePreview: workspacePreview,
+		StartWork:        startWork, ConversationID: id, SkillsKnown: discovery.SkillsKnown, Items: items,
 	})
 }
 

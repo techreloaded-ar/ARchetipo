@@ -321,6 +321,18 @@ async function exercisePage(browser, url, runDir) {
   assertNoExceptions("Il click sul thread del rail ha emesso eccezioni non catturate:");
   ok(CLAIMS[2], "il click su un thread del rail apre quella conversazione, sentinella dell'agente compresa");
 
+  await page.waitFor(`Array.from(document.querySelectorAll('.conv-event-markdown a')).some(a => a.textContent === 'Apri report tecnico' && a.getAttribute('href')?.includes('/reports/'))`, 10000, 'il link locale diventa un report autorizzato');
+  const reportRead = await page.evaluate(`(async () => {
+    const anchors = Array.from(document.querySelectorAll('.conv-event-markdown a'));
+    const report = anchors.find(a => a.textContent === 'Apri report tecnico');
+    const missing = anchors.find(a => a.textContent.includes('Report rimosso'));
+    const config = anchors.find(a => a.textContent === 'Configurazione privata');
+    const response = await fetch(report.href);
+    return {status:response.status, type:response.headers.get('content-type'), text:await response.text(), missing:missing?.textContent, configClickable:config?.hasAttribute('href'), path:report.getAttribute('href')};
+  })()`);
+  if (reportRead.status !== 200 || !reportRead.type.startsWith('text/plain') || !reportRead.text.includes('report originale') || !reportRead.missing.includes('Report non più disponibile') || reportRead.configClickable || reportRead.path.includes('/Users/')) throw new Error('Report della chat non sicuro o non leggibile: '+JSON.stringify(reportRead));
+  ok('conversation-reports', 'Il report della chat si apre come testo con ID stabile; report mancanti e configurazioni private non producono collegamenti rotti');
+
   // --- Il click su «Nuova spec» apre la modale -------------------------------
   //
   // L'altro sintomo della stessa rottura, e per la stessa ragione: openNewSpec
@@ -1064,6 +1076,9 @@ async function writeSpecsPayload(file) {
 async function seedConversationRecord(sandboxDir) {
   const dir = path.join(sandboxDir, ".archetipo", "conversations");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const reportDir = path.join(sandboxDir, ".archetipo", "environment");
+  await fs.mkdir(reportDir, {recursive:true});
+  await fs.writeFile(path.join(reportDir,"technical-summary.json"), '{"smoke":"report originale <script>inert</script>"}');
   const openedAt = new Date(Date.now() - 3600_000).toISOString();
   const record = {
     id: CONVERSATION_ID,
@@ -1080,7 +1095,7 @@ async function seedConversationRecord(sandboxDir) {
     final_state: "closed",
     events: [
       { id: 1, seq: 1, at: openedAt, kind: "user_message", text: HUMAN_SENTINEL },
-      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}` },
+      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}\n[Apri report tecnico](${path.join(sandboxDir, ".archetipo/environment/technical-summary.json")})\n[Report rimosso](.archetipo/environment/technical-session.md)\n[Configurazione privata](.archetipo/config.yaml)` },
     ],
   };
   await fs.writeFile(path.join(dir, `${CONVERSATION_ID}.json`), `${JSON.stringify(record, null, 2)}\n`, {

@@ -47,6 +47,8 @@ type scopedRoute struct {
 // TestRouteClassificationIsExhaustive reads server.go and fails as soon as a
 // route is registered without landing in this table or in homeRoutes.
 var workspaceScopedRoutes = []scopedRoute{
+	{"GET /api/workspace/preview/checks/{name}", http.MethodGet, "/api/workspace/preview/checks/test", ""},
+	{"GET /api/workspace/conversations/{id}/preview/checks/{name}", http.MethodGet, "/api/workspace/conversations/c-1/preview/checks/test", ""},
 	{"GET /api/documentation/wiki/actions", http.MethodGet, "/api/documentation/wiki/actions", ""},
 	{"POST /api/documentation/wiki/actions", http.MethodPost, "/api/documentation/wiki/actions", "{}"},
 	{"POST /api/increments", http.MethodPost, "/api/increments", "{}"},
@@ -101,8 +103,15 @@ var workspaceScopedRoutes = []scopedRoute{
 	{"POST /api/workspace/conversations/{id}/record", http.MethodPost, "/api/workspace/conversations/c-1/record", "{}"},
 	{"GET /api/workspace/conversations", http.MethodGet, "/api/workspace/conversations", ""},
 	{"GET /api/workspace/conversations/{id}", http.MethodGet, "/api/workspace/conversations/c-1", ""},
+	{"GET /api/workspace/conversations/{id}/reports", http.MethodGet, "/api/workspace/conversations/c-1/reports", ""},
+	{"GET /api/workspace/conversations/{id}/reports/{report}", http.MethodGet, "/api/workspace/conversations/c-1/reports/report-1", ""},
 	{"GET /api/workspace/conversations/{id}/model-choice", http.MethodGet, "/api/workspace/conversations/c-1/model-choice", ""},
 	{"POST /api/workspace/conversations/{id}/resume", http.MethodPost, "/api/workspace/conversations/c-1/resume", "{}"},
+	{"GET /api/workspace/preview", http.MethodGet, "/api/workspace/preview", ""},
+	{"POST /api/workspace/preview", http.MethodPost, "/api/workspace/preview", "{}"},
+	{"POST /api/workspace/preview/prepare", http.MethodPost, "/api/workspace/preview/prepare", "{}"},
+	{"POST /api/workspace/preview/configure", http.MethodPost, "/api/workspace/preview/configure", "{}"},
+	{"DELETE /api/workspace/preview", http.MethodDelete, "/api/workspace/preview", ""},
 	{"GET /api/workspace/conversations/{id}/preview", http.MethodGet, "/api/workspace/conversations/c-1/preview", ""},
 	{"POST /api/workspace/conversations/{id}/preview", http.MethodPost, "/api/workspace/conversations/c-1/preview", "{}"},
 	{"POST /api/workspace/conversations/{id}/preview/prepare", http.MethodPost, "/api/workspace/conversations/c-1/preview/prepare", "{}"},

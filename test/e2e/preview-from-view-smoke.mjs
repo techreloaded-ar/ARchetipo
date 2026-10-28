@@ -211,7 +211,7 @@ async function main(){
    await page.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:pt.x,y:pt.y+dy,button:'left',buttons:1});
    await page.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:pt.x,y:pt.y+dy,button:'left',clickCount:1});
   };
-  const firstSize=await geometry();await resize(-80);const resized=await geometry();assert.ok(resized.height>firstSize.height+60,JSON.stringify({firstSize,resized}));
+  await resize(100);const firstSize=await geometry();await resize(-80);const resized=await geometry();assert.ok(resized.height>firstSize.height && Math.abs(resized.height-Math.min(firstSize.height+80,firstSize.max))<2,JSON.stringify({firstSize,resized}));
   assert.equal(await page.evaluate('!!document.querySelector(".preview-drag-cover")'),false);
   await page.evaluate('document.querySelector(".preview-separator").focus()');await key('Home');let g=await geometry();assert.equal(g.now,g.min);assert.ok(Math.abs(g.height-g.min)<2);assert.match(g.text,/pixel/);await footerReachable();
   await key('ArrowUp');g=await geometry();assert.equal(g.now,g.min+20);
@@ -320,7 +320,7 @@ async function main(){
   // Reload loses in-memory controller state, but must retain browser drafts.
   await page.send('Page.reload');
   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'conversation after reload');
-  await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
+  await page.evaluate('(()=>{if(!window.WorkspacePanels.isPreviewActive())document.querySelector("[data-conversation-preview]").click();})()');
   await page.waitFor('document.querySelector(".preview-comment textarea")?.value === "Commento da conservare"',timeout,'draft restored after page reload');
   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'picker after page reload');
   frameID=(await page.send('Page.getFrameTree')).frameTree.childFrames[0].frame.id;
@@ -405,23 +405,39 @@ async function main(){
    for(const args of [['init','-b','main'],['config','user.name','Tests'],['config','user.email','tests@example.test'],['add','.archetipo/config.yaml','server.mjs'],['commit','-m','initial']])await run('bootstrap-git','git',args,{cwd:bootstrap});
    const early=JSON.parse((await run('early-increment',cli,['increment','create','--file',incrementInput],{cwd:bootstrap})).stdout).data;
    viewer=await startViewServer(cli,bootstrap,{...env,FAKE_CODEX_UNIQUE_THREADS:'1'},'/api/board');
-   const product=await (await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
-   const productID=product.conversation.id,productEndpoint=viewer.url+'/api/workspace/conversations/'+productID;
+   const productEndpoint=viewer.url+'/api/workspace';
    await page.send('Page.navigate',{url:viewer.url});
-   await page.waitFor(`!!document.querySelector('[data-conversation-id="${productID}"]')`,timeout,'bootstrap conversation');
-   await page.evaluate(`document.querySelector('[data-conversation-id="${productID}"]').click()`);
-   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'bootstrap preview control');
-   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
-   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'first-use Preview enabled');
-   assert.equal(await page.evaluate('!!document.querySelector("[data-preview=setup], [data-preview=prepare]")'),false);
-   await page.evaluate('document.querySelector("[data-preview=start]").click()');
+   await page.waitFor('!!document.querySelector("[data-workspace-preview]")',timeout,'preview directly on empty home');
+   assert.match(await page.evaluate('document.querySelector(".conv-work-preview").textContent'),/Checkout principale.*main/);
+   await page.evaluate('document.querySelector("[data-workspace-preview]").click()');
    let technicalID,technicalStart;
    await until(async()=>{const state=await (await fetch(productEndpoint+'/preview')).json();technicalID=state.environment?.conversation_id;technicalStart=received.find(e=>e.kind==='turn/start'&&(e.params.input||[]).some(i=>i.text?.includes('/archetipo-environment')));return technicalID&&technicalStart;},'separate technical setup session');
-   assert.notEqual(technicalID,productID);
+
    const ordinaryIndex=await (await fetch(viewer.url+'/api/workspace/conversations')).json();
-   assert(!ordinaryIndex.conversations.some(c=>c.id===technicalID),'technical session leaked into ordinary rail');
+   assert.equal(ordinaryIndex.conversations.length,0,'home preview created a product conversation');
    const technical=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
-   assert.notEqual(technical.conversation.id,productID);
+
+
+   // Native approvals and structured questions are answered inside Preview.
+   queue.push({targetPid:technicalStart.pid,kind:'request',id:971,method:'item/commandExecution/requestApproval',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'approval-home',reason:'Verifica Docker sintetico',availableDecisions:['accept','cancel']}});
+   await page.waitFor('!!document.querySelector("[data-environment-approval]")',timeout,'approval directly in Preview');
+
+   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+   await page.evaluate('document.querySelector("[data-environment-approval][data-option=allow]").scrollIntoView({block:"center"})');
+   await page.send('Page.captureScreenshot',{format:'png'}).then(result=>fs.writeFile(path.join(dir,'environment-approval-mobile.png'),Buffer.from(result.data,'base64')));
+   await page.evaluate('document.querySelector("[data-environment-approval][data-option=allow]").click()');
+   await page.send('Emulation.clearDeviceMetricsOverride');
+   await until(()=>received.some(e=>e.kind==='response'&&e.id===971&&e.result?.decision==='accept'),'approval reaches same native session');
+   queue.push({targetPid:technicalStart.pid,kind:'request',id:972,method:'item/tool/requestUserInput',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'input-home',questions:[{id:'fixture',header:'Dati',question:'Quali dati locali?',isOther:true,options:[{label:'Sintetici',description:'Nessun dato reale'}]}]}});
+   await page.waitFor('!!document.querySelector("[data-environment-input]")',timeout,'structured question directly in Preview');
+   await page.evaluate('(()=>{const form=document.querySelector("[data-environment-input]");form.querySelector("input[type=radio]").click();form.requestSubmit();})()');
+   await until(()=>received.some(e=>e.kind==='response'&&e.id===972),'input reaches same native session');
+
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'plain-question',delta:'Confermi fixture sintetiche locali?'}});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-1',status:'completed'}}});
+   await page.waitFor('!!document.querySelector("[data-environment-message]")',timeout,'plain question directly in Preview');
+   await page.evaluate('(()=>{const form=document.querySelector("[data-environment-message]");form.querySelector("textarea").value="Confermo fixture locali";form.requestSubmit();})()');
+   await until(()=>received.filter(e=>e.pid===technicalStart.pid&&e.kind==='turn/start').length===2,'plain answer continues the same native thread');
    await fs.mkdir(path.join(bootstrap,'scripts/archetipo'),{recursive:true});
    await fs.writeFile(path.join(bootstrap,'scripts/archetipo/prepare.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
    const setupInput=path.join(dir,'bootstrap-environment.json');
@@ -434,11 +450,22 @@ async function main(){
    assert.equal(qualification.passed,true);assert.deepEqual(qualification.reports.map(report=>report.reused),[false,false,true]);
    assert.equal(await fs.stat(path.join(bootstrap,'.archetipo/environment-recipe.json')).then(()=>true,()=>false),false,'candidate was published before qualification');
    await run('bootstrap-publish',cli,['execution','environment','publish','--qualified','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap});
-   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'setup-output',delta:'BUILD_ONLY_IN_TECHNICAL_SESSION'}});
-   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-1',status:'completed'}}});
-   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'first-use configuration continues automatically into preview');
-   const productHistory=await (await fetch(productEndpoint)).json();
-   assert(!JSON.stringify(productHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log polluted product conversation');
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-2',itemId:'setup-output',delta:'BUILD_ONLY_IN_TECHNICAL_SESSION'}});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-2',status:'completed'}}});
+   await page.waitFor('!!document.querySelector("#browser-preview iframe")',timeout,'home configuration continues automatically into preview');
+   await page.waitFor('document.querySelector(".preview-context-label").textContent.includes("main")',timeout,'workspace preview branch identity');
+   const workspacePreview=await (await fetch(productEndpoint+'/preview')).json();
+   assert.equal(workspacePreview.context.working_directory,bootstrap);assert.equal(workspacePreview.context.branch,'main');
+   assert.equal(workspacePreview.context.conversation_id,undefined);
+   assert.equal((await (await fetch(viewer.url+'/api/workspace/conversations')).json()).conversations.length,0);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=pick]").hidden'),true,'workspace preview offers comments without a recipient');
+   await page.evaluate('window.homePreviewFrame=document.querySelector("#browser-preview iframe");true');
+   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+   await page.waitFor('document.querySelector(".preview-context-label").textContent.includes("main")',timeout,'mobile checkout identity');
+   await page.send('Page.captureScreenshot',{format:'png'}).then(result=>fs.writeFile(path.join(dir,'home-preview-mobile.png'),Buffer.from(result.data,'base64')));
+   await page.send('Emulation.clearDeviceMetricsOverride');
+   assert.equal(await page.evaluate('window.homePreviewFrame.isConnected && window.homePreviewFrame===document.querySelector("#browser-preview iframe")'),true,'identity display remounted preview');
+   await page.send('Page.captureScreenshot',{format:'png'}).then(result=>fs.writeFile(path.join(dir,'home-preview-desktop.png'),Buffer.from(result.data,'base64')));
    const technicalHistory=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
    assert(JSON.stringify(technicalHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log was not durable');
    assert.equal(await fs.readFile(path.join(bootstrap,'setup-count'),'utf8'),'setup\nsetup\n');
@@ -452,8 +479,15 @@ async function main(){
    const another=await (await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
    const shared=await (await fetch(viewer.url+'/api/workspace/conversations/'+another.conversation.id+'/preview',{method:'POST'})).json();
    const original=await (await fetch(productEndpoint+'/preview')).json();assert.equal(shared.url,original.url,'same checkout launched duplicate preview');
+
+   await page.evaluate('document.querySelector("[data-preview=environment]").click()');
+   await page.waitFor('!!document.querySelector("[data-environment-chat]")',timeout,'permanent environment history link');
+   await page.evaluate('document.querySelector("[data-environment-chat]").click()');
+   await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('BUILD_ONLY_IN_TECHNICAL_SESSION')`,timeout,'technical history opened');
+   await page.send('Page.reload');
+   await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('BUILD_ONLY_IN_TECHNICAL_SESSION')`,timeout,'technical history restored after reload');
    await fetch(productEndpoint+'/preview',{method:'DELETE'});
-   ok('Capacità osservate e candidata qualificata con due preparazioni e riuso prima della pubblicazione. Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; nessun log nella chat di sviluppo. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
+   ok('Capacità osservate e candidata qualificata con due preparazioni e riuso prima della pubblicazione. Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; avvio dalla home senza conversazione prodotto, branch e directory visibili anche su mobile. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
   }
   assert.deepEqual(exceptions,[],'uncaught browser exceptions');
   await fs.writeFile(path.join(dir,'summary.json'),JSON.stringify({status:'pass',checks},null,2));
