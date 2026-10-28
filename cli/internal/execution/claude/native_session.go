@@ -287,8 +287,10 @@ func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionComma
 	return p.nativeCommand(request, func(client *streamSession) error { return client.Send(ctx, request.Message) })
 }
 
-func (p *Provider) RespondSessionInput(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}, fmt.Errorf("claude stream-json does not expose structured input requests")
+func (p *Provider) RespondSessionInput(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
+	return p.nativeCommand(request, func(client *streamSession) error {
+		return client.RespondInput(ctx, request.InteractionID, request.Answers)
+	})
 }
 
 func (p *Provider) RespondSessionApproval(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
@@ -365,17 +367,17 @@ func (s *nativeSession) snapshot() execution.SessionSnapshot {
 		copy := *s.current
 		turn = &copy
 	}
-	var approvals []execution.PendingApproval
+	approvals, inputs := []execution.PendingApproval{}, []execution.PendingInput{}
 	if s.client != nil {
-		approvals = s.client.PendingApprovals()
+		approvals = append(approvals, s.client.PendingApprovals()...)
+		inputs = append(inputs, s.client.PendingInputs()...)
 	}
 	if len(approvals) > 0 {
 		work = execution.SessionWaitingApproval
+	} else if len(inputs) > 0 {
+		work = execution.SessionWaitingInput
 	}
-	if approvals == nil {
-		approvals = []execution.PendingApproval{}
-	}
-	return execution.SessionSnapshot{Session: s.metadata, Archive: execution.ArchiveOpen, Connection: connection, Recovery: execution.RecoveryResumable, Work: work, CurrentTurn: turn, PendingInputs: []execution.PendingInput{}, PendingApprovals: approvals}
+	return execution.SessionSnapshot{Session: s.metadata, Archive: execution.ArchiveOpen, Connection: connection, Recovery: execution.RecoveryResumable, Work: work, CurrentTurn: turn, PendingInputs: inputs, PendingApprovals: approvals}
 }
 
 func (s *nativeSession) failTurn(err error) {

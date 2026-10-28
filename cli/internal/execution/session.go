@@ -182,12 +182,16 @@ type SessionDelivery struct {
 // InputQuestion is a presentation of a question actually requested by a runtime.
 // Providers translate native fields; the viewer never interprets their protocol.
 type InputQuestion struct {
-	ID        string        `json:"id"`
-	Header    string        `json:"header,omitempty"`
-	Prompt    string        `json:"prompt"`
-	Options   []InputOption `json:"options,omitempty"`
-	AllowText bool          `json:"allow_text"`
-	Secret    bool          `json:"secret,omitempty"`
+	ID      string        `json:"id"`
+	Header  string        `json:"header,omitempty"`
+	Prompt  string        `json:"prompt"`
+	Options []InputOption `json:"options,omitempty"`
+	// MultiSelect lets the person pick several options; the answer then
+	// carries every chosen value. A free-text answer, when AllowText, can be
+	// added beside the chosen options.
+	MultiSelect bool `json:"multi_select,omitempty"`
+	AllowText   bool `json:"allow_text"`
+	Secret      bool `json:"secret,omitempty"`
 }
 
 type InputOption struct {

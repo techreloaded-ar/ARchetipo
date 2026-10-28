@@ -80,7 +80,7 @@ function loadConversation() {
 	return mod.exports;
 }
 
-const { renderConversation, formatElapsed } = loadConversation();
+const { renderConversation, formatElapsed, inputAnswerValues } = loadConversation();
 
 // Strip every attribute from the markup, leaving only what a reader sees.
 // A sentence that survives this is visible text; one that does not was only
@@ -2051,21 +2051,85 @@ describe("renderConversation — il passo che ha una conversazione sua", () => {
 
 // Question schemas come from adapters, irrespective of provider or process.
 describe('runtime input questions', () => {
- const pending = (questions) => withConversation({ session: { archive: 'OPEN', recovery: 'RESUMABLE', pending_inputs: [{ id: 'input-1', title: 'Rispondi all’agente', payload: { nativeSentinel: 'PROTOCOL-ONLY' }, questions }] } });
+ const pending = (questions, session = {}) => withConversation({ session: { archive: 'OPEN', recovery: 'RESUMABLE', pending_inputs: [{ id: 'input-1', title: 'Rispondi all’agente', payload: { nativeSentinel: 'PROTOCOL-ONLY' }, questions }], ...session } });
+ const database = { id: 'db', header: 'Database', prompt: 'Quale database?', allow_text: true, options: [{ value: 'sqlite', label: 'SQLite', description: 'Sul computer' }, { value: 'postgres', label: 'Postgres' }] };
+ // The questionnaire alone: the composer below it has a send control of its own.
+ const questionnaireOf = (html) => html.slice(html.indexOf('conv-questionnaire'), html.indexOf('<form class="conv-composer"'));
+ const values = (question, entry) => Array.from(inputAnswerValues(question, entry));
+ const sections = { id: 'sections', header: 'Sezioni', prompt: 'Quali sezioni includo?', multi_select: true, allow_text: true, options: [{ value: 'intro', label: 'Introduzione' }, { value: 'end', label: 'Conclusione' }] };
  it('renders choices and free text without asking the person for JSON', () => {
-  const html = renderConversation(pending([{ id: 'db', header: 'Database', prompt: 'Quale database?', allow_text: true, options: [{ value: 'sqlite', label: 'SQLite', description: 'Sul computer' }] }]), '', { inputDrafts: { 'input-1': { db: { option: 'sqlite', text: '' } } } });
+  const html = renderConversation(pending([database]), '', { inputDrafts: { 'input-1': { db: { options: ['sqlite'], other: false, text: '' } } } });
   assert.match(html, /Quale database\?/);
   assert.match(html, /type="radio"[^>]*value="sqlite" checked/);
+  assert.match(html, /type="radio"[^>]*value="postgres"(?! checked)/);
   assert.match(html, /Sul computer/);
-  assert.match(html, /Oppure scrivi una risposta/);
+  assert.match(html, /Scegli un’opzione/);
   assert.doesNotMatch(html, /Risposta JSON|PROTOCOL-ONLY/);
+ });
+ it('offers "Altro" as one more choice and opens its field only once chosen', () => {
+  const closed = renderConversation(pending([database]), '', {});
+  assert.match(closed, /type="radio"[^>]*data-conversation-input-other(?! checked)/);
+  assert.match(closed, /<div class="conv-input-text" hidden>/);
+  assert.match(closed, /Scrivi una risposta tua/);
+  const open = renderConversation(pending([database]), '', { inputDrafts: { 'input-1': { db: { options: [], other: true, text: 'MariaDB' } } } });
+  assert.match(open, /data-conversation-input-other checked/);
+  assert.match(open, /<div class="conv-input-text">/);
+  assert.match(open, />MariaDB<\/textarea>/);
+ });
+ it('still reads a draft written before the questionnaire existed', () => {
+  const html = renderConversation(pending([database]), '', { inputDrafts: { 'input-1': { db: { option: 'postgres', text: '' } } } });
+  assert.match(html, /value="postgres" checked/);
+  assert.match(html, /data-conversation-input-other(?! checked)/);
+ });
+ it('draws checkboxes for a multi-select question and keeps every chosen value', () => {
+  const html = renderConversation(pending([sections]), '', { inputDrafts: { 'input-1': { sections: { options: ['intro', 'end'], other: false, text: '' } } } });
+  assert.match(html, /data-conversation-input-multi="true"/);
+  assert.match(html, /type="checkbox"[^>]*value="intro" checked/);
+  assert.match(html, /type="checkbox"[^>]*value="end" checked/);
+  assert.match(html, /type="checkbox"[^>]*data-conversation-input-other/);
+  assert.match(html, /Scegli una o più opzioni/);
+  assert.doesNotMatch(html, /type="radio"/);
+ });
+ it('asks several questions one at a time, with a tab per question and the send control on the last', () => {
+  const first = questionnaireOf(renderConversation(pending([database, sections]), '', {}));
+  assert.match(first, /Quale database\?/);
+  assert.doesNotMatch(first, /Quali sezioni includo\?/);
+  assert.match(first, /role="tab"[^>]*aria-selected="true"[^>]*data-conversation-input-step="0"/);
+  assert.match(first, /role="tab"[^>]*aria-selected="false"[^>]*data-conversation-input-step="1"/);
+  assert.match(first, /1 di 2/);
+  assert.doesNotMatch(first, /<legend>/);
+  assert.match(questionnaireOf(renderConversation(pending([database]), '', {})), /<legend>Database<\/legend>/);
+  assert.match(first, /data-conversation-input-step="prev" disabled/);
+  assert.match(first, /data-conversation-input-step="next"/);
+  assert.doesNotMatch(first, /type="submit"/);
+  const second = questionnaireOf(renderConversation(pending([database, sections]), '', { inputSteps: { 'input-1': 1 } }));
+  assert.doesNotMatch(second, /Quale database\?/);
+  assert.match(second, /Quali sezioni includo\?/);
+  assert.match(second, /2 di 2/);
+  assert.match(second, /type="submit"[^>]* disabled/);
+  assert.doesNotMatch(second, /data-conversation-input-step="next"/);
+ });
+ it('marks answered tabs and enables sending only once every question has an answer', () => {
+  const partial = questionnaireOf(renderConversation(pending([database, sections]), '', { inputSteps: { 'input-1': 1 }, inputDrafts: { 'input-1': { db: { options: ['sqlite'], other: false, text: '' } } } }));
+  assert.match(partial, /class="conv-input-tab is-answered"[^>]*data-conversation-input-step="0"/);
+  assert.match(partial, /class="conv-input-tab"[^>]*data-conversation-input-step="1"/);
+  assert.match(partial, /type="submit"[^>]* disabled/);
+  const complete = questionnaireOf(renderConversation(pending([database, sections]), '', { inputSteps: { 'input-1': 1 }, inputDrafts: { 'input-1': { db: { options: ['sqlite'], other: false, text: '' }, sections: { options: [], other: true, text: 'Appendice' } } } }));
+  assert.match(complete, /type="submit" class="primary-btn">/);
+ });
+ it('keeps the step inside the questionnaire whatever the page remembers', () => {
+  const html = renderConversation(pending([database, sections]), '', { inputSteps: { 'input-1': 7 } });
+  assert.match(html, /Quali sezioni includo\?/);
+  assert.match(html, /2 di 2/);
  });
  it('preserves free answers across renders, escapes native text and masks secret fields', () => {
   const html = renderConversation(pending([{ id: 'x', prompt: '<script>request</script>', allow_text: true }, { id: 'private', prompt: 'Risposta riservata', allow_text: true, secret: true }]), '', { busy: true, inputDrafts: { 'input-1': { x: { text: '<answer>' } } } });
   assert.match(html, /&lt;script&gt;request&lt;\/script&gt;/);
   assert.match(html, /&lt;answer&gt;/);
-  assert.match(html, /type="password"[^>]* disabled/);
-  assert.match(html, /type="submit"[^>]* disabled/);
+  assert.match(html, /data-conversation-input-step="next" disabled/);
+  const secret = questionnaireOf(renderConversation(pending([{ id: 'x', prompt: 'Nome', allow_text: true }, { id: 'private', prompt: 'Risposta riservata', allow_text: true, secret: true }]), '', { busy: true, inputSteps: { 'input-1': 1 } }));
+  assert.match(secret, /type="password"[^>]* disabled/);
+  assert.match(secret, /type="submit"[^>]* disabled/);
  });
  it('retains the native response fallback for an unknown schema', () => {
   const html = renderConversation(pending([]), '', {});
@@ -2076,6 +2140,19 @@ describe('runtime input questions', () => {
   const html = renderConversation(withConversation(), '', {});
   assert.doesNotMatch(html, /data-conversation-input-form/);
   assert.match(html, /conv-composer-input/);
+ });
+ // The page sends what the form counts as answered, through the same rule.
+ describe('inputAnswerValues', () => {
+  it('answers a choice question with its chosen options, and the free text only when "Altro" is chosen', () => {
+   assert.deepEqual(values(sections, { options: ['intro', 'end'], other: false, text: 'ignored' }), ['intro', 'end']);
+   assert.deepEqual(values(sections, { options: ['intro'], other: true, text: ' Appendice ' }), ['intro', 'Appendice']);
+   assert.deepEqual(values(database, { options: [], other: true, text: '' }), []);
+  });
+  it('answers a question without options with its text, and reads the older draft shape', () => {
+   assert.deepEqual(values({ id: 'x', prompt: 'Nome', allow_text: true }, { text: ' Ada ' }), ['Ada']);
+   assert.deepEqual(values(database, { option: 'postgres', text: '' }), ['postgres']);
+   assert.deepEqual(values(database, undefined), []);
+  });
  });
 });
 

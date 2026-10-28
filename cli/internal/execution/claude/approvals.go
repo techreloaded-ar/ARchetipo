@@ -37,7 +37,8 @@ type canUseToolRequest struct {
 
 // ask records one question the process is waiting on.
 //
-// Only `can_use_tool` is understood. Another control request — an elicitation,
+// Only `can_use_tool` is understood, and among those an `AskUserQuestion`
+// call is recorded as a pending input (see input.go). Another control request — an elicitation,
 // a dialog — is left unanswered on purpose rather than refused blindly: this
 // package would be guessing at both the payload the answer must carry and at
 // what refusing means for the tool behind it, and a wrong answer is worse than
@@ -54,6 +55,17 @@ func (s *streamSession) ask(f frame) {
 	}
 	if request.Subtype != subtypeCanUseTool {
 		return
+	}
+	if strings.TrimSpace(request.ToolName) == askUserQuestionTool {
+		// A question for the person is answered, not permitted: it becomes a
+		// pending input with its questions, unless its input does not read as
+		// questions — then it is offered as the permission it technically is.
+		s.mu.Lock()
+		handled := s.askInputLocked(id, request)
+		s.mu.Unlock()
+		if handled {
+			return
+		}
 	}
 	approval := execution.PendingApproval{
 		ID:        id,
@@ -109,6 +121,7 @@ func (s *streamSession) withdraw(requestID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.forgetAskedLocked(id)
+	s.forgetInputLocked(id)
 }
 
 // withdrawAll drops every open question, which is what the end of the process
@@ -118,6 +131,8 @@ func (s *streamSession) withdrawAll() {
 	defer s.mu.Unlock()
 	s.asked = make(map[string]execution.PendingApproval)
 	s.askedIn = nil
+	s.inputs = make(map[string]execution.PendingInput)
+	s.inputsIn = nil
 }
 
 // forgetAskedLocked removes one question from both the lookup and the order.

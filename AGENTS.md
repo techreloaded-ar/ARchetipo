@@ -329,6 +329,15 @@ across real polling before returning to the composer.
   preferences after reload. No AI credentials or non-local services; missing Chrome fails explicitly.
   Reports and screenshots are written under ignored `test/workspaces/` paths.
 
+The page-load smoke also drives the questionnaire a pending input is answered
+through, against a fetch fixture with a single-choice and a multi-select
+question: forward is refused without an answer, «Altro» opens its text field
+focused, the multi-select question draws checkboxes, drafts survive moving
+back and forward, and the answers posted to `/inputs/{id}` are exactly the ones
+given. It saves a questionnaire screenshot. The Claude adapter projects an
+`AskUserQuestion` call into that form (`cli/internal/execution/claude/input.go`),
+answering with `updatedInput.answers` keyed by question text.
+
 The page-load smoke also verifies the shared work panel toggle, reopening the
 last selected tab, expansion of increment details across the primary area,
 retained expansion across tab changes and polling, Escape restoring before

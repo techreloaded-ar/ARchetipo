@@ -108,6 +108,7 @@ const CLAIMS = [
   "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
   "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
   "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
+  "una domanda dell’agente si risponde come questionario: una domanda alla volta, scelta singola o multipla, «Altro» con testo libero, bozze conservate tra le domande e invio solo a risposte complete",
 ];
 
 // One entry per proved statement, for the report.
@@ -176,6 +177,7 @@ async function main() {
     await exerciseDocumentationRace(browser, view.url);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
+    await exerciseQuestionnaire(browser, view.url, runDir);
     await exerciseLiveConversationPagination(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
@@ -767,6 +769,79 @@ async function exercisePermissionComposer(browser, url, runDir) {
   ok("compositore espandibile", "prompt a tutta larghezza con proposte aperte, menu unificato, descrizioni leggibili e permessi accessibili anche a 390px");
   if (exceptions.length) throw new Error(`Eccezioni nel selettore dei permessi: ${JSON.stringify(exceptions)}`);
   ok(CLAIMS[11], "Permessi mostra solo il catalogo del provider, salva la scelta e la conserva cambiando modello con richieste ordinate");
+  await page.close();
+}
+
+// The questionnaire is exercised in the browser because its behaviour lives
+// across two files: the renderer draws one question at a time from the drafts
+// and the step, and the page writes both from what the person does. A pure
+// renderer test proves the drawing; only the page proves that choosing,
+// typing, moving and sending leave the server the answers it was given.
+async function exerciseQuestionnaire(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {source: `
+    const originalFetch = window.fetch.bind(window);
+    window.questionnaireAnswers = [];
+    const questions = [
+      {id:'Quale database?',header:'Database',prompt:'Quale database?',allow_text:true,options:[{value:'SQLite',label:'SQLite',description:'Un file sul computer'},{value:'Postgres',label:'Postgres',description:'Un servizio a parte'}]},
+      {id:'Quali sezioni includo?',header:'Sezioni',prompt:'Quali sezioni includo?',multi_select:true,allow_text:true,options:[{value:'Introduzione',label:'Introduzione'},{value:'Conclusione',label:'Conclusione'}]},
+    ];
+    let pending = [{id:'input-q',title:'Rispondi all’agente',payload:{questions},questions}];
+    const view = () => ({available:true,provider_id:'fixture',conversation:{id:'questionnaire-fixture',state:'ACTIVE'},session:{work:pending.length ? 'WAITING_INPUT' : 'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:pending,pending_approvals:[]},events:[{id:1,seq:1,at:'2026-01-01T12:00:00Z',kind:'text',text:'Ho due domande prima di procedere.'}],last_id:1,approvals:[],runs:[]});
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'questionnaire-fixture',title:'Questionario fixture',live:true,message_count:1}],closed_limit:20});
+      if (path === '/api/workspace/conversations/questionnaire-fixture') return json(view());
+      if (path === '/api/workspace/conversations/questionnaire-fixture/inputs/input-q' && method === 'POST') { window.questionnaireAnswers.push(JSON.parse(options.body)); pending = []; return json(view()); }
+      if (path === '/api/workspace/conversations/questionnaire-fixture/model-choice') return json({available:false});
+      if (path === '/api/workspace/activities') return json({items:[]});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input, options);
+    };
+  `});
+  await page.send("Page.navigate", {url});
+  await page.once("Page.loadEventFired", 30000, "la pagina del questionario");
+  const form = '[data-conversation-input-form="input-q"]';
+  await page.waitFor(`!!document.querySelector('${form} [data-conversation-input-question]')`, 10000, "il questionario della domanda in sospeso");
+  const opening = await page.evaluate(`(() => { const f = document.querySelector('${form}'); return {prompt:f.querySelector('.conv-input-prompt').textContent, tabs:Array.from(f.querySelectorAll('[role="tab"]')).map(t => t.textContent.trim()), counter:f.querySelector('.conv-input-counter').textContent, radios:f.querySelectorAll('input[type="radio"]').length, otherHidden:f.querySelector('.conv-input-other + .conv-input-text').hidden, submit:!!f.querySelector('[type="submit"]')}; })()`);
+  if (opening.prompt !== 'Quale database?' || opening.tabs.join('|') !== 'Database|Sezioni' || opening.counter !== '1 di 2' || opening.radios !== 3 || !opening.otherHidden || opening.submit) throw new Error('Il questionario non apre sulla prima domanda: ' + JSON.stringify(opening));
+  // Forward without an answer is refused where the person is, on the same question.
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="next"]').click()`);
+  await page.waitFor(`document.body.textContent.includes('Rispondi alla domanda prima di continuare')`, 10000, "il rifiuto di avanzare senza risposta");
+  if (await page.evaluate(`document.querySelector('${form} .conv-input-prompt').textContent`) !== 'Quale database?') throw new Error('Il questionario è avanzato senza risposta');
+  // "Altro" opens its field, focused, and the words typed become the answer.
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-other]').click()`);
+  await page.waitFor(`document.querySelector('${form} .conv-input-other + .conv-input-text')?.hidden === false && document.activeElement === document.querySelector('${form} [data-conversation-input-text]')`, 10000, "il campo di «Altro» aperto e a fuoco");
+  await page.evaluate(`(() => { const t = document.querySelector('${form} [data-conversation-input-text]'); t.value = 'MariaDB'; t.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="1"]').click()`);
+  await page.waitFor(`document.querySelector('${form} .conv-input-prompt')?.textContent === 'Quali sezioni includo?'`, 10000, "la seconda domanda dalla sua scheda");
+  const second = await page.evaluate(`(() => { const f = document.querySelector('${form}'); return {answered:f.querySelector('[data-conversation-input-step="0"]').classList.contains('is-answered'), boxes:f.querySelectorAll('input[type="checkbox"]').length, radios:f.querySelectorAll('input[type="radio"]').length, submitDisabled:f.querySelector('[type="submit"]').disabled, hint:f.querySelector('.conv-input-hint').textContent}; })()`);
+  if (!second.answered || second.boxes !== 3 || second.radios !== 0 || !second.submitDisabled || second.hint !== 'Scegli una o più opzioni') throw new Error('La domanda a scelta multipla non è disegnata come tale: ' + JSON.stringify(second));
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-option][value="Introduzione"]').click()`);
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-option][value="Conclusione"]').click()`);
+  await page.waitFor(`document.querySelector('${form} [type="submit"]')?.disabled === false`, 10000, "l’invio abilitato a risposte complete");
+  const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
+  await fs.writeFile(path.join(runDir, 'questionnaire.png'), Buffer.from(screenshot.data, 'base64'));
+  // Back and forward keep every answer: the drafts outlive the question drawn.
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="prev"]').click()`);
+  await page.waitFor(`document.querySelector('${form} .conv-input-prompt')?.textContent === 'Quale database?'`, 10000, "la prima domanda ritrovata con Indietro");
+  const kept = await page.evaluate(`(() => { const f = document.querySelector('${form}'); return {other:f.querySelector('[data-conversation-input-other]').checked, text:f.querySelector('[data-conversation-input-text]').value, hidden:f.querySelector('.conv-input-other + .conv-input-text').hidden}; })()`);
+  if (!kept.other || kept.text !== 'MariaDB' || kept.hidden) throw new Error('La risposta libera non sopravvive al cambio di domanda: ' + JSON.stringify(kept));
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="next"]').click()`);
+  await page.waitFor(`document.querySelectorAll('${form} [data-conversation-input-option]:checked').length === 2`, 10000, "le scelte multiple ritrovate con Avanti");
+  await page.evaluate(`document.querySelector('${form} [type="submit"]').click()`);
+  await page.waitFor(`window.questionnaireAnswers.length === 1 && !document.querySelector('${form}')`, 10000, "le risposte inviate e il questionario chiuso");
+  const sent = await page.evaluate(`window.questionnaireAnswers[0]`);
+  const expected = {answers:{'Quale database?':['MariaDB'],'Quali sezioni includo?':['Introduzione','Conclusione']}};
+  if (JSON.stringify(sent) !== JSON.stringify(expected)) throw new Error('Il server ha ricevuto risposte diverse da quelle date: ' + JSON.stringify(sent));
+  if (exceptions.length) throw new Error('Eccezioni nel questionario: ' + JSON.stringify(exceptions));
+  ok(CLAIMS[CLAIMS.length - 1], "il questionario rifiuta di avanzare senza risposta, apre «Altro» a fuoco, disegna checkbox per la scelta multipla, conserva le bozze tra le domande e invia esattamente le risposte date");
   await page.close();
 }
 

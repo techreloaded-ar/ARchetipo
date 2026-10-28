@@ -144,6 +144,10 @@ type streamSession struct {
 	// written under mu like every other fact of the session.
 	asked   map[string]execution.PendingApproval
 	askedIn []string
+	// inputs holds the AskUserQuestion calls the process is waiting an answer
+	// to, with the same lifecycle as asked: a question dies with the process.
+	inputs   map[string]execution.PendingInput
+	inputsIn []string
 	// now stamps a question with the instant it was asked. It is a field with a
 	// real default rather than a constructor parameter so that the seven places
 	// that build a session for a test keep building it unchanged; the provider
@@ -187,6 +191,7 @@ func newStreamSession(process localrun.Process, session *localrun.Session, conve
 		pending:  make(map[string]chan controlOutcome),
 		tools:    make(map[string]string),
 		asked:    make(map[string]execution.PendingApproval),
+		inputs:   make(map[string]execution.PendingInput),
 		now:      time.Now,
 		ready:    make(chan struct{}),
 		turnDone: make(chan struct{}),

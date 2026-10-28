@@ -152,6 +152,17 @@
 		inputPending: "Input richiesto",
 		inputPlaceholder: "Risposta JSON",
 		inputSend: "Rispondi",
+		inputQuestions: "Domande",
+		inputQuestionNumber: (n) => `Domanda ${n}`,
+		inputCounter: (n, total) => `${n} di ${total}`,
+		inputPickOne: "Scegli un’opzione",
+		inputPickMany: "Scegli una o più opzioni",
+		inputOther: "Altro",
+		inputOtherHint: "Scrivi una risposta tua",
+		inputOtherPlaceholder: "La tua risposta",
+		inputFreeAnswer: "La tua risposta",
+		inputPrevious: "Indietro",
+		inputNext: "Avanti",
 		// Proposta e suo esito
 		markProposed: "proposta",
 		markNotPossible: "non è possibile",
@@ -1258,19 +1269,105 @@
 		return `<div class="conv-activity-selection"><div><strong>${escapeHtml(textAt(selection, "label"))}</strong><p>${escapeHtml(textAt(selection, "description"))}</p>${textAt(selection, "result") ? `<small>Risultato: ${escapeHtml(selection.result)}</small>` : ""}</div><button type="button" class="ghost-btn" data-conversation-activity-clear aria-label="Rimuovi attività">×</button></div>`;
 	}
 
-	function renderInputQuestion(question, index, draft, busy) {
+	/**
+	 * The answer a person has given so far to one question, in one shape
+	 * whatever the draft holds: `options` are the chosen values, `other` says
+	 * whether the free-text entry is selected, `text` is what was typed. The
+	 * older `{option, text}` draft still reads, so a form drawn before the
+	 * questionnaire existed keeps its answer.
+	 */
+	function inputAnswerOf(entry) {
+		const value = entry && typeof entry === "object" ? entry : {};
+		const options = Array.isArray(value.options)
+			? value.options.filter((option) => typeof option === "string" && option)
+			: typeof value.option === "string" && value.option ? [value.option] : [];
+		const text = typeof value.text === "string" ? value.text : "";
+		const other = typeof value.other === "boolean" ? value.other : !!text && !options.length;
+		return { options, other, text };
+	}
+
+	/**
+	 * The values one question is answered with: the chosen options, then the
+	 * free text when it is selected. A question with no options is answered by
+	 * its text alone. Empty means unanswered.
+	 */
+	function inputAnswerValues(question, entry) {
+		const answer = inputAnswerOf(entry);
+		const values = arrayAt(question, "options").length ? answer.options.slice() : [];
+		const text = answer.text.trim();
+		if (text && (answer.other || !arrayAt(question, "options").length)) values.push(text);
+		return values;
+	}
+
+	/**
+	 * One question of a questionnaire, as the harness asks it: radios for a
+	 * single choice, checkboxes for several, and — when the adapter allows free
+	 * text — an "Altro" entry that opens a field for an answer of one's own, the
+	 * way the harness's own terminal prompt does. A question without options is
+	 * just that field. Nothing here decides what the question means: header, prompt,
+	 * options and flags are the adapter's words.
+	 */
+	function renderInputQuestion(question, index, draft, busy, withTabs) {
 		const id = escapeHtml(textAt(question, "id"));
-		const saved = draft && draft[question.id] || {};
+		const answer = inputAnswerOf(draft && draft[question.id]);
 		const disabled = busy ? " disabled" : "";
-		const options = arrayAt(question, "options").map((option) => `<label class="conv-input-option">
-			<input type="radio" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${saved.option === option.value ? " checked" : ""}${disabled}${question.allow_text ? "" : " required"}>
+		const choices = arrayAt(question, "options");
+		const multi = question.multi_select === true;
+		const kind = multi ? "checkbox" : "radio";
+		const options = choices.map((option) => `<label class="conv-input-option">
+			<input type="${kind}" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${answer.options.includes(option.value) ? " checked" : ""}${disabled}>
 			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}</span>
 		</label>`).join("");
-		const answer = question.allow_text ? `<label class="conv-input-text">${options ? "Oppure scrivi una risposta" : "La tua risposta"}
-			${question.secret ? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(saved.text || "")}"${disabled}${options ? "" : " required"}>`
-			: `<textarea data-conversation-input-text rows="2"${disabled}${options ? "" : " required"}>${escapeHtml(saved.text || "")}</textarea>`}
-		</label>` : "";
-		return `<fieldset data-conversation-input-question="${id}">${textAt(question, "header") ? `<legend>${escapeHtml(question.header)}</legend>` : ""}<p>${escapeHtml(textAt(question, "prompt"))}</p>${options}${answer}</fieldset>`;
+		const field = (required) => question.secret
+			? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(answer.text)}"${disabled}${required ? " required" : ""}>`
+			: `<textarea data-conversation-input-text rows="2" placeholder="${escapeHtml(TEXT.inputOtherPlaceholder)}"${disabled}${required ? " required" : ""}>${escapeHtml(answer.text)}</textarea>`;
+		let other = "";
+		if (question.allow_text && choices.length) {
+			other = `<label class="conv-input-option conv-input-other">
+			<input type="${kind}" name="question-${index}" data-conversation-input-other${answer.other ? " checked" : ""}${disabled}>
+			<span><strong>${escapeHtml(TEXT.inputOther)}</strong><small>${escapeHtml(TEXT.inputOtherHint)}</small></span>
+		</label>
+		<div class="conv-input-text"${answer.other ? "" : " hidden"}>${field(false)}</div>`;
+		} else if (question.allow_text) {
+			other = `<label class="conv-input-text">${escapeHtml(TEXT.inputFreeAnswer)}${field(true)}</label>`;
+		}
+		const hint = choices.length ? `<p class="conv-input-hint">${escapeHtml(multi ? TEXT.inputPickMany : TEXT.inputPickOne)}</p>` : "";
+		// The header names the question's tab when there is one; repeating it
+		// above the prompt would say the same word twice.
+		const legend = textAt(question, "header") && !withTabs ? `<legend>${escapeHtml(question.header)}</legend>` : "";
+		return `<fieldset data-conversation-input-question="${id}"${multi ? ' data-conversation-input-multi="true"' : ""}>${legend}<p class="conv-input-prompt">${escapeHtml(textAt(question, "prompt"))}</p>${hint}<div class="conv-input-options">${options}${other}</div></fieldset>`;
+	}
+
+	/**
+	 * The questionnaire a pending input is answered through: one question at a
+	 * time, a tab per question to move between them, and the send control on
+	 * the last one — enabled only once every question has an answer, which is
+	 * the one rule the adapter's protocol already imposes. The step shown is
+	 * the page's choice (`ui.inputSteps`), like the drafts.
+	 */
+	function renderInputQuestionnaire(input, questions, draft, ui) {
+		const id = escapeHtml(input.id);
+		const total = questions.length;
+		const requested = ui.inputSteps && typeof ui.inputSteps[input.id] === "number" ? ui.inputSteps[input.id] : 0;
+		const step = Math.min(Math.max(requested, 0), total - 1);
+		const answered = questions.map((question) => inputAnswerValues(question, draft && draft[question.id]).length > 0);
+		const complete = answered.every(Boolean);
+		const disabled = ui.busy ? " disabled" : "";
+		const tabs = total > 1 ? `<div class="conv-input-tabs" role="tablist" aria-label="${escapeHtml(TEXT.inputQuestions)}">${questions.map((question, index) => {
+			const label = textAt(question, "header") || TEXT.inputQuestionNumber(index + 1);
+			return `<button type="button" role="tab" class="conv-input-tab${answered[index] ? " is-answered" : ""}" aria-selected="${index === step ? "true" : "false"}" data-conversation-input-step="${index}"${disabled}>${answered[index] ? '<span class="conv-input-tab-check" aria-hidden="true">✓</span>' : ""}${escapeHtml(label)}</button>`;
+		}).join("")}</div>` : "";
+		const counter = total > 1 ? `<span class="conv-input-counter">${escapeHtml(TEXT.inputCounter(step + 1, total))}</span>` : "";
+		const previous = total > 1 ? `<button type="button" class="ghost-btn" data-conversation-input-step="prev"${step === 0 || ui.busy ? " disabled" : ""}>${escapeHtml(TEXT.inputPrevious)}</button>` : "";
+		const forward = step < total - 1
+			? `<button type="button" class="primary-btn" data-conversation-input-step="next"${disabled}>${escapeHtml(TEXT.inputNext)}</button>`
+			: `<button type="submit" class="primary-btn"${ui.busy || !complete ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>`;
+		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
+				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${counter}</div>
+				${tabs}
+				<div class="conv-input-fields">${renderInputQuestion(questions[step], step, draft, ui.busy, total > 1)}</div>
+				<div class="conv-input-nav">${previous}${forward}</div>
+			</form>`;
 	}
 
 	function renderConversationInputs(view, ui) {
@@ -1282,12 +1379,11 @@
 			const questions = arrayAt(input, "questions");
 			// The adapter supplies presentation fields. Unknown native requests keep
 			// their existing response path, behind an explicit technical detail.
-			const fields = questions.length ? questions.map((question, index) => renderInputQuestion(question, index, draft, ui.busy)).join("")
-				: `<details><summary>Dettaglio della richiesta</summary><pre>${escapeHtml(JSON.stringify(input.payload || {}, null, 2))}</pre></details>
-				<textarea data-conversation-input-draft="${id}" placeholder="${escapeHtml(TEXT.inputPlaceholder)}" required${ui.busy ? " disabled" : ""}>${escapeHtml(typeof draft === "string" ? draft : "")}</textarea>`;
+			if (questions.length) return renderInputQuestionnaire(input, questions, draft, ui);
 			return `<form class="conv-input" data-conversation-input-form="${id}">
 				<strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>
-				<div class="conv-input-fields">${fields}</div>
+				<div class="conv-input-fields"><details><summary>Dettaglio della richiesta</summary><pre>${escapeHtml(JSON.stringify(input.payload || {}, null, 2))}</pre></details>
+				<textarea data-conversation-input-draft="${id}" placeholder="${escapeHtml(TEXT.inputPlaceholder)}" required${ui.busy ? " disabled" : ""}>${escapeHtml(typeof draft === "string" ? draft : "")}</textarea></div>
 				<button type="submit" class="primary-btn"${ui.busy ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>
 			</form>`;
 		}).join("");
@@ -1845,8 +1941,10 @@
 	// per far scorrere un contatore sarebbe un prezzo assurdo: il chiamante
 	// riscrive quel solo numero, e lo scrive con le stesse parole di qui.
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderConversation, escapeHtml, formatElapsed };
+		module.exports = { renderConversation, escapeHtml, formatElapsed, inputAnswerValues };
 	} else {
-		window.Conversation = { renderConversation, formatElapsed };
+		// inputAnswerValues travels with the renderer because the page sends
+		// exactly the values the form shows as answered: one rule, read by both.
+		window.Conversation = { renderConversation, formatElapsed, inputAnswerValues };
 	}
 })();
