@@ -136,6 +136,7 @@ type environmentPreviewView struct {
 	Checks      []verification.CheckObservation `json:"checks"`
 	ChecksError string                          `json:"checks_error,omitempty"`
 	Attention   *environmentAttention           `json:"attention,omitempty"`
+	Services    []environmentService            `json:"services"`
 }
 
 func conversationPreviewView(root string, view preview.View) environmentPreviewView {

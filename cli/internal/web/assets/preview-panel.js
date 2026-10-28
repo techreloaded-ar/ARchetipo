@@ -146,8 +146,8 @@
   find("fullscreen").hidden=!document.fullscreenEnabled;
   find("pick").querySelector("span").textContent=picking?"Selezione attiva · Esc":"Commenta un elemento";
   find("pick").setAttribute("aria-pressed",String(picking));
-  find("start").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","ready"].includes(view?.state);
-  find("reconfigure").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","ready"].includes(view?.state);
+  find("start").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","stopping","ready"].includes(view?.state);
+  find("reconfigure").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","stopping","ready"].includes(view?.state);
   find("stop").disabled=busy || !["configuring","waiting","preparing","starting","ready","error"].includes(view?.state);
   find("reload").disabled=!frame;
   const state=view?.state || "unconfigured";
@@ -175,7 +175,7 @@
  function drawEnvironment(value){
   host.querySelector(".environment-headline").textContent=value.headline||"Ambiente";
   host.querySelector(".environment-checks-label").textContent=value.checks_label||"";
-  const checkKey=JSON.stringify([value.checks,value.checks_label,value.checks_error,value.environment?.previous_error,value.environment?.conversation_id]);
+  const checkKey=JSON.stringify([value.services,value.checks,value.checks_label,value.checks_error,value.environment?.previous_error,value.environment?.conversation_id]);
   if(checkKey!==checksSignature){checksSignature=checkKey;host.querySelector(".environment-checks").innerHTML=window.Preview.renderChecks(value);}
   const signature=JSON.stringify(value.attention||null);
   const attention=host.querySelector(".environment-attention");
@@ -244,7 +244,7 @@
   }
   host.querySelector(".preview-log pre").textContent=[value.resources?.resources?.map(r=>`Servizio ${r.resource.name}: ${r.state}${r.error ? " — "+r.error : ""}`).join("\n"),value.resources?.ports ? Object.entries(value.resources.ports).map(([name,port])=>`${name}: 127.0.0.1:${port}`).join("\n") : "",value.environment?.log,value.log,value.preparation?.report_path ? "Report ambiente: "+value.preparation.report_path : ""].filter(Boolean).join("\n");
   host.querySelector(".preview-error-badge").hidden=!(value.state==="error" || value.error);
-  const labels={unconfigured:"Premi Preview: configuriamo e prepariamo l’ambiente del progetto.",configuring:"Configurazione ambiente nella sessione tecnica…",waiting:"Serve il tuo intervento. Apri Dettagli ambiente.",stopped:"Premi Preview per aprire l’applicazione.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",ready:"Preview disponibile.",error:value.error};
+  const labels={unconfigured:"Premi Preview: configuriamo e prepariamo l’ambiente del progetto.",configuring:"Configurazione ambiente nella sessione tecnica…",waiting:"Serve il tuo intervento. Apri Dettagli ambiente.",stopped:"Premi Preview per aprire l’applicazione.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",stopping:"Arresto ambiente in corso…",ready:"Preview disponibile.",error:value.error};
   status.textContent=notice || labels[value.state] || value.state;
   if(value.state==="ready") {
    find("external").href=value.url;

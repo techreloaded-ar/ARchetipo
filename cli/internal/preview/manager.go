@@ -19,6 +19,7 @@ import (
 )
 
 type View struct {
+	Server       *ServerState                `json:"server,omitempty"`
 	Resources    *verification.ResourceState `json:"resources,omitempty"`
 	CleanupError string                      `json:"cleanup_error,omitempty"`
 	Configured   bool                        `json:"configured"`
@@ -41,6 +42,7 @@ type Instance struct {
 	done              chan struct{}
 	server            *http.Server
 	retainEnvironment bool
+	runID             string
 }
 
 func (i *Instance) Snapshot() View { i.mu.Lock(); defer i.mu.Unlock(); return i.view }
@@ -64,6 +66,17 @@ func (i *Instance) fail(err error) {
 	i.mu.Unlock()
 }
 
+func (i *Instance) commandEnded(root string, err error) {
+	state, readErr := readServerState(root)
+	if readErr == nil && state != nil && state.RunID == i.runID && state.State == "stopped" && serverStopRequested(root, state.RunID) {
+		i.mu.Lock()
+		i.view.State = "stopping"
+		i.mu.Unlock()
+		return
+	}
+	i.fail(fmt.Errorf("il server della preview è terminato: %v", err))
+}
+
 type Manager struct {
 	mu        sync.Mutex
 	instances map[string]*Instance
@@ -84,14 +97,7 @@ func (m *Manager) Status(root, id string) (View, error) {
 	m.mu.Unlock()
 	if instance != nil {
 		view := instance.Snapshot()
-		resources, err := verification.New(root, "").Resources()
-		if err != nil {
-			return view, err
-		}
-		if resources.Owner != "" {
-			view.Resources = &resources
-		}
-		return view, nil
+		return resourceView(root, view)
 	}
 	r, err := Load(root)
 	if err != nil {
@@ -156,6 +162,19 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	if err != nil {
 		return View{}, iox.NewConflict("another viewer owns this preview", "stop the existing preview before starting another", err)
 	}
+	commandLock, err := store.TryLock(context.Background(), "preview-command")
+	if err != nil {
+		_ = lock.Unlock()
+		return View{}, iox.NewConflict("the previous preview command is still ending", "wait for its server tree to stop before starting another preview", err)
+	}
+	if err = commandLock.Unlock(); err != nil {
+		_ = lock.Unlock()
+		return View{}, err
+	}
+	if err = ReconcileStopped(root); err != nil {
+		_ = lock.Unlock()
+		return View{}, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := "starting"
 	if r.PrepareEnvironment || prepareOnly {
@@ -206,6 +225,13 @@ func ready(ctx context.Context, address string) bool {
 func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Recipe, listener net.Listener, lock *conversationlog.ConversationLock, prepareOnly bool) {
 	defer close(i.done)
 	defer func() { _ = lock.Unlock() }()
+	defer func() {
+		i.mu.Lock()
+		if i.view.State == "stopping" {
+			i.view.State = "stopped"
+		}
+		i.mu.Unlock()
+	}()
 	defer func() {
 		if listener != nil {
 			_ = listener.Close()
@@ -298,12 +324,24 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 			i.fail(envErr)
 			return
 		}
-		go func() { exited <- runCommand(ctx, dir, r.Argv, env, i) }()
+		identity, identityErr := newServerState(r.URL)
+		if identityErr != nil {
+			i.fail(identityErr)
+			return
+		}
+		i.runID = identity.RunID
+		go func() { exited <- runCommand(ctx, root, dir, r.URL, identity.RunID, r.Argv, env, i) }()
 	}
 	defer func() {
 		if !reused {
 			i.cancel()
 			<-exited //nolint:errcheck // Cleanup reaps the already observed command exit.
+			if err := waitStopped(r.URL); err != nil {
+				i.mu.Lock()
+				i.view.CleanupError = err.Error()
+				i.mu.Unlock()
+				i.fail(err)
+			}
 		}
 	}()
 	deadline := time.NewTimer(30 * time.Second)
@@ -317,7 +355,7 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 		case err := <-exited:
 			// Put the result back for the deferred reap.
 			exited <- err
-			i.fail(fmt.Errorf("il comando della preview è terminato: %v", err))
+			i.commandEnded(root, err)
 			return
 		case <-deadline.C:
 			i.fail(fmt.Errorf("il server non risponde a %s dopo 30 secondi", r.URL))
@@ -339,7 +377,7 @@ func (i *Instance) run(ctx context.Context, root, dir, parentOrigin string, r Re
 		}
 	case err := <-exited:
 		exited <- err
-		i.fail(fmt.Errorf("il server della preview è terminato: %v", err))
+		i.commandEnded(root, err)
 	}
 }
 
@@ -386,6 +424,14 @@ func (m *Manager) stop(id string) error {
 	if i := m.instances[id]; i != nil {
 		i.cancel()
 		<-i.done
+		if message := i.Snapshot().CleanupError; message != "" {
+			// A retry can confirm that an asynchronously stopping server is gone.
+			if recipe := i.Snapshot().Recipe; recipe != nil {
+				if err := waitStopped(recipe.URL); err != nil {
+					return err
+				}
+			}
+		}
 		// Also recover an earlier failed cleanup, or services left by Prepare.
 		service := verification.New(i.root, "")
 		resources, err := service.Resources()
@@ -436,6 +482,12 @@ func (m *Manager) StopEnvironment(root, id string) error {
 	if err := m.Stop(id); err != nil {
 		return err
 	}
+	if err := requestServerStop(root); err != nil {
+		return err
+	}
+	if err := ReconcileStopped(root); err != nil {
+		return err
+	}
 	service := verification.New(root, "")
 	resources, err := service.Resources()
 	if err != nil {
@@ -459,6 +511,16 @@ func (m *Manager) StopEnvironment(root, id string) error {
 }
 
 func resourceView(root string, view View) (View, error) {
+	server, err := observedServerState(root)
+	if err != nil {
+		return view, err
+	}
+	view.Server = server
+	if server != nil && server.State != "stopped" && !server.OwnerActive {
+		view.State = "error"
+		view.CleanupError = "Il proprietario della preview è terminato senza un arresto verificato. Usa Ferma ambiente per controllare il servizio registrato."
+		view.Error = view.CleanupError
+	}
 	resources, err := verification.New(root, "").Resources()
 	if err != nil {
 		return view, err
@@ -467,7 +529,8 @@ func resourceView(root string, view View) (View, error) {
 		view.Resources = &resources
 	}
 	for _, r := range resources.Resources {
-		if r.State != "stopped" && r.State != "ready" {
+		busy := view.State == "preparing" || view.State == "starting" || view.State == "stopping"
+		if r.State != "stopped" && r.State != "ready" && (!busy || r.State == "error") {
 			view.State = "error"
 			view.Error = "L’ambiente contiene servizi registrati da verificare o fermare. Usa Ferma ambiente per riconciliarli."
 			break

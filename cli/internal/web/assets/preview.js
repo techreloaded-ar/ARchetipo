@@ -43,7 +43,8 @@
  }
  function renderChecks(value) {
   const rows=(value.checks||[]).map(check=>`<li><strong>${esc(check.name)}</strong> · ${esc(check.label)}${check.report?`<button type="button" data-environment-log="${esc(check.name)}">Leggi report</button>`:""}</li>`).join("");
-  return `<p>${esc(value.checks_label||"")}</p>${value.checks_error?`<p>${esc(value.checks_error)}</p>`:""}<ul>${rows}</ul>${value.environment?.previous_error?`<details><summary>Errore di un tentativo precedente</summary><p>${esc(value.environment.previous_error)}</p></details>`:""}${value.environment?.conversation_id?'<button type="button" data-environment-chat>Apri chat ambiente</button>':""}<pre class="environment-report" hidden></pre>`;
+  const services=(value.services||[]).map(service=>`<li><strong>${esc(service.name)}</strong> · ${esc(service.state)}<br>${esc(service.owner)}<br><small>${esc(service.directory)}</small>${(service.endpoints||[]).map(endpoint=>`<br><code>${esc(endpoint)}</code>`).join("")}</li>`).join("");
+  return `${services?`<h3>Servizi dell’ambiente</h3><ul class="environment-services">${services}</ul><p>Ferma arresta la preview e le risorse gestite di questo ambiente.</p>`:""}<p>${esc(value.checks_label||"")}</p>${value.checks_error?`<p>${esc(value.checks_error)}</p>`:""}<ul>${rows}</ul>${value.environment?.previous_error?`<details><summary>Errore di un tentativo precedente</summary><p>${esc(value.environment.previous_error)}</p></details>`:""}${value.environment?.conversation_id?'<button type="button" data-environment-chat>Apri chat ambiente</button>':""}<pre class="environment-report" hidden></pre>`;
  }
  const api={renderAttention,renderChecks,commentMessage,cleanElement,panelLimits,panelHeight,panelState};
  if(typeof module!=="undefined" && module.exports) module.exports=api;

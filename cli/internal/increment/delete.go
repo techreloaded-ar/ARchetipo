@@ -12,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
@@ -201,12 +202,15 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				defer func() { _ = mutationLock.Unlock() }()
 				// A released native session may still have a preview owned by another
 				// viewer. Every preview lock must be free, including the standalone CLI.
-				for _, previewID := range append([]string{"standalone", "environment"}, result.ConversationIDs...) {
+				for _, previewID := range append([]string{"standalone", "environment", "command"}, result.ConversationIDs...) {
 					previewLock, lockErr := localStore.TryLock(ctx, "preview-"+previewID)
 					if lockErr != nil {
 						return r, iox.NewConflict("a preview is still running", "stop the preview in its owning viewer or terminal before deleting this increment", lockErr)
 					}
 					defer func() { _ = previewLock.Unlock() }()
+				}
+				if err = preview.VerifyStopped(r.Workdir); err != nil {
+					return r, err
 				}
 				_, stateErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json"))
 				_, resourceErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "resources.json"))

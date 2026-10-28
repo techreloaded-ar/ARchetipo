@@ -62,7 +62,9 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 	root.AddCommand(publish)
 	root.AddCommand(newEnvironmentCapabilitiesCmd(s), newEnvironmentQualifyCmd(s))
 	root.AddCommand(&cobra.Command{Use: "_run", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		code, err := verification.Supervise(cmd.Context(), s.in, s.out, s.err)
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		code, err := verification.Supervise(ctx, s.in, s.out, s.err)
 		if err == nil {
 			return nil
 		}
@@ -72,7 +74,9 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 		return &iox.CodedError{Code: iox.CodeInternal, Message: "verification command ended unsuccessfully", Exit: code, Cause: err}
 	}})
 	root.AddCommand(&cobra.Command{Use: "_guard", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return verification.Guard(cmd.Context(), s.in, s.out)
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return verification.Guard(ctx, s.in, s.out)
 	}})
 	for _, operation := range []string{"show", "configure", "prepare", "check", "cleanup", "status", "evidence", "checks", "run"} {
 		var spec string

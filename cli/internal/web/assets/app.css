@@ -7942,6 +7942,7 @@ body.no-workspace [data-workspace-scoped] {
 .environment-checks-label { display:block; color:var(--text-muted); font-size:11px; margin:4px 0; }
 .environment-checks ul { padding-left:18px; }
 .environment-checks li { margin:8px 0; }
+.environment-services { overflow-wrap:anywhere; }
 .environment-checks button { margin-left:8px; }
 .environment-attention { border:1px solid var(--border); border-radius:8px; margin-top:8px; padding:10px; background:var(--surface-2); }
 .environment-attention h3 { font-size:14px; margin:0 0 8px; }

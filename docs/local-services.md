@@ -78,8 +78,9 @@ In caso di collisione l'avvio fallisce e viene compensato; un nuovo tentativo
 assegna nuove porte. Non riutilizzare il server sconosciuto che risponde alla porta.
 
 Due incrementi possono girare insieme; due anteprime che vogliono possedere i
-servizi dello stesso checkout ricevono invece un conflitto, evitando che lo stop
-nell'una interrompa silenziosamente l'altra.
+servizi dello stesso checkout ricevono invece un conflitto. Uno stop esplicito
+può raggiungere il supervisore dello stesso checkout anche da un altro terminale
+o viewer, attraverso una richiesta indirizzata all'identità della singola esecuzione.
 
 ## Uso e arresto
 
@@ -96,6 +97,35 @@ nell'una interrompa silenziosamente l'altra.
   prepare/check esterna riceve un conflitto finché quel proprietario è attivo.
 - `archetipo execution preview run`: prepara l'ambiente e supervisiona applicazione
   e dipendenze finché il terminale resta attivo.
+- `archetipo execution preview status`: restituisce `kind: preview`, con l'ultimo
+  endpoint applicativo, l'esito dello stop e la presenza del supervisore proprietario.
+- `archetipo execution preview stop`: richiede lo stop al supervisore registrato
+  di questo checkout e attende il rilascio e il cleanup; riconcilia poi i registri.
+  Un timeout conserva la richiesta e restituisce `E_CONFLICT`, senza dichiarare
+  il server fermo. Se il proprietario è scomparso ma la porta resta occupata,
+  conserva l'errore e richiede intervento: non termina un listener sconosciuto.
+
+Su macOS e Linux il comando in primo piano possiede un gruppo di processi:
+riceve SIGTERM, poi SIGKILL dopo una breve attesa se necessario. Anche l'uscita
+anticipata del launcher ferma i figli rimasti. I wrapper devono restare in primo
+piano, senza `nohup`, detach o nuove sessioni. Su Windows resta il percorso
+di cancellazione tramite `taskkill /T`; il recupero dei figli di un launcher già
+terminato non è garantito da questa modifica.
+
+Il registro `.archetipo/environment/preview-process.json` conserva endpoint,
+identità dell'esecuzione ed esito verificato dell'arresto. La verifica usa una
+connessione TCP, non il successo di una risposta HTTP. `preview-stop.json`
+indirizza le richieste alla sola esecuzione indicata: una richiesta vecchia non
+ferma quella successiva. Non sono registri di PID da terminare al riavvio.
+La rimozione di un incremento attende anche il supervisore applicativo e rifiuta
+di rimuovere il worktree se l'ultimo arresto risulta ancora da verificare.
+
+Il test opzionale `npm run test:next-preview-process-smoke -- --node-modules
+/percorso/assoluto/node_modules` usa una copia di Next già installata, senza
+installare dipendenze o modificare quel progetto. Crea una piccola app separata
+e prova la catena npm → wrapper → Next con stop normale, stop da un altro
+terminale, morte forzata del proprietario e uscita anticipata del wrapper.
+Report e log restano sotto `test/workspaces/next-preview-process-smoke/`.
 
 I comandi environment usano `archetipo/v1`, `kind: verification_result`.
 `status` restituisce il registro; `run` annuncia il risultato di preparazione e
@@ -105,7 +135,9 @@ Errori di contratto sono `E_INVALID_INPUT`, ownership concorrente `E_CONFLICT`,
 ricetta/registro mancanti o corrotti `E_PRECONDITION`.
 
 Nella view **Ferma ambiente** attende l'arresto dell'applicazione e dei servizi;
-Output mostra gli stati e le porte. Un fallimento di cleanup resta visibile e
+il dettaglio Ambiente elenca servizi, porte e gestione, distinguendo i server
+esterni dagli ultimi stati registrati delle dipendenze. Output mostra i log.
+Un fallimento di cleanup resta visibile e
 riprovabile. Il pulsante funziona anche dopo un riavvio, leggendo il registro.
 Un supervisore separato riceve la chiusura del canale privato anche se il viewer
 viene terminato con SIGKILL ed esegue il cleanup. Lo stesso vale per il run CLI.

@@ -38,14 +38,16 @@ async function main(){
   await run('init',cli,['init','--tool','codex','--connector','file','--yes'],{cwd:sandbox});
   await fs.appendFile(path.join(sandbox,'.archetipo/config.yaml'),'\nexecution:\n  default_provider:\n    id: codex\n    config:\n      command: '+JSON.stringify(path.join(repo,'test/e2e/support/fake-codex.mjs'))+'\n      model: gpt-fake\n      sandbox: workspace-write\n');
   const app=path.join(sandbox,'server.mjs');
+  await fs.writeFile(path.join(sandbox,'package.json'),JSON.stringify({private:true,scripts:{dev:'node launcher.mjs'}}));
+  await fs.writeFile(path.join(sandbox,'launcher.mjs'),`import {spawn} from 'node:child_process';import fs from 'node:fs';const child=spawn(process.execPath,['server.mjs',process.argv[2]],{stdio:'inherit'});child.on('exit',code=>process.exit(code??1));setInterval(()=>{if(fs.existsSync('exit-launcher'))process.exit(0);},20);`);
   await fs.writeFile(app,`import http from 'node:http';import fs from 'node:fs';fs.writeFileSync('server.pid',String(process.pid));for(let i=0;i<150;i++)console.log('Output fixture '+i);http.createServer((req,res)=>{res.setHeader('X-Checkout',process.cwd());res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Preview smoke</title><h1>Risultato</h1><p id=descrizione>Descrizione del risultato</p><a href="/seconda">Seconda pagina</a><button data-testid="salva" onclick="document.body.dataset.clicked=1">Salva</button><script>window.mountId=Math.random();</script>');}).listen(Number(process.argv[2]),'127.0.0.1');`);
   const recipe=path.join(dir,'recipe.json');
-  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,'server.mjs','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
+  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:['npm','run','dev','--','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
   await run('preview-configure',cli,['execution','preview','configure','--file',recipe],{cwd:sandbox});
   const environmentRecipe=path.join(dir,'environment-recipe.json');
   await fs.copyFile(path.join(repo,'test/e2e/support/managed-resource.mjs'),path.join(sandbox,'managed-resource.mjs'));
   const resourceCommand=action=>({name:'dependency-'+action,argv:[process.execPath,'managed-resource.mjs',action],timeout_seconds:10});
-  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,ports:['DATABASE'],resources:[{name:'database',start:resourceCommand('start'),probe:resourceCommand('probe'),stop:resourceCommand('stop'),stopped:resourceCommand('stopped')}],inputs:['server.mjs','setup.mjs','managed-resource.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
+  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,ports:['DATABASE'],resources:[{name:'database',start:resourceCommand('start'),probe:resourceCommand('probe'),stop:resourceCommand('stop'),stopped:resourceCommand('stopped')}],inputs:['package.json','launcher.mjs','server.mjs','setup.mjs','managed-resource.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
   await fs.writeFile(path.join(sandbox,'setup.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
   await run('environment-configure',cli,['execution','environment','configure','--file',environmentRecipe],{cwd:sandbox});
   // Two real increments inherit committed recipes and helpers from main.
@@ -53,7 +55,7 @@ async function main(){
   await run('git-init','git',['init','-b','main'],{cwd:sandbox});
   await run('git-name','git',['config','user.name','Preview smoke'],{cwd:sandbox});
   await run('git-email','git',['config','user.email','preview@example.test'],{cwd:sandbox});
-  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','server.mjs','setup.mjs','managed-resource.mjs'],{cwd:sandbox});
+  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','package.json','launcher.mjs','server.mjs','setup.mjs','managed-resource.mjs'],{cwd:sandbox});
   await run('git-baseline','git',['commit','-m','test: reusable preview setup'],{cwd:sandbox});
   const incrementInput=path.join(dir,'increment.json');
   await fs.writeFile(incrementInput,JSON.stringify({title:'Isolated preview',request:'Verify inherited setup'}));
@@ -375,10 +377,33 @@ async function main(){
   const started=await fetch(endpoint+'/preview',{method:'POST'});assert.equal(started.status,202);
   await until(async()=>{const state=await (await fetch(endpoint+'/preview')).json();return state.state==='ready';},'second app startup');
   const newPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));assert.notEqual(newPid,pid);
+  const services=(await (await fetch(endpoint+'/preview')).json()).services;
+  assert(services.some(service=>service.name==='Applicazione'&&service.state==='In esecuzione'&&service.endpoints.length===1));
+  assert(services.some(service=>service.name==='database'&&service.state.includes('registrato')));
+  assert.match(await page.evaluate('document.querySelector(".environment-services").textContent'),/Applicazione.*database/s);
   viewer.child.kill('SIGKILL');
   await until(()=>{try{process.kill(newPid,0);return false;}catch{return true;}},'server cleanup on hard viewer death');
   await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'external dependency cleanup on hard viewer death');
   ok('Anche la terminazione forzata del viewer chiude applicazione e servizi esterni posseduti.');
+  // npm -> launcher -> server: successful launcher exit must still reap the
+  // child, release its socket and run the registered environment cleanup.
+  for(const mode of ['cli-stop','launcher-exit']){
+  const orphanRun=spawn(cli,['execution','preview','run'],{cwd:sandbox,env,stdio:['ignore','pipe','pipe']});standalone.push(orphanRun);
+  let orphanOutput='',orphanError='';
+  orphanRun.stdout.on('data',chunk=>{orphanOutput+=chunk;});orphanRun.stderr.on('data',chunk=>{orphanError+=chunk;});
+  await until(()=>{if(orphanRun.exitCode!==null)throw new Error(orphanError);try{return JSON.parse(orphanOutput).data.state==='ready';}catch{return false;}},'npm preview before launcher exit');
+  const orphanView=JSON.parse(orphanOutput).data;
+  const orphanPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));
+  if(mode==='cli-stop')await run('stop-managed-preview',cli,['execution','preview','stop'],{cwd:sandbox});
+  else await fs.writeFile(path.join(sandbox,'exit-launcher'),'exit');
+  await until(()=>orphanRun.exitCode!==null,'launcher exit ends standalone preview');
+  await until(()=>{try{process.kill(orphanPid,0);return false;}catch{return true;}},'launcher exit terminates server descendant');
+  await assert.rejects(fetch(orphanView.recipe.url,{signal:AbortSignal.timeout(1000)}),'launcher exit releases app port');
+  assert(JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'));
+  if(mode==='launcher-exit')await fs.rm(path.join(sandbox,'exit-launcher'));
+  else assert.equal(orphanRun.exitCode,0,'explicit stop should end the owner successfully');
+  ok('La catena npm → launcher → server e le dipendenze si arrestano con '+mode+'.');
+  }
   // The standalone environment run uses the same independent lifetime owner.
   const environmentRun=spawn(cli,['execution','environment','run'],{cwd:sandbox,env,stdio:['ignore','pipe','pipe']});standalone.push(environmentRun);
   let environmentOutput='',environmentError='';
@@ -443,7 +468,9 @@ async function main(){
    const setupInput=path.join(dir,'bootstrap-environment.json');
    await fs.writeFile(setupInput,JSON.stringify({version:1,inputs:['scripts/archetipo/prepare.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'scripts/archetipo/prepare.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(!require('node:fs').existsSync('dependency.ready'))process.exit(1)"],timeout_seconds:10}],checks:{}}));
    await run('bootstrap-configure',cli,['execution','environment','configure','--candidate','--file',setupInput],{cwd:bootstrap});
-   await run('bootstrap-preview',cli,['execution','preview','configure','--candidate','--file',recipe],{cwd:bootstrap});
+   const bootstrapPreviewRecipe=path.join(dir,'bootstrap-preview.json');
+   await fs.writeFile(bootstrapPreviewRecipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,'server.mjs','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
+   await run('bootstrap-preview',cli,['execution','preview','configure','--candidate','--file',bootstrapPreviewRecipe],{cwd:bootstrap});
    const observed=JSON.parse((await run('bootstrap-capabilities',cli,['execution','environment','capabilities','--tool',process.execPath],{cwd:bootstrap})).stdout).data;
    assert.equal(observed.external_network.state,'unknown');assert.equal(observed.loopback_binding.state,'available');
    const qualification=JSON.parse((await run('bootstrap-qualify',cli,['execution','environment','qualify','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap})).stdout).data;

@@ -71,6 +71,13 @@ shell or an unrelated service. Each lifecycle command verifies
 `ARCHETIPO_PORT_<NAME>`. Distinguish a denied/unreachable daemon from an absent
 resource. Verify the owned endpoint as well as identity before reuse or stop.
 
+Preview launchers run in the foreground for the server's whole lifetime. Do not
+daemonize, detach, use `nohup`, background the app or create a new process session.
+Prefer `exec` in shell launchers; programmatic wrappers wait for the child and
+propagate its exit status. The CLI owns the foreground process tree and stops
+remaining children when the launcher exits; persistent dependencies belong only
+to registered resources with explicit stop and stopped probes.
+
 Readiness must exercise the actual requirements: e.g. usable generated artifacts,
 reachable owned dependencies and compatible schema. A successful version command
 or the existence of a dependency directory alone is insufficient for a database

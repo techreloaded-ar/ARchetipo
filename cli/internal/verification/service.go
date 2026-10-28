@@ -169,6 +169,15 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		return result, err
 	}
 	defer func() { _ = lock.Unlock() }()
+	if !liveCheck && !s.previewOwner {
+		previewLock, previewErr := store.TryLock(ctx, "preview-command")
+		if previewErr != nil {
+			return result, iox.NewConflict("the preview command is still ending", "wait for its owned server tree to terminate before preparing or cleaning", previewErr)
+		}
+		if err = previewLock.Unlock(); err != nil {
+			return result, err
+		}
+	}
 	// A dead CLI's supervisor may still be terminating its command. Never start
 	// another writer until that separate command owner has exited as well.
 	commandLock, err := store.TryLock(ctx, "verification-command")

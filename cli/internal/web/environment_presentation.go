@@ -19,6 +19,7 @@ type environmentAttention struct {
 }
 
 func (s *Server) presentEnvironment(ctx context.Context, ws *workspaceSession, target previewTarget, result *environmentPreviewView) {
+	result.Services = environmentServices(target.Root, *result)
 	result.Headline = "Ambiente da preparare"
 	switch result.State {
 	case "ready":
@@ -34,6 +35,8 @@ func (s *Server) presentEnvironment(ctx context.Context, ws *workspaceSession, t
 		result.Headline = "Preparazione ambiente in corso"
 	case "starting":
 		result.Headline = "Avvio preview in corso"
+	case "stopping":
+		result.Headline = "Arresto ambiente in corso"
 	case "waiting":
 		result.Headline = "Ambiente in attesa"
 	case "error":

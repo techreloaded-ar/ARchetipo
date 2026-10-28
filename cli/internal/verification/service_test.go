@@ -400,6 +400,11 @@ func TestLiveCheckDoesNotRepairOrStopPreviewEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = owner.Unlock() }()
+	commandOwner, err := store.TryLock(context.Background(), "preview-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = commandOwner.Unlock() }()
 	runner.calls = nil
 	result := execute(t, s, "check")
 	if !result.Passed || strings.Join(runner.calls, ",") != "test" {
@@ -415,6 +420,23 @@ func TestLiveCheckDoesNotRepairOrStopPreviewEnvironment(t *testing.T) {
 	runner.calls = nil
 	if _, err = s.Execute(context.Background(), "check", "focused", "", false); err == nil || len(runner.calls) != 0 {
 		t.Fatal("live check repaired dependencies", err, runner.calls)
+	}
+}
+
+func TestPreparationAndCleanupWaitForPreviewSupervisor(t *testing.T) {
+	s, runner, _ := fixture(t)
+	execute(t, s, "prepare")
+	store, _ := conversationlog.NewFileStore(s.Root)
+	owner, err := store.TryLock(context.Background(), "preview-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Unlock() }()
+	for _, operation := range []string{"prepare", "cleanup"} {
+		runner.calls = nil
+		if _, err = s.Execute(context.Background(), operation, "", "", false); err == nil || len(runner.calls) != 0 {
+			t.Fatal("changed environment before server shutdown completed", operation, err, runner.calls)
+		}
 	}
 }
 

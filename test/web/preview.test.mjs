@@ -4,6 +4,15 @@ import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const preview=require('../../cli/internal/web/assets/preview.js');
 
+test('service list renders server ownership and states as escaped text',()=>{
+ const html=preview.renderChecks({services:[{name:'App <test>',state:'Arresto da verificare',owner:'Server esterno',directory:'/checkout/<name>',endpoints:['127.0.0.1:1234']} ]});
+ assert.match(html,/App &lt;test&gt;/);
+ assert.match(html,/Arresto da verificare/);
+ assert.match(html,/Server esterno/);
+ assert.match(html,/127.0.0.1:1234/);
+ assert.doesNotMatch(html,/<name>|<test>/);
+});
+
 test('environment approval renders only provider options and escapes commands',()=>{
  const html=preview.renderAttention({kind:'approval',title:'Serve consenso',conversation_id:'env',approvals:[{id:'17',title:'Aprire <Docker>?',args:{command:'<script>bad</script>'},options:[{id:'provider-choice',label:'Solo adesso',description:'Nessuna regola persistente'}]}]});
  assert.match(html,/data-environment-approval="17"/);

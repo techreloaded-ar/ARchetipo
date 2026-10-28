@@ -43,6 +43,7 @@
     "test:view-increment-deletion-smoke": "node ./test/e2e/increment-deletion-view-smoke.mjs",
     "test:view-increment-smoke": "node ./test/e2e/increment-from-view-smoke.mjs",
     "test:view-preview-smoke": "node ./test/e2e/preview-from-view-smoke.mjs",
+    "test:next-preview-process-smoke": "node ./test/e2e/next-preview-process-smoke.mjs",
     "test:view-chat-smoke": "node ./test/e2e/chat-first-view-smoke.mjs"
   },
   "dependencies": {
