@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   product-viewer:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +21,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: browser-actions/setup-chrome@v1
+      # The image's Chrome uses its installed AppArmor profile. Downloaded
+      # Chromium snapshots cannot use user namespaces on this Ubuntu image.
+      - name: Select sandboxed system Chrome
         id: chrome
+        run: |
+          chrome_path="$(command -v google-chrome)"
+          "$chrome_path" --version
+          echo "chrome-path=$chrome_path" >> "$GITHUB_OUTPUT"
       - run: npm ci
       - name: Pure frontend contracts
         run: npm run test:web
