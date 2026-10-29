@@ -80,6 +80,8 @@ type persistentFakeNativeProvider struct {
 	// configuration is allowed to carry sets them.
 	workingDir     string
 	providerConfig map[string]any
+	// acceptsAttachments adds turn.attachments to what the fake declares.
+	acceptsAttachments bool
 }
 
 func newPersistentFakeNativeProvider(id string, store *persistentFakeNativeStore) *persistentFakeNativeProvider {
@@ -110,6 +112,9 @@ func (p *persistentFakeNativeProvider) DiscoverSession(_ context.Context, reques
 		Environment: p.environmentFor(request)}
 	if p.noModels {
 		discovery.Models = nil
+	}
+	if p.acceptsAttachments {
+		discovery.Capabilities = append(discovery.Capabilities, execution.SessionCapabilityAttachments)
 	}
 	return discovery, nil
 }

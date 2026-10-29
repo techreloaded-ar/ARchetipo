@@ -49,7 +49,36 @@ const (
 	SessionCapabilityApproval        SessionCapability = "turn.approval"
 	SessionCapabilitySteering        SessionCapability = "turn.steering"
 	SessionCapabilityInterrupt       SessionCapability = "turn.interrupt"
+	// SessionCapabilityAttachments says a turn may carry images beside its
+	// text. The viewer offers the control only when the provider declares it.
+	SessionCapabilityAttachments SessionCapability = "turn.attachments"
 )
+
+// Attachment is an image the person attached to a message. The viewer stores
+// the bytes on disk and hands the adapter their Path; the adapter puts the
+// image in the native frame and copies the attachment, without its path, onto
+// the user_message event, so the history can show it back through URL.
+type Attachment struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	URL       string `json:"url,omitempty"`
+	Path      string `json:"-"`
+}
+
+// AttachmentReferences is what an event may carry of the attachments: the
+// same list, without the path the adapter read them from.
+func AttachmentReferences(attachments []Attachment) []Attachment {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]Attachment, len(attachments))
+	for i, attachment := range attachments {
+		attachment.Path = ""
+		out[i] = attachment
+	}
+	return out
+}
 
 // SessionEnvironment freezes where and how a conversation runs. ProviderConfig
 // contains non-secret values only; credentials remain in the environment named
@@ -270,7 +299,8 @@ type StartTurnRequest struct {
 	Options map[string]string `json:"options,omitempty"`
 	// Skills are references selected from DiscoverSession. A provider validates
 	// them against the current native catalog before invocation.
-	Skills []SessionSkill `json:"skills,omitempty"`
+	Skills      []SessionSkill `json:"skills,omitempty"`
+	Attachments []Attachment   `json:"attachments,omitempty"`
 }
 
 // SessionCommandRequest correlates every command sent during an active turn.
@@ -286,7 +316,8 @@ type SessionCommandRequest struct {
 	Payload       json.RawMessage `json:"payload,omitempty"`
 	// Answers use the question and option identities exposed by PendingInput.
 	// The adapter encodes them in its native protocol; Payload is the legacy path.
-	Answers map[string][]string `json:"answers,omitempty"`
+	Answers     map[string][]string `json:"answers,omitempty"`
+	Attachments []Attachment        `json:"attachments,omitempty"`
 }
 
 type SessionTurnStarted struct {

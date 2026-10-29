@@ -150,9 +150,12 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		kind, text, tool, carries := startedItem(params)
 		if carries {
 			if kind == localrun.KindUserMessage {
+				attachments := a.attachmentsOf(text)
 				if display, echo := a.instructionEchoOf(text); echo {
 					text = display
 				}
+				a.appendWith(execution.RunEvent{Kind: kind, Text: text, Attachments: execution.AttachmentReferences(attachments), Raw: params})
+				return
 			}
 			a.append(kind, text, tool, params)
 		}
@@ -204,6 +207,17 @@ func (a *appServer) append(kind, text, tool string, params json.RawMessage, fina
 		TurnID:       turnID,
 		SubmissionID: submissionID,
 	})
+}
+
+// appendWith stamps the event with the turn it belongs to and hands it on.
+func (a *appServer) appendWith(event execution.RunEvent) {
+	a.mu.Lock()
+	event.Seq = a.seq
+	event.TurnID, event.SubmissionID = a.turnCoreID, a.submissionID
+	appendEvent := a.appendEvent
+	a.mu.Unlock()
+	event.Raw = localrun.RawOf(event.Raw)
+	appendEvent(event)
 }
 
 func decodeDelta(params json.RawMessage) string {

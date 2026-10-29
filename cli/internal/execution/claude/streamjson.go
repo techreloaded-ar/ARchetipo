@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"encoding/base64"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
+	"os"
 )
 
 // The stream-json protocol, as observed against Claude Code 2.1.235. The
@@ -125,7 +127,12 @@ type streamSession struct {
 	// one: replayed as it is, it would be the longest thing the person never
 	// said. The replay carries the instruction whole in the raw frame, so
 	// nothing is lost — only the history reads what was asked, not how.
-	instructions      map[string]string
+	instructions map[string]string
+	// attachments are the images written beside a message, keyed by the text
+	// of that message and kept until the process replays it: the replay is
+	// what makes the user_message event, and the event has to carry the
+	// images the frame carried — by reference, the bytes are on disk.
+	attachments       map[string][]execution.Attachment
 	completed         bool
 	finalMessage      string
 	lastAssistantText string
@@ -334,9 +341,30 @@ func (s *streamSession) writeUserText(text string) error {
 // the replay comes back with the instruction and the message still told apart
 // and only the instruction is kept out of the history.
 func (s *streamSession) writeUserBlocks(texts ...string) error {
-	blocks := make([]any, 0, len(texts))
+	return s.writeUserContent(nil, texts...)
+}
+
+// writeUserContent writes one `user` frame of text blocks followed by one
+// image block per attachment. An empty text writes no block: the API refuses
+// an empty text block, and a message that is only an image has nothing to say
+// in words.
+func (s *streamSession) writeUserContent(attachments []execution.Attachment, texts ...string) error {
+	blocks := make([]any, 0, len(texts)+len(attachments))
 	for _, text := range texts {
+		if text == "" {
+			continue
+		}
 		blocks = append(blocks, map[string]any{"type": "text", "text": text})
+	}
+	for _, attachment := range attachments {
+		block, err := imageBlock(attachment)
+		if err != nil {
+			return err
+		}
+		blocks = append(blocks, block)
+	}
+	if len(blocks) == 0 {
+		return fmt.Errorf("a user frame needs a text or an attachment")
 	}
 	payload, err := json.Marshal(map[string]any{
 		"type": frameUser,
@@ -349,6 +377,48 @@ func (s *streamSession) writeUserBlocks(texts ...string) error {
 		return fmt.Errorf("encoding the message for the claude session: %w", err)
 	}
 	return s.process.Send(payload)
+}
+
+// imageBlock reads the attachment from disk and renders it as the base64
+// image block the Anthropic message format defines.
+func imageBlock(attachment execution.Attachment) (map[string]any, error) {
+	data, err := os.ReadFile(attachment.Path)
+	if err != nil {
+		return nil, fmt.Errorf("reading the attachment %s: %w", attachment.Name, err)
+	}
+	return map[string]any{
+		"type": "image",
+		"source": map[string]any{
+			"type":       "base64",
+			"media_type": attachment.MediaType,
+			"data":       base64.StdEncoding.EncodeToString(data),
+		},
+	}, nil
+}
+
+// expectAttachments remembers the images written beside text, so the replay
+// of that text carries them onto its user_message event. Remembered before the
+// write, like expectInstruction, because the replay can arrive while the write
+// is still returning.
+func (s *streamSession) expectAttachments(text string, attachments []execution.Attachment) {
+	if len(attachments) == 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.attachments == nil {
+		s.attachments = map[string][]execution.Attachment{}
+	}
+	s.attachments[text] = attachments
+	s.mu.Unlock()
+}
+
+// attachmentsOf hands back, and forgets, the images written beside text.
+func (s *streamSession) attachmentsOf(text string) []execution.Attachment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	attachments := s.attachments[text]
+	delete(s.attachments, text)
+	return attachments
 }
 
 // start opens the work: it writes the first user frame and waits until the
@@ -380,8 +450,9 @@ func (s *streamSession) start(ctx context.Context, prompt string) error {
 // startNative starts a real user turn. Unlike start, the text is not an
 // adapter instruction and therefore remains in the native conversation
 // timeline when Claude replays it.
-func (s *streamSession) startNative(ctx context.Context, message string) error {
-	if err := s.writeUserText(message); err != nil {
+func (s *streamSession) startNative(ctx context.Context, message string, attachments []execution.Attachment) error {
+	s.expectAttachments(message, attachments)
+	if err := s.writeUserContent(attachments, message); err != nil {
 		return fmt.Errorf("the claude session could not be given its message: %w", err)
 	}
 	select {
@@ -528,6 +599,11 @@ func (s *streamSession) openingEchoOf(text string) (rest string, echo bool) {
 // the end of the work, while in a conversation it is the agent's question, and
 // the answer to it opens the next turn.
 func (s *streamSession) Send(ctx context.Context, text string) error {
+	return s.SendWith(ctx, text, nil)
+}
+
+// SendWith is Send with the images attached to the message.
+func (s *streamSession) SendWith(ctx context.Context, text string, attachments []execution.Attachment) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -566,9 +642,10 @@ func (s *streamSession) Send(ctx context.Context, text string) error {
 	// message and before it. It is given up before the write and never put back:
 	// a write that fails means the process is gone, and a retry that delivered
 	// the instruction a second time would open the conversation twice.
-	write := func() error { return s.writeUserText(text) }
+	s.expectAttachments(text, attachments)
+	write := func() error { return s.writeUserContent(attachments, text) }
 	if opening, held := s.takeHeldOpening(); held {
-		write = func() error { return s.writeUserBlocks(opening, text) }
+		write = func() error { return s.writeUserContent(attachments, opening, text) }
 	}
 	if err := write(); err != nil {
 		// The guard above and the write are not one atomic act, and they cannot

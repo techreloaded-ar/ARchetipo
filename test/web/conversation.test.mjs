@@ -2191,3 +2191,41 @@ describe("renderConversation — decisione sulla revisione", () => {
 		assert.ok(!html.includes("data-conversation-review-decision"), "una decisione non dovuta è offerta");
 	});
 });
+
+// Immagini allegate: il comando per allegare esiste solo quando il chiamante
+// dice che la sessione le accetta — il modulo non conosce la capability, legge
+// un fatto — e un evento che porta allegati li mostra dall'indirizzo che l'evento
+// stesso dichiara, mai da uno costruito qui.
+describe("allegati immagine", () => {
+	it("offre il comando per allegare solo quando il chiamante lo dichiara", () => {
+		const without = renderConversation(LIVE, "", { writable: true });
+		assert.ok(!without.includes("data-conversation-attach"));
+		assert.ok(!without.includes('type="file"'));
+
+		const offered = renderConversation(LIVE, "", { writable: true, attachmentsOffered: true });
+		assert.ok(offered.includes("data-conversation-attach"));
+		assert.ok(offered.includes('accept="image/png,image/jpeg,image/gif,image/webp"'));
+	});
+
+	it("mostra le anteprime scelte con il comando per toglierle, e quelle in consegna senza", () => {
+		const draft = [{ name: "schermata.png", media_type: "image/png", data_url: "data:image/png;base64,QUJD" }];
+		const html = renderConversation(LIVE, "", { writable: true, attachmentsOffered: true, attachments: draft, pendingMessage: "", pendingAttachments: draft });
+		assert.ok(html.includes('src="data:image/png;base64,QUJD"'));
+		assert.equal((html.match(/data-conversation-attachment-remove="0"/g) || []).length, 1);
+		// L'eco in consegna esiste anche senza parole: l'immagine è il messaggio.
+		assert.ok(html.includes("conv-event-pending"));
+		assert.ok(visibleText(html).includes("in consegna"));
+	});
+
+	it("rende gli allegati di un evento dall'indirizzo che l'evento porta", () => {
+		const view = withConversation({
+			events: [{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "guarda", attachments: [{ id: "abc.png", name: "SCHERMATA-X", media_type: "image/png", url: "/INDIRIZZO-DEL-SERVER/abc.png" }] }],
+		});
+		const html = renderConversation(view, "", {});
+		assert.ok(html.includes('src="/INDIRIZZO-DEL-SERVER/abc.png"'));
+		assert.ok(html.includes('alt="SCHERMATA-X"'));
+		// Un allegato senza indirizzo non ha niente da mostrare e non inventa un percorso.
+		const bare = renderConversation(withConversation({ events: [{ id: 1, seq: 1, kind: "user_message", text: "x", attachments: [{ id: "abc.png", name: "n" }] }] }), "", {});
+		assert.ok(!bare.includes("conv-attachment-img"));
+	});
+});

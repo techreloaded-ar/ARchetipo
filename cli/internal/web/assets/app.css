@@ -6559,6 +6559,18 @@ body.no-workspace [data-workspace-scoped] {
 .conv-turn-controls > [data-conversation-field="model"] { margin-left: auto; }
 .conv-turn-controls .conv-pill-shell { min-width: 0; max-width: 100%; }
 .conv-composer-row > .primary-btn { margin-left: auto; flex: 0 0 auto; }
+
+/* Allegati: anteprime in riga, piccole, sopra al campo nel compositore e
+   sotto al testo nella storia; nel compositore ognuna porta il comando per
+   toglierla. */
+.conv-attachments { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.conv-composer-surface > .conv-attachments { padding: var(--space-2) var(--space-2) 0; flex-basis: 100%; }
+.conv-attachment { position: relative; }
+.conv-attachment-img { display: block; max-width: 160px; max-height: 120px; border-radius: 6px; border: 1px solid var(--border-strong); object-fit: cover; }
+.conv-event-body .conv-attachment-img { max-width: 320px; max-height: 240px; object-fit: contain; }
+.conv-attachment-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font-size: 13px; line-height: 1; cursor: pointer; padding: 0; }
+.conv-attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 6px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-dim); cursor: pointer; }
+.conv-attach-btn:hover:not(:disabled) { color: var(--text); }
 .conv-composer-hint { font-size: 11px; line-height: 1.4; color: var(--text-dim); }
 
 /* ---- Close control ------------------------------------------------------ */

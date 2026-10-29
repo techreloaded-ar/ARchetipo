@@ -111,6 +111,10 @@
 		// suonerebbe come un rifiuto.
 		pendingMessageMark: "in consegna",
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
+		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
+		// detto che il provider le accetta: il pannello non lo sa da sé.
+		attach: "Allega immagine",
+		attachRemove: "Rimuovi l'immagine",
 		// Blocco run
 		markRun: "Attività",
 		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
@@ -363,6 +367,8 @@
 		} else if (text) {
 			lines.push(`<p class="conv-event-text">${escapeHtml(text)}</p>`);
 		}
+		const attachments = renderEventAttachments(arrayAt(event, "attachments"));
+		if (attachments) lines.push(attachments);
 		const id = event.id === null || event.id === undefined ? "" : String(event.id);
 		// Dentro una piega aperta — ed e' l'unico caso in cui il chiamante
 		// passa `ui` — ogni riga con un corpo si puo' ripiegare da sola: un
@@ -1103,7 +1109,7 @@
 		// della conversazione, non ha un id nella colonnina, e porta scritto in
 		// testa che è in consegna. Quando l'agente riporta il messaggio, il
 		// chiamante smette di passarla e al suo posto resta l'evento vero.
-		const pendingRow = renderPendingMessage(local.pendingMessage);
+		const pendingRow = renderPendingMessage(local.pendingMessage, local.pendingAttachments);
 		if (pendingRow) rows.push(pendingRow);
 		// E in fondo a tutto, se l'agente sta ancora lavorando a questo turno,
 		// la riga che lo dichiara: sta sotto l'ultima cosa detta perche' e' li'
@@ -1117,13 +1123,36 @@
 		return `<ol class="conv-timeline${frozen}">${rows.join("")}</ol>`;
 	}
 
+	// Le immagini di un evento della storia, servite dall'indirizzo che
+	// l'evento stesso porta: il pannello non costruisce indirizzi.
+	function renderEventAttachments(attachments) {
+		const items = attachments.filter((a) => a && textAt(a, "url"));
+		if (!items.length) return "";
+		return `<ul class="conv-attachments">${items
+			.map((a) => `<li class="conv-attachment"><a href="${escapeHtml(textAt(a, "url"))}" target="_blank" rel="noopener"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "url"))}" alt="${escapeHtml(textAt(a, "name"))}" loading="lazy"></a></li>`)
+			.join("")}</ul>`;
+	}
+
+	// Le immagini ancora nel compositore o in consegna: anteprime locali, con
+	// il comando per toglierle finché non sono partite.
+	function renderDraftAttachments(attachments, removable) {
+		const items = arrayAt({ a: attachments }, "a").filter((a) => a && textAt(a, "data_url"));
+		if (!items.length) return "";
+		return `<ul class="conv-attachments${removable ? " conv-attachments-draft" : ""}">${items
+			.map((a, i) => `<li class="conv-attachment"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "data_url"))}" alt="${escapeHtml(textAt(a, "name"))}">${
+				removable ? `<button type="button" class="conv-attachment-remove" data-conversation-attachment-remove="${i}" title="${escapeHtml(TEXT.attachRemove)}" aria-label="${escapeHtml(TEXT.attachRemove)}">×</button>` : ""
+			}</li>`)
+			.join("")}</ul>`;
+	}
+
 	// L'eco locale del messaggio appena inviato. Ha la forma di una riga della
 	// timeline perché sta dove starà quella vera, e se ne distingue per due
 	// cose sole: la colonnina non porta un id — non ce n'è uno, il messaggio non
 	// è ancora un evento — e la testa dichiara che è in consegna.
-	function renderPendingMessage(text) {
+	function renderPendingMessage(text, attachments) {
 		const said = typeof text === "string" ? text : "";
-		if (!said.trim()) return "";
+		const images = renderDraftAttachments(attachments, false);
+		if (!said.trim() && !images) return "";
 		return `<li class="conv-event cev-you conv-event-pending">
 			<div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span></div>
 			<div class="conv-event-body">
@@ -1131,7 +1160,8 @@
 					<span class="conv-event-kind">${escapeHtml(EVENT_KINDS.user_message.label)}</span>
 					<span class="conv-event-pending-mark" title="${escapeHtml(TEXT.pendingMessageTitle)}">${escapeHtml(TEXT.pendingMessageMark)}</span>
 				</div>
-				<p class="conv-event-text">${escapeHtml(said)}</p>
+				${said.trim() ? `<p class="conv-event-text">${escapeHtml(said)}</p>` : ""}
+				${images}
 			</div>
 		</li>`;
 	}
@@ -1226,15 +1256,23 @@
 			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
 		const confirming = typeof ui.nextConfirmHtml === "string" && ui.nextConfirmHtml !== "";
+		// Il comando per allegare c'è solo quando il server lo ha offerto; le
+		// anteprime delle immagini scelte stanno sopra al campo, dove si legge
+		// quello che partirà.
+		const attachControl = ui.attachmentsOffered === true && writable
+			? `<button type="button" class="conv-attach-btn" data-conversation-attach title="${escapeHtml(TEXT.attach)}" aria-label="${escapeHtml(TEXT.attach)}"${disabled}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10.5 4.5 5.8 9.2a1.7 1.7 0 0 0 2.4 2.4l5-5a3.2 3.2 0 0 0-4.5-4.5l-5.3 5.3a4.6 4.6 0 0 0 6.5 6.5l3.6-3.6"/></svg></button><input type="file" class="conv-attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>`
+			: "";
 		// Una riga sola: il campo cresce mentre si scrive, modello e Invia gli
 		// restano accanto. I prossimi passi dell'incremento stanno sopra.
 		return `<form class="conv-composer">
 			${renderActivitySelection(objectAt(ui, "activitySelection"))}
 			<div class="conv-composer-surface">
 				${confirming ? ui.nextConfirmHtml : typeof ui.nextStepsHtml === "string" ? ui.nextStepsHtml : ""}
+				${confirming ? "" : renderDraftAttachments(ui.attachments, true)}
 				<textarea class="conv-composer-input" rows="1" aria-label="Messaggio all’agente" placeholder="${escapeHtml(placeholder)}"${disabled}${confirming ? " hidden" : ""}>${escapeHtml(draft)}</textarea>
 				${typeof ui.skillChoiceHtml === "string" && !confirming ? ui.skillChoiceHtml : ""}
 				<div class="conv-composer-row"${confirming ? " hidden" : ""}>
+					${attachControl}
 					${typeof agentRow === "string" ? agentRow : ""}
 					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 				</div>

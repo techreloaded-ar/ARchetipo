@@ -2,8 +2,11 @@ package claude
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -942,5 +945,60 @@ func TestSkillPreambleOf(t *testing.T) {
 		if got != want || ok != (want != "") {
 			t.Fatalf("skillPreambleOf(%q) = %q, %v; want %q", text, got, ok, want)
 		}
+	}
+}
+
+// An image attached to a message travels in the same user frame as its text, as
+// the base64 block the message format defines, and comes back onto the
+// user_message event by reference only: the journal never holds the bytes.
+func TestStreamSessionWritesAttachedImagesAndKeepsTheirBytesOutOfTheHistory(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+	path := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(path, []byte("PNGBYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment := execution.Attachment{ID: "shot.png", Name: "schermata.png", MediaType: "image/png", URL: "/api/x/shot.png", Path: path}
+
+	if err := client.SendWith(context.Background(), "guarda qui", []execution.Attachment{attachment}); err != nil {
+		t.Fatalf("SendWith failed: %v", err)
+	}
+	frames := fake.framesReceived()
+	last := string(frames[len(frames)-1])
+	wantBlock := `{"source":{"data":"` + base64.StdEncoding.EncodeToString([]byte("PNGBYTES")) + `","media_type":"image/png","type":"base64"},"type":"image"}`
+	if !strings.Contains(last, `{"text":"guarda qui","type":"text"}`) || !strings.Contains(last, wantBlock) {
+		t.Fatalf("the user frame does not carry text and image blocks: %s", last)
+	}
+
+	// The replay echoes the frame, bytes included.
+	fake.emit(last)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+	var said execution.RunEvent
+	for _, event := range session.Events(0) {
+		if event.Kind == localrun.KindUserMessage {
+			said = event
+		}
+	}
+	if said.Text != "guarda qui" || len(said.Attachments) != 1 || said.Attachments[0].URL != attachment.URL || said.Attachments[0].MediaType != "image/png" {
+		t.Fatalf("user_message = %#v", said)
+	}
+	if encoded, _ := json.Marshal(said); strings.Contains(string(encoded), "PNGBYTES") || strings.Contains(string(encoded), base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))) || strings.Contains(string(encoded), path) {
+		t.Fatalf("the event leaks the bytes or the path: %s", encoded)
+	}
+
+	// An image with no words still makes a user_message, so the history shows it.
+	if err := client.SendWith(context.Background(), "", []execution.Attachment{attachment}); err != nil {
+		t.Fatalf("SendWith without text failed: %v", err)
+	}
+	frames = fake.framesReceived()
+	last = string(frames[len(frames)-1])
+	if strings.Contains(last, `"type":"text"`) {
+		t.Fatalf("an empty text block was written: %s", last)
+	}
+	fake.emit(last)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 2 })
+	events := session.Events(0)
+	if tail := events[len(events)-1]; tail.Text != "" || len(tail.Attachments) != 1 || len(tail.Raw) != 0 {
+		t.Fatalf("image-only user_message = %#v", tail)
 	}
 }

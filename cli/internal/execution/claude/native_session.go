@@ -61,6 +61,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			execution.SessionCapabilityTurnOptions, execution.SessionCapabilitySkillDiscovery,
 			execution.SessionCapabilitySkillInvocation, execution.SessionCapabilityApproval,
 			execution.SessionCapabilitySteering, execution.SessionCapabilityInterrupt,
+			execution.SessionCapabilityAttachments,
 		}),
 		PermissionProfiles: p.PermissionProfiles(), PermissionProfile: defaultNativePermissionProfile(cfg),
 		Models:      execution.CloneModels(models),
@@ -206,7 +207,7 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	session.process, session.client, session.current = process, client, &turn
 	session.connected = true
 	session.mu.Unlock()
-	if err := client.startNative(ctx, message); err != nil {
+	if err := client.startNative(ctx, message, request.Attachments); err != nil {
 		_, _, _ = p.shutdown(process)
 		session.failTurn(err)
 		delivery.State = execution.DeliveryUncertain
@@ -284,7 +285,7 @@ func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.Se
 }
 
 func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return p.nativeCommand(request, func(client *streamSession) error { return client.Send(ctx, request.Message) })
+	return p.nativeCommand(request, func(client *streamSession) error { return client.SendWith(ctx, request.Message, request.Attachments) })
 }
 
 func (p *Provider) RespondSessionInput(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {

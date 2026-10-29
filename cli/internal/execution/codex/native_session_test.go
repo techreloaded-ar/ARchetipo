@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -352,5 +353,77 @@ func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing
 	}
 	if ends != 1 || children != 2 {
 		t.Fatalf("end events: parent=%d children=%d", ends, children)
+	}
+}
+
+// An image attached to a turn travels as a localImage item beside the text, in
+// turn/start and in turn/steer alike, and comes back onto the user_message
+// event by reference: the event names the attachment, never its path.
+func TestNativeCodexTurnCarriesAttachedImagesAsLocalImageItems(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	discoveryFake, fake := newFakeCodex(), newFakeCodex()
+	provider := New(Options{
+		Runner:     &fakeRunner{outcomes: []runOutcome{probeOK}},
+		Starter:    &sequenceStarter{processes: []*fakeCodex{discoveryFake, fake}},
+		WorkingDir: func() (string, error) { return dir, nil },
+	})
+	config := map[string]any{"command": fakeCommand(t), "sandbox": "workspace-write"}
+	discovery, err := provider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{ProviderConfig: config, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !execution.SupportsSessionCapability(discovery.Capabilities, execution.SessionCapabilityAttachments) {
+		t.Fatalf("codex does not declare %s: %v", execution.SessionCapabilityAttachments, discovery.Capabilities)
+	}
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "conv-img", Environment: discovery.Environment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := execution.Attachment{ID: "shot.png", Name: "schermata.png", MediaType: "image/png", URL: "/api/x/shot.png", Path: dir + "/shot.png"}
+
+	started, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: created.Session, TurnID: "turn-core-1", SubmissionID: "submission-1", Message: "guarda qui", Model: "gpt-native", Attachments: []execution.Attachment{attachment}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-fake.turnStarted
+	input, _ := json.Marshal(fake.paramsOf(methodTurnStart)["input"])
+	if string(input) != `[{"text":"guarda qui","type":"text"},{"path":"`+attachment.Path+`","type":"localImage"}]` {
+		t.Fatalf("turn/start input = %s", input)
+	}
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"guarda qui"},{"type":"localImage","path":"`+attachment.Path+`"}]}}`)
+
+	steered, err := provider.SteerTurn(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: started.Turn.ID, SubmissionID: "submission-2", Message: "", Attachments: []execution.Attachment{attachment}})
+	if err != nil || steered.State != execution.DeliveryConfirmed {
+		t.Fatalf("steer = %#v, %v", steered, err)
+	}
+	input, _ = json.Marshal(fake.paramsOf(methodTurnSteer)["input"])
+	if string(input) != `[{"path":"`+attachment.Path+`","type":"localImage"}]` {
+		t.Fatalf("turn/steer input = %s", input)
+	}
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"localImage","path":"`+attachment.Path+`"}]}}`)
+
+	var events []execution.RunEvent
+	eventCtx, stopEvents := context.WithCancel(ctx)
+	_ = provider.StreamSessionEvents(eventCtx, execution.SessionRequest{Session: created.Session}, 0, func(event execution.RunEvent) error {
+		if event.Kind == localrun.KindUserMessage {
+			events = append(events, event)
+		}
+		if len(events) == 2 {
+			stopEvents()
+		}
+		return nil
+	})
+	if len(events) != 2 || events[0].Text != "guarda qui" || len(events[0].Attachments) != 1 || events[0].Attachments[0].URL != attachment.URL || events[1].Text != "" || len(events[1].Attachments) != 1 {
+		t.Fatalf("user_message events = %#v", events)
+	}
+	for _, event := range events {
+		if event.Attachments[0].Path != "" {
+			t.Fatalf("the path is returned by value and must not be serialized: %#v", event.Attachments[0])
+		}
+		if encoded, _ := json.Marshal(event.Attachments); !strings.Contains(string(encoded), `"id":"shot.png"`) || strings.Contains(string(encoded), dir) {
+			t.Fatalf("attachment serialization = %s", encoded)
+		}
 	}
 }

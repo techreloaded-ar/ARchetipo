@@ -6078,6 +6078,11 @@
 	// La conversazione lo disegna in coda, dichiarato in consegna, finché
 	// l'evento vero non prende il suo posto.
 	let conversationPendingMessage = "";
+	// Le immagini scelte per il prossimo messaggio e quelle del messaggio in
+	// consegna: anteprime locali, con il base64 pronto per il body. Viaggiano
+	// solo se il server ha dichiarato turn.attachments per la sessione.
+	let conversationAttachments = [];
+	let conversationPendingAttachments = [];
 	let conversationBusy = false; // a command is in flight: the controls stay disabled
 	let conversationCloseArmed = false; // the inline close confirmation is showing
 	let conversationRefusal = ""; // last refused command, shown inline until the next one
@@ -6406,6 +6411,16 @@
 				renderConversationPanel();
 				return;
 			}
+			if (e.target.closest("[data-conversation-attach]")) {
+				container.querySelector(".conv-attach-input")?.click();
+				return;
+			}
+			const removeAttachment = e.target.closest("[data-conversation-attachment-remove]");
+			if (removeAttachment) {
+				conversationAttachments.splice(Number(removeAttachment.getAttribute("data-conversation-attachment-remove")), 1);
+				renderConversationPanel();
+				return;
+			}
 			const activity = e.target.closest("[data-conversation-activity]");
 			if (activity) {
 				chooseConversationActivity(activity.getAttribute("data-conversation-activity"));
@@ -6643,6 +6658,20 @@
 				conversationDraftDestinations[e.target.getAttribute("data-conversation-draft-destination")] = e.target.value;
 				renderConversationPanel();
 			}
+		});
+		container.addEventListener("change", (e) => {
+			if (!e.target.matches(".conv-attach-input")) return;
+			addConversationAttachments(e.target.files);
+			e.target.value = "";
+		});
+		// Un'immagine incollata nel campo è un allegato, non testo: il browser
+		// non saprebbe che farne, e chi incolla una schermata vuole mandarla.
+		container.addEventListener("paste", (e) => {
+			if (!e.target.closest(".conv-composer-input") || !conversationCapabilities.includes("turn.attachments")) return;
+			const files = Array.from(e.clipboardData?.files || []).filter((f) => f.type.startsWith("image/"));
+			if (!files.length) return;
+			e.preventDefault();
+			addConversationAttachments(files);
 		});
 		container.addEventListener("toggle", (e) => {
 			if (e.target.matches("[data-increment-section]")) conversationIncrementSections[e.target.getAttribute("data-increment-section")] = e.target.open;
@@ -7524,6 +7553,8 @@
 		conversationEvents = [];
 		conversationAfterID = 0;
 		conversationPendingMessage = "";
+		conversationAttachments = [];
+		conversationPendingAttachments = [];
 		conversationRefusal = "";
 		conversationCloseArmed = false;
 		conversationOpeningSpecCode = String(specCode || "");
@@ -7568,6 +7599,8 @@
 		// L'eco locale appartiene alla conversazione che si sta lasciando: sotto
 		// un'altra sarebbe una frase detta a qualcun altro.
 		conversationPendingMessage = "";
+		conversationAttachments = [];
+		conversationPendingAttachments = [];
 		conversationAnsweredApprovals = {};
 		conversationHighlightAnchor = "";
 		conversationDismissedNotices = {};
@@ -7870,6 +7903,8 @@
 		conversationEvents = [];
 		conversationDraft = "";
 		conversationPendingMessage = "";
+		conversationAttachments = [];
+		conversationPendingAttachments = [];
 		conversationBusy = false;
 		conversationCloseArmed = false;
 		conversationRefusal = "";
@@ -7983,6 +8018,8 @@
 			return;
 		}
 		conversationPendingMessage = "";
+		conversationAttachments = [];
+		conversationPendingAttachments = [];
 	}
 
 	/** Le stesse parole, con ogni sequenza di spazi ridotta a uno solo. */
@@ -8307,7 +8344,8 @@
 			return;
 		}
 		const typed = conversationDraft.trim();
-		if (!typed) return;
+		const attachments = conversationAttachments;
+		if (!typed && !attachments.length) return;
 
 		// La barra iniziale è la skill, e da qui in poi le due cose viaggiano
 		// separate: il nome nel campo `skill`, il resto come messaggio.
@@ -8315,6 +8353,8 @@
 		const { message, skill } = selectedActivity
 			? { message: typed, skill: selectedActivity.skill }
 			: splitConversationSkill(typed);
+		const body = { message, skill };
+		if (attachments.length) body.attachments = attachments.map((a) => ({ name: a.name, media_type: a.media_type, data_base64: a.data_base64 }));
 		conversationBusy = true;
 		// Il campo si svuota e il messaggio compare in coda alla conversazione
 		// *adesso*, prima ancora di partire: chi ha premuto invio deve vedere
@@ -8323,6 +8363,8 @@
 		// identica a un istante prima. Se la consegna viene rifiutata, sotto si
 		// rimette esattamente ciò che era stato scritto.
 		conversationPendingMessage = typed;
+		conversationPendingAttachments = attachments;
+		conversationAttachments = [];
 		conversationDraft = "";
 		renderConversationPanel();
 		try {
@@ -8330,7 +8372,7 @@
 			if (conversationsCurrentId !== id) return;
 			const view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
-				{ message, skill },
+				body,
 			);
 			// Accepted means delivered, not published: the text stays out of the
 			// timeline until the agent carries it back. Quello che si vede in
@@ -8347,12 +8389,35 @@
 			// alla conversazione, e il testo torna nel campo da cui era uscito —
 			// chi l'ha scritto non deve riscriverlo per leggere il rifiuto.
 			conversationPendingMessage = "";
+			conversationPendingAttachments = [];
+			conversationAttachments = attachments;
 			conversationDraft = typed;
 			showConversationRefusal(err);
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();
 		}
+	}
+
+	// addConversationAttachments legge le immagini scelte o incollate e le mette
+	// in coda al prossimo messaggio, come anteprima e come base64. I formati
+	// sono quelli che il server accetta; tutto il resto viene ignorato.
+	const CONVERSATION_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+	function addConversationAttachments(files) {
+		const accepted = Array.from(files || []).filter((f) => CONVERSATION_IMAGE_TYPES.includes(f.type));
+		if (!accepted.length) return;
+		const id = conversationsCurrentId;
+		Promise.all(accepted.map((file) => new Promise((resolve) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve({ name: file.name || "immagine", media_type: file.type, data_url: String(reader.result), data_base64: String(reader.result).split(",")[1] || "" });
+			reader.onerror = () => resolve(null);
+			reader.readAsDataURL(file);
+		}))).then((read) => {
+			if (conversationsCurrentId !== id) return;
+			conversationAttachments = conversationAttachments.concat(read.filter(Boolean));
+			renderConversationPanel();
+			conversationEl.querySelector(".conv-composer-input")?.focus({ preventScroll: true });
+		});
 	}
 
 	// decideProposal answers the pending proposal: it says which one and what was
@@ -8638,6 +8703,9 @@
 				// l'unica cosa che il pannello disegna in coda alla storia senza
 				// che il server l'abbia detta, ed è dichiarata come tale.
 				pendingMessage: conversationPendingMessage,
+				pendingAttachments: conversationPendingAttachments,
+				attachments: conversationAttachments,
+				attachmentsOffered: conversationCapabilities.includes("turn.attachments"),
 				// `view` è nullo finché l'indice delle conversazioni non è stato
 				// letto — è emptyConversationView() a dirlo, e la guardia qui
 				// rispetta lo stesso contratto di riga 6392: nessuna scelta di

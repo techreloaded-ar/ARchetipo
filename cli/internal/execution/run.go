@@ -54,6 +54,9 @@ type RunEvent struct {
 	Raw          json.RawMessage `json:"raw,omitempty"`
 	TurnID       string          `json:"turn_id,omitempty"`
 	SubmissionID string          `json:"submission_id,omitempty"`
+	// Attachments are the images a user_message carried, by reference only:
+	// the bytes stay on disk and never enter the journal.
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // ApprovalOption is one answer a pending approval accepts.

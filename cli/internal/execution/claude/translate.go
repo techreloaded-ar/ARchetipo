@@ -161,8 +161,21 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 		s.append(kindOf(f), "", "", raw)
 		return
 	}
+	// A frame that carries images is not kept raw: the base64 of a screenshot
+	// is the one thing that must not enter the journal. The images reach the
+	// user_message event by reference, through what expectAttachments kept.
+	images := false
+	for _, block := range blocks {
+		if block.Type == "image" {
+			images = true
+			raw = nil
+		}
+	}
+	said := false
 	for _, block := range blocks {
 		switch block.Type {
+		case "image":
+			continue
 		case "tool_result":
 			kind := localrun.KindToolEnd
 			if block.IsError {
@@ -188,19 +201,34 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 			// not as the prompt it took to ask it; the body of a skill the
 			// harness expanded is the working of the agent, not a message,
 			// and it is filed with the tool that loaded it.
+			attachments := s.attachmentsOf(text)
 			if display, echo := s.instructionEchoOf(text); echo {
-				s.append(localrun.KindUserMessage, display, "", raw)
+				s.appendUserMessage(display, attachments, raw)
+				said = true
 				continue
 			}
 			if name, ok := skillPreambleOf(text); ok {
 				s.append(localrun.KindInstruction, name, "Skill", raw)
 				continue
 			}
-			s.append(localrun.KindUserMessage, text, "", raw)
+			s.appendUserMessage(text, attachments, raw)
+			said = true
 		default:
 			s.append(kindOf(f), "", "", raw)
 		}
 	}
+	// Images without words: the frame had no text block, so the event that
+	// shows them is appended here, with the attachments written beside an
+	// empty text.
+	if images && !said {
+		s.appendUserMessage("", s.attachmentsOf(""), nil)
+	}
+}
+
+// appendUserMessage appends what the person said, with the images they
+// attached to it.
+func (s *streamSession) appendUserMessage(text string, attachments []execution.Attachment, raw json.RawMessage) {
+	s.appendWith(execution.RunEvent{Kind: localrun.KindUserMessage, Text: text, Attachments: execution.AttachmentReferences(attachments), Raw: raw})
 }
 
 func (s *streamSession) toolNameOf(toolUseID string) string {
@@ -210,26 +238,23 @@ func (s *streamSession) toolNameOf(toolUseID string) string {
 }
 
 func (s *streamSession) append(kind, text, tool string, raw json.RawMessage, final ...string) {
-	s.mu.Lock()
-	seq := s.seq
-	turnID := s.turnID
-	submissionID := s.submissionID
-	appendEvent := s.appendEvent
-	s.mu.Unlock()
 	finalMessage := ""
 	if len(final) > 0 {
 		finalMessage = final[0]
 	}
-	appendEvent(execution.RunEvent{
-		FinalMessage: finalMessage,
-		Seq:          seq,
-		Kind:         kind,
-		Text:         text,
-		Tool:         tool,
-		Raw:          localrun.RawOf(raw),
-		TurnID:       turnID,
-		SubmissionID: submissionID,
-	})
+	s.appendWith(execution.RunEvent{FinalMessage: finalMessage, Kind: kind, Text: text, Tool: tool, Raw: raw})
+}
+
+// appendWith stamps the event with the turn it belongs to and hands it on.
+func (s *streamSession) appendWith(event execution.RunEvent) {
+	s.mu.Lock()
+	event.Seq = s.seq
+	event.TurnID = s.turnID
+	event.SubmissionID = s.submissionID
+	appendEvent := s.appendEvent
+	s.mu.Unlock()
+	event.Raw = localrun.RawOf(event.Raw)
+	appendEvent(event)
 }
 
 // Claude Code descrive il contenuto di un messaggio in due forme: la lista di

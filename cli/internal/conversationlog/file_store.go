@@ -79,6 +79,17 @@ func (s *FileStore) eventsPath(id string) (string, error) {
 	return strings.TrimSuffix(path, ".json") + ".events.jsonl", nil
 }
 
+// AttachmentsDir is where the images attached to the messages of a
+// conversation live, beside its record and its events, so that what removes
+// the conversation removes them with it.
+func (s *FileStore) AttachmentsDir(id string) (string, error) {
+	path, err := s.path(id)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(path, ".json") + ".attachments", nil
+}
+
 // Save writes a record, creating it or replacing it in place. It is an upsert
 // rather than a create/update pair because the journal rewrites the same record
 // on every round that brought new events, and a caller that had to know whether
@@ -444,6 +455,11 @@ func (s *FileStore) Delete(ctx context.Context, id string) error {
 	if eventsPath, eventsErr := s.eventsPath(id); eventsErr == nil {
 		if eventsErr = os.Remove(eventsPath); eventsErr != nil && !errors.Is(eventsErr, fs.ErrNotExist) {
 			return eventsErr
+		}
+	}
+	if attachmentsDir, dirErr := s.AttachmentsDir(id); dirErr == nil {
+		if dirErr = os.RemoveAll(attachmentsDir); dirErr != nil {
+			return dirErr
 		}
 	}
 	return nil

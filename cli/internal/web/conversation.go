@@ -1140,6 +1140,11 @@ type sendConversationMessageReq struct {
 	Message             string `json:"message"`
 	Skill               string `json:"skill,omitempty"`
 	PreviewFeedback     bool   `json:"preview_feedback,omitempty"`
+	// Attachments are the images sent with the message, inline. They are
+	// stored on disk before the turn is opened and reach the adapter through
+	// attachments, as references.
+	Attachments []attachmentUpload `json:"attachments,omitempty"`
+	attachments []execution.Attachment
 	// executionID names the ARchetipo action this turn carries out, and is
 	// deliberately not a JSON field: a browser cannot claim that the message it
 	// is typing belongs to an action. It is filled in by the two callers that
@@ -1173,14 +1178,18 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		return
 	}
 	var body sendConversationMessageReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBodyBytes)
 	if err := decodeJSON(r, &body); err != nil {
+		if bodyTooLarge(err) {
+			err = iox.NewInvalidInput(fmt.Sprintf("the message and its attachments may weigh at most %d MB", maxMessageBodyBytes>>20), "attach fewer or smaller images", err)
+		}
 		writeError(w, err)
 		return
 	}
 	// Una skill invocata da sola è un turn intero: `/review` non ha bisogno di
 	// parole in più, e il provider la scrive comunque davanti al messaggio. Solo
-	// un turn senza né skill né testo non dice niente.
-	if strings.TrimSpace(body.Message) == "" && strings.TrimSpace(body.Skill) == "" {
+	// un turn senza né skill né testo né immagini non dice niente.
+	if strings.TrimSpace(body.Message) == "" && strings.TrimSpace(body.Skill) == "" && len(body.Attachments) == 0 {
 		writeError(w, iox.NewInvalidInput("message is required", "send a non-empty message", nil))
 		return
 	}
@@ -1205,13 +1214,27 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 		writeError(w, s.conversationGoneRefusal(r.Context(), ws, id, "send a message"))
 		return
 	}
+	if len(body.Attachments) > 0 {
+		if err := requireAttachmentsCapability(r.Context(), snapshot); err != nil {
+			writeError(w, err)
+			return
+		}
+		stored, err := storeConversationAttachments(ws.conversationStore(), id, body.Attachments)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		body.attachments = stored
+	}
 	if snapshot.sessionProvider != nil {
 		ctx := r.Context()
 		if err := s.prepareIncrementMessage(ctx, ws, id, &body); err != nil {
+			removeConversationAttachments(body.attachments)
 			writeError(w, err)
 			return
 		}
 		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, body); err != nil {
+			removeConversationAttachments(body.attachments)
 			writeError(w, err)
 			return
 		}

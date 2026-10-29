@@ -100,6 +100,10 @@ type appServer struct {
 	// process re-emits them as user items. See streamSession.instructions in
 	// the claude provider: the reason is the same, and so is the rule.
 	instructions map[string]string
+	// attachments are the images sent beside a message, keyed by its text and
+	// kept until the process re-emits it as a user item: the item is what
+	// makes the user_message event, and the event carries them by reference.
+	attachments map[string][]execution.Attachment
 
 	sendMu         sync.Mutex
 	conversational bool
@@ -121,6 +125,29 @@ func (a *appServer) expectInstruction(prompt, display string) {
 	}
 	a.instructions[prompt] = display
 	a.mu.Unlock()
+}
+
+// expectAttachments remembers the images sent beside text, so the user item
+// that echoes the text carries them onto its event.
+func (a *appServer) expectAttachments(text string, attachments []execution.Attachment) {
+	if len(attachments) == 0 {
+		return
+	}
+	a.mu.Lock()
+	if a.attachments == nil {
+		a.attachments = map[string][]execution.Attachment{}
+	}
+	a.attachments[text] = attachments
+	a.mu.Unlock()
+}
+
+// attachmentsOf hands back, and forgets, the images sent beside text.
+func (a *appServer) attachmentsOf(text string) []execution.Attachment {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	attachments := a.attachments[text]
+	delete(a.attachments, text)
+	return attachments
 }
 
 // instructionEchoOf answers the text the history shows in place of the
@@ -350,12 +377,12 @@ func (a *appServer) openThread(ctx context.Context, cfg settings, dir, resumeID 
 }
 
 func (a *appServer) startTurn(ctx context.Context, prompt, model, effort string, skills []execution.SessionSkill) (string, error) {
-	return a.startTurnWithPermissions(ctx, prompt, model, effort, skills, "", nil)
+	return a.startTurnWithPermissions(ctx, prompt, model, effort, skills, nil, "", nil)
 }
 
-func (a *appServer) startTurnWithPermissions(ctx context.Context, prompt, model, effort string, skills []execution.SessionSkill, approval string, sandbox map[string]any) (string, error) {
+func (a *appServer) startTurnWithPermissions(ctx context.Context, prompt, model, effort string, skills []execution.SessionSkill, attachments []execution.Attachment, approval string, sandbox map[string]any) (string, error) {
 	threadID, _ := a.ids()
-	input := []any{map[string]any{"type": "text", "text": prompt}}
+	input := turnInput(prompt, attachments)
 	for _, skill := range skills {
 		input = append(input, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
@@ -437,10 +464,30 @@ func (a *appServer) ids() (string, string) {
 // into the history: the message becomes history when the process re-emits it as
 // a user message item, which is exactly what was observed on the real binary.
 func (a *appServer) Send(ctx context.Context, text string) error {
+	return a.SendWith(ctx, text, nil)
+}
+
+// turnInput renders the items of a turn: the text, when there is one, and one
+// localImage per attachment, read by the app server from the file the viewer
+// stored. An empty text sends no text item.
+func turnInput(text string, attachments []execution.Attachment) []any {
+	input := make([]any, 0, 1+len(attachments))
+	if text != "" {
+		input = append(input, map[string]any{"type": "text", "text": text})
+	}
+	for _, attachment := range attachments {
+		input = append(input, map[string]any{"type": "localImage", "path": attachment.Path})
+	}
+	return input
+}
+
+// SendWith is Send with the images attached to the message.
+func (a *appServer) SendWith(ctx context.Context, text string, attachments []execution.Attachment) error {
 	a.sendMu.Lock()
 	defer a.sendMu.Unlock()
+	a.expectAttachments(text, attachments)
 	if a.conversational && a.declaredTurnEnd() {
-		_, err := a.startTurn(ctx, text, "", "", nil)
+		_, err := a.startTurnWithPermissions(ctx, text, "", "", nil, attachments, "", nil)
 		return a.classify(err)
 	}
 	threadID, turnID := a.ids()
@@ -454,7 +501,7 @@ func (a *appServer) Send(ctx context.Context, text string) error {
 	_, err := a.call(ctx, methodTurnSteer, map[string]any{
 		"threadId":       threadID,
 		"expectedTurnId": turnID,
-		"input":          []any{map[string]any{"type": "text", "text": text}},
+		"input":          turnInput(text, attachments),
 	})
 	return a.classify(err)
 }

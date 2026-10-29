@@ -85,7 +85,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			execution.SessionCapabilityTurnOptions, execution.SessionCapabilitySkillDiscovery,
 			execution.SessionCapabilitySkillInvocation, execution.SessionCapabilityInput,
 			execution.SessionCapabilityApproval, execution.SessionCapabilitySteering,
-			execution.SessionCapabilityInterrupt,
+			execution.SessionCapabilityInterrupt, execution.SessionCapabilityAttachments,
 		}),
 		PermissionProfiles: p.PermissionProfiles(), PermissionProfile: defaultNativePermissionProfile(cfg),
 		Models: models, Skills: skills, SkillsKnown: true,
@@ -234,7 +234,8 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	client.correlate(request.TurnID, request.SubmissionID)
 	message := codexTurnMessage(request)
 	client.expectInstruction(message, request.Display)
-	nativeID, err := client.startTurnWithPermissions(ctx, message, cfg.Model, cfg.ReasoningEffort, request.Skills, approval, nativeSandboxPolicy(sandbox, session.metadata.Environment.WorkingDir))
+	client.expectAttachments(message, request.Attachments)
+	nativeID, err := client.startTurnWithPermissions(ctx, message, cfg.Model, cfg.ReasoningEffort, request.Skills, request.Attachments, approval, nativeSandboxPolicy(sandbox, session.metadata.Environment.WorkingDir))
 	if err != nil {
 		delivery.State = execution.DeliveryUncertain
 		return execution.SessionTurnStarted{Turn: turn, Delivery: delivery}, err
@@ -296,7 +297,7 @@ func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.Se
 }
 
 func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return p.codexNativeCommand(request, func(client *appServer) error { return client.Send(ctx, request.Message) })
+	return p.codexNativeCommand(request, func(client *appServer) error { return client.SendWith(ctx, request.Message, request.Attachments) })
 }
 
 func (p *Provider) InterruptTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
