@@ -283,6 +283,10 @@ func (ws *workspaceSession) startNativeFollower(snapshot conversationSnapshot) {
 				if event.ID <= afterID {
 					return nil
 				}
+				// An image the agent read was stored by the adapter, which knows
+				// the directory and not the route: the URL is given here, once,
+				// before the event is written down.
+				completeAttachmentURLs(snapshot.id, event.Attachments)
 				if appendErr := appender.Append(event); appendErr != nil {
 					return appendErr
 				}

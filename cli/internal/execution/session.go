@@ -87,6 +87,12 @@ type SessionEnvironment struct {
 	WorkingDir     string         `json:"working_dir"`
 	ProviderConfig map[string]any `json:"provider_config,omitempty"`
 	Location       string         `json:"location"` // for example local or remote
+	// AttachmentsDir is where the images of this conversation live on disk: the
+	// ones the person attached and the ones the agent read. The viewer sets it
+	// beside the conversation's record; an adapter that comes across an image
+	// in a tool result stores the bytes there and puts only the reference in
+	// the history. Empty for a session that keeps no images.
+	AttachmentsDir string `json:"attachments_dir,omitempty"`
 }
 
 // NativeSessionReference is the durable provider-owned identity. ID is not an

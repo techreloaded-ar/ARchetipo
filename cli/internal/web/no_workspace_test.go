@@ -108,6 +108,7 @@ var workspaceScopedRoutes = []scopedRoute{
 	{"GET /api/workspace/conversations/{id}", http.MethodGet, "/api/workspace/conversations/c-1", ""},
 	{"GET /api/workspace/conversations/{id}/model-choice", http.MethodGet, "/api/workspace/conversations/c-1/model-choice", ""},
 	{"GET /api/workspace/conversations/{id}/attachments/{file}", http.MethodGet, "/api/workspace/conversations/c-1/attachments/000000000000000000000000.png", ""},
+	{"GET /api/workspace/file", http.MethodGet, "/api/workspace/file?path=docs/shot.png", ""},
 	{"POST /api/workspace/conversations/{id}/resume", http.MethodPost, "/api/workspace/conversations/c-1/resume", "{}"},
 	{"GET /api/workspace/conversations/{id}/preview", http.MethodGet, "/api/workspace/conversations/c-1/preview", ""},
 	{"POST /api/workspace/conversations/{id}/preview", http.MethodPost, "/api/workspace/conversations/c-1/preview", "{}"},

@@ -412,7 +412,7 @@
 	// nudo, o se la pagina non ha caricato marked — resta il testo escapato di
 	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
 	// postura con cui la pagina rende i corpi di spec, piano e PRD.
-	function renderAgentText(events, parse, receiptLines) {
+	function renderAgentText(events, parse, receiptLines, conversationID) {
 		if (!events.length) return "";
 		const last = events[events.length - 1];
 		const head = [
@@ -433,7 +433,7 @@
 		if (text) {
 			lines.push(
 				parse
-					? `<div class="conv-event-text conv-event-markdown markdown-rendered">${parse(text)}</div>`
+					? `<div class="conv-event-text conv-event-markdown markdown-rendered">${resolveWorkspaceImages(parse(text), conversationID)}</div>`
 					: `<p class="conv-event-text">${escapeHtml(text)}</p>`,
 			);
 		}
@@ -452,6 +452,36 @@
 				${lines.join("")}
 			</div>
 		</li>`;
+	}
+
+	// Un'immagine che l'agente cita con un percorso del workspace —
+	// `![schermata](docs/shot.png)`, o un `<img>` con lo stesso src nudo — non
+	// esiste come URL della pagina: la serve la route del server, confinata
+	// alla directory in cui l'agente lavora. La route la riceve con l'id della
+	// conversazione, perché un agente in una sandbox scrive e cita i percorsi
+	// dalla sua directory, non dalla root. Si riscrive solo il percorso
+	// relativo; un URL con schema, assoluto o `data:` resta com'è. Il parser
+	// emette gli attributi con le entità HTML, quindi il percorso si decodifica
+	// prima di entrare nella query e si ri-escapa dopo.
+	const WORKSPACE_FILE_ROUTE = "/api/workspace/file?path=";
+	function resolveWorkspaceImages(html, conversationID) {
+		const scope = conversationID ? `&conversation=${encodeURIComponent(conversationID)}` : "";
+		return String(html).replace(
+			/(<img\b[^>]*?\bsrc=)(["'])([^"']*)\2/gi,
+			(match, before, quote, src) => {
+				const path = src
+					.replace(/&amp;/g, "&")
+					.replace(/&quot;/g, '"')
+					.replace(/&#39;/g, "'")
+					.replace(/&lt;/g, "<")
+					.replace(/&gt;/g, ">")
+					.replace(/^\.\//, "");
+				if (!path || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith("/") || path.startsWith("#")) {
+					return match;
+				}
+				return `${before}"${escapeHtml(WORKSPACE_FILE_ROUTE + encodeURIComponent(path) + scope)}"`;
+			},
+		);
 	}
 
 	/** Il tipo di un evento, o stringa vuota: i payload parziali non sollevano. */
@@ -1055,7 +1085,7 @@
 			let agentRun = [];
 			const flushAgent = () => {
 				if (!agentRun.length) return;
-				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))]));
+				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id")));
 				agentRun = [];
 			};
 			for (const event of events) {

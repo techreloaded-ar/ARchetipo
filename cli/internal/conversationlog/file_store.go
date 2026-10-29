@@ -162,6 +162,12 @@ func (s *FileStore) GetMetadata(ctx context.Context, id string) (Record, error) 
 	if err := json.Unmarshal(body, &record); err != nil {
 		return Record{}, fmt.Errorf("decode conversation %q: %w", id, err)
 	}
+	// A record written before conversations kept images has no attachments
+	// directory; the store knows where it would be, so a read fills it in
+	// rather than every caller that resumes a session having to.
+	if record.Session != nil && record.Session.Environment.AttachmentsDir == "" {
+		record.Session.Environment.AttachmentsDir = strings.TrimSuffix(path, ".json") + ".attachments"
+	}
 	return record, nil
 }
 

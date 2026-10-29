@@ -132,7 +132,12 @@ type streamSession struct {
 	// of that message and kept until the process replays it: the replay is
 	// what makes the user_message event, and the event has to carry the
 	// images the frame carried — by reference, the bytes are on disk.
-	attachments       map[string][]execution.Attachment
+	attachments map[string][]execution.Attachment
+	// attachmentsDir is where an image the agent read — a tool result carrying
+	// an image block — is stored, so the history keeps a reference and never
+	// the base64. Empty where the session was given no place for images: the
+	// base64 is still kept out of the history, and nothing is stored.
+	attachmentsDir    string
 	completed         bool
 	finalMessage      string
 	lastAssistantText string

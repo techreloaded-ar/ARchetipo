@@ -30,6 +30,10 @@
 .conv-composer-surface{display:flex;flex-wrap:wrap;align-items:flex-end}
 .conv-composer-surface>.conv-composer-input{flex:1 1 280px;width:auto}
 .conv-composer-surface>.conv-composer-row{flex:0 1 auto;padding:var(--space-2)}
+/* Quando il testo va a capo nella disposizione in linea, il campo prende la
+   riga intera e modello e Invia scendono sotto: lo decide app.js misurando. */
+.conv-composer-surface.is-multiline>.conv-composer-input{flex-basis:100%}
+.conv-composer-surface.is-multiline>.conv-composer-row{flex-basis:100%}
 .conv-composer-surface [hidden]{display:none!important}
 /* Le fasi dell'incremento al posto del percorso, nella testata. */
 .conv-phases{display:flex;align-items:center;gap:4px;min-width:0;margin:0;padding:0;list-style:none;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden}
@@ -6006,6 +6010,16 @@ body.no-workspace [data-workspace-scoped] {
 
 .conv-event-markdown > :last-child {
 	margin-bottom: 0;
+}
+
+/* Un'immagine citata dall'agente sta nella colonna, mai oltre. */
+.conv-event-markdown img {
+	display: block;
+	max-width: 100%;
+	max-height: 480px;
+	object-fit: contain;
+	border-radius: 6px;
+	border: 1px solid var(--border-strong);
 }
 
 .conv-event-tool {

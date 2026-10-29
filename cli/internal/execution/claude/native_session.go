@@ -80,7 +80,7 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
-	environment := execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneProviderConfig(request.Environment.ProviderConfig), Location: "local"}
+	environment := execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneProviderConfig(request.Environment.ProviderConfig), Location: "local", AttachmentsDir: request.Environment.AttachmentsDir}
 	metadata := execution.SessionMetadata{ConversationID: request.ConversationID, ProviderID: ProviderID, Environment: environment, Native: execution.NativeSessionReference{Kind: "claude-session", ID: id}}
 	_, mode, _ := nativePermissionMode(cfg, "")
 	cfg.PermissionMode = mode
@@ -247,6 +247,7 @@ func (p *Provider) connectNativeProcess(session *nativeSession, resume bool) err
 	dummy := localrun.NewSession(session.metadata.ConversationID, p.now)
 	client := newStreamSession(process, dummy, true)
 	client.now = p.now
+	client.attachmentsDir = session.metadata.Environment.AttachmentsDir
 	client.appendEvent = session.append
 	go client.consume()
 	session.mu.Lock()

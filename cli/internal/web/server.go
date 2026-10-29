@@ -295,6 +295,7 @@ func (s *Server) registerRoutes() {
 	s.handleWorkspace("GET /api/workspace/conversations/{id}/model-choice", s.handleGetNativeConversationModelChoice)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/messages", s.handleSendWorkspaceConversationMessage)
 	s.handleWorkspace("GET /api/workspace/conversations/{id}/attachments/{file}", s.handleGetWorkspaceConversationAttachment)
+	s.handleWorkspace("GET /api/workspace/file", s.handleGetWorkspaceFile)
 	s.handleWorkspace("POST /api/workspace/conversations/{id}/proposal", s.handleDecideWorkspaceConversationProposal)
 	// A conversation whose agent stops to ask permission is a conversation
 	// waiting on a person, exactly like a run: the answer travels on the

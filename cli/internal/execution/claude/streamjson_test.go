@@ -1002,3 +1002,54 @@ func TestStreamSessionWritesAttachedImagesAndKeepsTheirBytesOutOfTheHistory(t *t
 		t.Fatalf("image-only user_message = %#v", tail)
 	}
 }
+
+// An image the agent read — a tool result carrying an image block — is stored
+// beside the conversation and reaches the tool_end event by reference: the
+// file is on disk, the event names it, and neither the event nor its raw frame
+// holds the base64.
+func TestStreamSessionStoresImagesReadByToolsAndKeepsTheBase64OutOfTheHistory(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+	dir := filepath.Join(t.TempDir(), "conv.attachments")
+	client.attachmentsDir = dir
+	encoded := base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))
+
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"shot.png"}}]}}`)
+	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"letta"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + encoded + `"}}]}]}}`)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindToolEnd) == 1 })
+
+	var ended execution.RunEvent
+	for _, event := range session.Events(0) {
+		if event.Kind == localrun.KindToolEnd {
+			ended = event
+		}
+	}
+	if ended.Tool != "Read" || ended.Text != "letta" || len(ended.Attachments) != 1 {
+		t.Fatalf("tool_end = %#v", ended)
+	}
+	attachment := ended.Attachments[0]
+	if attachment.MediaType != "image/png" || !strings.HasSuffix(attachment.ID, ".png") || attachment.Path != "" {
+		t.Fatalf("attachment = %#v", attachment)
+	}
+	if stored, err := os.ReadFile(filepath.Join(dir, attachment.ID)); err != nil || string(stored) != "PNGBYTES" {
+		t.Fatalf("stored bytes = %q, %v", stored, err)
+	}
+	payload, _ := json.Marshal(ended)
+	if strings.Contains(string(payload), encoded) || strings.Contains(string(payload), dir) {
+		t.Fatalf("the event leaks the bytes or the directory: %s", payload)
+	}
+	if !strings.Contains(string(ended.Raw), `"tool_use_id":"toolu_1"`) || !strings.Contains(string(ended.Raw), `"media_type":"image/png"`) {
+		t.Fatalf("the raw frame lost what was not the image: %s", ended.Raw)
+	}
+
+	// Without a directory nothing is stored, and the base64 still stays out.
+	client.attachmentsDir = ""
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"Read","input":{}}]}}`)
+	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + encoded + `"}}]}]}}`)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindToolEnd) == 2 })
+	events := session.Events(0)
+	tail := events[len(events)-1]
+	if len(tail.Attachments) != 0 || strings.Contains(string(tail.Raw), encoded) {
+		t.Fatalf("without a directory the tool_end = %#v", tail)
+	}
+}

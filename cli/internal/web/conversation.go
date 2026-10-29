@@ -983,6 +983,9 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 		if environment.ProviderConfig == nil {
 			environment.ProviderConfig = providerConfig
 		}
+		if dir, dirErr := ws.conversationStore().AttachmentsDir(id); dirErr == nil {
+			environment.AttachmentsDir = dir
+		}
 		created, createErr := target.sessions.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: id, Environment: environment})
 		if createErr != nil {
 			return openedConversation{}, iox.NewInternal("creating a native conversation: "+createErr.Error(), createErr)

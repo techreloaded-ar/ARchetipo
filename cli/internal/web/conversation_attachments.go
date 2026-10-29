@@ -2,9 +2,7 @@ package web
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -30,11 +28,22 @@ const (
 
 // attachmentMediaTypes are the image formats the native harnesses accept, each
 // with the extension its stored file takes.
-var attachmentMediaTypes = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/gif":  ".gif",
-	"image/webp": ".webp",
+var attachmentMediaTypes = execution.AttachmentExtensions
+
+// conversationAttachmentURL is where a stored image of a conversation is
+// served back from.
+func conversationAttachmentURL(conversationID, fileName string) string {
+	return "/api/workspace/conversations/" + conversationID + "/attachments/" + fileName
+}
+
+// completeAttachmentURLs gives a URL to the attachments an adapter stored
+// without one: the adapter knows the directory, the viewer knows the route.
+func completeAttachmentURLs(conversationID string, attachments []execution.Attachment) {
+	for i := range attachments {
+		if attachments[i].URL == "" && attachments[i].ID != "" {
+			attachments[i].URL = conversationAttachmentURL(conversationID, attachments[i].ID)
+		}
+	}
 }
 
 // attachmentFileName is the only shape a stored attachment's name takes: the
@@ -77,14 +86,11 @@ func storeConversationAttachments(store *conversationlog.FileStore, conversation
 	if err != nil {
 		return nil, iox.NewInvalidInput("invalid conversation id", "", err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, iox.NewInternal("creating the attachments directory", err)
-	}
 	attachments := make([]execution.Attachment, 0, len(uploads))
 	for i, upload := range uploads {
 		field := fmt.Sprintf("attachments[%d]", i)
-		extension, known := attachmentMediaTypes[strings.ToLower(strings.TrimSpace(upload.MediaType))]
-		if !known {
+		mediaType := strings.ToLower(strings.TrimSpace(upload.MediaType))
+		if _, known := attachmentMediaTypes[mediaType]; !known {
 			return nil, iox.NewInvalidInput(field+": media_type must be one of image/png, image/jpeg, image/gif, image/webp", "", nil)
 		}
 		data, decodeErr := base64.StdEncoding.DecodeString(strings.TrimSpace(upload.DataBase64))
@@ -94,23 +100,15 @@ func storeConversationAttachments(store *conversationlog.FileStore, conversation
 		if len(data) > maxAttachmentBytes {
 			return nil, iox.NewInvalidInput(fmt.Sprintf("%s: an image may weigh at most %d MB", field, maxAttachmentBytes>>20), "", nil)
 		}
-		sum := sha256.Sum256(data)
-		fileName := hex.EncodeToString(sum[:12]) + extension
-		path := filepath.Join(dir, fileName)
-		if writeErr := os.WriteFile(path, data, 0o644); writeErr != nil {
-			return nil, iox.NewInternal("storing the attachment "+upload.Name, writeErr)
+		attachment, storeErr := execution.StoreAttachment(dir, mediaType, data)
+		if storeErr != nil {
+			return nil, iox.NewInternal("storing the attachment "+upload.Name, storeErr)
 		}
-		name := strings.TrimSpace(upload.Name)
-		if name == "" {
-			name = fileName
+		if name := strings.TrimSpace(upload.Name); name != "" {
+			attachment.Name = name
 		}
-		attachments = append(attachments, execution.Attachment{
-			ID:        fileName,
-			Name:      name,
-			MediaType: strings.ToLower(strings.TrimSpace(upload.MediaType)),
-			URL:       "/api/workspace/conversations/" + conversationID + "/attachments/" + fileName,
-			Path:      path,
-		})
+		attachment.URL = conversationAttachmentURL(conversationID, attachment.ID)
+		attachments = append(attachments, attachment)
 	}
 	return attachments, nil
 }

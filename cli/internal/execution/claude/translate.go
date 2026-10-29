@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 
@@ -36,6 +37,15 @@ type contentBlock struct {
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
 	IsError   bool            `json:"is_error"`
+	Source    *imageSource    `json:"source"`
+}
+
+// imageSource is the image of an `image` block as the message format carries
+// it: base64, with its media type.
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type streamMessage struct {
@@ -164,11 +174,19 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 	// A frame that carries images is not kept raw: the base64 of a screenshot
 	// is the one thing that must not enter the journal. The images reach the
 	// user_message event by reference, through what expectAttachments kept.
+	//
+	// A tool result that carries images — the agent read a screenshot — is
+	// the other way the bytes would enter: there the frame is kept, with the
+	// base64 stripped out of it, and the images are stored beside the
+	// conversation and attached to the tool_end by reference.
 	images := false
 	for _, block := range blocks {
 		if block.Type == "image" {
 			images = true
 			raw = nil
+		}
+		if block.Type == "tool_result" && len(toolResultImages(block.Content)) > 0 {
+			raw = stripImageData(raw)
 		}
 	}
 	said := false
@@ -181,7 +199,7 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 			if block.IsError {
 				kind = localrun.KindToolError
 			}
-			s.append(kind, toolResultText(block.Content), s.toolNameOf(block.ToolUseID), raw)
+			s.appendWith(execution.RunEvent{Kind: kind, Text: toolResultText(block.Content), Tool: s.toolNameOf(block.ToolUseID), Attachments: execution.AttachmentReferences(s.storeToolResultImages(block.Content)), Raw: raw})
 		case "text":
 			// The opening instruction comes back like any other user frame, and
 			// it is the one that is not history: it is what the caller asked
@@ -340,4 +358,74 @@ func toolResultText(content json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// toolResultImages are the base64 image blocks of a tool result, when its
+// content is a list of blocks.
+func toolResultImages(content json.RawMessage) []imageSource {
+	var blocks []contentBlock
+	if len(content) == 0 || json.Unmarshal(content, &blocks) != nil {
+		return nil
+	}
+	var images []imageSource
+	for _, block := range blocks {
+		if block.Type == "image" && block.Source != nil && block.Source.Data != "" {
+			images = append(images, *block.Source)
+		}
+	}
+	return images
+}
+
+// storeToolResultImages writes the images of a tool result under the session's
+// attachments directory and hands back their references. Without a directory
+// nothing is stored; an image that cannot be decoded or written is left out,
+// because the text of the result is still history worth keeping.
+func (s *streamSession) storeToolResultImages(content json.RawMessage) []execution.Attachment {
+	if s.attachmentsDir == "" {
+		return nil
+	}
+	var attachments []execution.Attachment
+	for _, image := range toolResultImages(content) {
+		data, err := base64.StdEncoding.DecodeString(image.Data)
+		if err != nil {
+			continue
+		}
+		attachment, err := execution.StoreAttachment(s.attachmentsDir, image.MediaType, data)
+		if err != nil {
+			continue
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments
+}
+
+// stripImageData returns the frame without the base64 of the images its tool
+// results carry: everything else — ids, text, media types — stays, so the raw
+// payload still says what arrived without holding the one thing that must not
+// enter the journal. A frame that cannot be read back is dropped whole.
+func stripImageData(raw json.RawMessage) json.RawMessage {
+	var frame map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &frame) != nil {
+		return nil
+	}
+	message, _ := frame["message"].(map[string]any)
+	blocks, _ := message["content"].([]any)
+	for _, b := range blocks {
+		block, _ := b.(map[string]any)
+		inner, _ := block["content"].([]any)
+		for _, ib := range inner {
+			image, _ := ib.(map[string]any)
+			if image["type"] != "image" {
+				continue
+			}
+			if source, ok := image["source"].(map[string]any); ok {
+				delete(source, "data")
+			}
+		}
+	}
+	out, err := json.Marshal(frame)
+	if err != nil {
+		return nil
+	}
+	return out
 }

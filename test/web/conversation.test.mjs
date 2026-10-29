@@ -964,6 +964,43 @@ describe("renderConversation — la run dentro il flusso", () => {
 	// nudo di questi test — resta il testo escapato di sempre: gli altri test
 	// di questo file sono la prova che il modulo non lancia e non cambia.
 	describe("markdown della risposta dell'agente", () => {
+		// US: un'immagine che l'agente cita con un percorso del workspace si
+		// vede nel thread. Il parser emette l'<img> com'è, e il renderer gira
+		// solo i percorsi relativi verso la route confinata del server: un URL
+		// con schema, assoluto o data: non è del workspace e resta com'è.
+		it("le immagini con percorso relativo puntano alla route del workspace, le altre restano", () => {
+			const html = renderConversation(
+				withConversation({
+					events: [{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "text", text: "![schermata](docs/shot.png)" }],
+					last_id: 1,
+				}),
+				"",
+				{
+					markedParse: () =>
+						'<p><img src="./docs/a&amp;b shot.png" alt="schermata"> ' +
+						"<img src='docs/x.png'> " +
+						'<img alt="remota" src="https://example.test/i.png"> ' +
+						'<img src="/api/workspace/conversations/c-1/attachments/abc.png"> ' +
+						'<img src="data:image/png;base64,QUJD"></p>',
+				},
+			);
+			assert.ok(
+				html.includes('<img src="/api/workspace/file?path=docs%2Fa%26b%20shot.png&amp;conversation=conv-1" alt="schermata">'),
+				`il percorso relativo deve passare dalla route con la conversazione, decodificato e ri-escapato: ${html}`,
+			);
+			assert.ok(
+				html.includes('<img src="/api/workspace/file?path=docs%2Fx.png&amp;conversation=conv-1">'),
+				"anche un src tra apici singoli è un percorso del workspace",
+			);
+			assert.ok(html.includes('src="https://example.test/i.png"'), "un URL con schema resta com'è");
+			assert.ok(
+				html.includes('src="/api/workspace/conversations/c-1/attachments/abc.png"'),
+				"un URL assoluto della pagina resta com'è",
+			);
+			assert.ok(html.includes('src="data:image/png;base64,QUJD"'), "un data: URL resta com'è");
+			assert.ok(!html.includes('src="docs/'), "nessun percorso nudo deve restare nel markup");
+		});
+
 		it("il testo dell'agente passa dal parser iniettato, quello di chi scrive no", () => {
 			const calls = [];
 			const html = renderConversation(
