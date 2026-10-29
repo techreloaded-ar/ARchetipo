@@ -430,12 +430,14 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Title                string            `json:"title"`
-		Request              string            `json:"request"`
-		OriginConversationID string            `json:"origin_conversation_id"`
-		Model                string            `json:"model"`
-		ModelOptions         map[string]string `json:"model_options"`
+		Title                string             `json:"title"`
+		Request              string             `json:"request"`
+		OriginConversationID string             `json:"origin_conversation_id"`
+		Model                string             `json:"model"`
+		ModelOptions         map[string]string  `json:"model_options"`
+		Attachments          []attachmentUpload `json:"attachments"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBodyBytes)
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, err)
 		return
@@ -474,9 +476,22 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	sendErr := s.sendNativeConversationMessage(ctx, ws, opened.snapshot, sendConversationMessageReq{Message: incrementPrompt(created, body.Request), display: body.Request})
+	// The images attached to the request travel with the first message, as
+	// they would with any other: stored beside the conversation that was just
+	// opened and handed to the adapter by reference.
+	var attachments []execution.Attachment
+	sendErr := error(nil)
+	if len(body.Attachments) > 0 {
+		if sendErr = requireAttachmentsCapability(ctx, opened.snapshot); sendErr == nil {
+			attachments, sendErr = storeConversationAttachments(ws.conversationStore(), opened.snapshot.id, body.Attachments)
+		}
+	}
+	if sendErr == nil {
+		sendErr = s.sendNativeConversationMessage(ctx, ws, opened.snapshot, sendConversationMessageReq{Message: incrementPrompt(created, body.Request), display: body.Request, attachments: attachments})
+	}
 	view := s.nativeConversationView(ctx, ws, opened.snapshot, 0)
 	if sendErr != nil {
+		removeConversationAttachments(attachments)
 		view.Notice = "La sandbox e la conversazione sono conservate. Il messaggio iniziale non è confermato: " + sendErr.Error()
 	}
 	writeJSON(w, http.StatusCreated, view)

@@ -968,7 +968,7 @@ describe("renderConversation — la run dentro il flusso", () => {
 		// vede nel thread. Il parser emette l'<img> com'è, e il renderer gira
 		// solo i percorsi relativi verso la route confinata del server: un URL
 		// con schema, assoluto o data: non è del workspace e resta com'è.
-		it("le immagini con percorso relativo puntano alla route del workspace, le altre restano", () => {
+		it("le immagini con percorso del workspace, relativo o assoluto, puntano alla route; le altre restano", () => {
 			const html = renderConversation(
 				withConversation({
 					events: [{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "text", text: "![schermata](docs/shot.png)" }],
@@ -981,6 +981,8 @@ describe("renderConversation — la run dentro il flusso", () => {
 						"<img src='docs/x.png'> " +
 						'<img alt="remota" src="https://example.test/i.png"> ' +
 						'<img src="/api/workspace/conversations/c-1/attachments/abc.png"> ' +
+						'<img src="/Users/x/repo/docs/abs.png"> ' +
+						'<img src="file:///Users/x/repo/docs/f.png"> ' +
 						'<img src="data:image/png;base64,QUJD"></p>',
 				},
 			);
@@ -998,7 +1000,84 @@ describe("renderConversation — la run dentro il flusso", () => {
 				"un URL assoluto della pagina resta com'è",
 			);
 			assert.ok(html.includes('src="data:image/png;base64,QUJD"'), "un data: URL resta com'è");
+			// Un agente scrive quasi sempre il percorso assoluto, e `file://` è
+			// la sua forma di URL: entrambi passano dalla route, che li confina.
+			assert.ok(
+				html.includes('<img src="/api/workspace/file?path=%2FUsers%2Fx%2Frepo%2Fdocs%2Fabs.png&amp;conversation=conv-1">'),
+				`il percorso assoluto passa dalla route: ${html}`,
+			);
+			assert.ok(
+				html.includes('<img src="/api/workspace/file?path=%2FUsers%2Fx%2Frepo%2Fdocs%2Ff.png&amp;conversation=conv-1">'),
+				`un URL file:// passa dalla route senza lo schema: ${html}`,
+			);
 			assert.ok(!html.includes('src="docs/'), "nessun percorso nudo deve restare nel markup");
+			assert.ok(!html.includes('src="/Users/'), "nessun percorso assoluto nudo deve restare nel markup");
+		});
+
+		// US: quello che l'agente ha guardato si vede senza aprire il dettaglio
+		// tecnico. Le immagini dei suoi passaggi — gli allegati dei tool_end
+		// dall'ultima frase della persona in poi — escono sotto la risposta come
+		// striscia; è una regola del viewer, l'agente non deve citarle.
+		describe("immagini lette dall'agente sotto la risposta", () => {
+			const seen = (id, url) => ({ id, name: id, media_type: "image/png", url });
+			const turn = [
+				{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "guarda i mockup" },
+				{ id: 2, seq: 2, at: "2026-08-21T10:00:02.000Z", kind: "tool_start", tool: "Read" },
+				{ id: 3, seq: 3, at: "2026-08-21T10:00:03.000Z", kind: "tool_end", tool: "Read", attachments: [seen("aaa.png", "/api/workspace/conversations/conv-1/attachments/aaa.png")] },
+				{ id: 4, seq: 4, at: "2026-08-21T10:00:04.000Z", kind: "tool_end", tool: "Read", attachments: [seen("aaa.png", "/api/workspace/conversations/conv-1/attachments/aaa.png"), seen("bbb.png", "/api/workspace/conversations/conv-1/attachments/bbb.png")] },
+				{ id: 5, seq: 5, at: "2026-08-21T10:00:05.000Z", kind: "text", text: "Ho aperto due schermate." },
+			];
+			const agentRow = (html) => {
+				const start = html.indexOf('<li class="conv-event cev-agent">');
+				assert.ok(start >= 0, `manca la riga dell'agente: ${html}`);
+				// La striscia ha i suoi <li>: la riga finisce dove inizia la successiva.
+				const candidates = ['<li class="conv-event ', '<li class="conv-tech', '<li class="conv-run-row', "</ol>"]
+					.map((mark) => html.indexOf(mark, start + 1))
+					.filter((i) => i >= 0);
+				const next = candidates.length ? Math.min(...candidates) : -1;
+				return html.slice(start, next < 0 ? html.length : next);
+			};
+
+			it("la striscia porta ogni immagine letta una volta sola, con il suo URL", () => {
+				const row = agentRow(renderConversation(withConversation({ events: turn, last_id: 5 }), ""));
+				assert.ok(row.includes("conv-seen-images"), `manca la striscia: ${row}`);
+				assert.strictEqual((row.match(/attachments\/aaa\.png/g) || []).length, 2, "aaa.png: un <a> e un <img>, non di più");
+				assert.ok(row.includes('src="/api/workspace/conversations/conv-1/attachments/bbb.png"'), "manca bbb.png");
+				assert.ok(row.includes("Immagini lette dall&#39;agente"), `la striscia dichiara cosa mostra: ${row}`);
+			});
+
+			it("una frase successiva della persona azzera la striscia, e la risposta che segue non la ripete", () => {
+				const html = renderConversation(
+					withConversation({
+						events: [
+							...turn,
+							{ id: 6, seq: 6, at: "2026-08-21T10:00:06.000Z", kind: "user_message", text: "e poi?" },
+							{ id: 7, seq: 7, at: "2026-08-21T10:00:07.000Z", kind: "text", text: "Niente altro." },
+						],
+						last_id: 7,
+					}),
+					"",
+				);
+				assert.strictEqual((html.match(/conv-seen-images"/g) || []).length, 1, `una striscia sola, sotto la prima risposta: ${html}`);
+				assert.strictEqual((html.match(/attachments\/bbb\.png/g) || []).length, 2, "bbb.png non si ripete sotto la seconda risposta");
+			});
+
+			it("se la risposta mostra già un'immagine, la striscia non la raddoppia", () => {
+				const html = renderConversation(
+					withConversation({ events: turn, last_id: 5 }),
+					"",
+					{ markedParse: () => '<p><img src="docs/mockups/aaa.png" alt="prima"></p>' },
+				);
+				assert.ok(!html.includes("conv-seen-images"), `l'agente ha scelto cosa mostrare: ${html}`);
+			});
+
+			it("senza immagini lette non c'è striscia, nemmeno vuota", () => {
+				const html = renderConversation(
+					withConversation({ events: [turn[0], turn[1], { ...turn[2], attachments: [] }, turn[4]], last_id: 5 }),
+					"",
+				);
+				assert.ok(!html.includes("conv-seen-images"), html);
+			});
 		});
 
 		it("il testo dell'agente passa dal parser iniettato, quello di chi scrive no", () => {

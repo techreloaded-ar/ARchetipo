@@ -13,9 +13,9 @@ import (
 )
 
 // An image the agent wrote into the workspace is served by its path relative
-// to the project root, and nothing else is: a path that leaves the root, a
-// symlink that leaves it, a file that is not an image and an absolute path all
-// answer 404.
+// to the project root or by its absolute path inside it, and nothing else is:
+// a path that leaves the root, a symlink that leaves it, a file that is not an
+// image and an absolute path outside the root all answer 404.
 func TestWorkspaceFileRouteServesImagesInsideTheRootOnly(t *testing.T) {
 	srv, cfg, _ := newRunServer(t, nil, false)
 	root := cfg.ProjectRoot
@@ -48,6 +48,10 @@ func TestWorkspaceFileRouteServesImagesInsideTheRootOnly(t *testing.T) {
 	}
 	if rec := get("./docs/shot.png"); rec.Code != http.StatusOK {
 		t.Fatalf("./ prefix = %d", rec.Code)
+	}
+	// The absolute path is what an agent writes nine times out of ten.
+	if rec := get(filepath.Join(root, "docs", "shot.png")); rec.Code != http.StatusOK || rec.Body.String() != "PNGBYTES" {
+		t.Fatalf("absolute inside the root = %d %q", rec.Code, rec.Body.String())
 	}
 
 	refused := []string{
@@ -88,9 +92,18 @@ func TestWorkspaceFileRouteServesImagesInsideTheRootOnly(t *testing.T) {
 	if rec := scoped("docs/shot.png", "conv-wt"); rec.Code != http.StatusOK || rec.Body.String() != "WORKTREE" {
 		t.Fatalf("in the worktree = %d %q", rec.Code, rec.Body.String())
 	}
+	if rec := scoped(filepath.Join(worktree, "docs", "shot.png"), "conv-wt"); rec.Code != http.StatusOK || rec.Body.String() != "WORKTREE" {
+		t.Fatalf("absolute in the worktree = %d %q", rec.Code, rec.Body.String())
+	}
+	// A conversation in a worktree may cite a file of the main checkout by
+	// its absolute path: the root is the second place looked at.
+	if rec := scoped(filepath.Join(root, "docs", "shot.png"), "conv-wt"); rec.Code != http.StatusOK || rec.Body.String() != "PNGBYTES" {
+		t.Fatalf("absolute in the root from a worktree conversation = %d %q", rec.Code, rec.Body.String())
+	}
 	for path, conversation := range map[string]string{
 		"../../../docs/shot.png": "conv-wt",
 		"docs/shot.png":          "conv-unknown",
+		outside:                  "conv-wt",
 	} {
 		if rec := scoped(path, conversation); rec.Code != http.StatusNotFound {
 			t.Fatalf("%q in %q = %d, want 404: %s", path, conversation, rec.Code, rec.Body.String())

@@ -75,6 +75,11 @@ type runWorkspaceActionReq struct {
 	// conversation this start was asked for in, absent when it was not asked for
 	// in one.
 	ConversationID string `json:"conversation_id,omitempty"`
+	// Attachments are the images attached to the words that start the action,
+	// in the shape the conversation message route takes them. They need a
+	// conversation to live in, so they are refused for a provider without
+	// native sessions exactly as the message route refuses them.
+	Attachments []attachmentUpload `json:"attachments,omitempty"`
 }
 
 // handleGetWorkspaceActions serves GET /api/workspace/actions.
@@ -148,6 +153,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req runWorkspaceActionReq
+	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBodyBytes)
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
 		return
@@ -157,7 +163,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 		writeError(w, iox.NewInvalidInput("action is required", "supported actions: "+supportedActions(), nil))
 		return
 	}
-	started, err := s.startWorkspaceAction(r.Context(), ws, action, req.Model, req.ModelOptions, req.ConversationID, req.UserInput)
+	started, err := s.startWorkspaceAction(r.Context(), ws, action, req.Model, req.ModelOptions, req.ConversationID, req.Attachments, req.UserInput)
 	if err != nil {
 		writeStartError(w, err)
 		return
@@ -181,7 +187,7 @@ func (s *Server) handleRunWorkspaceAction(w http.ResponseWriter, r *http.Request
 // produces, which is only guaranteed by there being a single sequence. Every
 // refusal is returned as an error; writeStartError is the single place that
 // turns one into an HTTP response.
-func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession, action execution.ActionID, model string, modelOptions map[string]string, conversationID string, input ...string) (*execution.Execution, error) {
+func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession, action execution.ActionID, model string, modelOptions map[string]string, conversationID string, attachments []attachmentUpload, input ...string) (*execution.Execution, error) {
 	userInput := ""
 	if len(input) > 0 {
 		userInput = strings.TrimSpace(input[0])
@@ -282,6 +288,7 @@ func (s *Server) startWorkspaceAction(ctx context.Context, ws *workspaceSession,
 		return s.startActionInSession(ctx, ws, actionInSession{
 			conversationID: conversationID,
 			userInput:      userInput,
+			attachments:    attachments,
 			action:         action,
 			providerID:     providerID,
 			providerConfig: providerConfig,

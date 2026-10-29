@@ -78,6 +78,12 @@ type actionInSession struct {
 	// that ends the action may be observed by a later process than the one that
 	// started it — see registerActionConfirmation.
 	confirm execution.Confirmation
+	// attachments are the images the person attached to the words that start
+	// the action, as the browser sent them. They are stored only once the
+	// conversation the action runs in is known, because that is where they
+	// live, and they reach the adapter as references exactly like the images
+	// of an ordinary message.
+	attachments []attachmentUpload
 }
 
 // startActionInSession opens the execution record of an action and hands the
@@ -167,12 +173,26 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 	if plan.userInput != "" {
 		display += "\n\n" + plan.userInput
 	}
+	var attachments []execution.Attachment
+	if len(plan.attachments) > 0 {
+		if err := requireAttachmentsCapability(ctx, snapshot); err != nil {
+			ws.settleSessionAction(ctx, opened.ID, nil, err)
+			return nil, err
+		}
+		stored, storeErr := storeConversationAttachments(ws.conversationStore(), snapshot.id, plan.attachments)
+		if storeErr != nil {
+			ws.settleSessionAction(ctx, opened.ID, nil, storeErr)
+			return nil, storeErr
+		}
+		attachments = stored
+	}
 	send := func(sendCtx context.Context) error {
 		if operation := readEnvironmentOperation(snapshot.workingDir); plan.action == execution.ActionImplement && operation.Preparation != nil {
 			prompt += "\nEnvironment preparation report for " + snapshot.workingDir + ": " + operation.Preparation.ReportPath
 		}
-		err := s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: prompt, Skill: plan.skill, executionID: opened.ID, display: display})
+		err := s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: prompt, Skill: plan.skill, executionID: opened.ID, display: display, attachments: attachments})
 		if err != nil {
+			removeConversationAttachments(attachments)
 			ws.settleSessionAction(sendCtx, opened.ID, nil, err)
 		}
 		return err

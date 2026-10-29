@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -56,6 +57,7 @@ func finishIncrementTurn(t *testing.T, srv *Server, p *persistentFakeNativeProvi
 }
 func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(t *testing.T) {
 	p := newPersistentFakeNativeProvider("native-fake", nil)
+	p.acceptsAttachments = true
 	srv, cfg, conn := newRunServer(t, p, true)
 	seedCommonEnvironment(t, srv)
 	incrementGit(t, cfg.ProjectRoot, "init", "-b", "main")
@@ -70,7 +72,8 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	incrementGit(t, cfg.ProjectRoot, "add", "-A")
 	incrementGit(t, cfg.ProjectRoot, "commit", "-m", "initial")
 	free := openConversationOK(t, srv)
-	response := doJSON(t, srv, "POST", "/api/increments", map[string]any{"request": "Esportare i clienti", "origin_conversation_id": free.Conversation.ID})
+	image := map[string]any{"name": "schermata.png", "media_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))}
+	response := doJSON(t, srv, "POST", "/api/increments", map[string]any{"request": "Esportare i clienti", "origin_conversation_id": free.Conversation.ID, "attachments": []any{image}})
 	if response.Code != 201 {
 		t.Fatalf("create: %d %s", response.Code, response.Body.String())
 	}
@@ -95,6 +98,12 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	}
 	if !strings.Contains(p.lastStart.Message, "/archetipo-increment "+r.ID) || p.lastStart.Session.Environment.WorkingDir != r.Workdir {
 		t.Fatal("initial turn lost the increment context")
+	}
+	// The image attached to the request opens the increment with its words:
+	// stored beside the increment's own conversation, handed by reference.
+	attachmentsDir, _ := srv.session().conversationStore().AttachmentsDir(view.Conversation.ID)
+	if len(p.lastStart.Attachments) != 1 || filepath.Dir(p.lastStart.Attachments[0].Path) != attachmentsDir || p.lastStart.Attachments[0].Name != "schermata.png" {
+		t.Fatalf("the initial turn lost the attachment: %#v (dir %s)", p.lastStart.Attachments, attachmentsDir)
 	}
 	service := increment.New(cfg, conn)
 	proposal := increment.Proposal{Intent: "Esportare i clienti in Excel.", Stories: []domain.Spec{{Code: "US-001", Title: "Esportazione", Epic: domain.Epic{Code: "EP-001", Title: "Export"}, Priority: domain.Priority("MEDIUM"), Points: 3, Status: domain.StatusTodo, Scope: domain.Scope("MVP"), Body: "## Dimostrazione\nEsporto il file.\n- [ ] Il file contiene i clienti."}}}

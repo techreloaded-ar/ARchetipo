@@ -111,6 +111,7 @@
 		// suonerebbe come un rifiuto.
 		pendingMessageMark: "in consegna",
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
+		seenImages: "Immagini lette dall'agente in questo turno",
 		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
 		// detto che il provider le accetta: il pannello non lo sa da sé.
 		attach: "Allega immagine",
@@ -412,7 +413,16 @@
 	// nudo, o se la pagina non ha caricato marked — resta il testo escapato di
 	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
 	// postura con cui la pagina rende i corpi di spec, piano e PRD.
-	function renderAgentText(events, parse, receiptLines, conversationID) {
+	//
+	// Le immagini che l'agente ha letto nel turno — gli allegati dei suoi
+	// passaggi tecnici dall'ultima frase della persona in poi — compaiono
+	// sotto la risposta come striscia di anteprime, così quello che l'agente
+	// ha guardato si vede senza aprire il dettaglio tecnico. È una regola di
+	// presentazione del viewer, non un'istruzione all'agente: vale per ogni
+	// provider che conserva le immagini lette e per le conversazioni libere.
+	// Se la risposta mostra già un'immagine, l'agente ha scelto cosa far
+	// vedere e la striscia non lo raddoppia.
+	function renderAgentText(events, parse, receiptLines, conversationID, seenImages) {
 		if (!events.length) return "";
 		const last = events[events.length - 1];
 		const head = [
@@ -437,6 +447,10 @@
 					: `<p class="conv-event-text">${escapeHtml(text)}</p>`,
 			);
 		}
+		const strip = /<img\b/i.test(lines[0] || "") ? "" : renderEventAttachments(Array.isArray(seenImages) ? seenImages : []);
+		if (strip) {
+			lines.push(`<div class="conv-seen-images"><span class="conv-seen-images-label">${escapeHtml(TEXT.seenImages)}</span>${strip}</div>`);
+		}
 		// La colonnina porta l'intervallo degli id fusi — #2–4 — così il cursore
 		// resta leggibile anche quando tre frammenti sono diventati una riga.
 		const firstID =
@@ -455,14 +469,16 @@
 	}
 
 	// Un'immagine che l'agente cita con un percorso del workspace —
-	// `![schermata](docs/shot.png)`, o un `<img>` con lo stesso src nudo — non
+	// `![schermata](docs/shot.png)`, il percorso assoluto che un agente scrive
+	// quasi sempre, un `file://`, o un `<img>` con lo stesso src nudo — non
 	// esiste come URL della pagina: la serve la route del server, confinata
-	// alla directory in cui l'agente lavora. La route la riceve con l'id della
-	// conversazione, perché un agente in una sandbox scrive e cita i percorsi
-	// dalla sua directory, non dalla root. Si riscrive solo il percorso
-	// relativo; un URL con schema, assoluto o `data:` resta com'è. Il parser
-	// emette gli attributi con le entità HTML, quindi il percorso si decodifica
-	// prima di entrare nella query e si ri-escapa dopo.
+	// alla directory in cui l'agente lavora e alla root del progetto. La route
+	// la riceve con l'id della conversazione, perché un agente in una sandbox
+	// scrive e cita i percorsi dalla sua directory, non dalla root. Un URL con
+	// schema diverso da file, `data:`, un'àncora e un indirizzo della pagina
+	// stessa (`/api/…`) restano com'erano. Il parser emette gli attributi con le
+	// entità HTML, quindi il percorso si decodifica prima di entrare nella query
+	// e si ri-escapa dopo.
 	const WORKSPACE_FILE_ROUTE = "/api/workspace/file?path=";
 	function resolveWorkspaceImages(html, conversationID) {
 		const scope = conversationID ? `&conversation=${encodeURIComponent(conversationID)}` : "";
@@ -475,8 +491,9 @@
 					.replace(/&#39;/g, "'")
 					.replace(/&lt;/g, "<")
 					.replace(/&gt;/g, ">")
+					.replace(/^file:\/\/(localhost)?(?=\/)/i, "")
 					.replace(/^\.\//, "");
-				if (!path || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith("/") || path.startsWith("#")) {
+				if (!path || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith("/api/") || path.startsWith("#")) {
 					return match;
 				}
 				return `${before}"${escapeHtml(WORKSPACE_FILE_ROUTE + encodeURIComponent(path) + scope)}"`;
@@ -1083,15 +1100,27 @@
 			// convivono mai — l'arrivo dell'uno chiude l'altro — quindi l'ordine
 			// delle righe resta quello degli eventi.
 			let agentRun = [];
+			// Le immagini lette dall'agente dall'ultima frase della persona in
+			// poi, una volta sola per file: escono sotto la prima risposta che
+			// le segue e non si ripetono sotto la successiva.
+			let seenImages = [];
+			const seenImageIDs = new Set();
 			const flushAgent = () => {
 				if (!agentRun.length) return;
-				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id")));
+				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"), seenImages));
 				agentRun = [];
+				seenImages = [];
 			};
 			for (const event of events) {
 				if (isTechnicalEvent(event)) {
 					flushAgent();
 					folding.push(event);
+					for (const image of arrayAt(event, "attachments")) {
+						const key = image && (textAt(image, "id") || textAt(image, "url"));
+						if (!key || seenImageIDs.has(key)) continue;
+						seenImageIDs.add(key);
+						seenImages.push(image);
+					}
 				} else if (event && event.kind === "text" && !event.tool) {
 					flushTechnical();
 					const previous = agentRun[agentRun.length - 1];
@@ -1101,6 +1130,10 @@
 					flushTechnical();
 					flushAgent();
 					rows.push(renderEvent(event));
+					if (event && event.kind === "user_message") {
+						seenImages = [];
+						seenImageIDs.clear();
+					}
 				}
 				const id =
 					event && event.id !== null && event.id !== undefined

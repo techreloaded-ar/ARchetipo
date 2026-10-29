@@ -4770,6 +4770,7 @@
 		try {
 			const body = { action: target.action };
 			if (target.user_input) body.user_input = target.user_input;
+			if (target.attachments && target.attachments.length) body.attachments = attachmentUploads(target.attachments);
 			// Solo un gesto fatto dentro la conversazione aperta la nomina: la
 			// board non sta in nessun thread, e la sua azione ne apre uno suo.
 			const from = target.fromConversation ? conversationsCurrentId : "";
@@ -7674,11 +7675,14 @@
 		const id = conversationsCurrentId;
 		if (conversationBusy || !id) return;
 		const typed = conversationDraft.trim();
-		if (!typed) return;
+		const attachments = conversationAttachments;
+		if (!typed && !attachments.length) return;
 		const selectedActivity = conversationActivitySelection;
 		const { message, skill } = selectedActivity
 			? { message: typed, skill: selectedActivity.skill }
 			: splitConversationSkill(typed);
+		const body = { message, skill };
+		if (attachments.length) body.attachments = attachmentUploads(attachments);
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
@@ -7692,10 +7696,12 @@
 			applyConversationView(view);
 			view = await apiPost(
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
-				{ message, skill },
+				body,
 			);
 			conversationDraft = "";
+			conversationAttachments = [];
 			conversationPendingMessage = message || typed;
+			conversationPendingAttachments = attachments;
 			conversationsRefusal = "";
 			applyConversationView(view);
 			startConversationPolling();
@@ -8274,8 +8280,9 @@
 		finally { conversationBusy = false; renderConversationPanel(); }
 	}
 
-	async function startIncrementFromConversation(proposal) {
+	async function startIncrementFromConversation(proposal, attachments) {
 		const body = {request: proposal, origin_conversation_id: conversationsCurrentId || ""};
+		if (attachments && attachments.length) body.attachments = attachmentUploads(attachments);
 		const override = conversationModelOverride();
 		if (override) Object.assign(body, override);
 		try {
@@ -8322,14 +8329,19 @@
 			if (!proposal) return;
 			const typed = proposal;
 			const activity = conversationActivitySelection;
+			// Le immagini allegate partono con le parole che avviano l'attività,
+			// come con un messaggio qualunque: il campo si svuota solo se
+			// l'avvio è accettato, e un rifiuto le lascia dove erano.
+			const attachments = conversationAttachments;
 			conversationBusy = true;
 			renderConversationPanel();
 			try {
 				const started = activity.kind === "increment"
-					? await startIncrementFromConversation(typed)
-					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed, fromConversation: true }, null);
+					? await startIncrementFromConversation(typed, attachments)
+					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed, attachments, fromConversation: true }, null);
 				if (started) {
 					conversationDraft = "";
+					conversationAttachments = [];
 					conversationActivitySelection = null;
 					startConversationPolling();
 					loadConversationActivities();
@@ -8361,7 +8373,7 @@
 			? { message: typed, skill: selectedActivity.skill }
 			: splitConversationSkill(typed);
 		const body = { message, skill };
-		if (attachments.length) body.attachments = attachments.map((a) => ({ name: a.name, media_type: a.media_type, data_base64: a.data_base64 }));
+		if (attachments.length) body.attachments = attachmentUploads(attachments);
 		conversationBusy = true;
 		// Il campo si svuota e il messaggio compare in coda alla conversazione
 		// *adesso*, prima ancora di partire: chi ha premuto invio deve vedere
@@ -8410,6 +8422,11 @@
 	// in coda al prossimo messaggio, come anteprima e come base64. I formati
 	// sono quelli che il server accetta; tutto il resto viene ignorato.
 	const CONVERSATION_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+	// attachmentUploads è la forma in cui ogni route che apre un turno riceve
+	// le immagini: nome, tipo e base64, senza l'anteprima locale.
+	function attachmentUploads(attachments) {
+		return attachments.map((a) => ({ name: a.name, media_type: a.media_type, data_base64: a.data_base64 }));
+	}
 	function addConversationAttachments(files) {
 		const accepted = Array.from(files || []).filter((f) => CONVERSATION_IMAGE_TYPES.includes(f.type));
 		if (!accepted.length) return;
