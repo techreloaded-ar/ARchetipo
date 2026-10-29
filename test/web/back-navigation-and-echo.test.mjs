@@ -347,7 +347,7 @@ describe("il messaggio inviato si vede subito", () => {
 			"dopo un rifiuto la riga in consegna resta: mostrerebbe come consegnato un messaggio che non è partito",
 		);
 		assert.ok(
-			onFailure.includes("conversationDraft = typed"),
+			onFailure.includes("saveConversationDraft(typed)"),
 			"dopo un rifiuto il testo non torna nel campo: chi l'ha scritto dovrebbe riscriverlo per leggere la ragione",
 		);
 	});

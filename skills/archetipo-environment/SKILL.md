@@ -152,6 +152,17 @@ failure carries `kind: error` and `error.code`.
   Each command has `name`, explicit `argv`, `timeout_seconds` (1..1800); each
   resource has `name`, `start`, `probe`, `stop`, `stopped` (timeouts <= 30).
   Checks have command fields, explicit `inputs`, `cache`, optional `during_preview`.
+  `prepare`, `probe` and `cleanup` are ARRAYS of commands; `checks` is an OBJECT
+  keyed by check name, never an array. For example (replace commands and inputs
+  with those discovered in the actual project):
+
+  ```json
+  {"version":1,"inputs":["package.json"],"outputs":[],"prepare":[],"probe":[{"name":"runtime","argv":["node","--version"],"timeout_seconds":10}],"checks":{"tests":{"name":"tests","argv":["npm","test"],"timeout_seconds":120,"inputs":["package.json","src","test"],"cache":true,"during_preview":false}}}
+  ```
+
+  This is a shape example, not a default recipe or sufficient application
+  readiness probe. Require a successful envelope before qualification; failed
+  configuration leaves no new candidate. Repair the payload before continuing.
   Returns `kind: verification_result`, configured local recipe in `data`.
 - `archetipo execution preview configure --candidate --file -`: for web apps only,
   stdin `{ "version":1, "directory":".", "argv":["scripts/archetipo/preview.sh",

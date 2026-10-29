@@ -162,7 +162,7 @@
   find("add").hidden=current?.commentable===false;
   find("send").hidden=current?.commentable===false;
   find("reload").hidden=state!=="ready";
-  find("external").hidden=state!=="ready";
+  find("external").hidden=state!=="ready" && state!=="external";
   host.querySelector(".preview-tools").hidden=state!=="ready";
 
   host.querySelector(".preview-comments-count").textContent=String(comments.length);

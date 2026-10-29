@@ -25,11 +25,14 @@ type Qualification struct {
 }
 
 func (s *Service) qualificationKey(assets []string) (string, string, error) {
-	bundle, err := environmentrecipe.Collect(s.Root, assets)
+	recipe, err := LoadLocal(s.Root)
+	if os.IsNotExist(err) {
+		return "", "", iox.NewPrecondition("no candidate environment recipe", "configure the candidate successfully before qualification", err)
+	}
 	if err != nil {
 		return "", "", err
 	}
-	recipe, err := LoadLocal(s.Root)
+	bundle, err := environmentrecipe.Collect(s.Root, assets)
 	if err != nil {
 		return "", "", err
 	}

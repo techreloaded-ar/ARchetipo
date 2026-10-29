@@ -245,6 +245,7 @@
 	const EVENT_KINDS = {
 		text: { label: "agente", variant: "cev-agent" },
 		thinking: { label: "ragionamento", variant: "cev-thinking", technical: true },
+		worker_message: { label: "agente delegato", variant: "cev-thinking", technical: true },
 		user_message: { label: "tu", variant: "cev-you" },
 		tool_start: {
 			label: "strumento · avvio",
@@ -1009,9 +1010,9 @@
 			// riga sola, per la stessa ragione della piega tecnica ma al
 			// contrario: lì si ripiega il rumore, qui si ricompone la risposta
 			// che i provider a delta consegnano in frammenti. I due accumuli non
-			// convivono mai: strumenti e messaggi chiudono la risposta. I soli
-			// metadati senza contenuto intercalati nello stesso messaggio vengono
-			// conservati subito dopo la risposta completa.
+			// Gli strumenti della stessa sessione chiudono la risposta; eventi
+			// tecnici di worker paralleli e metadati vuoti restano ispezionabili
+			// subito dopo il messaggio completo senza spezzarne i delta.
 			let agentRun = [];
 			let streamMetadata = [];
 			const flushAgent = () => {
@@ -1030,7 +1031,11 @@
 					// identified message. Retain it after the complete answer so it
 					// cannot split words, links or Markdown tables into two bubbles.
 					const previous = agentRun[agentRun.length - 1];
-					if (previous?.message_id && !event.text && !event.tool && !eventEntry(event)?.failed && !eventKind(event).startsWith("tool_")) {
+					const previousThread = textAt(objectAt(previous, "raw"), "threadId");
+					const eventThread = textAt(objectAt(event, "raw"), "threadId");
+					const workerEvent = previousThread && eventThread && previousThread !== eventThread;
+					const emptyMetadata = !event.text && !event.tool && !eventEntry(event)?.failed && !eventKind(event).startsWith("tool_");
+					if (previous?.message_id && (workerEvent || emptyMetadata)) {
 						streamMetadata.push(event);
 					} else {
 						flushAgent();

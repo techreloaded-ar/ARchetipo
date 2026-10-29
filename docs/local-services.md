@@ -4,6 +4,22 @@ ARchetipo gestisce i servizi dichiarati dal progetto, senza riconoscere framewor
 né richiedere Docker. La CLI possiede registro, porte, serializzazione ed evidenze;
 le skill scelgono i comandi del progetto e la view usa lo stesso contratto.
 
+## Indirizzo browser e dati locali
+
+La preview conserva per ogni checkout il proprio indirizzo proxy in
+`.archetipo/environment/browser-origin.json`. Stop, revisioni e riavvii del viewer
+riusano quell'origine: i dati dell'app in localStorage rimangono accessibili.
+Il server applicativo può ricevere una porta diversa; il token del selettore viene
+rinnovato. Se la porta proxy conservata è occupata, l'avvio segnala un conflitto
+senza passare a un'origine vuota o fermare listener estranei. Il file contiene
+stato runtime locale e non va incluso nella ricetta pubblicata.
+
+Una ricetta pubblicata da un incremento può non avere copie locali nel checkout
+principale. I nuovi lavori ereditano direttamente il bundle comune e gli helper.
+Solo creando un worktree nuovo gli helper versionati e invariati della base
+possono essere aggiornati alla revisione comune. Modifiche locali e helper non
+versionati restano protetti dai conflitti.
+
 ## Ricetta del progetto
 
 La ricetta versionata `.archetipo/environment.json` versione 1 accetta i campi

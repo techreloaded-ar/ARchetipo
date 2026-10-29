@@ -13,7 +13,7 @@ workflow:
     planned: PLANNED
     in_progress: IN PROGRESS
     review: REVIEW
-    done: DONE        # gated: /archetipo-review (explicit human approval) or /archetipo-autopilot (autonomous acceptance)
+    done: DONE        # Original story status; product readiness and PR merge do not change it.
 
 # Process Template installed in this workspace. `id` selects the process —
 # which skills are installed and which workflow statuses it uses — and
@@ -21,17 +21,15 @@ workflow:
 # `archetipo init [--template <id>]`; omitting the flag selects the default.
 template:
   id: fabbrica-del-software
-  version: "1.0.0"
+  version: "2.0.0"
 
 # Used only when connector == file
 file:
   backlog: .archetipo/backlog.yaml
   planning: .archetipo/plans/
 
-# Living Wiki, off by default. With enabled: true the standard workflow
-# (inception, spec, plan, implement, review) reads and maintains the Wiki. The
-# `archetipo wiki ...` commands and an explicit `/archetipo-wiki` invocation
-# keep working either way, so the Wiki stays available on demand.
+# Living Wiki, off by default. The `archetipo wiki ...` commands and an explicit
+# `/archetipo-wiki` invocation remain available independently of product work.
 wiki:
   enabled: false
 
@@ -44,21 +42,8 @@ worktree:
   dir: .archetipo/worktrees
   branch_prefix: archetipo/
 
-# One commit per spec, without the worktree workflow. With auto_commit: true,
-# `archetipo spec review` stages and commits everything dirty in the project
-# root before moving the spec to REVIEW, so each increment lands as its own
-# `<type>(US-XXX): <summary>` commit instead of piling up in the working tree.
-# Turn it on when you run /archetipo-autopilot on a project without worktrees:
-# the autopilot completes several specs in a row, and without this their changes
-# accumulate into one indistinguishable blob.
-#
-# Off by default: when you implement one spec at a time you normally want to
-# commit yourself, and the commit stages the whole working tree — including any
-# unrelated change of yours.
-#
-# This key does NOT affect the worktree workflow. With worktree.enabled: true
-# the per-spec commit always happens, because the branch diff is what review and
-# `spec integrate` consume. Non-git projects are always left alone.
+# Compatibility setting for optional spec operations. Product increments commit
+# their verified changes in a dedicated worktree independently of this setting.
 git:
   auto_commit: false
 

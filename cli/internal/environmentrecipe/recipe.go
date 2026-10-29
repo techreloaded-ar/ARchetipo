@@ -146,6 +146,17 @@ func publish(root string, assets []string, digest string) (Recipe, error) {
 // checkpoints or uses another checkout's services. Unknown helper changes are
 // refused rather than overwritten; a previous inherited helper can be updated.
 func Sync(root string) error {
+	return sync(root, false)
+}
+
+// Inherit installs the shared bundle in a newly created checkout. Its unchanged
+// versioned helpers may come from an older main commit; edited or untracked
+// helpers remain protected exactly as during ordinary synchronization.
+func Inherit(root string) error {
+	return sync(root, true)
+}
+
+func sync(root string, freshCheckout bool) error {
 	r, err := Load(root)
 	if os.IsNotExist(err) {
 		return nil
@@ -176,7 +187,9 @@ func Sync(root string) error {
 			continue
 		}
 		if readErr == nil && f.Path != Environment && f.Path != Preview && !bytes.Equal(raw, previous[f.Path]) {
-			return iox.NewConflict("environment helper differs from the workspace recipe: "+f.Path, "repair and publish the common workspace configuration before preparing", nil)
+			if !freshCheckout || !unchangedVersionedHelper(root, f.Path) {
+				return iox.NewConflict("environment helper differs from the workspace recipe: "+f.Path, "repair and publish the common workspace configuration before preparing", nil)
+			}
 		}
 	}
 	for _, f := range r.Files {
@@ -214,6 +227,13 @@ func Sync(root string) error {
 		}
 	}
 	return recordfile.WriteAtomic(filepath.Dir(checkpoint), checkpoint, ".inherited-", r)
+}
+
+func unchangedVersionedHelper(root, path string) bool {
+	if err := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", path).Run(); err != nil {
+		return false
+	}
+	return exec.Command("git", "-C", root, "diff", "--quiet", "HEAD", "--", path).Run() == nil
 }
 
 // Read resolves the sole common configuration without materializing files during

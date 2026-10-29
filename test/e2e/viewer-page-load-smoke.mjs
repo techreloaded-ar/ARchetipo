@@ -321,6 +321,15 @@ async function exercisePage(browser, url, runDir) {
   assertNoExceptions("Il click sul thread del rail ha emesso eccezioni non catturate:");
   ok(CLAIMS[2], "il click su un thread del rail apre quella conversazione, sentinella dell'agente compresa");
 
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.value='BOZZA CONSERVATA AL RELOAD';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await page.send('Page.reload');
+  await page.once('Page.loadEventFired',30000,'reload con bozza non inviata');
+  await page.waitFor(`!!document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]')`,10000,'conversazione dopo reload della bozza');
+  await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`document.querySelector('.conv-composer-input')?.value==='BOZZA CONSERVATA AL RELOAD'`,10000,'bozza non inviata conservata al reload');
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  ok('conversation-draft-reload','la bozza non inviata sopravvive al reload nello stesso workspace');
+
   await page.waitFor(`Array.from(document.querySelectorAll('.conv-event-markdown a')).some(a => a.textContent === 'Apri report tecnico' && a.getAttribute('href')?.includes('/reports/'))`, 10000, 'il link locale diventa un report autorizzato');
   const reportRead = await page.evaluate(`(async () => {
     const anchors = Array.from(document.querySelectorAll('.conv-event-markdown a'));

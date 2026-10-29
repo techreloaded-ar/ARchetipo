@@ -10,7 +10,34 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
+
+func TestQualificationMissingRecipeIsRecoverablePrecondition(t *testing.T) {
+	s, _, _ := fixture(t)
+	if _, err := s.Qualify(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.Root, RecipePath)); err != nil {
+		t.Fatal(err)
+	}
+	q, err := s.Qualify(context.Background(), nil)
+	var coded *iox.CodedError
+	if !errors.As(err, &coded) || coded.Code != iox.CodePreconditionMissing {
+		t.Fatalf("missing candidate must explain its prerequisite, got %v", err)
+	}
+	if q.Passed {
+		t.Fatal("missing recipe retained a successful qualification")
+	}
+	raw, err := os.ReadFile(q.ReportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained Qualification
+	if err = json.Unmarshal(raw, &retained); err != nil || retained.Passed {
+		t.Fatalf("previous qualification was not revoked: %+v, %v", retained, err)
+	}
+}
 
 func TestCandidateQualificationDoesNotReplaceCommonRecipe(t *testing.T) {
 	s, runner, recipe := fixture(t)

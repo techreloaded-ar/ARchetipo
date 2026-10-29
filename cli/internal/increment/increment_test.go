@@ -12,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
@@ -85,6 +86,47 @@ func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json")); !os.IsNotExist(err) {
 		t.Fatal("parent resource ownership checkpoint copied")
+	}
+}
+
+func TestSandboxInheritsBundlePublishedOnlyFromAnotherIncrement(t *testing.T) {
+	s := fixture(t)
+	helper := "scripts/archetipo/preview.sh"
+	if err := os.MkdirAll(filepath.Join(s.Config.ProjectRoot, "scripts/archetipo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, helper), []byte("old committed launcher\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, s.Config.ProjectRoot, "add", helper)
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: original launcher")
+	first := create(t, s)
+	preview := []byte(`{"version":1,"directory":".","argv":["sh","scripts/archetipo/preview.sh","{port}"],"url":"http://127.0.0.1:{port}","prepare_environment":true}`)
+	if err := os.WriteFile(filepath.Join(first.Workdir, environmentrecipe.Preview), preview, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(first.Workdir, "scripts/archetipo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first.Workdir, helper), []byte("exec actual-server \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := environmentrecipe.Publish(first.Workdir, []string{helper}); err != nil {
+		t.Fatal(err)
+	}
+	parentPreview := filepath.Join(s.Config.ProjectRoot, environmentrecipe.Preview)
+	if _, err := os.Stat(parentPreview); !os.IsNotExist(err) {
+		t.Fatal("fixture unexpectedly materialized the parent preview", err)
+	}
+	second := create(t, s)
+	for path, expected := range map[string]string{environmentrecipe.Preview: string(preview), helper: "exec actual-server \"$1\"\n"} {
+		got, err := os.ReadFile(filepath.Join(second.Workdir, path))
+		if err != nil || string(got) != expected {
+			t.Fatalf("published asset missing in the new worktree: %s, %v", path, err)
+		}
+	}
+	if _, err := os.Stat(parentPreview); !os.IsNotExist(err) {
+		t.Fatal("new increment changed the parent checkout", err)
 	}
 }
 

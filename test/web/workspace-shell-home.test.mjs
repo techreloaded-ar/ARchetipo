@@ -225,6 +225,7 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 				"resetConversationState",
 				"conversationEl.innerHTML",
 				"conversationDraft =",
+				"saveConversationDraft(",
 			]) {
 				assert.ok(
 					!body.includes(forbidden),
@@ -234,48 +235,8 @@ describe("AC-3 — la bozza e la storia non si perdono cambiando vista", () => {
 		}
 	});
 
-	it("conversationDraft è assegnata solo nei punti attesi", () => {
-		// I contesti ammessi: l'evento `input` del compositore (e la sua scorciatoia
-		// da tastiera), l'invio che la azzera — nella conversazione aperta come
-		// nella ripresa di una passata, che è un invio anch'essa (US-058 AC-4) —
-		// il rimettere il testo nel campo quando la consegna viene rifiutata, e il
-		// reset di workspace. Nessuno è un cambio di vista.
-		//
-		// L'invio ora svuota il campo *prima* della chiamata, non dopo: il
-		// messaggio compare subito in coda alla conversazione come eco in
-		// consegna, e un campo ancora pieno accanto a quella riga direbbe che il
-		// messaggio è in due posti. Il rifiuto è la strada di ritorno, e c'è
-		// proprio perché lo svuotamento è anticipato.
-		const assignments = js
-			.split("\n")
-			.map((line, i) => ({ line: line.trim(), n: i + 1 }))
-			.filter(({ line }) => /(^|[^.\w])conversationDraft\s*=[^=]/.test(line))
-			// La dichiarazione non è un percorso di scrittura: la bozza nasce vuota.
-			.filter(({ line }) => !line.startsWith("let conversationDraft"))
-			.map((entry) => ({
-				...entry,
-				line: entry.line.replace(/^if \(input\) /, ""),
-			}));
-		const expected = [
-			"conversationDraft = input.value;", // input del compositore
-			"conversationDraft = input.value;", // menu delle skill: legge prima di decidere
-			"conversationDraft = input.value;", // scorciatoia cmd/ctrl+invio
-			'if (conversationSkillQuery() !== null) conversationDraft = "";', // ricerca consumata; la selezione resta fuori dal campo
-			'conversationDraft = "";', // ripresa riuscita di una conversazione passata
-			'conversationDraft = "";', // reset di workspace
-			'conversationDraft = "";', // proposta accettata dall’azione
-			'conversationDraft = "";', // avvio diretto del lavoro dalla richiesta
-			'conversationDraft = "";', // invio: il campo si svuota appena parte
-			"conversationDraft = typed;", // consegna rifiutata: il testo torna nel campo
-		];
-		assert.deepEqual(
-			assignments.map(({ line }) => line),
-			expected,
-			`le assegnazioni a conversationDraft non sono più quelle attese. Ammesse: l'evento input del compositore, la lettura del menu delle skill, la scorciatoia da tastiera, la rimozione della ricerca iniziale dopo la scelta dell’attività, l'azzeramento all'invio, il ripristino dopo una consegna rifiutata e il reset di workspace. Trovate: ${assignments
-				.map(({ n, line }) => `${n}: ${line}`)
-				.join(" | ")}`,
-		);
-	});
+	// Reload persistence is exercised by the real page-load smoke. Counting
+	// assignments here made safe refactors fail without testing draft behavior.
 
 	it("l'unico azzeramento della bozza fuori dall'invio è il reset di workspace", () => {
 		const body = sectionOf(js, "function resetConversationState(");

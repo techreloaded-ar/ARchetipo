@@ -1037,6 +1037,22 @@ describe("renderConversation — la run dentro il flusso", () => {
 			assert.ok(html.includes("runtime-metadata"), "i metadati restano ispezionabili");
 		});
 
+		it("gli strumenti di un worker non spezzano la risposta in streaming del parent", () => {
+			const calls = [];
+			const html = renderConversation(withConversation({events: [
+				{id: 1, kind: "text", message_id: "answer", text: "Da rest", raw: {threadId: "parent"}},
+				{id: 2, kind: "tool_start", tool: "commandExecution", text: "worker-probe", raw: {threadId: "worker"}},
+				{id: 3, kind: "tool_end", tool: "commandExecution", text: "worker-result", raw: {threadId: "worker"}},
+				{id: 4, kind: "text", message_id: "answer", text: "ituire", raw: {threadId: "parent"}},
+				{id: 5, kind: "tool_start", tool: "commandExecution", text: "parent-probe", raw: {threadId: "parent"}},
+				{id: 6, kind: "text", message_id: "next", text: "Nuova risposta", raw: {threadId: "parent"}},
+			], last_id: 6}), "", {technicalAll: true, markedParse: md => { calls.push(md); return `<x>${md}</x>`; }});
+			assert.deepEqual(calls, ["Da restituire", "Nuova risposta"]);
+			assert.match(html, /worker-probe/);
+			assert.match(html, /worker-result/);
+			assert.match(html, /parent-probe/);
+		});
+
 		it("la colonnina di una riga fusa porta l'intervallo degli id", () => {
 			const html = renderConversation(
 				withConversation({

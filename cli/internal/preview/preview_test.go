@@ -169,6 +169,64 @@ func TestBorrowedServerProxyAndOwnership(t *testing.T) {
 	}
 }
 
+func TestBrowserOriginSurvivesManagerRestartAndRefusesOccupiedAddress(t *testing.T) {
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "application")
+	}))
+	defer app.Close()
+	root := t.TempDir()
+	raw, _ := json.Marshal(Recipe{Version: 1, Directory: ".", URL: app.URL})
+	if _, err := Configure(root, raw); err != nil {
+		t.Fatal(err)
+	}
+	start := func(m *Manager) View {
+		t.Helper()
+		v, err := m.Start(root, "work", "http://127.0.0.1:8080")
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for v.State == "starting" && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			v, _ = m.Status(root, "work")
+		}
+		if v.State != "ready" {
+			t.Fatalf("not ready: %+v", v)
+		}
+		return v
+	}
+	first := NewManager()
+	defer first.Close()
+	original := start(first)
+	first.Close()
+	second := NewManager()
+	defer second.Close()
+	restarted := start(second)
+	if restarted.URL != original.URL {
+		t.Fatalf("browser storage origin changed: %s -> %s", original.URL, restarted.URL)
+	}
+	if restarted.Token == original.Token {
+		t.Fatal("picker token was reused across owners")
+	}
+	second.Close()
+	address, _ := url.Parse(original.URL)
+	occupied, err := net.Listen("tcp", address.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = occupied.Close() }()
+	third := NewManager()
+	defer third.Close()
+	if _, err := third.Start(root, "work", "http://127.0.0.1:8080"); err == nil {
+		t.Fatal("occupied browser origin silently switched to an empty storage origin")
+	}
+	connection, err := net.DialTimeout("tcp", occupied.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.Close()
+}
+
 func TestUnconfiguredAndNoServer(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager()

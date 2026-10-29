@@ -13,6 +13,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
@@ -171,6 +172,12 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 }
 
 func (s *Service) installRuntime(target string) error {
+	// A recipe published from another worktree can exist only in the common
+	// bundle, with no materialized files in the parent checkout. Resolve it in
+	// this new worktree before falling back to legacy local recipe copies.
+	if err := environmentrecipe.Inherit(target); err != nil {
+		return err
+	}
 	// Copy only workflow assets, never environment files or credentials.
 	// A project recipe declares commands and variable names. Never copy its
 	// resource checkpoint: every checkout prepares and owns its own environment.

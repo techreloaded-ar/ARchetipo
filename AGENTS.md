@@ -400,3 +400,12 @@ questions directly in Preview, then reopens the technical history and verifies i
 survives reload with the same identity. The harness benchmark also inspects a failed
 check through `environment checks` without changing its evidence. Check observation
 is read-only and does not replace the product readiness/publication evidence gate.
+
+The page-load smoke verifies that an unsent workspace chat draft survives a real
+page reload. It stays in browser session storage and is cleared after successful
+delivery; a failed delivery preserves it. The preview smoke verifies a stable
+browser origin and retained localStorage across Stop/Start. Preview unit tests
+cover manager restart and refusal of an occupied retained proxy port. Increment
+tests cover common recipes published only from a worktree, without materialized
+parent files, including replacement of unchanged older versioned helpers while
+preserving edited and untracked helpers.

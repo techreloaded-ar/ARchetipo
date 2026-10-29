@@ -361,6 +361,8 @@ async function main(){
   await page.waitFor('document.querySelector(".preview-comment-reference").textContent.includes("non è più presente")',timeout,'missing component explained');
   assert.equal(await evaluateFrame('document.querySelector("[data-archetipo-highlight]").style.display'),'none');
   ok('Riferimenti ripristinati dopo reload; nessuna evidenziazione errata su altre pagine o componenti rimossi.');
+  const browserOrigin=(await (await fetch(endpoint+'/preview')).json()).url;
+  await evaluateFrame('localStorage.setItem("acceptance-retained-loan","Proiettore a Marco")');
   const failStop=path.join(sandbox,'.archetipo/environment/fail-resource-stop');
   await fs.writeFile(failStop,'fail stop');
   await page.evaluate('document.querySelector("[data-preview=stop]").click()');
@@ -376,6 +378,12 @@ async function main(){
   // Hard viewer death closes the private supervisor pipe and its app tree.
   const started=await fetch(endpoint+'/preview',{method:'POST'});assert.equal(started.status,202);
   await until(async()=>{const state=await (await fetch(endpoint+'/preview')).json();return state.state==='ready';},'second app startup');
+  assert.equal((await (await fetch(endpoint+'/preview')).json()).url,browserOrigin,'restart changed the browser storage origin');
+  await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'preview reattached after restart');
+  frameID=(await page.send('Page.getFrameTree')).frameTree.childFrames[0].frame.id;
+  await until(()=>contexts.has(frameID),'restarted browser context');
+  assert.equal(await evaluateFrame('localStorage.getItem("acceptance-retained-loan")'),'Proiettore a Marco','browser data disappeared after stop/start');
+  ok('L’indirizzo browser e i dati locali restano gli stessi dopo Ferma ambiente e nuovo avvio.');
   const newPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));assert.notEqual(newPid,pid);
   const services=(await (await fetch(endpoint+'/preview')).json()).services;
   assert(services.some(service=>service.name==='Applicazione'&&service.state==='In esecuzione'&&service.endpoints.length===1));
@@ -407,6 +415,7 @@ async function main(){
    assert.equal(await page.evaluate('document.querySelector("[data-preview=start]").disabled'),true);
    assert.equal(await page.evaluate('document.querySelector("[data-preview=stop]").disabled'),false);
    assert.equal(await page.evaluate('document.querySelector("[data-preview=external]").href'),external.url);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=external]").hidden'),false,'external preview link is not reachable');
    assert.match(await page.evaluate('document.querySelector(".preview-status").textContent'),/altro processo/);
    await fs.writeFile(path.join(dir,'external-owner.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }

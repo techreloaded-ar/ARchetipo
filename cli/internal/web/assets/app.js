@@ -5455,6 +5455,16 @@
 	let conversationReportsCache = null;
 	let conversationEvents = []; // timeline, appended to and never rebuilt
 	let conversationDraft = ""; // composer text, preserved across re-renders
+	function saveConversationDraft(value) {
+		conversationDraft = value;
+		const root = conversationsIndex?.workspace_root;
+		if (!root) return;
+		try {
+			const key = "archetipo.chat-draft:" + root;
+			if (value) sessionStorage.setItem(key, value);
+			else sessionStorage.removeItem(key);
+		} catch { /* The in-memory draft remains usable when storage is blocked. */ }
+	}
 	// Il messaggio consegnato all'agente e non ancora tornato indietro come
 	// evento. Non è una copia della storia: è ciò che sta *fuori* dalla storia
 	// per la finestra di tempo in cui il server non ha ancora niente da dire —
@@ -6057,7 +6067,7 @@
 			}
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
-			conversationDraft = input.value;
+			saveConversationDraft(input.value);
 			adattaAltezzaCompositore(input);
 			// Il menu delle skill vive del testo: ogni battuta lo riapre, lo
 			// filtra o lo chiude, e riparte sempre dalla prima voce perché
@@ -6116,7 +6126,7 @@
 			// Col menu delle skill aperto invio sceglie e non manda: si sta
 			// ancora decidendo che cosa dire, non lo si sta dicendo.
 			if (!e.isComposing && e.keyCode !== 229 && !e.shiftKey && !e.altKey) {
-				conversationDraft = input.value;
+				saveConversationDraft(input.value);
 				if (conversationSkillKeydown(e)) {
 					e.preventDefault();
 					return;
@@ -6126,7 +6136,7 @@
 			if (e.isComposing || e.keyCode === 229) return;
 			if (e.shiftKey || e.altKey) return;
 			e.preventDefault();
-			conversationDraft = input.value;
+			saveConversationDraft(input.value);
 			sendConversationMessage();
 		});
 	}
@@ -6787,7 +6797,7 @@
 	function pickConversationSkill(name) {
 		const item = conversationActivityItems().find((entry) => entry.kind === "skill" && entry.skill === name);
 		if (!item || !item.runnable) return;
-		if (conversationSkillQuery() !== null) conversationDraft = "";
+		if (conversationSkillQuery() !== null) saveConversationDraft("");
 		conversationSkillHighlight = 0;
 		chooseConversationActivity(item.id);
 	}
@@ -7018,7 +7028,7 @@
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
 				{ message, skill },
 			);
-			conversationDraft = "";
+			saveConversationDraft("");
 			conversationPendingMessage = message || typed;
 			conversationsRefusal = "";
 			applyConversationView(view);
@@ -7326,6 +7336,10 @@
 		}
 		resetConversationState();
 		await loadConversationsIndex();
+		try {
+			const root = conversationsIndex?.workspace_root;
+			if (root) conversationDraft = sessionStorage.getItem("archetipo.chat-draft:" + root) || "";
+		} catch { /* Storage may be unavailable; conversation loading still works. */ }
 		const live = liveConversationEntries();
   let remembered="";
   try{remembered=sessionStorage.getItem("archetipo.last-chat:"+conversationsIndex?.workspace_root)||"";}catch{}
@@ -7541,7 +7555,7 @@
 					? await startIncrementFromConversation(typed)
 					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
 				if (started) {
-					conversationDraft = "";
+					saveConversationDraft("");
 					conversationActivitySelection = null;
 					startConversationPolling();
 					loadConversationActivities();
@@ -7558,7 +7572,7 @@
 			renderConversationPanel();
 			try {
 				if (await startIncrementFromConversation(proposal, conversationActivitiesView.start_work.development_mode)) {
-					conversationDraft = "";
+					saveConversationDraft("");
 					startConversationPolling();
 				}
 			} finally { conversationBusy = false; renderConversationPanel(); }
@@ -7599,6 +7613,7 @@
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
 				{ message, skill },
 			);
+			saveConversationDraft("");
 			// Accepted means delivered, not published: the text stays out of the
 			// timeline until the agent carries it back. Quello che si vede in
 			// coda fino ad allora è l'eco locale qui sopra, e porta scritto che
@@ -7614,7 +7629,7 @@
 			// alla conversazione, e il testo torna nel campo da cui era uscito —
 			// chi l'ha scritto non deve riscriverlo per leggere il rifiuto.
 			conversationPendingMessage = "";
-			conversationDraft = typed;
+			saveConversationDraft(typed);
 			showConversationRefusal(err);
 		} finally {
 			conversationBusy = false;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -339,6 +340,7 @@ func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing
 	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "parent-turn", "parent-submission", "develop", "low", nil)
 	fake.emit("item/agentMessage/delta", `{"threadId":"thread-1","turnId":"turn-1","itemId":"parent-message","delta":"Parent result"}`)
 	fake.emit("turn/started", `{"threadId":"child-plan","turn":{"id":"child-plan-turn"}}`)
+	fake.emit("item/agentMessage/delta", `{"threadId":"child-plan","turnId":"child-plan-turn","itemId":"child-message","delta":"Child "}`)
 	fake.emit("item/completed", `{"threadId":"child-plan","turnId":"child-plan-turn","item":{"id":"child-message","type":"agentMessage","text":"Child receipt"}}`)
 	fake.emit("turn/completed", `{"threadId":"child-plan","turn":{"id":"child-plan-turn","rootTurnId":"turn-1","status":"completed"}}`)
 	fake.request(71, "item/commandExecution/requestApproval", `{"threadId":"child-implement","turnId":"child-implement-turn","reason":"Check isolated Docker runtime","availableDecisions":["accept","cancel"]}`)
@@ -372,7 +374,14 @@ func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing
 	defer session.mu.Unlock()
 	ends := 0
 	children := 0
+	workerText := ""
 	for _, event := range session.events {
+		if event.Kind == "worker_message" {
+			workerText += event.Text
+		}
+		if event.Kind == localrun.KindText && strings.Contains(event.Text, "Child") {
+			t.Fatal("worker commentary leaked into the parent answer")
+		}
 		if event.Kind == localrun.KindTurnEnd {
 			ends++
 			if event.FinalMessage != "Parent result" {
@@ -385,5 +394,8 @@ func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing
 	}
 	if ends != 1 || children != 2 {
 		t.Fatalf("end events: parent=%d children=%d", ends, children)
+	}
+	if workerText != "Child receipt" {
+		t.Fatalf("worker history lost or duplicated: %q", workerText)
 	}
 }

@@ -183,7 +183,7 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	i := &Instance{root: root, view: View{Configured: true, Recipe: &r, State: state}, cancel: cancel, done: make(chan struct{})}
 	var listener net.Listener
 	if !prepareOnly {
-		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		listener, err = listenBrowserOrigin(root)
 		if err != nil {
 			cancel()
 			_ = lock.Unlock()
