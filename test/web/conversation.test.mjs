@@ -1025,6 +1025,18 @@ describe("renderConversation — la run dentro il flusso", () => {
 			);
 		});
 
+		it("i metadati intercalati non spezzano il Markdown dello stesso messaggio", () => {
+			const calls = [];
+			const html = renderConversation(withConversation({events: [
+				{id: 1, kind: "text", message_id: "answer", text: "| Esito | Prova |\n| --- | --- |\n| PASS | rep"},
+				{id: 2, kind: "runtime-metadata", raw: {status: "observed"}},
+				{id: 3, kind: "text", message_id: "answer", text: "ort.json |"},
+				{id: 4, kind: "text", message_id: "next-answer", text: "Risposta successiva"},
+			], last_id: 4}), "", {markedParse: md => { calls.push(md); return `<x>${md}</x>`; }});
+			assert.deepEqual(calls, ["| Esito | Prova |\n| --- | --- |\n| PASS | report.json |", "Risposta successiva"]);
+			assert.ok(html.includes("runtime-metadata"), "i metadati restano ispezionabili");
+		});
+
 		it("la colonnina di una riga fusa porta l'intervallo degli id", () => {
 			const html = renderConversation(
 				withConversation({

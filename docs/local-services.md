@@ -112,6 +112,13 @@ piano, senza `nohup`, detach o nuove sessioni. Su Windows resta il percorso
 di cancellazione tramite `taskkill /T`; il recupero dei figli di un launcher già
 terminato non è garantito da questa modifica.
 
+I supervisori privati di comando e cleanup hanno un gruppo POSIX separato da
+quello del chiamante. Se l’harness termina l’intero gruppo del proprio comando,
+il canale di controllo si chiude e i supervisori possono ancora fermare app e
+risorse prima di uscire. Non sono server applicativi staccati: la loro vita
+resta vincolata al canale privato. La morte del supervisore stesso resta distinta
+e richiede riconciliazione delle evidenze, senza terminare listener sconosciuti.
+
 Il registro `.archetipo/environment/preview-process.json` conserva endpoint,
 identità dell'esecuzione ed esito verificato dell'arresto. La verifica usa una
 connessione TCP, non il successo di una risposta HTTP. `preview-stop.json`
@@ -124,7 +131,8 @@ Il test opzionale `npm run test:next-preview-process-smoke -- --node-modules
 /percorso/assoluto/node_modules` usa una copia di Next già installata, senza
 installare dipendenze o modificare quel progetto. Crea una piccola app separata
 e prova la catena npm → wrapper → Next con stop normale, stop da un altro
-terminale, morte forzata del proprietario e uscita anticipata del wrapper.
+terminale, morte forzata del proprietario, morte del suo intero gruppo POSIX e
+uscita anticipata del wrapper.
 Report e log restano sotto `test/workspaces/next-preview-process-smoke/`.
 
 I comandi environment usano `archetipo/v1`, `kind: verification_result`.

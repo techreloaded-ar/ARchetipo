@@ -118,7 +118,11 @@ Update documentation affected by the implemented behavior, recording decisions a
 relevant page references. Keep product intent distinct from current implementation.
 Use targeted documentation checks; a full Wiki rebuild is not required each turn.
 
-Commit the verified product changes on this branch, excluding runtime and secrets.
+Commit the verified product changes on this branch, including portable
+`.archetipo/environment.json`, `.archetipo/preview.json` and non-secret
+`scripts/archetipo/` helpers when they were added or changed. Exclude local
+environment journals, databases, conversations, ownership markers and secrets;
+portable recipes are source assets, not disposable runtime state.
 Call `increment ready <id> --file -`:
 
 ```json
@@ -127,7 +131,14 @@ Call `increment ready <id> --file -`:
 
 The preview URL is optional and must be observed, never invented. Configure a
 managed preview recipe through the environment method for a web app. The viewer
-launches the app through that same deterministic contract. Readiness freezes a
+launches the app through that same deterministic contract.
+When invoked inside View, do not run `execution preview run` or start another
+application server yourself: that would hold the environment under a different
+owner and prevent View from opening its preview. Finish the turn after
+configuration and checks so View can launch it. Report unavailable browser
+control honestly and let the person try Preview; do not wait or poll for their
+manual validation inside a running turn.
+Readiness freezes a
 clean committed candidate, current specification and machine reports. Text in
 `checks` explains the result; it cannot substitute for those reports. Publication
 revalidates the code and evidence. No story state is needed.

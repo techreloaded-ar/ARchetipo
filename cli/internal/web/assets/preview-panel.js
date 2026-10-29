@@ -30,8 +30,10 @@
  let comments=[], notice="", panel=window.Preview.panelState({},{}), activeComment=null, drag=null;
  const states=new Map();
  const autoStarted=new Set();
+ const stoppedTargets=new Set();
  const candidateKey=()=>key+":"+(current?.candidate || "");
- function manuallyStopped(candidate){try{return sessionStorage.getItem("preview-stopped:"+key)===candidate;}catch{return false;}}
+ const stopKey=()=>"preview-stopped:"+(current?.root || key);
+ function manuallyStopped(){if(stoppedTargets.has(stopKey()))return true;try{return !!(sessionStorage.getItem(stopKey()) || sessionStorage.getItem("preview-stopped:"+key));}catch{return false;}}
  const route=()=>current.scope==="workspace"?"/api/workspace/preview":`/api/workspace/conversations/${encodeURIComponent(current.id)}/preview`;
  async function api(url,method="GET",payload={}) {
   const response=await fetch(url,{method,headers:method==="GET"?{}:{"Content-Type":"application/json"},body:method==="POST"?JSON.stringify(payload):undefined});
@@ -146,9 +148,9 @@
   find("fullscreen").hidden=!document.fullscreenEnabled;
   find("pick").querySelector("span").textContent=picking?"Selezione attiva · Esc":"Commenta un elemento";
   find("pick").setAttribute("aria-pressed",String(picking));
-  find("start").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","stopping","ready"].includes(view?.state);
-  find("reconfigure").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","stopping","ready"].includes(view?.state);
-  find("stop").disabled=busy || !["configuring","waiting","preparing","starting","ready","error"].includes(view?.state);
+  find("start").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","stopping","ready","external"].includes(view?.state);
+  find("reconfigure").disabled=busy || !current?.writable || ["configuring","waiting","preparing","starting","stopping","ready","external"].includes(view?.state);
+  find("stop").disabled=busy || !["configuring","waiting","preparing","starting","ready","external","error"].includes(view?.state);
   find("reload").disabled=!frame;
   const state=view?.state || "unconfigured";
   host.dataset.state=state;
@@ -234,9 +236,10 @@
   host.querySelector(".preview-context-chat").textContent=context.conversation_title || context.conversation_id || "";
   for(const name of ["work","chat"]){const node=host.querySelector(".preview-context-"+name);node.hidden=!node.textContent;host.querySelector(".preview-context-"+name+"-heading").hidden=node.hidden;}
 
-  // One automatic attempt per verified candidate; Stop and errors never loop.
+  // One automatic attempt per candidate. An explicit environment stop remains
+  // in force across turns until the person starts that checkout again.
   const candidate=candidateKey();
-  if(current?.autoStart && current.writable && value.configured && value.state==="stopped" && !autoStarted.has(candidate) && !manuallyStopped(candidate)) {
+  if(current?.autoStart && current.writable && value.configured && value.state==="stopped" && !autoStarted.has(candidate) && !manuallyStopped()) {
    autoStarted.add(candidate);
    const selected=key, generation=++request, url=route();
    busy=true;
@@ -244,7 +247,7 @@
   }
   host.querySelector(".preview-log pre").textContent=[value.resources?.resources?.map(r=>`Servizio ${r.resource.name}: ${r.state}${r.error ? " — "+r.error : ""}`).join("\n"),value.resources?.ports ? Object.entries(value.resources.ports).map(([name,port])=>`${name}: 127.0.0.1:${port}`).join("\n") : "",value.environment?.log,value.log,value.preparation?.report_path ? "Report ambiente: "+value.preparation.report_path : ""].filter(Boolean).join("\n");
   host.querySelector(".preview-error-badge").hidden=!(value.state==="error" || value.error);
-  const labels={unconfigured:"Premi Preview: configuriamo e prepariamo l’ambiente del progetto.",configuring:"Configurazione ambiente nella sessione tecnica…",waiting:"Serve il tuo intervento. Apri Dettagli ambiente.",stopped:"Premi Preview per aprire l’applicazione.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",stopping:"Arresto ambiente in corso…",ready:"Preview disponibile.",error:value.error};
+  const labels={unconfigured:"Premi Preview: configuriamo e prepariamo l’ambiente del progetto.",configuring:"Configurazione ambiente nella sessione tecnica…",waiting:"Serve il tuo intervento. Apri Dettagli ambiente.",stopped:"Premi Preview per aprire l’applicazione.",external:"Preview avviata da un altro processo. Aprila nel browser oppure usa Ferma ambiente prima di avviarla qui.",preparing:"Preparazione ambiente in corso…",starting:"Avvio del server in corso…",stopping:"Arresto ambiente in corso…",ready:"Preview disponibile.",error:value.error};
   status.textContent=notice || labels[value.state] || value.state;
   if(value.state==="ready") {
    find("external").href=value.url;
@@ -256,7 +259,7 @@
     frame.src=value.url;stage.append(frame);
    }
    post("archetipo-picker-hello");
-  } else {clearFrame();find("external").removeAttribute("href");}
+  } else {clearFrame();if(value.state==="external" && value.url)find("external").href=value.url;else find("external").removeAttribute("href");}
   updateButtons();
  }
  async function refresh(){
@@ -306,9 +309,10 @@
   const selected=key, url=route();request++;notice="";busy=true;updateButtons();
   if(action==="stop"){
    autoStarted.add(candidateKey());
-   try{sessionStorage.setItem("preview-stopped:"+key,candidateKey());}catch{/* In-memory stop still prevents a restart. */}
+   stoppedTargets.add(stopKey());
+   try{sessionStorage.setItem(stopKey(),"true");}catch{/* In-memory stop still prevents a restart. */}
   }
-  if(action==="start"){try{sessionStorage.removeItem("preview-stopped:"+key);}catch{/* Explicit start remains available. */}}
+  if(action==="start"){stoppedTargets.delete(stopKey());try{sessionStorage.removeItem(stopKey());sessionStorage.removeItem("preview-stopped:"+key);}catch{/* Explicit start remains available. */}}
   try{
    if(action==="setup"){const value=await api(url+"/configure","POST");if(key===selected)apply(value);}
    if(action==="send"){

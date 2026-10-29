@@ -28,7 +28,7 @@ func environmentServices(root string, view environmentPreviewView) []environment
 			owner = "Server esterno: Ferma scollega solo la preview"
 		}
 		if view.Server != nil && !view.Reused && view.Server.State != "stopped" {
-			if view.Server.OwnerActive && view.State == "stopped" {
+			if view.Server.OwnerActive && (view.State == "stopped" || view.State == "external") {
 				state = "In esecuzione · altro proprietario ARchetipo"
 			} else if !view.Server.OwnerActive {
 				owner = "Proprietario terminato · arresto da riconciliare"

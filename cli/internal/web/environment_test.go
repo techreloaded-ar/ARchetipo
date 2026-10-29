@@ -146,6 +146,13 @@ func TestMissingRecipeUsesSeparateDurableTechnicalSession(t *testing.T) {
 	if response.Code != 202 {
 		t.Fatalf("technical answer: %d %s", response.Code, response.Body.String())
 	}
+	deadline = time.Now().Add(3 * time.Second)
+	for readEnvironmentOperation(root).State != "configuring" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if value := readEnvironmentOperation(root); value.State != "configuring" || value.Error != "" {
+		t.Fatalf("answered technical request still looks blocked: %+v", value)
+	}
 	// Simulate only the agent's chosen configuration; preparation, reports and
 	// publication use the real shared contracts.
 	if _, err := verification.Configure(root, []byte(`{"version":1,"probe":[{"name":"ready","argv":["go","version"],"timeout_seconds":10}],"checks":{}}`)); err != nil {

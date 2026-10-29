@@ -31,6 +31,7 @@ func runCommand(ctx context.Context, root, dir, address, runID string, argv []st
 		return err
 	}
 	cmd := exec.Command(executable, "execution", "preview", "_run")
+	processtree.SeparateSupervisor(cmd)
 	cmd.Dir, cmd.Stdout, cmd.Stderr, cmd.WaitDelay = dir, output, output, 2*time.Second
 	cmd.Env = env
 	control, err := cmd.StdinPipe()

@@ -296,7 +296,10 @@ func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.Se
 }
 
 func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return p.codexNativeCommand(request, func(client *appServer) error { return client.Send(ctx, request.Message) })
+	return p.codexNativeCommand(request, func(client *appServer) error {
+		client.expectInstruction(request.Message, request.Display)
+		return client.Send(ctx, request.Message)
+	})
 }
 
 func (p *Provider) InterruptTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {

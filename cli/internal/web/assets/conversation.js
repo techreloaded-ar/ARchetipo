@@ -1009,18 +1009,33 @@
 			// riga sola, per la stessa ragione della piega tecnica ma al
 			// contrario: lì si ripiega il rumore, qui si ricompone la risposta
 			// che i provider a delta consegnano in frammenti. I due accumuli non
-			// convivono mai — l'arrivo dell'uno chiude l'altro — quindi l'ordine
-			// delle righe resta quello degli eventi.
+			// convivono mai: strumenti e messaggi chiudono la risposta. I soli
+			// metadati senza contenuto intercalati nello stesso messaggio vengono
+			// conservati subito dopo la risposta completa.
 			let agentRun = [];
+			let streamMetadata = [];
 			const flushAgent = () => {
 				if (!agentRun.length) return;
 				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))]));
 				agentRun = [];
+				if (streamMetadata.length) {
+					rows.push(renderTechnicalGroup(streamMetadata, local, folded));
+					folded += 1;
+					streamMetadata = [];
+				}
 			};
 			for (const event of events) {
 				if (isTechnicalEvent(event)) {
-					flushAgent();
-					folding.push(event);
+					// Empty runtime metadata can arrive between deltas of one
+					// identified message. Retain it after the complete answer so it
+					// cannot split words, links or Markdown tables into two bubbles.
+					const previous = agentRun[agentRun.length - 1];
+					if (previous?.message_id && !event.text && !event.tool && !eventEntry(event)?.failed && !eventKind(event).startsWith("tool_")) {
+						streamMetadata.push(event);
+					} else {
+						flushAgent();
+						folding.push(event);
+					}
 				} else if (event && event.kind === "text" && !event.tool) {
 					flushTechnical();
 					const previous = agentRun[agentRun.length - 1];

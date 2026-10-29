@@ -274,10 +274,13 @@ type StartTurnRequest struct {
 // SteerTurn uses Message, approval responses use InteractionID and OptionID,
 // and structured input responses use InteractionID and Payload.
 type SessionCommandRequest struct {
-	Session       SessionMetadata `json:"session"`
-	TurnID        string          `json:"turn_id"`
-	SubmissionID  string          `json:"submission_id"`
-	Message       string          `json:"message,omitempty"`
+	Session      SessionMetadata `json:"session"`
+	TurnID       string          `json:"turn_id"`
+	SubmissionID string          `json:"submission_id"`
+	Message      string          `json:"message,omitempty"`
+	// Display preserves the person's text when steering carries an expanded
+	// skill instruction, with the same history contract as StartTurnRequest.
+	Display       string          `json:"display,omitempty"`
 	InteractionID string          `json:"interaction_id,omitempty"`
 	OptionID      string          `json:"option_id,omitempty"`
 	Payload       json.RawMessage `json:"payload,omitempty"`

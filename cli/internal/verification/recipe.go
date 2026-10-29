@@ -175,6 +175,9 @@ func validateCommands(commands []Command) error {
 // Reject lexical escapes and symlinks at every existing component, including
 // dangling links. Dependency outputs must belong to this checkout.
 func localPath(root, rel string) (string, error) {
+	if strings.ContainsAny(rel, "*?[]{}") {
+		return "", invalid("recipe paths must name explicit files or directories, not glob patterns: " + rel)
+	}
 	if rel == "" || rel == "." || filepath.IsAbs(rel) || strings.ContainsAny(rel, `\:`) || filepath.ToSlash(filepath.Clean(rel)) != rel || strings.HasPrefix(rel, "../") || rel == ".." {
 		return "", invalid("expected a project-relative file or directory: " + rel)
 	}

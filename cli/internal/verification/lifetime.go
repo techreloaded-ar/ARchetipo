@@ -13,6 +13,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/processtree"
 )
 
 // Lifetime is an independent cleanup owner, rather than a Go defer in the
@@ -55,6 +56,7 @@ func ownLifetime(root string, output io.Writer, candidate bool) (*Lifetime, erro
 		return nil, err
 	}
 	cmd := exec.Command(executable, "execution", "environment", "_guard")
+	processtree.SeparateSupervisor(cmd)
 	cmd.Dir, cmd.Stderr = root, output
 	control, err := cmd.StdinPipe()
 	if err != nil {

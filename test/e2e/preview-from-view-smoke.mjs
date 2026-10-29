@@ -387,28 +387,50 @@ async function main(){
   ok('Anche la terminazione forzata del viewer chiude applicazione e servizi esterni posseduti.');
   // npm -> launcher -> server: successful launcher exit must still reap the
   // child, release its socket and run the registered environment cleanup.
-  for(const mode of ['cli-stop','launcher-exit']){
-  const orphanRun=spawn(cli,['execution','preview','run'],{cwd:sandbox,env,stdio:['ignore','pipe','pipe']});standalone.push(orphanRun);
+  for(const mode of ['cli-stop','owner-group-sigkill','launcher-exit']){
+  const orphanRun=spawn(cli,['execution','preview','run'],{cwd:sandbox,env,detached:mode==='owner-group-sigkill',stdio:['ignore','pipe','pipe']});standalone.push(orphanRun);
   let orphanOutput='',orphanError='';
   orphanRun.stdout.on('data',chunk=>{orphanOutput+=chunk;});orphanRun.stderr.on('data',chunk=>{orphanError+=chunk;});
   await until(()=>{if(orphanRun.exitCode!==null)throw new Error(orphanError);try{return JSON.parse(orphanOutput).data.state==='ready';}catch{return false;}},'npm preview before launcher exit');
   const orphanView=JSON.parse(orphanOutput).data;
   const orphanPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));
+  if(mode==='cli-stop'){
+   viewer=await startViewServer(cli,sandbox,env,'/api/board');
+   const external=await (await fetch(viewer.url+'/api/workspace/preview')).json();
+   assert.equal(external.state,'external');assert.equal(external.url,orphanView.recipe.url);
+   await page.send('Page.navigate',{url:viewer.url});
+   await page.waitFor(`!!document.querySelector('[data-conversation-id="${conversationID}"]')`,timeout,'retained conversation in the new viewer');
+   await page.evaluate(`document.querySelector('[data-conversation-id="${conversationID}"]').click()`);
+   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'preview control after viewer restart');
+   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
+   await page.waitFor('document.getElementById("browser-preview").dataset.state==="external"',timeout,'external owner is displayed without takeover',()=>page.evaluate('JSON.stringify({status:document.querySelector(".preview-status")?.textContent,state:document.getElementById("browser-preview")?.dataset.state,body:document.body.innerText.slice(-1000)})'));
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=start]").disabled'),true);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=stop]").disabled'),false);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=external]").href'),external.url);
+   assert.match(await page.evaluate('document.querySelector(".preview-status").textContent'),/altro processo/);
+   await fs.writeFile(path.join(dir,'external-owner.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
   if(mode==='cli-stop')await run('stop-managed-preview',cli,['execution','preview','stop'],{cwd:sandbox});
+  else if(mode==='owner-group-sigkill')process.kill(-orphanRun.pid,'SIGKILL');
   else await fs.writeFile(path.join(sandbox,'exit-launcher'),'exit');
-  await until(()=>orphanRun.exitCode!==null,'launcher exit ends standalone preview');
+  await until(()=>orphanRun.exitCode!==null||orphanRun.signalCode!==null,mode+' ends standalone preview');
   await until(()=>{try{process.kill(orphanPid,0);return false;}catch{return true;}},'launcher exit terminates server descendant');
   await assert.rejects(fetch(orphanView.recipe.url,{signal:AbortSignal.timeout(1000)}),'launcher exit releases app port');
-  assert(JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'));
+  await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),mode+' retained dependency cleanup');
   if(mode==='launcher-exit')await fs.rm(path.join(sandbox,'exit-launcher'));
-  else assert.equal(orphanRun.exitCode,0,'explicit stop should end the owner successfully');
+  else if(mode==='cli-stop')assert.equal(orphanRun.exitCode,0,'explicit stop should end the owner successfully');
+  if(mode==='cli-stop'){
+   await page.waitFor('document.getElementById("browser-preview").dataset.state==="stopped"',timeout,'external owner stop appears in the viewer');
+   await stopProcess(viewer.child,run);
+   ok('Un altro proprietario ARchetipo è visibile con il suo link: avvio disabilitato, arresto disponibile e nessun takeover automatico.');
+  }
   ok('La catena npm → launcher → server e le dipendenze si arrestano con '+mode+'.');
   }
   // The standalone environment run uses the same independent lifetime owner.
   const environmentRun=spawn(cli,['execution','environment','run'],{cwd:sandbox,env,stdio:['ignore','pipe','pipe']});standalone.push(environmentRun);
   let environmentOutput='',environmentError='';
   environmentRun.stdout.on('data',chunk=>{environmentOutput+=chunk;});environmentRun.stderr.on('data',chunk=>{environmentError+=chunk;});
-  await until(()=>{if(environmentRun.exitCode!==null)throw new Error(environmentError);try{return JSON.parse(environmentOutput).data.passed;}catch{return false;}},'standalone environment run ready');
+  await until(()=>{if(environmentRun.exitCode!==null)throw new Error('environment run exited '+environmentRun.exitCode+': '+environmentError+'; '+environmentOutput);try{return JSON.parse(environmentOutput).data.passed;}catch{return false;}},'standalone environment run ready');
   const conflicting=await run('active-lifetime-conflict',cli,['execution','environment','prepare'],{cwd:sandbox,allowFailure:true});
   assert.notEqual(conflicting.code,0);assert.match(conflicting.stderr,/E_CONFLICT/);
   environmentRun.kill('SIGKILL');

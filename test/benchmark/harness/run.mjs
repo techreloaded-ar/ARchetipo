@@ -85,15 +85,16 @@ try {
   const before = readFileSync(beat, 'utf8');
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(readFileSync(beat, 'utf8'), before, 'cancelled command leaked a live descendant');
+  for (const groupKill of process.platform==='win32' ? [false] : [false,true]) {
   unlinkSync(join(project, '.archetipo/environment/descendant.pid'));
   const crashStart = performance.now();
-  const crash = spawn(bin, ['-C', project, 'execution', 'environment', 'check', 'slow', '--spec', 'US-001'], { stdio: 'ignore' });
+  const crash = spawn(bin, ['-C', project, 'execution', 'environment', 'check', 'slow', '--spec', 'US-001'], { detached:groupKill, stdio: 'ignore' });
   const crashed = new Promise(resolve => crash.on('exit', resolve));
   while (!existsSync(join(project, '.archetipo/environment/descendant.pid'))) {
     assert(performance.now() - crashStart < 5000, 'hard-kill fixture did not start');
     await new Promise(resolve => setTimeout(resolve, 10));
   }
-  crash.kill('SIGKILL');
+  if(groupKill)process.kill(-crash.pid,'SIGKILL');else crash.kill('SIGKILL');
   await crashed;
   // Wait for the owned supervisor to release its command lock, not a fixed
   // delay that could hide an orphan. Recovery is required within four seconds.
@@ -106,7 +107,8 @@ try {
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(readFileSync(beat, 'utf8'), hardBeat, 'CLI hard kill leaked a live descendant');
   r = check('hard-kill-recovery'); assert(r.passed && r.reused);
-  rows.push({ label: 'hard-kill-no-orphan', elapsed_ms: Math.round(performance.now() - crashStart), envelope: { data: { passed: true, reused: false } } });
+  rows.push({ label: groupKill?'group-kill-no-orphan':'hard-kill-no-orphan', elapsed_ms: Math.round(performance.now() - crashStart), envelope: { data: { passed: true, reused: false } } });
+  }
   invoke('cleanup', ['cleanup']);
   r = check('after-cleanup'); assert(r.passed && !r.reused); assert.equal(counts().prepare, 4);
   // A real parent dies while a compatible check uses its service. Its private

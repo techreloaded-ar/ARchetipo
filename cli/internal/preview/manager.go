@@ -516,6 +516,10 @@ func resourceView(root string, view View) (View, error) {
 		return view, err
 	}
 	view.Server = server
+	if server != nil && server.State == "running" && server.OwnerActive && (view.State == "stopped" || view.State == "unconfigured") {
+		view.State = "external"
+		view.URL = server.URL
+	}
 	if server != nil && server.State != "stopped" && !server.OwnerActive {
 		view.State = "error"
 		view.CleanupError = "Il proprietario della preview è terminato senza un arresto verificato. Usa Ferma ambiente per controllare il servizio registrato."

@@ -29,6 +29,8 @@ func (s *Server) presentEnvironment(ctx context.Context, ws *workspaceSession, t
 		}
 	case "stopped":
 		result.Headline = "Preview ferma"
+	case "external":
+		result.Headline = "Preview gestita da un altro processo"
 	case "configuring":
 		result.Headline = "Configurazione ambiente in corso"
 	case "preparing":

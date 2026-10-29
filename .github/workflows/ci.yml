@@ -10,6 +10,56 @@ permissions:
   contents: read
 
 jobs:
+  product-viewer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - run: npm ci
+      - name: Pure frontend contracts
+        run: npm run test:web
+      - name: Real page and browser interactions
+        run: npm run test:view-page-load-smoke
+        env:
+          ARCHETIPO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+      - name: Product chat journey
+        run: npm run test:view-chat-smoke
+        env:
+          ARCHETIPO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+      - name: Business story, revision and delivery journey
+        run: npm run test:view-increment-smoke
+        env:
+          ARCHETIPO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+      - name: Environment, preview and recovery journey
+        run: npm run test:view-preview-smoke
+        env:
+          ARCHETIPO_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+      - name: Verification environment benchmark
+        run: npm run test:harness-benchmark
+      - name: Retain browser and environment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-viewer-evidence
+          path: |
+            test/workspaces/viewer-page-load-smoke/
+            test/workspaces/chat-first-view-smoke/
+            test/workspaces/enterprise-product-view-smoke/
+            test/workspaces/preview-view-smoke/
+            test/workspaces/harness-benchmark/
+            !test/workspaces/**/chrome*/**
+            !test/workspaces/**/.git/**
+          include-hidden-files: true
+          retention-days: 14
+
   lint:
     runs-on: ubuntu-latest
     steps:

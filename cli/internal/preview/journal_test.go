@@ -93,3 +93,27 @@ func TestRecoveryRefusesLiveSupervisorLease(t *testing.T) {
 		t.Fatal("reconciled while a supervisor was still owning the command tree")
 	}
 }
+
+func TestAnotherPreviewOwnerIsNotReportedAsStopped(t *testing.T) {
+	root := t.TempDir()
+	state, err := newServerState("http://127.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveServerState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	store, err := conversationlog.NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := store.TryLock(context.Background(), "preview-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Unlock() }()
+	view, err := NewManager().Status(root, "another-viewer")
+	if err != nil || view.State != "external" || view.URL != state.URL || view.Server == nil || !view.Server.OwnerActive {
+		t.Fatalf("live external owner mislabeled: %+v %v", view, err)
+	}
+}

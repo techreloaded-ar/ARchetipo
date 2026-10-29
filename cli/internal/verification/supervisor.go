@@ -30,6 +30,7 @@ func (SupervisorRunner) Run(ctx context.Context, root string, env []string, comm
 		return err
 	}
 	cmd := exec.Command(executable, "execution", "environment", "_run")
+	processtree.SeparateSupervisor(cmd)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = root, env, output, output
 	cmd.WaitDelay = 2 * time.Second
 	control, err := cmd.StdinPipe()

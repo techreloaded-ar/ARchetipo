@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+func separateSupervisor(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
 func isolate(cmd *exec.Cmd) func() error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var once sync.Once

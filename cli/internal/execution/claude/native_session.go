@@ -284,7 +284,10 @@ func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.Se
 }
 
 func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return p.nativeCommand(request, func(client *streamSession) error { return client.Send(ctx, request.Message) })
+	return p.nativeCommand(request, func(client *streamSession) error {
+		client.expectInstruction(request.Message, request.Display)
+		return client.Send(ctx, request.Message)
+	})
 }
 
 func (p *Provider) RespondSessionInput(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {

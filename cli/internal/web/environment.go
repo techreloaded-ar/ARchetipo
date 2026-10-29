@@ -207,8 +207,15 @@ func (s *Server) configureEnvironment(ctx context.Context, ws *workspaceSession,
 		if record.Work == execution.SessionWaitingApproval || record.Work == execution.SessionWaitingInput {
 			value.State = "waiting"
 			_ = saveEnvironmentOperation(root, *value)
-		} else {
+		} else if record.CurrentTurn == nil || !terminalTurn(record.CurrentTurn.State) {
+			changed := value.State != "configuring" || value.Error != ""
 			value.State = "configuring"
+			value.Error = ""
+			if changed {
+				if err = saveEnvironmentOperation(root, *value); err != nil {
+					return err
+				}
+			}
 		}
 		if record.CurrentTurn != nil && terminalTurn(record.CurrentTurn.State) {
 			if record.CurrentTurn.State != execution.TurnCompleted {

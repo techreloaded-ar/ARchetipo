@@ -4,9 +4,83 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
+
+func TestWatcherBoundsWatchesToWorkspaceArtifacts(t *testing.T) {
+	root := t.TempDir()
+	generated := []string{".venv/lib/packages", ".next/cache", "node_modules/example", ".archetipo/environment/pristine-run/lib", ".archetipo/increments/worktrees/inc-one/docs", ".archetipo/conversations/runtime"}
+	for _, rel := range append(append([]string{}, generated...), "docs/wiki", ".archetipo/specs") {
+		if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := NewBroker()
+	defer b.Close()
+	w, err := NewWatcher(root, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.fsw.Close() }()
+	if err = w.addTree(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range generated {
+		// New-directory events must not re-enter excluded ancestors either.
+		if err = w.addTree(filepath.Join(root, rel)); err != nil {
+			t.Fatal(err)
+		}
+		if w.relevant(fsnotify.Event{Name: filepath.Join(root, rel, "generated.md"), Op: fsnotify.Create}) {
+			t.Fatalf("generated runtime artifact triggered a workspace refresh: %s", rel)
+		}
+	}
+	watches := w.fsw.WatchList()
+	for _, path := range watches {
+		rel, _ := filepath.Rel(root, path)
+		for _, excluded := range []string{".venv", ".next", "node_modules", ".archetipo/environment", ".archetipo/increments", ".archetipo/conversations"} {
+			if rel == excluded || strings.HasPrefix(filepath.ToSlash(rel), excluded+"/") {
+				t.Fatalf("watcher entered generated tree %s", rel)
+			}
+		}
+	}
+	for _, rel := range []string{"docs/wiki/page.md", ".archetipo/specs/US-001.yaml"} {
+		if !w.relevant(fsnotify.Event{Name: filepath.Join(root, rel), Op: fsnotify.Write}) {
+			t.Fatalf("workspace artifact no longer refreshes: %s", rel)
+		}
+	}
+}
+
+func TestWatcherSkipsRuntimeWhenBacklogWatchRootIsArchetipo(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".archetipo")
+	for _, rel := range []string{"conversations/turn.lock", "environment/pristine/lib", "increments/worktrees/inc-one/src", "specs"} {
+		if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := NewBroker()
+	defer b.Close()
+	w, err := NewWatcher(root, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.fsw.Close() }()
+	if err = w.addTree(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range w.fsw.WatchList() {
+		rel, _ := filepath.Rel(root, path)
+		if rel != "." && rel != "specs" {
+			t.Fatalf("backlog watcher entered runtime tree: %s", rel)
+		}
+	}
+	if w.relevant(fsnotify.Event{Name: filepath.Join(root, "environment/report.md"), Op: fsnotify.Write}) {
+		t.Fatal("runtime report triggered the backlog watcher")
+	}
+}
 
 func TestWatcherPublishesOnYamlChange(t *testing.T) {
 	root := t.TempDir()

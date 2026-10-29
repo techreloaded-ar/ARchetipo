@@ -39,14 +39,15 @@ try{
  const recipe=path.join(dir,'preview.json');
  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:['npm','run','dev','--','{port}'],url:'http://127.0.0.1:{port}/'}));
  await run('configure',bin,['execution','preview','configure','--file',recipe],{cwd:project});
- for(const mode of ['graceful-stop','cli-stop','owner-sigkill','launcher-exit']){
+ for(const mode of ['graceful-stop','cli-stop','owner-sigkill','owner-group-sigkill','launcher-exit']){
   let output='',errors='';
-  active=spawn(bin,['execution','preview','run'],{cwd:project,env,stdio:['ignore','pipe','pipe']});
+  active=spawn(bin,['execution','preview','run'],{cwd:project,env,detached:mode==='owner-group-sigkill',stdio:['ignore','pipe','pipe']});
   active.stdout.on('data',chunk=>{output+=chunk;});active.stderr.on('data',chunk=>{errors+=chunk;});
   await until(()=>{if(active.exitCode!==null)throw new Error(errors);try{return JSON.parse(output).data.state==='ready';}catch{return false;}},mode+' ready');
   const view=JSON.parse(output).data;
   assert.match(await (await fetch(view.recipe.url)).text(),/Next process ownership test/);
   if(mode==='cli-stop')await run('stop-active-next',bin,['execution','preview','stop'],{cwd:project});
+  else if(mode==='owner-group-sigkill')process.kill(-active.pid,'SIGKILL');
   else if(mode==='launcher-exit')await fs.writeFile(path.join(project,'exit-launcher'),'exit');
   else active.kill(mode==='owner-sigkill'?'SIGKILL':'SIGTERM');
   await until(()=>active.exitCode!==null||active.signalCode!==null,mode+' owner exits');

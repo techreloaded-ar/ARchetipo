@@ -64,6 +64,12 @@ lockfiles and migrations in setup inputs. Checks include their complete code,
 test and configuration inputs. Output paths must be real checkout-local files,
 not package-manager executable symlinks. Prefer installed tools over commands
 that silently download missing tools.
+Inputs and outputs name explicit files or directories; glob patterns such as
+`*.py` or `tests/**` are rejected. List root files explicitly and use directory
+names for recursive coverage, excluding generated caches by choosing narrower
+directories or explicit files. The CLI fingerprints resolved executable paths;
+unrelated harness PATH entries do not invalidate evidence. Declare additional
+environment keys only when the project's behavior actually depends on them.
 
 Register persistent dependencies through managed resources, never a detached
 shell or an unrelated service. Each lifecycle command verifies

@@ -633,7 +633,7 @@ func (ws *workspaceSession) sendNativeConversationMessage(ctx context.Context, s
 			return saveErr
 		}
 		delivery, steerErr := snapshot.sessionProvider.SteerTurn(ctx, execution.SessionCommandRequest{
-			Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID, Message: body.Message,
+			Session: snapshot.session, TurnID: record.CurrentTurn.ID, SubmissionID: submissionID, Message: body.Message, Display: body.display,
 		})
 		if delivery.State != "" {
 			record.Deliveries = upsertDelivery(record.Deliveries, delivery)

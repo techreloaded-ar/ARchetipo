@@ -44,6 +44,12 @@ tests, configuration, dependency and toolchain inputs; exclude generated output,
 logs and runtime state. Time/network/external-state-dependent tests remain
 `cache:false` unless that state is explicitly controlled and verified. Missing
 inputs are fingerprinted as missing, so creating them invalidates evidence.
+Glob syntax is rejected instead of treating patterns as missing literal files.
+Project-relative executables are resolved from the recipe's checkout, including
+when a viewer serves a different worktree from its own working directory. The
+resolved tool paths and metadata are fingerprinted; unrelated PATH entries
+injected by a native harness are not. Declare PATH in `env_keys` only if its full
+value is itself a project input.
 
 Every check records complete output, real exit status, command, duration and an
 input fingerprint. Reports are unique and never overwritten. Readiness runs and

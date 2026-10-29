@@ -7,6 +7,9 @@ import (
 	"strconv"
 )
 
+// Windows process-tree cancellation retains its existing taskkill contract.
+func separateSupervisor(_ *exec.Cmd) {}
+
 func isolate(cmd *exec.Cmd) func() error {
 	cmd.Cancel = func() error {
 		_ = exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()

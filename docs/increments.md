@@ -113,7 +113,9 @@ lo sviluppo. Rimane aperta durante domande, feedback e modifiche; i server con
 ricaricamento automatico mostrano gli aggiornamenti senza creare un altro ambiente.
 **In lavorazione** distingue l’app corrente dalla **Versione verificata**: quest’ultima
 richiede commit pulito e prove valide. Solo il server abilita l’approvazione.
-**Ferma** resta esplicito anche dopo reload.
+**Ferma** resta esplicito anche dopo reload. Il browser conserva la scelta per
+il checkout: una risposta successiva della chat non riavvia l’ambiente; occorre
+premere di nuovo Preview.
 
 Un check può dichiarare `during_preview: true` se non reinstalla dipendenze,
 non riscrive gli output del server e non azzera dati condivisi. Il check usa la

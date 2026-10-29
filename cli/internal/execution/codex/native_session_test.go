@@ -17,6 +17,39 @@ type sequenceStarter struct {
 	processes []*fakeCodex
 }
 
+func TestNativeSteeringShowsUserTextInsteadOfExpandedInstruction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	process := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &sequenceStarter{processes: []*fakeCodex{process}}, WorkingDir: func() (string, error) { return dir, nil }})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "conv-steering", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t), "sandbox": "workspace-write"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startNativeCodexTurn(t, ctx, provider, created.Session, process, "turn-core", "initial", "first", "low", nil)
+	delivery, err := provider.SteerTurn(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-core", SubmissionID: "steering", Message: "/archetipo-increment private-instructions", Display: "Ho provato il CSV"})
+	if err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("steering: %+v %v", delivery, err)
+	}
+	process.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"/archetipo-increment private-instructions"}]}}`)
+	session := provider.nativeSession(created.Session.Native.ID)
+	waitFor(t, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		for _, event := range session.events {
+			if event.Kind == "user_message" {
+				if event.Text != "Ho provato il CSV" {
+					t.Fatalf("expanded instruction leaked into visible history: %q", event.Text)
+				}
+				return true
+			}
+		}
+		return false
+	})
+	_ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session})
+}
+
 func (s *sequenceStarter) Start(context.Context, string, string, []string) (localrun.Process, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -65,6 +65,7 @@ type persistentFakeNativeProvider struct {
 	// when the turn ended between the read and the command: the typed refusal,
 	// and the session already idle.
 	steerFindsNoTurn bool
+	lastSteer        execution.SessionCommandRequest
 	lastStart        execution.StartTurnRequest
 	// capabilities are the ARchetipo actions this fake accepts. They are empty
 	// by default, which is the honest shape of a provider that only holds
@@ -240,6 +241,7 @@ func (p *persistentFakeNativeProvider) StreamSessionEvents(ctx context.Context, 
 }
 func (p *persistentFakeNativeProvider) SteerTurn(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
 	p.store.mu.Lock()
+	p.lastSteer = request
 	session := p.store.sessions[request.Session.Native.ID]
 	// A journal can still show ACTIVE after the native turn has completed.
 	// Match real adapters: refuse steering so delivery starts the next turn.
@@ -621,6 +623,28 @@ func TestRestoredReleasedNativeConversationIsWritableWithoutReopen(t *testing.T)
 // person's words still have to be delivered, into the next turn. Only that
 // refusal falls through: a fault decided nothing and stays a conflict, with
 // the delivery left uncertain, which is what the sibling test asserts.
+func TestNativeSteeringPreservesDisplayedUserMessage(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, _ := newRunServer(t, provider, true)
+	id := openConversationOK(t, srv).Conversation.ID
+	first := doJSON(t, srv, "POST", conversationsRoute+"/"+id+"/messages", map[string]any{"message": "first turn"})
+	if first.Code != 202 {
+		t.Fatalf("first turn: %s", first.Body.String())
+	}
+	snapshot, found := srv.session().conversation.get(id)
+	if !found {
+		t.Fatal("no active native session")
+	}
+	if err := srv.sendNativeConversationMessage(context.Background(), srv.session(), snapshot, sendConversationMessageReq{Message: "/archetipo-increment expanded instruction", display: "Ho provato il CSV"}); err != nil {
+		t.Fatal(err)
+	}
+	provider.store.mu.Lock()
+	defer provider.store.mu.Unlock()
+	if provider.lastSteer.Display != "Ho provato il CSV" || provider.lastSteer.Message != "/archetipo-increment expanded instruction" {
+		t.Fatalf("steering lost the display boundary: %+v", provider.lastSteer)
+	}
+}
+
 func TestSteeringRefusedByAFinishedTurnOpensTheNextOneInstead(t *testing.T) {
 	provider := newPersistentFakeNativeProvider("native-fake", nil)
 	srv, _, _ := newRunServer(t, provider, true)
