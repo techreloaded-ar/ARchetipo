@@ -6202,7 +6202,14 @@
 		// Azzerare prima è ciò che permette al campo di *tornare indietro*
 		// quando il testo viene cancellato: scrollHeight non scende mai sotto
 		// l'altezza già imposta.
+		const superficie = input.closest(".conv-composer-surface");
+		superficie?.classList.remove("is-multiline");
 		input.style.height = "auto";
+		// Modello e Invia stanno accanto al campo finché il testo ci sta su una
+		// riga; appena va a capo scendono sotto e il campo prende la riga intera.
+		// Si misura sempre nella disposizione in linea, così la scelta non
+		// rimbalza tra le due.
+		if (superficie && input.scrollHeight > input.clientHeight) superficie.classList.add("is-multiline");
 		const bordi = input.offsetHeight - input.clientHeight;
 		input.style.height = `${input.scrollHeight + bordi}px`;
 	}
