@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
@@ -73,14 +74,5 @@ func resolveWorkspaceImage(root, requested string) (string, string, error) {
 // workspaceImageMediaType is the media type a file's extension declares, among
 // the formats a conversation carries, or empty.
 func workspaceImageMediaType(path string) string {
-	extension := strings.ToLower(filepath.Ext(path))
-	if extension == ".jpeg" {
-		extension = ".jpg"
-	}
-	for mediaType, known := range attachmentMediaTypes {
-		if extension == known {
-			return mediaType
-		}
-	}
-	return ""
+	return execution.MediaTypeOfPath(path)
 }

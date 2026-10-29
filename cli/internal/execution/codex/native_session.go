@@ -65,7 +65,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 		}
 	}
 	if client == nil {
-		process, client, err = p.startNativeClient(ctx, cfg, dir)
+		process, client, err = p.startNativeClient(ctx, cfg, dir, "")
 		if err != nil {
 			return execution.SessionDiscovery{}, err
 		}
@@ -105,7 +105,7 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 	if err := p.Available(ctx, request.Environment.ProviderConfig); err != nil {
 		return execution.SessionSnapshot{}, err
 	}
-	process, client, err := p.startNativeClient(ctx, cfg, dir)
+	process, client, err := p.startNativeClient(ctx, cfg, dir, request.Environment.AttachmentsDir)
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
@@ -119,7 +119,7 @@ func (p *Provider) CreateSession(ctx context.Context, request execution.CreateSe
 	}
 	metadata := execution.SessionMetadata{
 		ConversationID: request.ConversationID, ProviderID: ProviderID,
-		Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneCodexProviderConfig(request.Environment.ProviderConfig), Location: "local"},
+		Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: cloneCodexProviderConfig(request.Environment.ProviderConfig), Location: "local", AttachmentsDir: request.Environment.AttachmentsDir},
 		Native:      execution.NativeSessionReference{Kind: "codex.thread", ID: thread.ID},
 	}
 	session := newCodexNativeSession(metadata, cfg)
@@ -166,7 +166,7 @@ func (p *Provider) ResumeSession(ctx context.Context, request execution.ResumeSe
 	if err := p.Available(ctx, request.Session.Environment.ProviderConfig); err != nil {
 		return execution.SessionSnapshot{}, err
 	}
-	process, client, err := p.startNativeClient(ctx, cfg, dir)
+	process, client, err := p.startNativeClient(ctx, cfg, dir, request.Session.Environment.AttachmentsDir)
 	if err != nil {
 		return execution.SessionSnapshot{}, err
 	}
@@ -434,12 +434,13 @@ func (p *Provider) releaseNativeSession(session *nativeSession) {
 	}
 }
 
-func (p *Provider) startNativeClient(ctx context.Context, cfg settings, dir string) (localrun.Process, *appServer, error) {
+func (p *Provider) startNativeClient(ctx context.Context, cfg settings, dir, attachmentsDir string) (localrun.Process, *appServer, error) {
 	process, err := p.starter.Start(context.Background(), dir, cfg.Command, buildArgs())
 	if err != nil {
 		return nil, nil, fmt.Errorf("starting codex native session: %w", err)
 	}
 	client := newAppServer(process, localrun.NewSession("codex-native", p.now))
+	client.attachmentsDir, client.workingDir = attachmentsDir, dir
 	go client.consume()
 	if err := client.initialize(ctx); err != nil {
 		_, _, _ = p.shutdown(process)

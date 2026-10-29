@@ -22,8 +22,12 @@ const (
 	// maxLineBytes bounds one line of the process's standard output. The stream
 	// itself is unbounded by design; a single line is not, and buffering an
 	// unbounded one would be the single way this consumer could be made to
-	// exhaust memory.
-	maxLineBytes = 1 << 20
+	// exhaust memory. The bound has to hold the largest frame a harness really
+	// emits: a tool result carrying an image travels base64-encoded, and Claude
+	// Code repeats it in `tool_use_result`, so one screenshot of a few hundred
+	// kilobytes already made a line of more than a megabyte. Hitting the bound
+	// ends the stream, which ends the turn, so it is generous on purpose.
+	maxLineBytes = 32 << 20
 
 	// lineBuffer bounds how far the reader may run ahead of the consumer.
 	lineBuffer = 256

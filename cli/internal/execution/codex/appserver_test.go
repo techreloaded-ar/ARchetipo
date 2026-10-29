@@ -2,8 +2,11 @@ package codex
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -761,5 +764,67 @@ func TestAppServerShowsAnInstructionAsWhatWasAskedFor(t *testing.T) {
 	events = session.Events(0)
 	if got := events[len(events)-1].Text; got != "Plan the spec US-005" {
 		t.Fatalf("a message of the person was rewritten: %q", got)
+	}
+}
+
+// An image the agent viewed or generated, and one an MCP tool answered with,
+// reach the tool_end by reference: the bytes are copied under the session's
+// attachments directory and never enter the event — the MCP base64 is
+// stripped from the raw payload — while without a directory nothing is stored.
+func TestAppServerStoresImagesOfCompletedItemsAndKeepsTheirBytesOutOfTheHistory(t *testing.T) {
+	dir := t.TempDir()
+	shot := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(shot, []byte("PNGBYTES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("JPGBYTES"))
+	session := localrun.NewSession("run-1", nil)
+	client := newAppServer(newFakeCodex(), session)
+	client.attachmentsDir, client.workingDir = filepath.Join(dir, "conv.attachments"), dir
+
+	client.project("item/completed", json.RawMessage(`{"item":{"type":"imageView","id":"item-1","path":"shot.png"}}`))
+	client.project("item/completed", json.RawMessage(`{"item":{"type":"mcpToolCall","id":"item-2","server":"ui","tool":"screenshot","status":"completed","result":{"content":[{"type":"text","text":"fatto"},{"type":"image","data":"`+encoded+`","mimeType":"image/jpeg"}]}}}`))
+	client.project("item/completed", json.RawMessage(`{"item":{"type":"imageView","id":"item-3","path":"missing.png"}}`))
+
+	events := session.Events(0)
+	if len(events) != 3 {
+		t.Fatalf("events = %#v", events)
+	}
+	viewed, answered, missing := events[0], events[1], events[2]
+	if viewed.Kind != localrun.KindToolEnd || viewed.Tool != "imageView" || viewed.Text != "shot.png" || len(viewed.Attachments) != 1 {
+		t.Fatalf("imageView tool_end = %#v", viewed)
+	}
+	if att := viewed.Attachments[0]; att.MediaType != "image/png" || att.Path != "" || !strings.HasSuffix(att.ID, ".png") {
+		t.Fatalf("imageView attachment = %#v", att)
+	}
+	if stored, err := os.ReadFile(filepath.Join(client.attachmentsDir, viewed.Attachments[0].ID)); err != nil || string(stored) != "PNGBYTES" {
+		t.Fatalf("stored bytes = %q, %v", stored, err)
+	}
+	if answered.Tool != "ui.screenshot" || len(answered.Attachments) != 1 || answered.Attachments[0].MediaType != "image/jpeg" {
+		t.Fatalf("mcp tool_end = %#v", answered)
+	}
+	if stored, err := os.ReadFile(filepath.Join(client.attachmentsDir, answered.Attachments[0].ID)); err != nil || string(stored) != "JPGBYTES" {
+		t.Fatalf("stored mcp bytes = %q, %v", stored, err)
+	}
+	if raw := string(answered.Raw); strings.Contains(raw, encoded) || !strings.Contains(raw, `"text":"fatto"`) || !strings.Contains(raw, `"mimeType":"image/jpeg"`) {
+		t.Fatalf("the raw payload leaks the base64 or lost the rest: %s", raw)
+	}
+	if len(missing.Attachments) != 0 || missing.Kind != localrun.KindToolEnd {
+		t.Fatalf("a file that cannot be read still ends the tool: %#v", missing)
+	}
+
+	// Without a directory nothing is stored.
+	client.attachmentsDir = ""
+	client.project("item/completed", json.RawMessage(`{"item":{"type":"imageView","id":"item-4","path":"shot.png"}}`))
+	events = session.Events(0)
+	if tail := events[len(events)-1]; len(tail.Attachments) != 0 {
+		t.Fatalf("without a directory the tool_end = %#v", tail)
+	}
+}
+
+func TestStripItemImageDataDropsAGeneratedImageAndKeepsItsPath(t *testing.T) {
+	out := stripItemImageData(json.RawMessage(`{"item":{"type":"imageGeneration","id":"g1","result":"AAAA","savedPath":"/tmp/out.png","status":"completed"}}`))
+	if strings.Contains(string(out), `"result"`) || !strings.Contains(string(out), `"savedPath":"/tmp/out.png"`) {
+		t.Fatalf("stripped = %s", out)
 	}
 }

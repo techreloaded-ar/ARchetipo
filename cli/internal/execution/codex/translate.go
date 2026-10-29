@@ -1,7 +1,10 @@
 package codex
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
@@ -26,6 +29,12 @@ type threadItem struct {
 	} `json:"content"`
 	ExitCode *int   `json:"exitCode"`
 	Error    string `json:"error"`
+	// Path is the file an imageView item shows, SavedPath the one an
+	// imageGeneration item wrote, Result what an MCP tool answered — its
+	// content blocks may be images, base64 inside.
+	Path      string          `json:"path"`
+	SavedPath string          `json:"savedPath"`
+	Result    json.RawMessage `json:"result"`
 }
 
 // itemNotification is the shape shared by every notification that carries a
@@ -162,9 +171,18 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		return
 	case "item/completed":
 		kind, text, tool, carries := completedItem(a, params)
-		if carries {
-			a.append(kind, text, tool, params)
+		if !carries {
+			return
 		}
+		if kind == localrun.KindToolEnd || kind == localrun.KindToolError {
+			var notification itemNotification
+			_ = json.Unmarshal(params, &notification)
+			if images := a.itemImages(notification.Item); len(images) > 0 {
+				a.appendWith(execution.RunEvent{Kind: kind, Text: text, Tool: tool, Attachments: execution.AttachmentReferences(images), Raw: stripItemImageData(params)})
+				return
+			}
+		}
+		a.append(kind, text, tool, params)
 		return
 	case "error":
 		a.append(localrun.KindError, decodeErrorText(params), "", params)
@@ -346,7 +364,99 @@ func toolText(item threadItem) string {
 	if query := strings.TrimSpace(item.Query); query != "" {
 		return query
 	}
+	if path := strings.TrimSpace(item.Path + item.SavedPath); path != "" {
+		return path
+	}
 	return commandText(item.Command)
+}
+
+// itemImages are the images a completed item carries, copied under the
+// session's attachments directory: the file an imageView or imageGeneration
+// item names, and the image blocks of an MCP result. Without a directory
+// nothing is stored; a file that cannot be read or a block that cannot be
+// decoded is left out, because the rest of the item is still history.
+func (a *appServer) itemImages(item threadItem) []execution.Attachment {
+	if a.attachmentsDir == "" {
+		return nil
+	}
+	var images []execution.Attachment
+	for _, path := range []string{item.Path, item.SavedPath} {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(a.workingDir, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if attachment, err := execution.StoreAttachment(a.attachmentsDir, execution.MediaTypeOfPath(path), data); err == nil {
+			images = append(images, attachment)
+		}
+	}
+	for _, block := range mcpImageBlocks(item.Result) {
+		data, err := base64.StdEncoding.DecodeString(block.Data)
+		if err != nil {
+			continue
+		}
+		if attachment, err := execution.StoreAttachment(a.attachmentsDir, block.MimeType, data); err == nil {
+			images = append(images, attachment)
+		}
+	}
+	return images
+}
+
+// mcpImageBlock is an image block of an MCP tool result, as the MCP content
+// format carries it.
+type mcpImageBlock struct {
+	Type     string `json:"type"`
+	Data     string `json:"data"`
+	MimeType string `json:"mimeType"`
+}
+
+func mcpImageBlocks(result json.RawMessage) []mcpImageBlock {
+	var decoded struct {
+		Content []mcpImageBlock `json:"content"`
+	}
+	if len(result) == 0 || json.Unmarshal(result, &decoded) != nil {
+		return nil
+	}
+	var images []mcpImageBlock
+	for _, block := range decoded.Content {
+		if block.Type == "image" && block.Data != "" {
+			images = append(images, block)
+		}
+	}
+	return images
+}
+
+// stripItemImageData returns the notification without the base64 its item
+// carries — the data of MCP image blocks, and the result string of an
+// imageGeneration item, which is the generated image itself — so the raw
+// payload still says what arrived without the one thing that must not enter
+// the journal. A notification that cannot be read back is dropped whole.
+func stripItemImageData(params json.RawMessage) json.RawMessage {
+	var notification map[string]any
+	if json.Unmarshal(params, &notification) != nil {
+		return nil
+	}
+	item, _ := notification["item"].(map[string]any)
+	if item["type"] == "imageGeneration" {
+		delete(item, "result")
+	}
+	result, _ := item["result"].(map[string]any)
+	blocks, _ := result["content"].([]any)
+	for _, b := range blocks {
+		if block, ok := b.(map[string]any); ok && block["type"] == "image" {
+			delete(block, "data")
+		}
+	}
+	out, err := json.Marshal(notification)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // commandText renders a command the way Codex sends it: a string, or the

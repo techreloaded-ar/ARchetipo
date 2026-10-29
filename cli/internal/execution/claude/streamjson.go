@@ -43,15 +43,18 @@ const (
 // else survives untouched in the raw line, which is what every event carries:
 // narrowing what is read must never narrow what is kept.
 type frame struct {
-	Type          string          `json:"type"`
-	Subtype       string          `json:"subtype"`
-	Message       json.RawMessage `json:"message"`
-	Result        string          `json:"result"`
-	IsError       bool            `json:"is_error"`
-	SessionID     string          `json:"session_id"`
-	Model         string          `json:"model"`
-	Skills        []string        `json:"skills"`
-	SlashCommands []string        `json:"slash_commands"`
+	Type    string          `json:"type"`
+	Subtype string          `json:"subtype"`
+	Message json.RawMessage `json:"message"`
+	Result  string          `json:"result"`
+	IsError bool            `json:"is_error"`
+	// IsSynthetic marks a user frame the harness composed by itself — the
+	// note it adds beside an image it resized — which is not a person's words.
+	IsSynthetic   bool     `json:"isSynthetic"`
+	SessionID     string   `json:"session_id"`
+	Model         string   `json:"model"`
+	Skills        []string `json:"skills"`
+	SlashCommands []string `json:"slash_commands"`
 	// RequestID and Request belong to the control protocol, which travels on
 	// the same stream as the history. They are read here rather than in a
 	// second decode of the line because the frame type alone does not say what

@@ -19,6 +19,21 @@ var AttachmentExtensions = map[string]string{
 	"image/webp": ".webp",
 }
 
+// MediaTypeOfPath is the media type a file's extension declares, among the
+// formats a conversation carries, or empty for anything else.
+func MediaTypeOfPath(path string) string {
+	extension := strings.ToLower(filepath.Ext(path))
+	if extension == ".jpeg" {
+		extension = ".jpg"
+	}
+	for mediaType, known := range AttachmentExtensions {
+		if extension == known {
+			return mediaType
+		}
+	}
+	return ""
+}
+
 // StoreAttachment writes one image under dir, named by its content, and hands
 // back the attachment that names the file. The URL is left empty: where the
 // file is reached from is the viewer's to say, not the writer's. An empty dir

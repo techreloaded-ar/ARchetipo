@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -425,5 +426,39 @@ func TestNativeCodexTurnCarriesAttachedImagesAsLocalImageItems(t *testing.T) {
 		if encoded, _ := json.Marshal(event.Attachments); !strings.Contains(string(encoded), `"id":"shot.png"`) || strings.Contains(string(encoded), dir) {
 			t.Fatalf("attachment serialization = %s", encoded)
 		}
+	}
+}
+
+// The attachments directory the viewer hands over at creation reaches the
+// client that translates the items — it is what lets an imageView be stored —
+// and stays in the session metadata, so a resume finds it again.
+func TestNativeCodexSessionCarriesTheAttachmentsDirectoryToItsClient(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	attachmentsDir := filepath.Join(dir, "conv.attachments")
+	discoveryFake, fake := newFakeCodex(), newFakeCodex()
+	provider := New(Options{
+		Runner:     &fakeRunner{outcomes: []runOutcome{probeOK}},
+		Starter:    &sequenceStarter{processes: []*fakeCodex{discoveryFake, fake}},
+		WorkingDir: func() (string, error) { return dir, nil },
+	})
+	config := map[string]any{"command": fakeCommand(t), "sandbox": "workspace-write"}
+	discovery, err := provider.DiscoverSession(ctx, execution.SessionDiscoveryRequest{ProviderConfig: config, WorkingDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := discovery.Environment
+	environment.AttachmentsDir = attachmentsDir
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "conv-att", Environment: environment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Session.Environment.AttachmentsDir != attachmentsDir {
+		t.Fatalf("metadata attachments dir = %q", created.Session.Environment.AttachmentsDir)
+	}
+	session := provider.nativeSession(created.Session.Native.ID)
+	if session == nil || session.client == nil || session.client.attachmentsDir != attachmentsDir || session.client.workingDir != dir {
+		t.Fatalf("the client was not given the directories: %#v", session)
 	}
 }

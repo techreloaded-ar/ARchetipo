@@ -166,6 +166,14 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 // dropped here, so a conversation opens on an empty transcript and the first
 // thing a reader sees is what a person really wrote.
 func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
+	if f.IsSynthetic {
+		// A user frame the harness wrote to itself — «[Image: original
+		// 2280x984, displayed at 2000x863…]» beside a screenshot it resized —
+		// is its own working, not something the person said: shown as a
+		// message it would read as theirs.
+		s.append(kindOf(f)+"/synthetic", "", "", raw)
+		return
+	}
 	blocks, ok := decodeBlocks(f.Message)
 	if !ok || len(blocks) == 0 {
 		s.append(kindOf(f), "", "", raw)
@@ -402,11 +410,18 @@ func (s *streamSession) storeToolResultImages(content json.RawMessage) []executi
 // stripImageData returns the frame without the base64 of the images its tool
 // results carry: everything else — ids, text, media types — stays, so the raw
 // payload still says what arrived without holding the one thing that must not
-// enter the journal. A frame that cannot be read back is dropped whole.
+// enter the journal. Claude Code carries the bytes twice, in the result's
+// blocks and again in `tool_use_result.file.base64`, so both copies go. A
+// frame that cannot be read back is dropped whole.
 func stripImageData(raw json.RawMessage) json.RawMessage {
 	var frame map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &frame) != nil {
 		return nil
+	}
+	if result, ok := frame["tool_use_result"].(map[string]any); ok {
+		if file, ok := result["file"].(map[string]any); ok {
+			delete(file, "base64")
+		}
 	}
 	message, _ := frame["message"].(map[string]any)
 	blocks, _ := message["content"].([]any)

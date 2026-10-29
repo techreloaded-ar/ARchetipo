@@ -104,6 +104,14 @@ type appServer struct {
 	// kept until the process re-emits it as a user item: the item is what
 	// makes the user_message event, and the event carries them by reference.
 	attachments map[string][]execution.Attachment
+	// attachmentsDir is where an image the agent viewed or generated — an
+	// imageView or imageGeneration item naming a file, an MCP result carrying
+	// one base64 — is copied, so the tool_end can carry it by reference and
+	// the history still shows it once the file is gone with its worktree.
+	// Empty, nothing is stored. workingDir resolves a relative path an item
+	// names.
+	attachmentsDir string
+	workingDir     string
 
 	sendMu         sync.Mutex
 	conversational bool

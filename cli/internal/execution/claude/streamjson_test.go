@@ -1015,7 +1015,7 @@ func TestStreamSessionStoresImagesReadByToolsAndKeepsTheBase64OutOfTheHistory(t 
 	encoded := base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))
 
 	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"shot.png"}}]}}`)
-	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"letta"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + encoded + `"}}]}]}}`)
+	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"letta"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + encoded + `"}}]}]},"tool_use_result":{"type":"image","file":{"filePath":"shot.png","type":"image/png","base64":"` + encoded + `"}}}`)
 	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindToolEnd) == 1 })
 
 	var ended execution.RunEvent
@@ -1051,5 +1051,26 @@ func TestStreamSessionStoresImagesReadByToolsAndKeepsTheBase64OutOfTheHistory(t 
 	tail := events[len(events)-1]
 	if len(tail.Attachments) != 0 || strings.Contains(string(tail.Raw), encoded) {
 		t.Fatalf("without a directory the tool_end = %#v", tail)
+	}
+}
+
+// Beside an image it resized, Claude Code emits a user frame it wrote itself,
+// marked `isSynthetic`. In the viewer it showed as something the person had
+// said — «TU: [Image: original 2280x984, displayed at 2000x863…]» — so it is
+// filed as the harness's own step and never as a user message.
+func TestStreamSessionDoesNotShowSyntheticUserFramesAsThePersonsWords(t *testing.T) {
+	fake := newFakeClaude()
+	_, session := openConversation(t, fake)
+
+	fake.emit(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Image: original 2280x984, displayed at 2000x863. Multiply coordinates by 1.14 to map to original image.]"}]},"isSynthetic":true}`)
+	fake.emit(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"quindi? hai fatto?"}]}}`)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+
+	events := session.Events(0)
+	if got := events[len(events)-1]; got.Kind != localrun.KindUserMessage || got.Text != "quindi? hai fatto?" {
+		t.Fatalf("the person's message = %#v", got)
+	}
+	if got := events[len(events)-2]; got.Kind != "user/synthetic" || got.Text != "" {
+		t.Fatalf("the synthetic frame = %#v", got)
 	}
 }
