@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -359,13 +360,13 @@ func TestAvailableReportsTheFourOutcomes(t *testing.T) {
 			name:    "present but impossible to start",
 			command: present,
 			outcome: runOutcome{exitCode: -1, err: errors.New("spawn claude ENOENT")},
-			wantErr: []string{present, "was found but could not be run", "spawn claude ENOENT"},
+			wantErr: []string{strconv.Quote(present), "was found but could not be run", "spawn claude ENOENT"},
 		},
 		{
 			name:    "started but failing",
 			command: present,
 			outcome: runOutcome{exitCode: 127, stderr: "claude: command not found"},
-			wantErr: []string{present, "exited 127", "claude: command not found"},
+			wantErr: []string{strconv.Quote(present), "exited 127", "claude: command not found"},
 		},
 		{
 			name:    "available",
