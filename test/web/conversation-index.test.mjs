@@ -680,6 +680,46 @@ describe("il comando di cancellazione di un thread", () => {
 	});
 });
 
+describe("il comando di archiviazione di un thread nella rail", () => {
+	const conversations = [
+		{ id: "conv-viva", title: "Quella in corso", last_message_at: ago(HOUR), work: "TURN_ACTIVE", live: true, native: true },
+		{ id: "conv-ferma", title: "Quella ferma", last_message_at: ago(HOUR), work: "IDLE", native: true },
+		{ id: "conv-chiusa", title: "Quella conclusa", last_message_at: ago(3 * DAY), archived: true, native: true },
+	];
+	const rail = (ui) => renderConversationIndex({ conversations }, Object.assign({ now: NOW }, ui));
+
+	it("sta su ogni conversazione aperta, al lavoro o ferma, e dice quale archivia", () => {
+		const html = rail();
+		assert.match(html, /data-conversation-archive="conv-viva"/);
+		assert.match(html, /data-conversation-archive="conv-ferma"/);
+		assert.match(html, /Archivia la conversazione Quella ferma/);
+		assert.ok(!html.includes('data-conversation-archive="conv-chiusa"'), `an archived conversation must carry no archive command, got ${html}`);
+		assert.ok(!html.includes("data-conversation-archive-confirm"), `nothing is armed, so no confirmation is drawn, got ${html}`);
+	});
+
+	it("premuto, lascia il posto a conferma e annullamento solo sulla sua riga", () => {
+		const html = rail({ archiveArmed: "conv-ferma" });
+		assert.match(html, /data-conversation-archive-confirm="conv-ferma"/);
+		assert.match(html, /data-conversation-archive-abort="conv-ferma"/);
+		assert.match(html, /Conferma l&#39;archiviazione di Quella ferma/);
+		assert.ok(!html.includes('data-conversation-archive="conv-ferma"'), `the armed row must not also offer the archive command, got ${html}`);
+		assert.match(html, /data-conversation-archive="conv-viva"/);
+		assert.equal(html.match(/data-conversation-archive-confirm=/g).length, 1);
+	});
+
+	it("si disabilita mentre la pagina è occupata", () => {
+		const html = rail({ busy: true, archiveArmed: "conv-ferma" });
+		assert.match(html, /data-conversation-archive="conv-viva" disabled/);
+		assert.match(html, /data-conversation-archive-confirm="conv-ferma" disabled/);
+	});
+
+	it("sta accanto al thread e non dentro: niente bottoni annidati", () => {
+		const insideThread = /data-conversation-id="[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*data-conversation-archive/;
+		assert.ok(!insideThread.test(rail()), "the archive command must be a sibling of the thread");
+		assert.ok(!insideThread.test(rail({ archiveArmed: "conv-ferma" })), "the confirmation must be a sibling of the thread");
+	});
+});
+
 describe("l'annullamento dell'ultima eliminazione", () => {
 	const withUndo = (conversations) =>
 		renderConversationIndex(

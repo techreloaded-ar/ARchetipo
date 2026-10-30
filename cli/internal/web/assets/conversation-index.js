@@ -84,6 +84,11 @@
 		// dentro una lista di righe che si somigliano, e un'etichetta uguale su
 		// tutte non basterebbe a chi la legge senza vedere dove sta il puntatore.
 		deleteThread: (label) => `Elimina la conversazione ${label}`,
+		// L'archiviazione sta sulla riga come la cancellazione: chi vuole
+		// chiudere un thread non deve prima aprirlo per trovare il comando.
+		archiveThread: (label) => `Archivia la conversazione ${label}`,
+		archiveConfirm: (label) => `Conferma l'archiviazione di ${label}`,
+		archiveAbort: "Annulla l'archiviazione",
 		// Il bottone dice cosa fa; quale conversazione rimetta a posto lo dice
 		// il nome accessibile. Il titolo per esteso dentro una colonna stretta
 		// andrebbe a capo tre volte per una cosa che si legge di sfuggita.
@@ -210,19 +215,41 @@
 		// un bottone non è markup valido, e il puntatore finirebbe per aprire il
 		// thread che si sta cancellando. Per questo la riga li tiene entrambi.
 		const label = textAt(entry, "title") || id;
-		const remove = activityOf(entry) !== "done" || isLive(entry)
+		const done = activityOf(entry) === "done";
+		const remove = !done || isLive(entry)
 			? ""
-			: `<button type="button" class="thread-delete-btn" data-conversation-delete="${escapeHtml(id)}" title="${escapeHtml(TEXT.deleteThread(label))}" aria-label="${escapeHtml(TEXT.deleteThread(label))}">
+			: `<button type="button" class="thread-action-btn thread-delete-btn" data-conversation-delete="${escapeHtml(id)}" title="${escapeHtml(TEXT.deleteThread(label))}" aria-label="${escapeHtml(TEXT.deleteThread(label))}">
 				<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 4.5h9" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M6 2.5h4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 4.5v8h6v-8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.75 6.5v4.25M9.25 6.5v4.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
 			</button>`;
+		// Un thread aperto porta invece il comando di archiviazione. Premuto, al
+		// suo posto compaiono conferma e annullamento: la decisione resta sulla
+		// riga, e quale riga stia confermando lo dice `ui.archiveArmed`.
+		const archive = done ? "" : renderArchiveControl(id, label, textAt(ui, "archiveArmed") === id, !!(ui && ui.busy));
 		return `<div class="thread-row">
 			<button type="button" class="${classes}" data-conversation-id="${escapeHtml(id)}"${current}>
 				${codeHtml}
 				<span class="thread-title">${escapeHtml(textAt(entry, "title"))}</span>
 				${renderMeta(entry, now, ui)}
 			</button>
-			${remove}
+			${remove}${archive}
 		</div>`;
+	}
+
+	function renderArchiveControl(id, label, armed, busy) {
+		const disabled = busy ? " disabled" : "";
+		if (!armed) {
+			return `<button type="button" class="thread-action-btn thread-archive-btn" data-conversation-archive="${escapeHtml(id)}"${disabled} title="${escapeHtml(TEXT.archiveThread(label))}" aria-label="${escapeHtml(TEXT.archiveThread(label))}">
+				<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			</button>`;
+		}
+		return `<span class="thread-actions">
+			<button type="button" class="thread-action-btn thread-confirm-btn" data-conversation-archive-confirm="${escapeHtml(id)}"${disabled} title="${escapeHtml(TEXT.archiveConfirm(label))}" aria-label="${escapeHtml(TEXT.archiveConfirm(label))}">
+				<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 8.5l3.5 3.5L13 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			</button>
+			<button type="button" class="thread-action-btn thread-abort-btn" data-conversation-archive-abort="${escapeHtml(id)}"${disabled} title="${escapeHtml(TEXT.archiveAbort)}" aria-label="${escapeHtml(TEXT.archiveAbort)}">
+				<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+			</button>
+		</span>`;
 	}
 
 	/**
@@ -339,7 +366,9 @@
 	 * recency exist at once.
 	 *
 	 * @param {object|null} view  The /api/workspace/conversations payload.
-	 * @param {{currentId?: string}} [ui]  Which conversation the page is showing.
+	 * @param {{currentId?: string, archiveArmed?: string}} [ui]  Which
+	 *   conversation the page is showing, and which one is waiting for the
+	 *   archive confirmation on its row.
 	 * @returns {string} HTML string.
 	 */
 	function renderConversationIndex(view, ui) {

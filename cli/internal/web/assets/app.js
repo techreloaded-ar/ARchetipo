@@ -6140,6 +6140,9 @@
 	// una ricarica della pagina se lo porta via, e da lì la cancellazione è
 	// definitiva. Ne resta una sola: «annulla» vuol dire l'ultima.
 	let conversationsUndo = null;
+	// Il thread della rail su cui è aperta la conferma di archiviazione: uno
+	// solo, perché una decisione alla volta è quanto una persona prende.
+	let conversationsArchiveArmedId = "";
 	const CONVERSATIONS_CLOSED_PAGE_SIZE = 20;
 	let conversationsClosedLimit = CONVERSATIONS_CLOSED_PAGE_SIZE;
 	let conversationsIndexBusy = false;
@@ -6874,6 +6877,20 @@
 				);
 				return;
 			}
+			const archive = e.target.closest("[data-conversation-archive]");
+			if (archive) {
+				armConversationArchive(archive.getAttribute("data-conversation-archive") || "");
+				return;
+			}
+			const archiveConfirm = e.target.closest("[data-conversation-archive-confirm]");
+			if (archiveConfirm) {
+				closeConversation(archiveConfirm.getAttribute("data-conversation-archive-confirm") || "");
+				return;
+			}
+			if (e.target.closest("[data-conversation-archive-abort]")) {
+				disarmConversationArchive();
+				return;
+			}
 			const thread = e.target.closest("[data-conversation-id]");
 			if (thread) {
 				openConversationThread(
@@ -6885,6 +6902,9 @@
 		// the reader reaches the tail, ask for one more page. The listener is on
 		// the stable rail and uses capture because the scrollable list is replaced
 		// whenever the index changes.
+		container.addEventListener("keydown", (e) => {
+			if (e.key === "Escape" && conversationsArchiveArmedId) disarmConversationArchive();
+		});
 		container.addEventListener("scroll", (e) => {
 			const list = e.target.closest && e.target.closest(".rail-list");
 			if (!list) return;
@@ -6898,6 +6918,39 @@
 	}
 
 	bindConversationsRail(conversationsRailEl);
+
+	// armConversationArchive apre la conferma sulla riga. Quando il server
+	// chiede una scelta sull'ambiente (worktree da tenere o rimuovere), quel
+	// dialogo è già la conferma e si va dritti lì, come fa il pannello.
+	async function armConversationArchive(id) {
+		if (!id || conversationBusy) return;
+		let plan;
+		try {
+			plan = await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/deletion-plan?action=archive`);
+		} catch (err) {
+			showToast((err && err.message) || String(err), "err");
+			return;
+		}
+		if (plan && plan.requires_choice) {
+			closeConversation(id, plan);
+			return;
+		}
+		conversationsArchiveArmedId = id;
+		renderConversationsRail();
+		conversationsRailEl.querySelector("[data-conversation-archive-confirm]")?.focus();
+	}
+
+	function disarmConversationArchive() {
+		conversationsArchiveArmedId = "";
+		renderConversationsRail();
+	}
+
+	function conversationIndexEntry(id) {
+		const entries = conversationsIndex && Array.isArray(conversationsIndex.conversations)
+			? conversationsIndex.conversations
+			: [];
+		return entries.find((entry) => entry && entry.id === id) || null;
+	}
 
 	// renderConversationsRail draws the rail from the local projection alone. It
 	// owns the holder; the renderer owns everything inside it.
@@ -6928,6 +6981,7 @@
 				busy: conversationBusy,
 				undo: conversationsUndo,
 				unread: conversationsUnread(),
+				archiveArmed: conversationsArchiveArmedId,
 			});
 		const nextList = conversationsRailEl.querySelector(".rail-list");
 		if (nextList) {
@@ -8584,32 +8638,45 @@
 		}
 	}
 
-	async function closeConversation() {
+	// closeConversation archivia il thread indicato — quello a schermo quando
+	// non ne viene nominato uno — dal pannello o dalla rail. Se è nativo lo dice
+	// la vista per quello corrente e l'indice per gli altri; il piano di
+	// rimozione, quando chi chiama l'ha già letto, non viene chiesto due volte.
+	async function closeConversation(targetId, knownPlan) {
 		if (conversationBusy) return;
-		const id = conversationsCurrentId;
+		const id = targetId || conversationsCurrentId;
 		if (!id) return;
+		const current = id === conversationsCurrentId;
+		const native = current && conversationView
+			? !!conversationView.session
+			: conversationIndexEntry(id)?.native === true;
 		conversationCloseArmed = false;
+		conversationsArchiveArmedId = "";
 		conversationBusy = true;
 		renderConversationPanel();
+		renderConversationsRail();
 		try {
 			let query = "";
-			if (conversationView && conversationView.session) {
-				const plan = await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/deletion-plan?action=archive`);
+			if (native) {
+				const plan = knownPlan || await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/deletion-plan?action=archive`);
 				const choice = await chooseRemoval(plan);
 				if (!choice) return;
 				query = removalQuery(choice, plan);
 			}
-			const view = conversationView && conversationView.session
+			const view = native
 				? await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/archive${query}`, {})
 				: await apiDelete(`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`);
 			conversationRefusal = "";
 			// A slot has just been freed, so the reason an open was refused is no
 			// longer the truth of this workspace.
 			conversationsRefusal = "";
-			if (conversationsCurrentId === id) applyConversationView(view);
-			stopConversationPolling();
+			if (conversationsCurrentId === id) {
+				applyConversationView(view);
+				stopConversationPolling();
+			}
 		} catch (err) {
-			showConversationRefusal(err);
+			if (current) showConversationRefusal(err);
+			else showToast((err && err.message) || String(err), "err");
 		} finally {
 			conversationBusy = false;
 			renderConversationPanel();

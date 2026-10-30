@@ -7694,7 +7694,7 @@ body.no-workspace [data-workspace-scoped] {
 /* Stessa gestualità della card della board: il comando resta invisibile finché
    il puntatore non è sulla riga, e compare comunque appena prende il fuoco da
    tastiera — altrimenti sarebbe raggiungibile ma non visibile. */
-.thread-delete-btn {
+.thread-action-btn {
 	position: absolute;
 	top: 6px;
 	right: 6px;
@@ -7716,20 +7716,59 @@ body.no-workspace [data-workspace-scoped] {
 		background var(--transition);
 }
 
-.thread-row:hover .thread-delete-btn,
-.thread-row:focus-within .thread-delete-btn {
+.thread-row:hover .thread-action-btn,
+.thread-row:focus-within .thread-action-btn {
 	opacity: 1;
 }
 
-.thread-delete-btn:hover {
+.thread-action-btn:disabled {
+	cursor: not-allowed;
+	opacity: 0.45;
+}
+
+.thread-delete-btn:hover,
+.thread-confirm-btn:hover {
 	color: var(--danger);
 	background: var(--danger-soft);
 }
 
-.thread-delete-btn:focus-visible {
+.thread-archive-btn:hover,
+.thread-abort-btn:hover {
+	color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.thread-action-btn:focus-visible {
 	outline: none;
 	opacity: 1;
 	box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+/* Conferma e annullamento al posto del comando di archiviazione: due pulsanti
+   piccoli, sempre visibili finché la decisione è aperta — una conferma che
+   sparisce quando il puntatore si sposta non si può premere. */
+.thread-actions {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	display: inline-flex;
+	gap: 2px;
+}
+
+/* Finché la decisione è aperta il titolo lascia il posto ai due pulsanti,
+   invece di finirci sotto. */
+.thread-row:has(.thread-actions) .thread {
+	padding-right: 64px;
+}
+
+.thread-actions .thread-action-btn {
+	position: static;
+	width: 26px;
+	height: 26px;
+	opacity: 1;
+	color: var(--text-muted);
+	background: var(--surface);
+	border: 1px solid var(--border);
 }
 
 /* Una colonna sola: il codice della spec — quando c'è — sta sopra al titolo, e

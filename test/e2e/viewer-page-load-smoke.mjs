@@ -106,7 +106,7 @@ const CLAIMS = [
   "Documentazione è leggibile su schermi stretti e distingue Wiki assente e pagina mancante",
   "una conversazione attiva raggiunge automaticamente gli ultimi messaggi oltre più pagine di eventi senza richiedere click sulla cronologia",
   "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
-  "Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
+  "l’archiviazione si conferma o si annulla sulla riga della rail, Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
   "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
   "una domanda dell’agente si risponde come questionario: una domanda alla volta, scelta singola o multipla, «Altro» con testo libero, bozze conservate tra le domande e invio solo a risposte complete",
 ];
@@ -656,9 +656,16 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   if (composer.draft !== 'Risposta dalla vista stretta' || !composer.reachable) throw new Error('Compositore tagliato o bozza persa: ' + JSON.stringify(composer));
   if (exceptions.length) throw new Error('Eccezioni nel layout dell’incremento: ' + JSON.stringify(exceptions));
   ok(CLAIMS[19], 'a 390px la chat è leggibile, i permessi e il compositore sono raggiungibili e il polling conserva posizione e bozza');
-  await page.evaluate(`document.querySelector('[data-conversation-close-open]').click()`);
-  await page.waitFor(`!!document.querySelector('[data-conversation-close-confirm]')`,10000,'la conferma di archiviazione');
-  await page.evaluate(`document.querySelector('[data-conversation-close-confirm]').click()`);
+  // L'archiviazione parte dalla riga della rail: il comando lascia il posto a
+  // conferma e annullamento, l'annullamento lo riporta, la conferma archivia.
+  await page.evaluate(`document.querySelector('[data-conversation-archive="pagination-fixture"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-archive-confirm="pagination-fixture"]') && !document.querySelector('[data-conversation-archive="pagination-fixture"]')`,10000,'conferma e annullamento al posto del comando archivia nella rail');
+  await page.evaluate(`document.querySelector('[data-conversation-archive-abort="pagination-fixture"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-archive="pagination-fixture"]') && !document.querySelector('[data-conversation-archive-confirm]')`,10000,'il comando archivia tornato dopo l’annullamento');
+  if (await page.evaluate('!!window.finishArchive')) throw new Error('L’annullamento nella rail non deve archiviare');
+  await page.evaluate(`document.querySelector('[data-conversation-archive="pagination-fixture"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-archive-confirm="pagination-fixture"]')`,10000,'la conferma di archiviazione nella rail');
+  await page.evaluate(`document.querySelector('[data-conversation-archive-confirm="pagination-fixture"]').click()`);
   await page.waitFor(`!!window.finishArchive`,10000,'la richiesta di archiviazione sospesa');
   const duringArchive = await page.evaluate(`(() => {const button=document.querySelector('[data-conversation-new]');button.click();return {disabled:button.disabled,busy:button.getAttribute('aria-busy'),draft:document.querySelector('.conv-composer-input')?.value};})()`);
   if (!duringArchive.disabled || duringArchive.busy !== 'true' || duringArchive.draft !== 'Risposta dalla vista stretta') throw new Error('Nuova conversazione non dichiara l’operazione in corso: '+JSON.stringify(duringArchive));
