@@ -249,8 +249,10 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 				return r, iox.NewInvalidInput("empty verification evidence", "name each completed check and its result", nil)
 			}
 		}
-		if commit := result.SquashCommit; commit != nil && (strings.TrimSpace(commit.Title) == "" || strings.ContainsAny(commit.Title, "\r\n")) {
-			return r, iox.NewInvalidInput("squash commit title must be one non-empty line", "describe what the increment introduces in a single line, or omit squash_commit", nil)
+		// The squash commit is what the history keeps of the increment: without it
+		// the PR would fall back to the beginning of the request, which says nothing.
+		if commit := result.SquashCommit; commit == nil || strings.TrimSpace(commit.Title) == "" || strings.ContainsAny(commit.Title, "\r\n") {
+			return r, iox.NewInvalidInput("squash commit title must be one non-empty line", "describe in squash_commit.title what the increment introduces, in a single line", nil)
 		}
 		if result.PreviewURL != "" {
 			parsed, parseErr := url.Parse(result.PreviewURL)

@@ -48,7 +48,12 @@ async function fakeGhMain(){
   await fs.writeFile(statePath,JSON.stringify(state));
   console.log(state.pr.url);
  }else if(args[1]==="list")console.log(JSON.stringify(state.pr?[state.pr]:[]));
- else if(args[1]==="view")console.log(JSON.stringify(state.pr));
+ else if(args[1]==="view")console.log(JSON.stringify({...state.pr,comments:state.comments||[]}));
+ else if(args[1]==="comment"){
+  // The squash publication posts the increment details once, through a body file.
+  state.comments=[...(state.comments||[]),{body:await fs.readFile(args[args.indexOf("--body-file")+1],"utf8")}];
+  await fs.writeFile(statePath,JSON.stringify(state));
+ }
  else throw new Error("Unexpected gh operation");
 }
 const story=(format)=>({code:"US-001",title:"Esportare i clienti in "+format,epic:{code:"EP-001",title:"Esportazione clienti"},priority:"MEDIUM",points:3,status:"TODO",scope:"MVP",blocked_by:[],body:"## User story\nCome responsabile commerciale voglio esportare i clienti.\n## Dimostrazione\nApro un file "+format+" con i clienti.\n## Criteri\n- [ ] Il file contiene solo i clienti attesi."});
@@ -169,7 +174,7 @@ async function main(){
     assert.equal(planless.tasks.length,0);
     assert.ok(!planless.plan_body,"feedback revision should have no stale plan");
    }
-   await cliJSON(["increment","ready",inc.id],{summary:"Apri hello.txt: il risultato concordato è Clienti in "+format+".",checks:["Contenuto del file verificato: Clienti in "+format]});
+   await cliJSON(["increment","ready",inc.id],{summary:"Apri hello.txt: il risultato concordato è Clienti in "+format+".",checks:["Contenuto del file verificato: Clienti in "+format],squash_commit:{title:"feat(clienti): esporta i clienti in "+format,body:"Il file hello.txt riporta i clienti nel formato concordato."}});
    await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:{...workflow.state,phase:"ready"}});
    if(!legacyTasks) ok("La revisione successiva arriva a REVIEW senza piano o task sintetici, mantenendo approvazioni e pubblicazione unica.");
    await finish(n,"Il risultato è pronto. Provalo e dimmi cosa cambiare.");

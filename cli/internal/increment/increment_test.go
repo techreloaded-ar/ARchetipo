@@ -14,6 +14,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"gopkg.in/yaml.v3"
 )
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -177,7 +178,7 @@ func ready(t *testing.T, s *Service, r Record) Record {
 	}
 	runGit(t, r.Workdir, "add", "hello.txt")
 	runGit(t, r.Workdir, "commit", "-m", "feat: export")
-	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try the customer export.", Checks: []string{"go test ./... — passed"}})
+	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try the customer export.", Checks: []string{"go test ./... — passed"}, SquashCommit: &SquashCommit{Title: "feat: export"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +283,7 @@ func TestRevisionsPreserveUnchangedWorkAndInvalidateChangedStories(t *testing.T)
 func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 	s := fixture(t)
 	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	if _, err := s.Ready(context.Background(), r.ID, Result{Summary: "Result", Checks: []string{"check"}}); err == nil {
+	if _, err := s.Ready(context.Background(), r.ID, Result{Summary: "Result", Checks: []string{"check"}, SquashCommit: &SquashCommit{Title: "feat: export"}}); err == nil {
 		t.Fatal("unfinished story was reviewable")
 	}
 	r = ready(t, s, r)
@@ -300,7 +301,7 @@ func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 }
 
 func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
-	for _, scenario := range []string{"ready", "unfinished story", "unfinished task", "malformed plan", "changed intent", "dirty tree", "no product commit", "missing evidence"} {
+	for _, scenario := range []string{"ready", "unfinished story", "unfinished task", "malformed plan", "changed intent", "dirty tree", "no product commit", "missing evidence", "missing squash commit"} {
 		t.Run(scenario, func(t *testing.T) {
 			s := fixture(t)
 			r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
@@ -350,9 +351,12 @@ func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			result := Result{Summary: "Try the verified export", Checks: []string{"export check — passed"}}
+			result := Result{Summary: "Try the verified export", Checks: []string{"export check — passed"}, SquashCommit: &SquashCommit{Title: "feat: export"}}
 			if scenario == "missing evidence" {
 				result.Checks = nil
+			}
+			if scenario == "missing squash commit" {
+				result.SquashCommit = nil
 			}
 			got, err := s.Ready(context.Background(), r.ID, result)
 			if scenario != "ready" {
@@ -784,7 +788,7 @@ func TestReadyRecordsSimulatedIntegrationsFromTheRecipeAndThePRRepeatsThem(t *te
 	runGit(t, r.Workdir, "add", "hello.txt", ".archetipo/preview.json")
 	runGit(t, r.Workdir, "commit", "-m", "feat: export")
 	// The agent cannot claim a real trial: the recipe is the only source.
-	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, Simulated: []string{}})
+	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, Simulated: []string{}, SquashCommit: &SquashCommit{Title: "feat: export"}})
 	if err != nil || strings.Join(r.Result.Simulated, ",") != "google-oauth,google-calendar" {
 		t.Fatalf("simulated integrations not taken from the recipe: %+v %v", r.Result, err)
 	}
@@ -793,11 +797,9 @@ func TestReadyRecordsSimulatedIntegrationsFromTheRecipeAndThePRRepeatsThem(t *te
 	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
 		t.Fatal(err)
 	}
-	if hosting.createTitle != r.Title || !strings.HasPrefix(hosting.createBody, r.ID+"\n\n") {
-		t.Fatalf("a result without squash commit changed the PR: %q\n%s", hosting.createTitle, hosting.createBody)
-	}
-	if !strings.Contains(hosting.createBody, SimulatedNotice(r.Result.Simulated)) {
-		t.Fatalf("PR body hides the simulated trial: %s", hosting.createBody)
+	// The description is the squash commit; the trial notice travels with the details comment.
+	if len(hosting.comments) != 1 || !strings.Contains(hosting.comments[0], SimulatedNotice(r.Result.Simulated)) {
+		t.Fatalf("PR hides the simulated trial: %q", hosting.comments)
 	}
 	if SimulatedNotice(nil) != "" {
 		t.Fatal("a real trial produced a notice")
@@ -831,5 +833,37 @@ func TestPRTitleAndBodyLeadWithTheSquashCommitWrittenAtReadiness(t *testing.T) {
 	}
 	if len(hosting.comments) != 1 || !strings.HasPrefix(hosting.comments[0], detailsMarker(r.ID)+"\n") || !strings.Contains(hosting.comments[0], "Incremento "+r.ID) || !strings.Contains(hosting.comments[0], "go test — passed") {
 		t.Fatalf("intent and checks are not in the details comment: %q", hosting.comments)
+	}
+}
+
+func TestSandboxCommitsNameTheProductBacklogStory(t *testing.T) {
+	s := fixture(t)
+	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+	sandbox, err := config.LoadExact(r.Workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture backlog already holds US-010, so the published code differs.
+	if got := PublishedCode(sandbox, "US-001"); got != r.Published["US-001"] || got == "US-001" {
+		t.Fatalf("sandbox commit scope %q, published %q", got, r.Published["US-001"])
+	}
+	if got := PublishedCode(sandbox, "US-999"); got != "US-999" {
+		t.Fatalf("an unpublished story changed code: %q", got)
+	}
+	if got := PublishedCode(s.Config, "US-001"); got != "US-001" {
+		t.Fatalf("outside a sandbox the code changed: %q", got)
+	}
+}
+
+func TestReadyPayloadDecodesThroughTheYAMLReaderOfTheCLI(t *testing.T) {
+	// The CLI reads --file payloads with yaml.Unmarshal, which ignores json tags:
+	// the documented squash_commit and preview_url used to be dropped silently.
+	payload := `{"summary":"Try it","preview_url":"http://127.0.0.1:3000","checks":["go test — passed"],"squash_commit":{"title":"feat(export): esporta i clienti","body":"Perché."}}`
+	var result Result
+	if err := yaml.Unmarshal([]byte(payload), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.PreviewURL != "http://127.0.0.1:3000" || result.SquashCommit == nil || result.SquashCommit.Title != "feat(export): esporta i clienti" || result.SquashCommit.Body != "Perché." {
+		t.Fatalf("payload fields lost in decoding: %+v", result)
 	}
 }

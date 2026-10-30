@@ -16,6 +16,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
@@ -647,7 +648,8 @@ func newSpecReviewCmd(s streams) *cobra.Command {
 					}
 					if commit {
 						opts := gitwt.CommitMessageOptions{Type: commitType, Summary: commitSummary}
-						if err := gitwt.CommitSpecChanges(ctx, cfg.ProjectRoot, workdir, spec.Code, spec.Title, opts); err != nil {
+						// In an increment sandbox the commit names the product backlog story.
+						if err := gitwt.CommitSpecChanges(ctx, cfg.ProjectRoot, workdir, increment.PublishedCode(cfg, spec.Code), spec.Title, opts); err != nil {
 							return nil, err
 						}
 					}

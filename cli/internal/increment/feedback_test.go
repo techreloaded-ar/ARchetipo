@@ -47,13 +47,13 @@ func TestCorrectionReopensOnlyLinkedStoriesWithoutChangingApprovedRequirements(t
 	if err != nil || retainedPlan != plan {
 		t.Fatal("correction discarded the original plan", err)
 	}
-	if _, err = s.Ready(context.Background(), r.ID, Result{Summary: "premature", Checks: []string{"old tasks were done"}}); err == nil {
+	if _, err = s.Ready(context.Background(), r.ID, Result{Summary: "premature", Checks: []string{"old tasks were done"}, SquashCommit: &SquashCommit{Title: "feat: export"}}); err == nil {
 		t.Fatal("accepted a correction before its linked story was finished again")
 	}
 	if _, err = local.TransitionStatus(context.Background(), "US-001", domain.StatusDone); err != nil {
 		t.Fatal(err)
 	}
-	r, err = s.Ready(context.Background(), r.ID, Result{Summary: "Corrected", Checks: []string{"selection regression passed"}})
+	r, err = s.Ready(context.Background(), r.ID, Result{Summary: "Corrected", Checks: []string{"selection regression passed"}, SquashCommit: &SquashCommit{Title: "feat: export"}})
 	if err != nil || r.Status != Review {
 		t.Fatalf("correction could not return to review: %+v %v", r, err)
 	}
@@ -104,7 +104,7 @@ func TestInterruptedCorrectionReopeningIsRetryableWithoutAnotherRevision(t *test
 		t.Fatal(err)
 	}
 	first, _ := local.ReadSpecDetail(context.Background(), "US-001")
-	if _, err = s.Ready(context.Background(), r.ID, Result{Summary: "premature", Checks: []string{"old checks"}}); err == nil {
+	if _, err = s.Ready(context.Background(), r.ID, Result{Summary: "premature", Checks: []string{"old checks"}, SquashCommit: &SquashCommit{Title: "feat: export"}}); err == nil {
 		t.Fatal("incomplete correction could become ready")
 	}
 	r, err = s.RequestChanges(context.Background(), r.ID, change)
@@ -145,7 +145,7 @@ func TestRefinementMustUpdateLinkedStoryAndNeedsApproval(t *testing.T) {
 	if err != nil || r.Revisions[1].Approved || r.Revisions[1].Change == nil || r.PendingChange != nil {
 		t.Fatalf("refinement skipped approval or lost its story link: %+v %v", r, err)
 	}
-	if _, err = s.Ready(context.Background(), r.ID, Result{Summary: "not approved", Checks: []string{"test"}}); err == nil {
+	if _, err = s.Ready(context.Background(), r.ID, Result{Summary: "not approved", Checks: []string{"test"}, SquashCommit: &SquashCommit{Title: "feat: export"}}); err == nil {
 		t.Fatal("unapproved refinement became ready")
 	}
 	if _, err = s.Approve(context.Background(), r.ID, 1); err == nil {

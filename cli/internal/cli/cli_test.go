@@ -17,6 +17,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/cli"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
@@ -2998,4 +2999,53 @@ func specForkBase(t *testing.T, code string) string {
 	spec, _ := data["spec"].(map[string]any)
 	forkBase, _ := spec["fork_base"].(string)
 	return forkBase
+}
+
+func TestSpecReviewInsideAnIncrementCommitsWithTheProductStoryCode(t *testing.T) {
+	// The sandbox reference holds the resolved parent path.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	writeAutoCommitConfig(t)
+	if err := os.WriteFile(filepath.Join(".archetipo", "shared-runtime.md"), []byte("test runtime\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	initGitMain(t)
+	// The product backlog already holds US-001 and US-002: the increment's
+	// local US-001 is published as US-003.
+	if res := runCLI(t, "", "spec", "add", "--file", writeInputFile(t, "specs.json", specJSON)); res.exit != 0 {
+		t.Fatal(res.stderr.String())
+	}
+	made := runCLI(t, `{"title":"Bicycle trips","request":"Add bicycle trips"}`, "increment", "create")
+	if made.exit != 0 {
+		t.Fatal(made.stderr.String())
+	}
+	var envelope struct {
+		Data increment.Record `json:"data"`
+	}
+	if err := json.Unmarshal(made.stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	r := envelope.Data
+	t.Cleanup(func() { mustRun(t, "git", "worktree", "remove", "--force", r.Workdir) })
+	proposal := `{"intent":"Bicycle trips","stories":[{"code":"US-001","title":"Bicycle trips","epic":{"code":"EP-001","title":"Cycling"},"priority":"MEDIUM","points":3,"status":"TODO","scope":"MVP","body":"## User story\nAs a rider I want bicycle trips.\n## Demonstrates\nA bicycle trip.\n## Acceptance\n- [ ] Bicycle trips are available."}]}`
+	for _, step := range []struct{ stdin, op string }{{proposal, "propose"}, {`{"revision":1}`, "approve"}} {
+		if res := runCLI(t, step.stdin, "increment", step.op, r.ID); res.exit != 0 {
+			t.Fatalf("%s: %s", step.op, res.stderr.String())
+		}
+	}
+	if res := runCLI(t, "", "-C", r.Workdir, "spec", "move", "US-001", "--to", "in_progress"); res.exit != 0 {
+		t.Fatal(res.stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(r.Workdir, "trips.txt"), []byte("bicycle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := runCLI(t, "", "-C", r.Workdir, "spec", "review", "US-001", "--commit-type", "feat"); res.exit != 0 {
+		t.Fatalf("review failed: %s %s", res.stdout.String(), res.stderr.String())
+	}
+	if subject := mustOutput(t, "git", "-C", r.Workdir, "log", "-1", "--pretty=%s"); subject != "feat(US-003): Bicycle trips" {
+		t.Fatalf("sandbox commit names the local story: %q", subject)
+	}
 }

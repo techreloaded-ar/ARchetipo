@@ -77,6 +77,10 @@ After verification, complete any existing verified tasks using
 the delivered outcome, exact check results/report paths and remaining concerns.
 This operation may commit changes: first await all writers and inspect the
 candidate files to keep runtime journals, secrets and unrelated changes out.
+Pass `--commit-type <type>` (`feat`, `fix`, …) and, when the story title is not
+specific enough, `--commit-summary "<concise summary>"`: the subject becomes
+`<type>(<code>): <summary>`, where the CLI writes the product backlog code of the
+story (the one the person knows), never the increment-local one.
 Do not mark stories DONE during implementation.
 
 Return a compact handoff: story states, changed areas, original evidence paths,

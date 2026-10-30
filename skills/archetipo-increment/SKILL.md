@@ -314,8 +314,9 @@ Payload:
 
     {"summary":"What the person can now try, with demonstration instructions","preview_url":"http://127.0.0.1:3000","checks":["Exact command — actual result"],"squash_commit":{"title":"One line saying what the increment introduces","body":"What the product now does and why, in a few lines"}}
 
-`squash_commit` is the single commit the increment leaves on `main` after a
-squash merge: the PR is opened with its title, and its description holds only
+`squash_commit` is required: it is the single commit the increment leaves on
+`main` after a squash merge, and `increment ready` refuses a result without its
+title. The PR is opened with that title, and its description holds only
 the body and the list of published stories. The CLI posts the increment,
 intent, summary and checks once as a PR comment. Follow the commit convention visible in `git log` of the base
 branch (for example `feat(scope): …`), in the workspace language. The title is

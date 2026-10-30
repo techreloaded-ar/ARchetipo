@@ -42,20 +42,23 @@ type Revision struct {
 	HeadSHA   string           `json:"head_sha,omitempty"`
 	Change    *FeedbackRequest `json:"change,omitempty"`
 }
+
+// Result is decoded from the skill's payload by the YAML reader of the CLI,
+// which ignores json tags: every field also needs its yaml name.
 type Result struct {
-	Summary    string   `json:"summary"`
-	PreviewURL string   `json:"preview_url,omitempty"`
-	Checks     []string `json:"checks"`
+	Summary    string   `json:"summary" yaml:"summary"`
+	PreviewURL string   `json:"preview_url,omitempty" yaml:"preview_url,omitempty"`
+	Checks     []string `json:"checks" yaml:"checks"`
 	// Simulated is read from the preview recipe at readiness, never from the
 	// agent: which integrations the person tried against local fakes.
-	Simulated []string `json:"simulated,omitempty"`
+	Simulated []string `json:"simulated,omitempty" yaml:"simulated,omitempty"`
 	// SquashCommit is written by the skill so that the PR title and the head of
 	// its body read as the single commit a squash merge leaves on main.
-	SquashCommit *SquashCommit `json:"squash_commit,omitempty"`
+	SquashCommit *SquashCommit `json:"squash_commit,omitempty" yaml:"squash_commit,omitempty"`
 }
 type SquashCommit struct {
-	Title string `json:"title"`
-	Body  string `json:"body,omitempty"`
+	Title string `json:"title" yaml:"title"`
+	Body  string `json:"body,omitempty" yaml:"body,omitempty"`
 }
 type Record struct {
 	ID                   string            `json:"id"`

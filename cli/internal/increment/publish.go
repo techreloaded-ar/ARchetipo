@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -81,6 +82,8 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err != nil {
 			return r, err
 		}
+		// Readiness requires the squash commit; only records readied before that
+		// rule still publish with the increment title and the result in the body.
 		squash := r.Result != nil && r.Result.SquashCommit != nil
 		if pr == nil {
 			var body strings.Builder
@@ -159,6 +162,21 @@ func SimulatedNotice(simulated []string) string {
 		return ""
 	}
 	return "Provato con integrazioni simulate: " + strings.Join(simulated, ", ") + ". La prova con i servizi reali avviene dopo il merge."
+}
+
+// PublishedCode is the product backlog code a sandbox story was published
+// under, so a commit made in an increment refers to the story the person knows
+// (US-038), not to the increment-local one (US-001). Outside a sandbox, or
+// before publication allocated the codes, the local code is returned unchanged.
+func PublishedCode(cfg config.Config, localCode string) string {
+	if cfg.Increment == nil {
+		return localCode
+	}
+	r, err := New(config.Config{ProjectRoot: cfg.Increment.ParentRoot}, nil).Read(cfg.Increment.ID)
+	if err != nil || r.Published[localCode] == "" {
+		return localCode
+	}
+	return r.Published[localCode]
 }
 
 func sourceMarker(id, code string) string {
