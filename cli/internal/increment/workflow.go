@@ -143,12 +143,20 @@ func (s *Service) requireClean(ctx context.Context, r Record) error {
 	if branch != r.Branch {
 		return iox.NewConflict("sandbox branch has changed", "restore the increment branch", nil)
 	}
-	args := append([]string{"status", "--porcelain", "--untracked-files=all", "--", "."}, gitwt.RuntimeArtifactPathspecs...)
+	// Compare normalized Git content, including staged changes. With autocrlf,
+	// status can report a stat-only modification after materializing a shared
+	// recipe even when its normalized bytes still match HEAD exactly.
+	args := append([]string{"diff", "--name-only", "HEAD", "--", "."}, gitwt.RuntimeArtifactPathspecs...)
 	dirty, err := git(ctx, r.Workdir, args...)
 	if err != nil {
 		return err
 	}
-	if dirty != "" {
+	args = append([]string{"ls-files", "--others", "--exclude-standard", "--", "."}, gitwt.RuntimeArtifactPathspecs...)
+	untracked, err := git(ctx, r.Workdir, args...)
+	if err != nil {
+		return err
+	}
+	if dirty != "" || untracked != "" {
 		return iox.NewConflict("sandbox has uncommitted changes", "commit and verify the current result before approving it", nil)
 	}
 	return nil

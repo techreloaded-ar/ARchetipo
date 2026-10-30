@@ -93,7 +93,7 @@ var probeOK = runOutcome{stdout: "codex 1.0.0"}
 // the test depending on what is installed on the machine or on PATH.
 func fakeCommand(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "codex-fake")
+	path := filepath.Join(t.TempDir(), "codex-fake.exe")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -431,17 +431,23 @@ func TestExecuteReturnsAPayloadBuiltFromTheReceipt(t *testing.T) {
 // AC-2 — the run is registered and readable while the agent is still working,
 // which is what makes it followable at all.
 func TestExecuteRegistersTheRunBeforeTheAgentWorks(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	command := fakeCommand(t)
 	fake := newFakeCodex()
 	provider := newSessionProvider(workspaceWithSkill(t), &fakeRunner{outcomes: []runOutcome{probeOK}}, fake, nil)
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := provider.Execute(context.Background(), testRequest(command))
+		_, err := provider.Execute(ctx, testRequest(command))
 		done <- err
 	}()
 
-	<-fake.turnStarted
+	select {
+	case <-fake.turnStarted:
+	case err := <-done:
+		t.Fatalf("execution ended before the fake agent started: %v", err)
+	}
 	fake.emit("item/agentMessage/delta", `{"delta":"sto lavorando"}`)
 
 	// Everything below happens while Execute is still inside the agent's work.

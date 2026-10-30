@@ -91,6 +91,7 @@ jobs:
           working-directory: cli
 
   test:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

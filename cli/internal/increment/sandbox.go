@@ -1,6 +1,7 @@
 package increment
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -23,9 +24,11 @@ import (
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return "", iox.NewConflict("git "+strings.Join(args, " ")+": "+strings.TrimSpace(string(out)), "inspect the increment working directory and retry", err)
+		return "", iox.NewConflict("git "+strings.Join(args, " ")+": "+strings.TrimSpace(string(out)+stderr.String()), "inspect the increment working directory and retry", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

@@ -42,5 +42,19 @@ func WriteAtomic(dir, path, prefix string, record any) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, path)
+	return retryFileOperation(func() error { return os.Rename(temporaryPath, path) })
+}
+
+// ReadFile and Remove share WriteAtomic's bounded handling of transient Windows
+// sharing violations. Persistent permissions/errors remain failures.
+func ReadFile(path string) (body []byte, err error) {
+	err = retryFileOperation(func() error {
+		body, err = os.ReadFile(path)
+		return err
+	})
+	return body, err
+}
+
+func Remove(path string) error {
+	return retryFileOperation(func() error { return os.Remove(path) })
 }

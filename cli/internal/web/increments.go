@@ -213,11 +213,12 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 	}
 	opened, err := s.openConversationOn(ctx, ws, conversationOpenSpec{title: body.Title, workingDir: created.Workdir, incrementID: created.ID, model: body.Model, modelOptions: body.ModelOptions})
 	if err != nil {
-		if rollbackErr := service.RemoveUnused(context.WithoutCancel(ctx), created.ID); rollbackErr == nil {
+		rollbackErr := service.RemoveUnused(context.WithoutCancel(ctx), created.ID)
+		if rollbackErr == nil {
 			writeError(w, err)
 			return
 		}
-		writeError(w, iox.NewConflict("la sandbox "+created.ID+" è stata conservata, ma la conversazione non è partita: "+err.Error(), "riprendi l’incremento esistente prima di crearne un altro", err))
+		writeError(w, iox.NewConflict("la sandbox "+created.ID+" è stata conservata, ma la conversazione non è partita: "+err.Error(), "riprendi l’incremento esistente prima di crearne un altro; rollback: "+rollbackErr.Error(), err))
 		return
 	}
 	created, err = service.Bind(context.WithoutCancel(ctx), created.ID, opened.snapshot.id)

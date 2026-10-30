@@ -140,7 +140,7 @@ func (s *FileStore) GetMetadata(ctx context.Context, id string) (Record, error) 
 	if err != nil {
 		return Record{}, err
 	}
-	body, err := os.ReadFile(path)
+	body, err := recordfile.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Record{}, &StoreError{Kind: StoreNotFound, ID: id, Err: err}
 	}
@@ -435,14 +435,14 @@ func (s *FileStore) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil {
+	if err := recordfile.Remove(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return &StoreError{Kind: StoreNotFound, ID: id, Err: err}
 		}
 		return err
 	}
 	if eventsPath, eventsErr := s.eventsPath(id); eventsErr == nil {
-		if eventsErr = os.Remove(eventsPath); eventsErr != nil && !errors.Is(eventsErr, fs.ErrNotExist) {
+		if eventsErr = recordfile.Remove(eventsPath); eventsErr != nil && !errors.Is(eventsErr, fs.ErrNotExist) {
 			return eventsErr
 		}
 	}
@@ -475,7 +475,7 @@ func (s *FileStore) List(ctx context.Context) ([]Record, error) {
 			continue
 		}
 		path := filepath.Join(s.dir, entry.Name())
-		body, err := os.ReadFile(path)
+		body, err := recordfile.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read conversation record %q: %w", entry.Name(), err)
 		}

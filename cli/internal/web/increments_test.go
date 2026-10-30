@@ -150,7 +150,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	p.workingDir = ""
 	increments, listErr := service.List()
 	if listErr != nil || len(increments) != 1 {
-		t.Fatalf("failed open left an orphan increment: %v %v", increments, listErr)
+		t.Fatalf("failed open left an orphan increment: %v %v; response: %s", increments, listErr, refused.Body.String())
 	}
 	srv.session().stop(time.Second)
 	p.store.loseRuntime()

@@ -141,6 +141,29 @@ func TestSandboxDoesNotBorrowWorkspacePreviewEndpoint(t *testing.T) {
 	}
 }
 
+func TestUnusedSandboxRollbackIgnoresGitLineEndingWarnings(t *testing.T) {
+	s := fixture(t)
+	runGit(t, s.Config.ProjectRoot, "config", "core.autocrlf", "true")
+	raw, err := os.ReadFile(filepath.Join(s.Config.ProjectRoot, verification.RecipePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verification.Configure(s.Config.ProjectRoot, raw); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, s.Config.ProjectRoot, "add", verification.RecipePath)
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: portable formatted recipe")
+	if _, err := environmentrecipe.Publish(s.Config.ProjectRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	r := create(t, s)
+	if err := s.RemoveUnused(context.Background(), r.ID); err != nil {
+		status := runGit(t, r.Workdir, "status", "--porcelain")
+		diff := runGit(t, r.Workdir, "diff", "--", verification.RecipePath)
+		t.Fatalf("unused sandbox cannot roll back with autocrlf: %v; status: %s; diff: %s", err, status, diff)
+	}
+}
+
 func TestSandboxKeepsPreviewRecipeFromMain(t *testing.T) {
 	s := fixture(t)
 	path := filepath.Join(s.Config.ProjectRoot, ".archetipo", "preview.json")
@@ -228,7 +251,7 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 		t.Fatal("parent code changed")
 	}
 	unchanged, _ := os.ReadFile(filepath.Join(r.Workdir, config.RelativePath))
-	if string(unchanged) != string(configBefore) {
+	if strings.ReplaceAll(string(unchanged), "\r\n", "\n") != strings.ReplaceAll(string(configBefore), "\r\n", "\n") {
 		t.Fatal("sandbox rewrote tracked configuration")
 	}
 	diff := runGit(t, r.Workdir, "diff", "--name-only", r.BaseSHA+"...HEAD")

@@ -88,7 +88,7 @@ var probeOK = runOutcome{stdout: "2.1.234 (Claude Code)"}
 // the test depending on what is installed on the machine or on PATH.
 func fakeCommand(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "claude-fake")
+	path := filepath.Join(t.TempDir(), "claude-fake.exe")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

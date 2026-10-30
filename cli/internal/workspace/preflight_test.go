@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -112,6 +113,9 @@ func TestPreflightRefusalsNameTheField(t *testing.T) {
 }
 
 func TestPreflightRefusesADirectoryItCannotWriteTo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory mode does not remove Windows ACL write access; permission refusal is not exercised by chmod")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("skipped: running as root, where a 0o500 directory is still writable")
 	}

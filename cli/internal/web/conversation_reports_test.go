@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,16 @@ func TestConversationReportPathPolicy(t *testing.T) {
 	for _, ref := range []string{"docs/test-results/inc-1/environment/report.json", ".archetipo/environment/technical-summary.json"} {
 		if got := conversationReportPath(root, "docs/test-results", ref); got == "" {
 			t.Errorf("refused report %q", ref)
+		}
+	}
+	abs := filepath.Join(root, ".archetipo/environment/technical-summary.json")
+	uriPath := filepath.ToSlash(abs)
+	if filepath.VolumeName(abs) != "" {
+		uriPath = "/" + uriPath
+	}
+	for _, ref := range []string{abs, (&url.URL{Scheme: "file", Path: uriPath}).String()} {
+		if got := conversationReportPath(root, "docs/test-results", ref); got != ".archetipo"+string(filepath.Separator)+"environment"+string(filepath.Separator)+"technical-summary.json" {
+			t.Errorf("refused absolute local report %q: %q", ref, got)
 		}
 	}
 }

@@ -27,17 +27,20 @@ type conversationReportLink struct {
 }
 
 func conversationReportPath(root, results, href string) string {
-	u, err := url.Parse(href)
-	if err != nil || u.RawQuery != "" {
-		return ""
+	path := href
+	// Native Windows drive paths are filesystem references, not URI schemes.
+	// URL forms still reject remote hosts and must stay inside this checkout.
+	if filepath.VolumeName(href) == "" || !filepath.IsAbs(href) {
+		u, err := url.Parse(href)
+		if err != nil || u.RawQuery != "" || (u.Scheme != "" && u.Scheme != "file") || u.Host != "" {
+			return ""
+		}
+		path = u.Path
+		if u.Scheme == "file" && strings.HasPrefix(path, "/") && filepath.VolumeName(filepath.FromSlash(path[1:])) != "" {
+			path = path[1:]
+		}
+		path = filepath.FromSlash(path)
 	}
-	if u.Scheme != "" && u.Scheme != "file" {
-		return ""
-	}
-	if u.Host != "" {
-		return ""
-	}
-	path := filepath.FromSlash(u.Path)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
