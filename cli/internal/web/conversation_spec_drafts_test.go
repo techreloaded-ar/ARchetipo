@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
@@ -326,7 +327,16 @@ func TestNativeStorySetIsVisibleAndCanBeRevisedAfterActionCompletion(t *testing.
 	}
 	provider.completeCurrentTurn(t, draftSetLine(t, "Seconda rivista"), execution.TurnCompleted)
 	awaitRecordSettled(t, srv, conversationID)
+	// The native terminal snapshot and its last journal event are observed
+	// separately. A settled turn alone does not mean its receipt was flushed;
+	// wait for the revised event as the polling client does, not an arbitrary
+	// delay, and still assert its complete content below.
+	deadline := time.Now().Add(5 * time.Second)
 	revised := read()
+	for (revised.SpecDrafts == nil || revised.SpecDrafts.EventID <= view.SpecDrafts.EventID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		revised = read()
+	}
 	if revised.SpecDrafts == nil || revised.SpecDrafts.EventID <= view.SpecDrafts.EventID || len(revised.SpecDrafts.Items) != 1 || revised.SpecDrafts.Items[0].Title != "Seconda rivista" {
 		t.Fatalf("revision lost: %+v", revised.SpecDrafts)
 	}
