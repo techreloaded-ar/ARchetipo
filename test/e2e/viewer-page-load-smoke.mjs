@@ -110,6 +110,7 @@ const CLAIMS = [
   "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
   "le domande delle personalità accettano scelte cliccabili, selezioni multiple e testo libero, conservando la risposta dopo un errore e il polling",
   "una lettura della chat sospesa viene annullata e riprovata senza reload, perdite di messaggi o della bozza",
+  "salvare il primo provider rende subito disponibile il compositore senza riavvio o vecchi avvisi",
 ];
 
 // One entry per proved statement, for the report.
@@ -176,6 +177,7 @@ async function main() {
     await exercisePage(browser, view.url, runDir);
     await exerciseDocumentation(browser, view.url, runDir);
     await exerciseDocumentationRace(browser, view.url);
+    await exerciseProviderOnboarding(browser, view.url, runDir);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
     await exerciseDiscoveryQuestions(browser, view.url, runDir);
@@ -524,6 +526,51 @@ async function exercisePersistedStoryRevisions(page, url, runDir) {
 
 // The real page with deterministic provider responses: no agent or credential.
 // Server tests separately prove the native cancellation and persisted effects.
+async function exerciseProviderOnboarding(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on('Runtime.exceptionThrown', event => exceptions.push(event.exceptionDetails));
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.addScriptToEvaluateOnNewDocument', {source:`
+    const originalFetch = window.fetch.bind(window);
+    window.firstProviderSaved = false;
+    window.firstProviderIndexReads = 0;
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/config' && options.method === 'PUT') {
+        const payload = JSON.parse(options.body);
+        if (payload.provider?.id !== 'onboarding-native') throw new Error('Missing selected provider');
+        window.firstProviderSaved = true;
+        return json({config:payload.config,raw:'connector: file\\n',exists:true,restart_required:false});
+      }
+      if (path === '/api/execution/providers') return json({providers:[{id:'onboarding-native',label:'Provider della prova',available:true,capabilities:[],config_fields:[]}],default:window.firstProviderSaved?{id:'onboarding-native',config:{}}:null});
+      if (path === '/api/execution/model-choice') return json({available:true,models:[],capabilities:[]});
+      if (path === '/api/workspace/conversations') {
+        window.firstProviderIndexReads++;
+        return json({workspace_root:'/onboarding-fixture',conversations:[],available:window.firstProviderSaved,unavailable_reason:window.firstProviderSaved?'':'Provider della prova non configurato',closed_limit:20});
+      }
+      if (path === '/api/workspace/activities') return json({items:[],start_work:{id:'increment',label:'Sviluppa la tua app',development_mode:'continuous',kind:'increment',runnable:window.firstProviderSaved}});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input,options);
+    };
+  `});
+  await page.send('Page.navigate',{url});
+  await page.once('Page.loadEventFired',30000,'il primo avvio senza provider');
+  await page.waitFor(`document.querySelector('#workspace-conversation')?.textContent.includes('Provider della prova non configurato')`,10000,'il motivo iniziale di indisponibilità');
+  await page.evaluate(`document.getElementById('topbar-more-btn').click();document.getElementById('config-btn').click()`);
+  await page.waitFor(`!!document.querySelector('input[name="execution_provider"][value="onboarding-native"]')`,10000,'il provider offerto dal server');
+  await page.evaluate(`document.querySelector('[data-config-tab="execution"]').click();document.getElementById('config-save-btn').click()`);
+  await page.waitFor(`window.firstProviderSaved && window.firstProviderIndexReads > 1 && !!document.querySelector('.conv-work-home .conv-composer-input:not(:disabled)')`,10000,'il compositore disponibile dopo il salvataggio senza reload');
+  if (await page.evaluate(`!document.getElementById('config-restart-notice').classList.contains('hidden') || document.getElementById('workspace-conversation').textContent.includes('Provider della prova non configurato')`)) throw new Error('Il primo provider lascia un avviso obsoleto o richiede riavvio');
+  await page.evaluate(`document.getElementById('config-modal-close').click()`);
+  await fs.writeFile(path.join(runDir,'provider-onboarding.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  if (exceptions.length) throw new Error('Eccezioni nel primo salvataggio provider: '+JSON.stringify(exceptions));
+  ok(CLAIMS[24],'il primo provider aggiorna disponibilità, home e compositore senza riavvio e rimuove il rifiuto precedente');
+  await page.close();
+}
+
 async function exerciseActivityComposer(browser, url) {
   const page = await browser.newPage();
   const exceptions = [];

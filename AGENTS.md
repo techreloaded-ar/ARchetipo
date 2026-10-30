@@ -145,6 +145,7 @@ Rules that follow from this, and that a change must not quietly undo:
 - **An action runs *in* the session.** `POST /api/spec/{code}/execution` and `POST /api/workspace/execution` accept a `conversation_id` and, for a provider with native sessions, start a turn in that thread instead of spawning a second agent. The receipt closes the execution; it does not close the conversation.
 - **Skills come from the runtime.** Discovery is the harness's own (`skills/list` for Codex, `system/init` for Claude) and never a scan of `.claude/skills` accumulated across providers. A catalog not yet announced is declared unknown rather than guessed.
 - **Choices are per turn.** Model and options chosen during a turn apply to the *next* one, are validated against the session's own catalog, and never move the workspace default.
+- **Worker interactions retain native ownership.** A parent turn ending must not discard a worker's pending approval or input. It remains answerable after reload until its own native turn ends, the runtime resolves it or the connection is released. Stopping such a worker preserves the already completed parent turn.
 - **Ownership is per conversation.** One viewer process at a time holds a native runtime, through the conversation lock the journal already uses; a second viewer reads it and is refused only when it writes.
 - **Conversation deletion and environment removal are distinct choices.** `DELETE …/{id}` releases the runtime. Chat-only `DELETE …/{id}/record` removes the ARchetipo record and timeline and preserves the native session. For linked worktrees, deletion and archiving require an explicit keep/remove choice; confirmed increment removal delegates to the shared CLI increment deletion contract, which stops owned work, runs the registered environment cleanup, retains only a Git recovery ref for committed work (no environment archive) and removes its local worktree, branch and live records. Archiving with removal keeps the conversation readable. Never delete the harness transcript, guess service ownership or remove working files merely because a conversation was closed.
 
@@ -409,3 +410,10 @@ cover manager restart and refusal of an occupied retained proxy port. Increment
 tests cover common recipes published only from a worktree, without materialized
 parent files, including replacement of unchanged older versioned helpers while
 preserving edited and untracked helpers.
+
+The page-load smoke also verifies first-provider onboarding: saving the provider
+refreshes the home and removes its former unavailable notice without a restart.
+Connector/path and idle-release policy changes still declare their required
+restart. The chat smoke retains a worker approval across parent completion and
+reload, delivers it through the native adapter and stops a later pending worker
+without rewriting the completed parent turn.

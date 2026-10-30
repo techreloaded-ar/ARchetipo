@@ -114,6 +114,12 @@ synthetic resources. Do not copy resource journals, checkpoints or secrets.
    adopts the exact bundle. A changed helper, recipe, declared setup input or
    missing/tampered log requires requalification. Publish only non-secret setup
    helpers and environment/preview configuration, never product code.
+   For this operation, `E_PRECONDITION` is not a request for broader permissions:
+   inspect the retained qualification and its current inputs, coordinate with the
+   product session so writers have finished, then requalify the actual bundle.
+   An approved command still cannot publish stale evidence. Do not immediately
+   retry it with another escalation or report a pending permission that the
+   runtime has already answered.
 4. Run every project check through `environment check <name>` and retain its
    reports (or `check <name> --candidate` before publication). Select coverage from
    the actual product: applicable compilation/static checks, tests and meaningful
@@ -126,6 +132,11 @@ synthetic resources. Do not copy resource journals, checkpoints or secrets.
    A setup mistake in the test launcher is not a product defect.
    Existing product failures remain visible and must not
    cause an endless rewrite of a working recipe.
+
+An exit-zero check with `passed:false` or `stable:false` is not a pass. When
+declared inputs changed during the command, wait for the owning session's edits
+to settle and rerun against those files. Keep the original invalidated report;
+do not remove inputs, weaken the check or call this a permission failure.
 
 `during_preview: true` promises no dependency changes, shared build-output writes
 or destructive data changes while the app runs. Leave it false otherwise. Tests'

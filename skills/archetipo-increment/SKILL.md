@@ -35,6 +35,11 @@ Persist the evolving specification with `increment propose <id> --file -`:
 {"intent":"Markdown: problem and people; desired behavior and concrete examples; assumptions; exclusions; decisions and open questions"}
 ```
 
+When implementation is requested, persist a proportionate initial specification
+before the first product edit. Do not leave the work in discovery with no saved
+specification until after writing the app. This is a versioned statement of the
+request, not a separate planning or approval ceremony.
+
 Stories and the enterprise backlog remain optional planning tools. Read linked
 stories when present and keep acceptance criteria and documentation consistent.
 Use `increment link <id> --file -` with `{"story_codes":["US-010"]}` before
@@ -73,6 +78,14 @@ Reuse an already running preview through compatible checks directly; do not
 prepare again merely because a new turn started. Prepare the project's environment
 recipe when setup is missing or changed; delegate `/archetipo-environment`
 when configuration or repair is needed, preserving its technical session identity.
+Discovery and setup design may overlap product edits; final qualification,
+publication and product checks must use settled declared inputs. Coordinate this
+handoff with the technical session. If you change an input after qualification,
+tell that same session to requalify before publication instead of attributing
+`E_PRECONDITION` to sandbox permissions. Before reporting a blocker, read the
+worker's actual latest CLI envelope and current pending runtime requests.
+Keep worker ownership in the checkpoint and resume the same worker after an
+approval; a parent answer does not imply its worker has finished.
 Keep product edits in this worktree. The technical environment session can publish
 the common recipe and non-secret helpers through the CLI from this worktree;
 this is environment configuration, not product publication or a manual parent

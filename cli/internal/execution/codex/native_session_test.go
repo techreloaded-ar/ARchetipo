@@ -327,6 +327,66 @@ func assertFakeResponse(t *testing.T, fake *fakeCodex, id, wanted string) {
 	t.Fatalf("fake did not receive response id=%s result=%s", id, wanted)
 }
 
+func TestNativeCodexChildRequestsSurviveParentCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fake := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "pending-child", Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}) }()
+	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "parent-turn", "parent-submission", "develop", "low", nil)
+	fake.request(70, "item/commandExecution/requestApproval", `{"threadId":"thread-1","turnId":"turn-1","availableDecisions":["accept","cancel"]}`)
+	fake.request(71, "item/commandExecution/requestApproval", `{"threadId":"child-setup","turnId":"setup-turn","availableDecisions":["accept","cancel"]}`)
+	fake.request(72, "item/tool/requestUserInput", `{"threadId":"child-setup","turnId":"setup-turn","questions":[{"id":"choice","question":"A o B?"}]}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool {
+		return len(s.PendingApprovals) == 2 && len(s.PendingInputs) == 1
+	})
+	fake.emit("turn/completed", `{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.CurrentTurn.State == execution.TurnCompleted })
+	observed, err := provider.ReadSession(ctx, execution.SessionRequest{Session: created.Session})
+	if err != nil || len(observed.PendingApprovals) != 1 || observed.PendingApprovals[0].ID != "71" || len(observed.PendingInputs) != 1 || observed.Work != execution.SessionWaitingApproval {
+		t.Fatalf("parent completion discarded child interactions: %+v, %v", observed, err)
+	}
+	request := execution.SessionCommandRequest{Session: created.Session, TurnID: "parent-turn", SubmissionID: "approve-child", InteractionID: "71", OptionID: localrun.ApprovalAllow}
+	if delivery, err := provider.RespondSessionApproval(ctx, request); err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("approval after parent completion: %+v, %v", delivery, err)
+	}
+	assertFakeResponse(t, fake, "71", `{"decision":"accept"}`)
+	request.InteractionID, request.SubmissionID, request.Answers = "72", "answer-child", map[string][]string{"choice": {"A"}}
+	if delivery, err := provider.RespondSessionInput(ctx, request); err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("input after parent completion: %+v, %v", delivery, err)
+	}
+	assertFakeResponse(t, fake, "72", `{"answers":{"choice":{"answers":["A"]}}}`)
+	request.InteractionID = "71"
+	if delivery, err := provider.RespondSessionApproval(ctx, request); err == nil || delivery.State != execution.DeliveryUnsent {
+		t.Fatal("a resolved child approval was sent twice")
+	}
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return s.Work == execution.SessionIdle })
+}
+
+func TestNativeCodexChildCompletionClearsOnlyItsOwnTurnRequests(t *testing.T) {
+	session := newCodexNativeSession(execution.SessionMetadata{Native: execution.NativeSessionReference{ID: "parent"}}, settings{})
+	for _, item := range []struct{ id, thread, turn string }{
+		{"1", "child-a", "old"}, {"2", "child-a", "new"}, {"3", "child-b", "other"}, {"4", "parent", "main"},
+	} {
+		params, _ := json.Marshal(map[string]string{"threadId": item.thread, "turnId": item.turn})
+		session.handleRequest(rpcMessage{ID: json.RawMessage(item.id), Method: "item/commandExecution/requestApproval", Params: params})
+	}
+	session.handleNotification("turn/completed", json.RawMessage(`{"threadId":"child-a","turn":{"id":"old","status":"interrupted"}}`))
+	snapshot := session.snapshot()
+	if len(snapshot.PendingApprovals) != 3 {
+		t.Fatalf("child completion removed sibling or parent requests: %+v", snapshot.PendingApprovals)
+	}
+	for _, request := range snapshot.PendingApprovals {
+		if request.ID == "1" {
+			t.Fatal("completed child turn retained an obsolete request")
+		}
+	}
+}
+
 func TestNativeCodexChildCompletionDoesNotCloseParentOrRefuseApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

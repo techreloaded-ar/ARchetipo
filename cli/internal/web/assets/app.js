@@ -5392,6 +5392,12 @@
 			// server, cosi' il pannello mostra esattamente quello che c'e' su
 			// disco e non quello che c'era nel form.
 			await loadExecutionProviders();
+			await loadConversationsIndex();
+			if (!conversationsCurrentId && !conversationBusy) {
+				conversationView = emptyConversationView();
+				renderConversationPanel();
+				loadConversationModelChoice();
+			}
 			configSummaryConnector.textContent =
 				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
 			configSummaryExists.textContent = TEXT.configPresent;

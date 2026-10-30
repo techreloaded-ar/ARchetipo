@@ -136,12 +136,12 @@ async function main(){
    if(payload!==undefined){await fs.writeFile(filename,JSON.stringify(payload));args=[...args,"--file",filename];}
    return JSON.parse((await run("CLI",cli,args,{cwd})).stdout).data;
   };
-  const finish=async(n,text)=>{
+  const finish=async(n,text,waitForIdle=true)=>{
    const nativeTurn=(await read()).session.current_turn.native_id;
    control.queue.push({kind:"emit",method:"item/agentMessage/delta",params:{turnId:nativeTurn,itemId:"answer-"+n,delta:text}});
    control.queue.push({kind:"emit",method:"item/completed",params:{turnId:nativeTurn,item:{type:"agentMessage",id:"answer-"+n,text}}});
    control.queue.push({kind:"emit",method:"turn/completed",params:{turn:{id:nativeTurn,status:"completed"}}});
-   await until(async()=>!(await read()).increment.busy,"idle native turn");
+   await until(async()=>{const state=await read();return waitForIdle?!state.increment.busy:state.session.current_turn.state==="COMPLETED";},waitForIdle?"idle native turn":"parent turn complete while worker waits");
   };
 
   assert.equal(inc.development_mode,"continuous");
@@ -170,7 +170,25 @@ async function main(){
   await cliJSON(["execution","environment","check","export"]);
   await cliJSON(["increment","ready",inc.id],{summary:"Esportazione pronta",checks:["File CSV verificato"]});
   if(workflow)await cliJSON(["execution","workflow","checkpoint",workflow.id],{revision:workflow.revision,status:"complete",phase:"ready",state:{...workflow.state,phase:"ready"}});
-  await finish(1,"La pagina è pronta da provare.");
+  control.queue.push({kind:"request",id:9001,method:"item/commandExecution/requestApproval",params:{threadId:"child-environment",turnId:"child-environment-turn",reason:"Pubblicare la ricetta locale del worker",availableDecisions:["accept","cancel"]}});
+  await until(async()=>(await read()).approvals.some(item=>item.id==="9001"),"child approval before parent completion");
+  await finish(1,"La pagina è pronta da provare.",false);
+  await until(async()=>{const state=await read();return state.session.current_turn.state==="COMPLETED" && state.approvals.some(item=>item.id==="9001");},"child approval retained after parent completion");
+  await page.send("Page.reload");await page.once("Page.loadEventFired",timeout,"reload with pending child approval");
+  await page.waitFor(`!!document.querySelector('[data-run-approval-id="9001"][data-run-option-id="allow"]:not(:disabled)')`,timeout,"child approval visible after reload and parent completion");
+  await page.evaluate(`document.querySelector('[data-run-approval-id="9001"][data-run-option-id="allow"]').click()`);
+  await until(()=>control.received.some(item=>item.kind==="response" && item.id===9001 && item.result?.decision==="accept"),"child approval delivered to the real native adapter after parent completion");
+  control.queue.push({kind:"emit",method:"turn/completed",params:{threadId:"child-environment",turn:{id:"child-environment-turn",status:"completed"}}});
+  assert.equal((await read()).session.session.native.id,native);
+  ok("Il consenso del worker resta visibile dopo fine turno e reload e viene consegnato alla stessa sessione nativa.");
+  control.queue.push({kind:"request",id:9002,method:"item/commandExecution/requestApproval",params:{threadId:"child-to-stop",turnId:"child-stop-turn",reason:"Worker ancora in attesa dopo la risposta",availableDecisions:["accept","cancel"]}});
+  await page.waitFor(`!!document.querySelector('[data-run-approval-id="9002"]') && !!document.querySelector('[data-conversation-interrupt]')`,timeout,"pending worker can be stopped after parent completion");
+  await page.evaluate(`document.querySelector('[data-conversation-interrupt]').click()`);
+  await until(()=>control.received.some(item=>item.kind==="turn/interrupt" && item.params?.threadId==="child-to-stop" && item.params?.turnId==="child-stop-turn"),"stop delivered to the pending worker native turn");
+  control.queue.push({kind:"emit",method:"turn/completed",params:{threadId:"child-to-stop",turn:{id:"child-stop-turn",status:"interrupted"}}});
+  await until(async()=>{const state=await read();return state.session.work==="IDLE" && state.approvals.length===0;},"stopped worker clears its pending approval");
+  assert.equal((await read()).session.current_turn.state,"COMPLETED","stopping a worker rewrote the completed parent turn");
+  ok("Ferma interrompe il worker pendente senza riscrivere o chiudere il turno principale già completato.");
   await page.waitFor(`!!document.querySelector("#browser-preview iframe")`,timeout,"automatic managed preview");
   await fs.writeFile(path.join(runDir,"work.png"),Buffer.from((await page.send("Page.captureScreenshot",{format:"png"})).data,"base64"));
   assert.equal((await read()).session.session.native.id,native);
