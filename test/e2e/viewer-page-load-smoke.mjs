@@ -285,6 +285,21 @@ async function exercisePage(browser, url, runDir) {
   ok(CLAIMS[0], "il caricamento della pagina non ha emesso nessuna eccezione non catturata");
   ok(CLAIMS[1], `il rail elenca la conversazione ${CONVERSATION_ID} letta dal disco del workspace`);
 
+  // Closing configuration must return to the live page without a stuck
+  // overlay. Exercise both close controls, including the provider tab.
+  phase = "apertura e chiusura configurazione";
+  for (const closeID of ['config-cancel-btn', 'config-modal-close']) {
+    await page.evaluate(`document.getElementById('topbar-more-btn').click()`);
+    await page.waitFor(`!document.getElementById('topbar-more-menu').classList.contains('hidden')`,10000,'il menu delle azioni aperto');
+    await page.evaluate(`document.getElementById('config-btn').click()`);
+    await page.waitFor(`!document.getElementById('config-modal').classList.contains('hidden') && document.getElementById('config-path').textContent.includes('config.yaml')`,10000,'la configurazione caricata');
+    await page.evaluate(`document.querySelector('[data-config-tab="execution"]').click()`);
+    await page.waitFor(`document.querySelector('[data-config-tab="execution"]').getAttribute('aria-selected') === 'true'`,10000,'la scheda provider selezionata');
+    await page.evaluate(`document.getElementById('${closeID}').click()`);
+    await page.waitFor(`document.getElementById('config-modal').classList.contains('hidden')`,10000,'la configurazione chiusa e la pagina disponibile');
+    assertNoExceptions('Eccezioni durante apertura e chiusura della configurazione:');
+  }
+
   // --- Il click su un thread apre la conversazione ---------------------------
   //
   // Questo è l'oracolo che il caricamento pulito da solo non dà: il gestore del

@@ -698,23 +698,24 @@
                                 <div class="form-grid config-form-grid">
                                     <div class="field full config-toggle-field">
                                         <span>Mantieni la Wiki automaticamente</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="wiki_enabled" /><span>Spenta di partenza. Da spenta, il flusso standard (inception, spec, piano, implementazione, revisione) non legge né aggiorna la Wiki; <code>archetipo wiki</code> e <code>/archetipo-wiki</code> restano disponibili su richiesta.</span></label>
+                                        <label class="config-toggle-row"><input type="checkbox" name="wiki_enabled" /><span>Spenta di partenza. La documentazione è facoltativa: <code>archetipo wiki</code> e <code>/archetipo-wiki</code> restano disponibili su richiesta anche con questa opzione spenta.</span></label>
                                     </div>
                                 </div>
                             </section>
                             <section class="config-group">
-                                <h4>Flusso con worktree</h4>
+                                <h4>Opzioni delle specifiche</h4>
+                                <p class="config-copy">Impostazioni per le operazioni CLI sulle specifiche. I lavori avviati dalla chat usano il proprio ambiente separato.</p>
                                 <div class="form-grid config-form-grid">
                                     <div class="field full config-toggle-field">
                                         <span>Abilita i worktree isolati</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="worktree_enabled" /><span>Un ramo e un worktree per spec, per la revisione e l'integrazione.</span></label>
+                                        <label class="config-toggle-row"><input type="checkbox" name="worktree_enabled" /><span>Un ramo e un worktree locale per le operazioni CLI su ciascuna specifica. Non fornisce isolamento di sicurezza del sistema operativo.</span></label>
                                     </div>
                                     <label class="field"><span>Ramo base</span><input type="text" name="worktree_base" /></label>
                                     <label class="field"><span>Directory dei worktree</span><input type="text" name="worktree_dir" /></label>
                                     <label class="field"><span>Prefisso dei rami</span><input type="text" name="worktree_branch_prefix" /></label>
                                     <div class="field full config-toggle-field">
                                         <span>Committa ogni spec automaticamente</span>
-                                        <label class="config-toggle-row"><input type="checkbox" name="git_auto_commit" /><span>Senza worktree, <code>archetipo spec review</code> committa l'incremento nella radice del progetto. Con i worktree il commit c'è sempre.</span></label>
+                                        <label class="config-toggle-row"><input type="checkbox" name="git_auto_commit" /><span>Opzione per <code>archetipo spec review</code>. Non approva il risultato del lavoro in chat e non pubblica la sua PR.</span></label>
                                     </div>
                                     <div class="field full config-toggle-field">
                                         <span>Registra il video della demo E2E</span>

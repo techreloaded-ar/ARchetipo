@@ -58,3 +58,9 @@ func ReadFile(path string) (body []byte, err error) {
 func Remove(path string) error {
 	return retryFileOperation(func() error { return os.Remove(path) })
 }
+
+// RemoveAll also covers lock directories: a Windows reader may temporarily
+// prevent deleting their owner file. The retry policy remains bounded.
+func RemoveAll(path string) error {
+	return retryFileOperation(func() error { return os.RemoveAll(path) })
+}
