@@ -57,7 +57,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment and its local files, retaining only committed work in Git")
 	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
 	root.AddCommand(deletionPlan, deletion)
-	for _, operation := range []string{"create", "show", "list", "propose", "approve", "ready", "feedback", "publish", "refresh"} {
+	for _, operation := range []string{"create", "show", "list", "propose", "approve", "ready", "feedback", "publish", "refresh", "reapprove-pr"} {
 		var file string
 		cmd := &cobra.Command{Use: operation, Short: operation + " a product increment"}
 		if operation == "create" || operation == "list" {
@@ -99,6 +99,8 @@ func newIncrementCmd(s streams) *cobra.Command {
 				value, err = service.Read(args[0])
 			case "refresh":
 				value, err = service.Refresh(cmd.Context(), args[0])
+			case "reapprove-pr":
+				value, err = service.ReapprovePR(cmd.Context(), args[0])
 			default:
 				var input struct {
 					Title                string   `json:"title"`
@@ -154,7 +156,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 			}
 			return iox.WriteOK(s.out, "increment", value)
 		}
-		if operation != "list" && operation != "show" && operation != "refresh" {
+		if operation != "list" && operation != "show" && operation != "refresh" && operation != "reapprove-pr" {
 			cmd.Flags().StringVar(&file, "file", "-", "JSON payload path, or - for stdin")
 		}
 		root.AddCommand(cmd)

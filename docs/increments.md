@@ -168,6 +168,9 @@ viewer. I comandi deterministici usano il normale envelope JSON
   classificazione mantiene il passaggio attraverso definizione e approvazione.
 - `increment publish <id> --file -`: `{"revision":N,"head_sha":"commit provato"}`.
 - `increment refresh <id>`: stato effettivo della PR e riconciliazione.
+- `increment reapprove-pr <id>`: approva la head attuale della PR quando è
+  cambiata dopo l'approvazione (merge del ramo base o rebase per i conflitti);
+  rifiuta se la PR è cambiata di nuovo dopo l'ultimo `refresh`.
 
 Le approvazioni standalone devono essere richieste dalla persona sulla
 versione effettivamente mostrata. Il testo dell'agente non sostituisce gli

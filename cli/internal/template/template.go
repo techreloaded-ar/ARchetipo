@@ -244,6 +244,8 @@ func builtin() Template {
 			{ID: "refresh", Label: "Controlla ora la PR", Statuses: []string{"PROPOSED"}, Prompts: []IncrementPrompt{
 				{Label: "Cosa succede adesso?", Text: "Cosa succede adesso con la preparazione al rilascio?"},
 			}},
+			{ID: "reapprove-pr", Label: "Approva la PR aggiornata", Statuses: []string{"PROPOSED"}, Primary: true,
+				Confirm: &IncrementConfirm{Title: "Approvare la PR com’è adesso?", Text: "La pull request è cambiata dopo la tua approvazione, per esempio per risolvere i conflitti con il ramo principale. Approvando la versione attuale il controllo della PR riprende e al merge l’incremento viene consegnato.", Label: "Sì, approvo la PR aggiornata"}},
 		},
 		IncrementPhases: []IncrementPhase{
 			{Label: "Definizione", Statuses: []string{"DISCOVERY"}},

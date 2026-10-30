@@ -867,3 +867,45 @@ func TestReadyPayloadDecodesThroughTheYAMLReaderOfTheCLI(t *testing.T) {
 		t.Fatalf("payload fields lost in decoding: %+v", result)
 	}
 }
+
+func TestPRHeadMovedAfterApprovalIsDeliveredOnlyOnceReapproved(t *testing.T) {
+	s := fixture(t)
+	remote(t, s)
+	r := ready(t, s, proposeApprove(t, s, create(t, s), story("US-001", "Excel")))
+	hosting := &fakeHosting{}
+	s.Hosting = hosting
+	r, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.PRMoved() {
+		t.Fatal("fresh PR reported as moved")
+	}
+	hosting.pr.HeadSHA = "merge-of-main"
+	if _, err = s.Refresh(context.Background(), r.ID); err == nil {
+		t.Fatal("moved PR head delivered")
+	}
+	moved, _ := s.Read(r.ID)
+	if !moved.PRMoved() || moved.PR.HeadSHA != "merge-of-main" || moved.ApprovedSHA != r.ApprovedSHA {
+		t.Fatalf("moved head not kept for the person to read: %+v", moved)
+	}
+	if want := "https://github.com/example/product/compare/" + r.ApprovedSHA + "...merge-of-main"; moved.PRCompareURL() != want {
+		t.Fatalf("compare url %q, want %q", moved.PRCompareURL(), want)
+	}
+	hosting.pr.HeadSHA = "moved-again"
+	if _, err = s.ReapprovePR(context.Background(), r.ID); err == nil {
+		t.Fatal("approved a head the person never saw")
+	}
+	again, _ := s.Read(r.ID)
+	if again.ApprovedSHA != r.ApprovedSHA || again.PR.HeadSHA != "moved-again" {
+		t.Fatalf("second move not shown: %+v", again)
+	}
+	current, err := s.ReapprovePR(context.Background(), r.ID)
+	if err != nil || current.ApprovedSHA != "moved-again" || current.PRMoved() {
+		t.Fatalf("re-approval failed: %+v %v", current, err)
+	}
+	hosting.pr.State = "MERGED"
+	if current, err = s.Refresh(context.Background(), r.ID); err != nil || current.Status != Delivered {
+		t.Fatalf("re-approved merge not delivered: %+v %v", current, err)
+	}
+}

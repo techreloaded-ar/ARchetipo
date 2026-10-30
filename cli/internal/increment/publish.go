@@ -358,7 +358,13 @@ func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
 			return r, err
 		}
 		if pr.HeadSHA != r.ApprovedSHA {
-			return r, iox.NewConflict("PR changed after business approval", "verify the changed result before marking it delivered", nil)
+			// The moved head is kept so the person can read the difference and
+			// approve it with ReapprovePR; delivery waits until then.
+			r.PR = pr
+			if err = s.save(r); err != nil {
+				return r, err
+			}
+			return r, iox.NewConflict("PR changed after business approval", "read the changed PR and approve it again before it is delivered", nil)
 		}
 		r.PR = pr
 		if pr.State == "MERGED" {
@@ -382,6 +388,35 @@ func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
 			}
 			r.Status = Delivered
 		}
+		return r, s.save(r)
+	})
+}
+
+// ReapprovePR approves the head the PR has now, after a merge of the base
+// branch or a rebase moved it past the approved one. The person approves the
+// head Refresh last showed: a head that moved again since is refused and shown.
+func (s *Service) ReapprovePR(ctx context.Context, id string) (Record, error) {
+	return s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
+		r, err := s.Read(id)
+		if err != nil {
+			return r, err
+		}
+		if r.PR == nil || r.Status != Proposed {
+			return r, iox.NewConflict("increment has no published PR", "publish its approved result first", nil)
+		}
+		pr, err := s.Hosting.Read(ctx, r.Workdir, r.PR.Number)
+		if err != nil {
+			return r, err
+		}
+		shown := r.PR.HeadSHA
+		r.PR = pr
+		if pr.HeadSHA != shown {
+			if err = s.save(r); err != nil {
+				return r, err
+			}
+			return r, iox.NewConflict("PR changed again after it was displayed", "read the current PR before approving it", nil)
+		}
+		r.ApprovedSHA = pr.HeadSHA
 		return r, s.save(r)
 	})
 }

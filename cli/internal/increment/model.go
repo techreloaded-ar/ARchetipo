@@ -4,6 +4,7 @@ package increment
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -83,6 +84,24 @@ type Record struct {
 	Published            map[string]string `json:"published_stories,omitempty"`
 	PublishedEpic        string            `json:"published_epic,omitempty"`
 }
+
+// PRMoved tells whether the published PR's head differs from the approved one,
+// as after a merge of the base branch or a rebase; PRCompareURL then links the
+// difference on the hosting.
+func (r Record) PRMoved() bool {
+	return r.Status == Proposed && r.PR != nil && r.ApprovedSHA != "" && r.PR.HeadSHA != r.ApprovedSHA
+}
+func (r Record) PRCompareURL() string {
+	if r.PR == nil {
+		return ""
+	}
+	i := strings.LastIndex(r.PR.URL, "/pull/")
+	if i < 0 {
+		return ""
+	}
+	return r.PR.URL[:i] + "/compare/" + r.ApprovedSHA + "..." + r.PR.HeadSHA
+}
+
 type PullRequest struct {
 	URL     string `json:"url"`
 	Number  int    `json:"number"`

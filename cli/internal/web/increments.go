@@ -107,6 +107,9 @@ func (c *incrementPRChecks) end(id string, err error) {
 	if err != nil {
 		check.err = err.Error()
 	}
+	if c.byID == nil {
+		c.byID = map[string]incrementPRCheck{}
+	}
 	c.byID[id] = check
 }
 func (c *incrementPRChecks) last(id string) incrementPRCheck {
@@ -324,6 +327,11 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		if action.ID == "approve-intent" && (len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Approved) {
 			continue
 		}
+		// Re-approval exists only while the PR head moved past the approved
+		// one; checking the PR again before that would only refuse again.
+		if (action.ID == "reapprove-pr" && !r.PRMoved()) || (action.ID == "refresh" && r.PRMoved()) {
+			continue
+		}
 		offered = append(offered, action)
 		view.Actions = append(view.Actions, incrementControl{ID: action.ID, Label: action.Label})
 	}
@@ -349,6 +357,9 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 	}
 	if r.Status == increment.Review {
 		steps = append(steps, incrementStepView{Kind: "open", Open: "preview", Label: "Apri l’anteprima"})
+	}
+	if r.PRMoved() {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "url", Target: r.PRCompareURL(), Tone: "warn", Label: "Leggi cosa è cambiato nella PR ↗"})
 	}
 	if r.Status == increment.Proposed && r.PR != nil && r.PR.URL != "" {
 		steps = append(steps, incrementStepView{Kind: "open", Open: "url", Target: r.PR.URL, Label: fmt.Sprintf("Apri la PR #%d su GitHub ↗", r.PR.Number)})
@@ -377,7 +388,9 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 	notes := []string{}
 	if r.Status == increment.Proposed {
 		notes = append(notes, "in attesa del merge della PR")
-		if check := ws.prChecks.last(r.ID); check.err != "" {
+		if r.PRMoved() {
+			notes = append(notes, "la PR è cambiata dopo la tua approvazione: leggi le modifiche e approvala di nuovo")
+		} else if check := ws.prChecks.last(r.ID); check.err != "" {
 			notes = append(notes, "ultimo controllo non riuscito: "+check.err)
 		} else if !check.at.IsZero() {
 			notes = append(notes, "controllata alle "+check.at.Format("15:04")+", in automatico")
@@ -583,9 +596,15 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 			message = fmt.Sprintf("La persona ha approvato il risultato e la preparazione al rilascio è avviata: pull request #%d (%s). Confermalo in una frase, senza altre azioni.", current.PR.Number, current.PR.URL)
 			display = fmt.Sprintf("Ho avviato la preparazione al rilascio: PR #%d su GitHub.", current.PR.Number)
 		}
-	case "refresh":
+	case "refresh", "reapprove-pr":
+		if action == "reapprove-pr" {
+			if current, err = service.ReapprovePR(ctx, current.ID); err != nil {
+				break
+			}
+		}
 		var removeErr error
 		current, removeErr, err = s.refreshIncrement(ctx, ws, current.ID)
+		ws.prChecks.end(current.ID, err)
 		if err == nil && current.Status == increment.Delivered {
 			if removeErr != nil {
 				view := s.incrementView(ctx, ws, current)
