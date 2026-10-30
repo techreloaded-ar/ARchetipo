@@ -46,6 +46,33 @@ Ask one focused question at a time. For a
 feedback round, concentrate on the requested delta and show its consequences.
 Do not write product code before the latest intent is approved.
 
+### Visual mockups
+
+Decide on your own whether the increment needs mockups; the person does not
+have to ask. It needs them when at least one holds: it introduces a new page,
+screen or route; it introduces a new user-facing component with its own layout
+(form, wizard, dashboard widget, modal flow, not a field or button added to an
+existing form); it restructures the layout of an existing page rather than
+changing copy, colours or styling of what is already there. A small UI change,
+or one whose rendering you are confident about, gets no mockup. When in doubt,
+make none, say so in one line, and let the person ask for them.
+
+A mockup here is an image and nothing else: a PNG per variant, two or three
+variants at most, each a static picture of the proposed screen. Produce it
+from a throwaway HTML or SVG draft rendered with headless Chrome
+(`--headless --screenshot=<file> --window-size=<w>,<h>`) or with the
+screenshot tool your harness offers, then delete the draft so the image is the
+only artifact. Write the images under `.archetipo/tmp/mockups/<revision>/` in
+the increment workdir: that directory is excluded from Git by the sandbox, so
+they never reach the increment branch or the PR, and `increment ready` still
+finds a clean tree. Show each image in the conversation as a Markdown image
+with its absolute path, name what differs between variants, and ask the person
+to choose. Record the chosen direction in words in the proposed intent and the
+affected stories; the image files are not the record.
+
+Don't invoke `/archetipo-design` or deliver HTML, CSS or prototype pages from
+this skill, unless the user explicitly asks for it.
+
 Propose the complete current intent and story set with:
 
 `archetipo -C <workdir> increment propose <id> --file -`
