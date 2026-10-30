@@ -265,7 +265,14 @@ async function main(){
   ok("Report letto dal worktree come testo inerte; riapertura ripetuta conserva la stessa sessione nativa.");
   assert.deepEqual(exceptions,[],"uncaught browser exceptions");
   ok("Primo messaggio → worktree e sessione; specifica senza conferma aggiuntiva; preview automatica; feedback e reload nello stesso lavoro; PR protetta.");
- } catch(error) {failure=error;console.error(error.stack || error);}
+ } catch(error) {
+  failure=error;console.error(error.stack || error);
+  if(page)try{
+   const diagnostics=await page.evaluate(`({text:document.body.innerText,previewState:document.querySelector('#browser-preview')?.dataset.state,startDisabled:document.querySelector('[data-preview="start"]')?.disabled,status:document.querySelector('.preview-status')?.textContent})`);
+   await fs.writeFile(path.join(runDir,"failure-page.json"),JSON.stringify(diagnostics,null,2));
+   await fs.writeFile(path.join(runDir,"failure.png"),Buffer.from((await page.send("Page.captureScreenshot",{format:"png"})).data,"base64"));
+  }catch(diagnosticError){console.error("Failure evidence:",diagnosticError.message);}
+ }
  finally {
   if(browser)await browser.close();
   if(view)await stopProcess(view.child,run);

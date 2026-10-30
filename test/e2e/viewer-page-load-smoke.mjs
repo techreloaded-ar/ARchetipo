@@ -640,11 +640,11 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.waitFor(`!!document.querySelector('[data-run-approval-id="scroll-approval"]')`, 10000, 'la decisione nella conversazione di incremento');
   const compactIncrement = await page.evaluate(`({height:document.querySelector('.conv-increment').getBoundingClientRect().height,open:!!document.querySelector('.conv-increment-panel'),text:document.querySelector('.conv-increment').textContent})`);
   if (compactIncrement.open || compactIncrement.height > 150 || !compactIncrement.text.includes('Specifica e decisioni')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
-  await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click(); document.querySelector('[data-increment-section="intent"]>summary').click()`);
+  await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click(); const summary=document.querySelector('[data-increment-section="intent"]>summary'); summary.click(); summary.focus(); window.incrementFocusedSummary=summary;`);
   await page.waitFor(`document.querySelector('[data-increment-section="intent"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
   const drawer = await page.evaluate(`(() => {const body=document.querySelector('.conv-increment-body');body.scrollTop=120;return {reads:window.historyCursors.length,top:body.scrollTop,width:document.querySelector('.conv-increment-panel').getBoundingClientRect().width};})()`);
   if (drawer.width > 390 || drawer.width < 250) throw new Error('Laterale mobile fuori schermo: '+JSON.stringify(drawer));
-  await page.waitFor(`window.historyCursors.length > ${drawer.reads}`,10000,'un aggiornamento con il laterale aperto');
+  await page.waitFor(`document.querySelector('[data-increment-section="intent"]>summary') !== window.incrementFocusedSummary && document.activeElement === document.querySelector('[data-increment-section="intent"]>summary')`,10000,'un aggiornamento DOM con il focus conservato sul riepilogo del laterale');
   const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="intent"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
   if (!drawerAfter.open || Math.abs(drawerAfter.top-drawer.top)>2) throw new Error('Il polling perde il laterale: '+JSON.stringify({drawer,drawerAfter}));
   await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-mobile.png'),Buffer.from(result.data,'base64')));

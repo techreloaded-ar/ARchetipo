@@ -28,7 +28,12 @@ if(action==='serve'){
   if(req.url==='/stop'){server.close(()=>process.exit(0));server.closeAllConnections();}
  });
  server.listen(port,'127.0.0.1',()=>{
-  fs.writeFileSync(record,JSON.stringify({owner,name,port,pid:process.pid}));
+  // The start command reads concurrently with this listener callback. Publish
+  // the complete ownership record atomically; truncating it in place exposes
+  // empty JSON to that reader during an otherwise healthy restart.
+  const next=record+'.'+process.pid+'.tmp';
+  fs.writeFileSync(next,JSON.stringify({owner,name,port,pid:process.pid}));
+  fs.renameSync(next,record);
  });
 }else if(action==='start'){
  const previous=read();

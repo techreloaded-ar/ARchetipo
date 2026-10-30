@@ -3648,7 +3648,7 @@
 	function bindModelFieldRedraw(provider) {
 		if (!provider || !provider.model_field) return;
 		const control = executionFields.querySelector(
-			`[name="provider_${cssEscape(provider.model_field)}"]`,
+			`[name="provider_${CSS.escape(provider.model_field)}"]`,
 		);
 		if (!control) return;
 		control.addEventListener("change", () => {
@@ -3662,7 +3662,7 @@
 		const config = {};
 		(provider.config_fields || []).forEach((f) => {
 			const input = executionFields.querySelector(
-				`[name="provider_${cssEscape(f.name)}"]`,
+				`[name="provider_${CSS.escape(f.name)}"]`,
 			);
 			if (!input) return;
 			const raw = input.value.trim();
@@ -3697,7 +3697,7 @@
 			.forEach((label) => label.classList.remove("field-error"));
 		if (!name) return;
 		const label = executionFields.querySelector(
-			`[data-provider-field="${cssEscape(name)}"]`,
+			`[data-provider-field="${CSS.escape(name)}"]`,
 		);
 		if (!label) return;
 		label.classList.add("field-error");
@@ -5772,7 +5772,7 @@
 				else window.WorkspacePanels?.close();
 				if (incrementStory) conversationIncrementSections["current-story-" + incrementStory.getAttribute("data-increment-story")] = true;
 				renderConversationPanel();
-				const target = open ? conversationEl.parentElement.querySelector(incrementStory ? '[data-increment-section="current-story-' + cssEscape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
+				const target = open ? conversationEl.parentElement.querySelector(incrementStory ? '[data-increment-section="current-story-' + CSS.escape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
 				target?.focus({preventScroll:true});
 				if (incrementStory) target?.scrollIntoView({block:"nearest"});
 				return;
@@ -7885,8 +7885,8 @@
 		let incrementFocusSelector = "";
 		if (incrementFocused?.closest(".conv-increment-panel")) {
 			const section = incrementFocused.closest("[data-increment-section]");
-			if (incrementFocused.tagName === "SUMMARY" && section) incrementFocusSelector = '[data-increment-section="' + cssEscape(section.getAttribute("data-increment-section")) + '"] > summary';
-			else if (incrementFocused.hasAttribute("data-increment-action")) incrementFocusSelector = '[data-increment-action="' + cssEscape(incrementFocused.getAttribute("data-increment-action")) + '"]';
+			if (incrementFocused.tagName === "SUMMARY" && section) incrementFocusSelector = '[data-increment-section="' + CSS.escape(section.getAttribute("data-increment-section")) + '"] > summary';
+			else if (incrementFocused.hasAttribute("data-increment-action")) incrementFocusSelector = '[data-increment-action="' + CSS.escape(incrementFocused.getAttribute("data-increment-action")) + '"]';
 			else if (incrementFocused.hasAttribute("data-increment-panel")) incrementFocusSelector = '[data-increment-panel="close"]';
 			else if (incrementFocused.classList.contains("conv-increment-panel")) incrementFocusSelector = '.conv-increment-panel';
 		}
