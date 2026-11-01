@@ -11,6 +11,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 )
 
 func productWork(t *testing.T) (*Service, Record) {
@@ -286,5 +287,74 @@ func TestCandidateRequiresMachineEvidenceAndRetainsApprovalReports(t *testing.T)
 	}
 	if _, err = s.Publish(ctx, r.ID, r.ReadySHA, 1); err == nil {
 		t.Fatal("published without original approval evidence")
+	}
+}
+
+func TestProductSimulationsAndSquashPreserveDossierAndCandidate(t *testing.T) {
+	s, r := productWork(t)
+	ctx := context.Background()
+	var err error
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "A cancellation button"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe := []byte(`{"version":1,"directory":".","url":"http://127.0.0.1:3000","simulated":["calendar"]}`)
+	if _, err = preview.Configure(r.Workdir, recipe); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, r.Workdir, "add", preview.RecipePath)
+	runGit(t, r.Workdir, "commit", "-m", "test: declare preview integrations")
+	r = ready(t, s, r)
+	result := *r.Result
+	result.Simulated = []string{"invented"}
+	result.SquashCommit = &SquashCommit{Title: "feat: cancel bookings", Body: "Allow customers to cancel before departure."}
+	r, err = s.Ready(ctx, r.ID, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Result.Simulated) != 1 || r.Result.Simulated[0] != "calendar" {
+		t.Fatalf("untrusted simulations: %+v", r.Result)
+	}
+	remote(t, s)
+	hosting := &fakeHosting{}
+	s.Hosting = hosting
+	approved := r.ReadySHA
+	r, err = s.Publish(ctx, r.ID, approved, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hosting.title != "feat: cancel bookings" || !strings.Contains(hosting.body, "Allow customers to cancel") || !strings.Contains(hosting.body, "Original request") || !strings.Contains(hosting.body, "calendar") || !strings.Contains(hosting.body, approved) {
+		t.Fatalf("squash lost portable dossier: %q %s", hosting.title, hosting.body)
+	}
+	hosting.pr.State = "MERGED"
+	hosting.pr.HeadSHA = "developer-head"
+	r, err = s.Refresh(ctx, r.ID)
+	if err != nil || r.ApprovedSHA != approved || r.IntegrationSHA != "developer-head" {
+		t.Fatalf("lost approval: %+v %v", r, err)
+	}
+	if _, err = os.Stat(r.Workdir); err != nil {
+		t.Fatal("refresh removed the environment", err)
+	}
+}
+
+func TestSimulationChangesRevokeCandidateAndMalformedSquashIsRejected(t *testing.T) {
+	s, r := productWork(t)
+	ctx := context.Background()
+	var err error
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Cancellation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = ready(t, s, r)
+	invalid := *r.Result
+	invalid.SquashCommit = &SquashCommit{Title: "two\nlines"}
+	if _, err = s.Ready(ctx, r.ID, invalid); err == nil {
+		t.Fatal("accepted multiline squash title")
+	}
+	if _, err = preview.Configure(r.Workdir, []byte(`{"version":1,"directory":".","url":"http://127.0.0.1:3000","simulated":["new-fake"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.VerifyCandidate(ctx, r); err == nil {
+		t.Fatal("changed simulations retained approval readiness")
 	}
 }

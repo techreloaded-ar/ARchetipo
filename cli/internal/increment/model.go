@@ -57,11 +57,18 @@ type Revision struct {
 	HeadSHA        string           `json:"head_sha,omitempty"`
 	Change         *FeedbackRequest `json:"change,omitempty"`
 }
+type SquashCommit struct {
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+}
+
 type Result struct {
-	Evidence   []verification.Result `json:"evidence,omitempty"`
-	Summary    string                `json:"summary"`
-	PreviewURL string                `json:"preview_url,omitempty"`
-	Checks     []string              `json:"checks"`
+	Simulated    []string              `json:"simulated,omitempty"`
+	SquashCommit *SquashCommit         `json:"squash_commit,omitempty"`
+	Evidence     []verification.Result `json:"evidence,omitempty"`
+	Summary      string                `json:"summary"`
+	PreviewURL   string                `json:"preview_url,omitempty"`
+	Checks       []string              `json:"checks"`
 }
 type Learning struct {
 	Observation string    `json:"observation"`

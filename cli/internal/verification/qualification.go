@@ -65,9 +65,15 @@ func (s *Service) Qualify(ctx context.Context, assets []string) (Qualification, 
 		return q, err
 	}
 	q.InputKey, q.BundleDigest = key, digest
+	// Only materialized local configuration may change in the first preparation.
+	// All other declared source inputs and helpers must retain their initial key.
+	sourceKey, err := s.qualificationSourceKey(assets)
+	if err != nil {
+		return q, err
+	}
 	// Two actual preparations expose non-repeatable setup. The third must reuse
 	// the second preparation and still execute readiness probes.
-	for _, fresh := range []bool{true, true, false} {
+	for index, fresh := range []bool{true, true, false} {
 		report, runErr := s.Execute(ctx, "prepare", "", "", fresh)
 		q.Reports = append(q.Reports, report)
 		if err = recordfile.WriteAtomic(s.dir(), q.ReportPath, ".qualification-", q); err != nil {
@@ -78,6 +84,20 @@ func (s *Service) Qualify(ctx context.Context, assets []string) (Qualification, 
 		}
 		if !report.Passed || !report.Stable {
 			return q, nil
+		}
+		if index == 0 {
+			afterSource, sourceErr := s.qualificationSourceKey(assets)
+			if sourceErr != nil {
+				return q, sourceErr
+			}
+			if afterSource != sourceKey {
+				return q, nil
+			}
+			key, digest, err = s.qualificationKey(assets)
+			if err != nil {
+				return q, err
+			}
+			q.InputKey, q.BundleDigest = key, digest
 		}
 	}
 	after, _, err := s.qualificationKey(assets)
@@ -160,4 +180,33 @@ func validateCandidateAssets(recipe Recipe, bundle environmentrecipe.Recipe) err
 		}
 	}
 	return nil
+}
+
+func (s *Service) qualificationSourceKey(assets []string) (string, error) {
+	recipe, err := LoadLocal(s.Root)
+	if err != nil {
+		return "", err
+	}
+	local := map[string]bool{}
+	for _, path := range recipe.LocalFiles {
+		local[path] = true
+	}
+	inputs := []string{}
+	for _, path := range recipe.Inputs {
+		if !local[path] {
+			inputs = append(inputs, path)
+		}
+	}
+	// Keep declared paths in the recipe hash while omitting their contents from
+	// this additional stability check. The full qualification key hashes both.
+	raw, err := environmentrecipe.Collect(s.Root, assets)
+	if err != nil {
+		return "", err
+	}
+	declared := recipe.LocalFiles
+	recipe.LocalFiles = nil
+	return fingerprint(s.Root, recipe, inputs, struct {
+		Digest     string
+		LocalFiles []string
+	}{environmentrecipe.Digest(raw), declared})
 }

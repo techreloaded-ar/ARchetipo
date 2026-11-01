@@ -11,6 +11,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 type incrementControl struct {
@@ -23,7 +24,31 @@ type incrementStoryView struct {
 	StatusLabel         string `json:"status_label"`
 	Active              bool   `json:"active"`
 }
+type incrementPhaseView struct {
+	Label string `json:"label"`
+	State string `json:"state"` // done, current, todo
+}
+
+// incrementStepView is one of the next steps offered beside the composer. A
+// decision or action takes the increment action named by Action; a prompt only
+// fills the composer with Prompt; an open shows Open (preview, details,
+// conversation or url) at Target.
+type incrementStepView struct {
+	Kind    string                     `json:"kind"`
+	Label   string                     `json:"label"`
+	Action  string                     `json:"action,omitempty"`
+	Prompt  string                     `json:"prompt,omitempty"`
+	Open    string                     `json:"open,omitempty"`
+	Target  string                     `json:"target,omitempty"`
+	Tone    string                     `json:"tone,omitempty"`
+	Confirm *template.IncrementConfirm `json:"confirm,omitempty"`
+}
 type incrementView struct {
+	ResultNotice     string               `json:"result_notice,omitempty"`
+	Phases           []incrementPhaseView `json:"phases,omitempty"`
+	NextSteps        []incrementStepView  `json:"next_steps"`
+	NextStepsLabel   string               `json:"next_steps_label,omitempty"`
+	NextStepsNote    string               `json:"next_steps_note,omitempty"`
 	CandidateLabel   string               `json:"candidate_label,omitempty"`
 	VerificationNote string               `json:"verification_note,omitempty"`
 	QuickActions     []incrementControl   `json:"quick_actions"`
@@ -53,6 +78,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		return view
 	}
 	view.StatusLabel = tpl.IncrementStatusLabel(r.Status)
+	if r.Result != nil {
+		view.ResultNotice = increment.SimulatedNotice(r.Result.Simulated)
+	}
 	if r.Status == increment.Concluded {
 		view.StatusLabel = "Apprendimento registrato"
 	}
@@ -91,7 +119,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		case "waiting":
 			view.ActivityLabel = "Ambiente: serve il tuo intervento"
 			view.Busy = true
-			view.Note = "Apri Preview e Dettagli ambiente per rispondere nella sessione tecnica."
+			view.Note = "Apri la conversazione Ambiente di sviluppo dai prossimi passi o dal rail."
 		case "error":
 			view.ActivityLabel = "Ambiente da verificare"
 			view.Note = environment.Error
@@ -119,6 +147,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		view.PreviewAutoStart = false
 		return view
 	}
+	offered := []template.IncrementAction{}
 	for _, action := range tpl.IncrementActions {
 		allowed := false
 		for _, status := range action.Statuses {
@@ -135,11 +164,14 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		if action.ID == "approve-intent" {
 			continue
 		}
+		offered = append(offered, action)
 		view.Actions = append(view.Actions, incrementControl{ID: action.ID, Label: action.Label})
 		if action.ID == "publish" || action.ID == "refresh" {
 			view.QuickActions = append(view.QuickActions, incrementControl{ID: action.ID, Label: action.Label})
 		}
 	}
+	view.Phases = incrementPhases(tpl, r.Status)
+	s.incrementNextSteps(ws, r, offered, &view)
 	return view
 }
 func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, record conversationlog.Record, view *conversationView) {
@@ -159,6 +191,9 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	view.RemovalChoiceRequired = true
 	current := s.incrementView(ctx, ws, r)
 	view.Increment = &current
+	if r.Status == increment.Proposed && !current.Busy {
+		s.checkIncrementPR(ws, r.ID)
+	}
 }
 func incrementPrompt(r increment.Record, message string) string {
 	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork in the dedicated worktree %s. Read the persisted increment before acting. Keep product changes in this worktree; never modify the parent backlog or open a PR before the business approval. This worktree is local working separation, not an OS security sandbox. Environment configuration and repair belong to /archetipo-environment in its separate technical session. That session may publish the common recipe and its non-secret helpers through archetipo execution environment publish from this worktree; this does not publish product code or require manual edits in the parent checkout. Respect the harness's actual permissions and report missing capabilities. You are running inside ARchetipo View: the viewer owns preview startup. Do not invoke execution preview run or launch another application server in this session. Configure the managed recipe and finish the turn so the viewer can launch it. If browser control is unavailable, report that limitation and let the person try the managed Preview; do not keep the turn open waiting for manual validation.\n%s\nWorkflow conversation: %s", r.ID, message, r.Workdir, sessionInputGuidance, r.ConversationID)
@@ -366,4 +401,77 @@ func (s *Server) handleIncrementDossier(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": record.ID, "markdown": increment.Dossier(record)})
+}
+
+func incrementPhases(tpl template.Template, status string) []incrementPhaseView {
+	current := -1
+	for i, phase := range tpl.IncrementPhases {
+		for _, candidate := range phase.Statuses {
+			if candidate == status {
+				current = i
+			}
+		}
+	}
+	if current < 0 {
+		return nil
+	}
+	phases := make([]incrementPhaseView, len(tpl.IncrementPhases))
+	for i, phase := range tpl.IncrementPhases {
+		phases[i] = incrementPhaseView{Label: phase.Label, State: "todo"}
+		if i < current {
+			phases[i].State = "done"
+		} else if i == current {
+			phases[i].State = "current"
+		}
+	}
+	return phases
+}
+
+func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, offered []template.IncrementAction, view *incrementView) {
+	steps := []incrementStepView{}
+	if environment := readEnvironmentOperation(r.Workdir); environment.ConversationID != "" {
+		switch environment.State {
+		case "waiting":
+			steps = append(steps, incrementStepView{Kind: "open", Open: "conversation", Target: environment.ConversationID, Tone: "warn", Label: "L’ambiente di sviluppo ti chiede una risposta · Apri"})
+		case "error":
+			steps = append(steps, incrementStepView{Kind: "open", Open: "conversation", Target: environment.ConversationID, Tone: "warn", Label: "L’ambiente di sviluppo ha un problema · Apri"})
+		}
+	}
+	if r.Status == increment.Review {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "preview", Label: "Apri l’anteprima"})
+	}
+	if r.Status == increment.Proposed && r.PR != nil && r.PR.URL != "" {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "url", Target: r.PR.URL, Label: fmt.Sprintf("Apri la PR #%d su GitHub ↗", r.PR.Number)})
+	}
+	primary := false
+	for _, action := range offered {
+		kind := "action"
+		if action.Primary {
+			kind, primary = "decision", true
+		}
+		steps = append(steps, incrementStepView{Kind: kind, Action: action.ID, Label: action.Label, Confirm: action.Confirm})
+	}
+	for _, action := range offered {
+		for _, prompt := range action.Prompts {
+			steps = append(steps, incrementStepView{Kind: "prompt", Label: prompt.Label, Prompt: prompt.Text})
+		}
+	}
+	view.NextSteps = steps
+	view.NextStepsLabel = "Prossimi passi"
+	if !primary {
+		view.NextStepsLabel = view.StatusLabel
+	}
+	notes := []string{}
+	if r.Status == increment.Proposed {
+		notes = append(notes, "in attesa del merge della PR")
+		if check := ws.prChecks.last(r.ID); check.err != "" {
+			notes = append(notes, "ultimo controllo non riuscito: "+check.err)
+		} else if !check.at.IsZero() {
+			notes = append(notes, "controllata automaticamente alle "+check.at.Format("15:04"))
+		}
+
+	} else if !primary {
+		notes = append(notes, view.ActivityLabel)
+	}
+	view.NextStepsNote = strings.Join(notes, " · ")
 }

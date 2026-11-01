@@ -111,6 +111,7 @@ const CLAIMS = [
   "le domande delle personalità accettano scelte cliccabili, selezioni multiple e testo libero, conservando la risposta dopo un errore e il polling",
   "una lettura della chat sospesa viene annullata e riprovata senza reload, perdite di messaggi o della bozza",
   "salvare il primo provider rende subito disponibile il compositore senza riavvio o vecchi avvisi",
+  "questionario a passi: scelte multiple, testo libero e bozze conservate",
 ];
 
 // One entry per proved statement, for the report.
@@ -180,6 +181,8 @@ async function main() {
     await exerciseProviderOnboarding(browser, view.url, runDir);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
+    await exerciseQuestionnaire(browser, view.url, runDir);
+    await exerciseIncrementStepsAndReleasedPreview(browser, view.url);
     await exerciseDiscoveryQuestions(browser, view.url, runDir);
     await exerciseLiveConversationPagination(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
@@ -823,12 +826,12 @@ async function exerciseDiscoveryQuestions(browser, url, runDir) {
   await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
   await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-1"]')`,10000,'la domanda successiva di Livia');
   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
-  await page.evaluate(`document.querySelectorAll('[data-conversation-input-option]').forEach(option=>option.closest('label').click())`);
+  await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-input-option]')).map(option=>option.value).forEach(value=>document.querySelector('[data-conversation-input-option][value="'+value+'"]').closest('label').click())`);
   if (!await page.evaluate(`document.querySelectorAll('[data-conversation-input-option]:checked').length===2`)) throw new Error('Le risposte multiple si escludono');
   await page.send('Page.captureScreenshot',{format:'png'}).then(shot=>fs.writeFile(path.join(runDir,'discovery-mobile.png'),Buffer.from(shot.data,'base64')));
   await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
   await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-2"]')`,10000,'la domanda con risposta personale');
-  await page.evaluate(`(() => {document.querySelector('[data-conversation-input-option]').closest('label').click();const field=document.querySelector('[data-conversation-input-text]');field.value='Il mio esempio concreto';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await page.evaluate(`(() => {document.querySelector('[data-conversation-input-other]').click();const field=document.querySelector('[data-conversation-input-text]');field.value='Il mio esempio concreto';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   if (await page.evaluate(`!!document.querySelector('[data-conversation-input-option]:checked')`)) throw new Error('Il testo libero conserva una scelta incompatibile');
   await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
   await page.waitFor(`window.discoveryAnswers.length===4 && !document.querySelector('[data-conversation-input-form]')`,10000,'tutte le risposte consegnate');
@@ -939,6 +942,79 @@ async function exercisePermissionComposer(browser, url, runDir) {
   ok("compositore espandibile", "prompt a tutta larghezza con proposte aperte, menu unificato, descrizioni leggibili e permessi accessibili anche a 390px");
   if (exceptions.length) throw new Error(`Eccezioni nel selettore dei permessi: ${JSON.stringify(exceptions)}`);
   ok(CLAIMS[11], "Permessi mostra solo il catalogo del provider, salva la scelta e la conserva cambiando modello con richieste ordinate");
+  await page.close();
+}
+
+// The questionnaire is exercised in the browser because its behaviour lives
+// across two files: the renderer draws one question at a time from the drafts
+// and the step, and the page writes both from what the person does. A pure
+// renderer test proves the drawing; only the page proves that choosing,
+// typing, moving and sending leave the server the answers it was given.
+async function exerciseQuestionnaire(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {source: `
+    const originalFetch = window.fetch.bind(window);
+    window.questionnaireAnswers = [];
+    const questions = [
+      {id:'Quale database?',header:'Database',prompt:'Quale database?',allow_text:true,options:[{value:'SQLite',label:'SQLite',description:'Un file sul computer'},{value:'Postgres',label:'Postgres',description:'Un servizio a parte'}]},
+      {id:'Quali sezioni includo?',header:'Sezioni',prompt:'Quali sezioni includo?',multiple:true,allow_text:true,options:[{value:'Introduzione',label:'Introduzione'},{value:'Conclusione',label:'Conclusione'}]},
+    ];
+    let pending = [{id:'input-q',title:'Rispondi all’agente',payload:{questions},questions}];
+    const view = () => ({available:true,provider_id:'fixture',conversation:{id:'questionnaire-fixture',state:'ACTIVE'},session:{work:pending.length ? 'WAITING_INPUT' : 'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:pending,pending_approvals:[]},events:[{id:1,seq:1,at:'2026-01-01T12:00:00Z',kind:'text',text:'Ho due domande prima di procedere.'}],last_id:1,approvals:[],runs:[]});
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'questionnaire-fixture',title:'Questionario fixture',live:true,message_count:1}],closed_limit:20});
+      if (path === '/api/workspace/conversations/questionnaire-fixture') return json(view());
+      if (path === '/api/workspace/conversations/questionnaire-fixture/inputs/input-q' && method === 'POST') { window.questionnaireAnswers.push(JSON.parse(options.body)); pending = []; return json(view()); }
+      if (path === '/api/workspace/conversations/questionnaire-fixture/model-choice') return json({available:false});
+      if (path === '/api/workspace/activities') return json({items:[]});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input, options);
+    };
+  `});
+  await page.send("Page.navigate", {url});
+  await page.once("Page.loadEventFired", 30000, "la pagina del questionario");
+  const form = '[data-conversation-input-form="input-q"]';
+  await page.waitFor(`!!document.querySelector('${form} [data-conversation-input-question]')`, 10000, "il questionario della domanda in sospeso");
+  const opening = await page.evaluate(`(() => { const f = document.querySelector('${form}'); return {prompt:f.querySelector('.conv-input-prompt').textContent, tabs:Array.from(f.querySelectorAll('[role="tab"]')).map(t => t.textContent.trim()), counter:f.querySelector('.conv-input-counter').textContent, radios:f.querySelectorAll('input[type="radio"]').length, otherHidden:f.querySelector('.conv-input-other + .conv-input-text').hidden, submit:!!f.querySelector('[type="submit"]')}; })()`);
+  if (opening.prompt !== 'Quale database?' || opening.tabs.join('|') !== 'Database|Sezioni' || opening.counter !== '1 di 2' || opening.radios !== 3 || !opening.otherHidden || opening.submit) throw new Error('Il questionario non apre sulla prima domanda: ' + JSON.stringify(opening));
+  // Forward without an answer is refused where the person is, on the same question.
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="next"]').click()`);
+  await page.waitFor(`document.body.textContent.includes('Rispondi alla domanda prima di continuare')`, 10000, "il rifiuto di avanzare senza risposta");
+  if (await page.evaluate(`document.querySelector('${form} .conv-input-prompt').textContent`) !== 'Quale database?') throw new Error('Il questionario è avanzato senza risposta');
+  // "Altro" opens its field, focused, and the words typed become the answer.
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-other]').click()`);
+  await page.waitFor(`document.querySelector('${form} .conv-input-other + .conv-input-text')?.hidden === false && document.activeElement === document.querySelector('${form} [data-conversation-input-text]')`, 10000, "il campo di «Altro» aperto e a fuoco");
+  await page.evaluate(`(() => { const t = document.querySelector('${form} [data-conversation-input-text]'); t.value = 'MariaDB'; t.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="1"]').click()`);
+  await page.waitFor(`document.querySelector('${form} .conv-input-prompt')?.textContent === 'Quali sezioni includo?'`, 10000, "la seconda domanda dalla sua scheda");
+  const second = await page.evaluate(`(() => { const f = document.querySelector('${form}'); return {answered:f.querySelector('[data-conversation-input-step="0"]').classList.contains('is-answered'), boxes:f.querySelectorAll('input[type="checkbox"]').length, radios:f.querySelectorAll('input[type="radio"]').length, submitDisabled:f.querySelector('[type="submit"]').disabled, hint:f.querySelector('.conv-input-hint').textContent}; })()`);
+  if (!second.answered || second.boxes !== 3 || second.radios !== 0 || !second.submitDisabled || second.hint !== 'Scegli una o più opzioni') throw new Error('La domanda a scelta multipla non è disegnata come tale: ' + JSON.stringify(second));
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-option][value="Introduzione"]').click()`);
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-option][value="Conclusione"]').click()`);
+  await page.waitFor(`document.querySelector('${form} [type="submit"]')?.disabled === false`, 10000, "l’invio abilitato a risposte complete");
+  const screenshot = await page.send('Page.captureScreenshot', {format:'png',captureBeyondViewport:false});
+  await fs.writeFile(path.join(runDir, 'questionnaire.png'), Buffer.from(screenshot.data, 'base64'));
+  // Back and forward keep every answer: the drafts outlive the question drawn.
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="prev"]').click()`);
+  await page.waitFor(`document.querySelector('${form} .conv-input-prompt')?.textContent === 'Quale database?'`, 10000, "la prima domanda ritrovata con Indietro");
+  const kept = await page.evaluate(`(() => { const f = document.querySelector('${form}'); return {other:f.querySelector('[data-conversation-input-other]').checked, text:f.querySelector('[data-conversation-input-text]').value, hidden:f.querySelector('.conv-input-other + .conv-input-text').hidden}; })()`);
+  if (!kept.other || kept.text !== 'MariaDB' || kept.hidden) throw new Error('La risposta libera non sopravvive al cambio di domanda: ' + JSON.stringify(kept));
+  await page.evaluate(`document.querySelector('${form} [data-conversation-input-step="next"]').click()`);
+  await page.waitFor(`document.querySelectorAll('${form} [data-conversation-input-option]:checked').length === 2`, 10000, "le scelte multiple ritrovate con Avanti");
+  await page.evaluate(`document.querySelector('${form} [type="submit"]').click()`);
+  await page.waitFor(`window.questionnaireAnswers.length === 1 && !document.querySelector('${form}')`, 10000, "le risposte inviate e il questionario chiuso");
+  const sent = await page.evaluate(`window.questionnaireAnswers[0]`);
+  const expected = {answers:{'Quale database?':['MariaDB'],'Quali sezioni includo?':['Introduzione','Conclusione']}};
+  if (JSON.stringify(sent) !== JSON.stringify(expected)) throw new Error('Il server ha ricevuto risposte diverse da quelle date: ' + JSON.stringify(sent));
+  if (exceptions.length) throw new Error('Eccezioni nel questionario: ' + JSON.stringify(exceptions));
+  ok(CLAIMS[CLAIMS.length - 1], "il questionario rifiuta di avanzare senza risposta, apre «Altro» a fuoco, disegna checkbox per la scelta multipla, conserva le bozze tra le domande e invia esattamente le risposte date");
   await page.close();
 }
 
@@ -1536,4 +1612,50 @@ if (path.resolve(process.argv[1] || "") === __filename) {
     console.error(`\nFAIL: ${error.message}`);
     process.exit(1);
   });
+}
+
+async function exerciseIncrementStepsAndReleasedPreview(browser, url) {
+ const page=await browser.newPage();
+ const exceptions=[];
+ page.on('Runtime.exceptionThrown',p=>exceptions.push(p.exceptionDetails));
+ await page.send('Runtime.enable');await page.send('Page.enable');
+ await page.send('Page.addScriptToEvaluateOnNewDocument',{source:`
+ const originalFetch=window.fetch.bind(window);
+ window.guidedPosts=[];window.guidedReopens=0;window.guidedMessages=[];
+ let active=false;
+ const increment={id:'guided-work',title:'Lavoro guidato',ready_sha:'displayed-candidate',revisions:[{number:3,intent:'Specifica'}],next_steps_label:'Prossimi passi',result_notice:'Integrazione calendario simulata',next_steps:[{kind:'prompt',label:'Suggerimento',prompt:'Vorrei cambiare: '},{kind:'decision',action:'publish-fixture',label:'Approva candidato',confirm:{title:'Aprire la PR?',text:'Pubblica il candidato mostrato',label:'Conferma candidato'}}]};
+ const view=()=>({available:true,conversation:{id:'guided-fixture',state:active?'ACTIVE':'CLOSED'},session:{work:'IDLE',archive:'OPEN',connection:active?'CONNECTED':'RELEASED',recovery:'RESUMABLE',pending_inputs:[],pending_approvals:[]},increment,events:[{id:1,seq:1,kind:'text',text:'Risultato da provare.'}],last_id:1,runs:[],approvals:[]});
+ window.fetch=async(input,options={})=>{
+  const path=new URL(typeof input==='string'?input:input.url,location.href).pathname;
+  const method=options.method||'GET';const json=body=>new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
+  if(path==='/api/workspace/conversations'&&method==='GET')return json({available:true,conversations:[{id:'guided-fixture',title:'Lavoro guidato',live:true,message_count:1}],closed_limit:20});
+  if(path==='/api/workspace/conversations/guided-fixture')return json(view());
+  if(path==='/api/workspace/conversations/guided-fixture/reopen'){window.guidedReopens++;active=true;return json(view());}
+  if(path==='/api/workspace/conversations/guided-fixture/messages'){window.guidedMessages.push(JSON.parse(options.body));return json(view());}
+  if(path==='/api/increments/guided-work/publish-fixture'){window.guidedPosts.push(JSON.parse(options.body));return json(increment);}
+  if(path==='/api/workspace/conversations/guided-fixture/model-choice')return json({available:false});
+  if(path==='/api/workspace/activities')return json({items:[]});
+  if(path==='/api/workspace/runs')return json({runs:[]});
+  return originalFetch(input,options);
+ };
+ `});
+ await page.send('Page.navigate',{url});await page.once('Page.loadEventFired',30000,'il lavoro guidato');
+ await page.waitFor(`!!document.querySelector('[data-conversation-id="guided-fixture"]')`,10000,'la conversazione guidata');
+ await page.evaluate(`document.querySelector('[data-conversation-id="guided-fixture"]').click()`);
+ await page.waitFor(`!!document.querySelector('[data-increment-step-prompt]')`,10000,'i prossimi passi nel composer');
+ await page.evaluate(`(()=>{const field=document.querySelector('.conv-composer-input');field.value='Bozza conservata';field.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-increment-step-prompt]').click();})()`);
+ if(!await page.evaluate(`document.querySelector('.conv-composer-input').value.includes('Bozza conservata')&&document.querySelector('.conv-composer-input').value.includes('Vorrei cambiare:')&&window.guidedPosts.length===0`))throw new Error('Il suggerimento ha perso o inviato la bozza');
+ await page.evaluate(`document.querySelector('[data-increment-step-action]').click()`);
+ await page.waitFor(`!!document.querySelector('[data-increment-step-run]')`,10000,'la conferma del candidato');
+ if(!await page.evaluate(`window.guidedPosts.length===0&&document.querySelector('.conv-composer-input').value.includes('Bozza conservata')`))throw new Error('La decisione ha pubblicato prima della conferma');
+ await page.evaluate(`document.querySelector('[data-increment-step-cancel]').click()`);
+ // A released runtime is resumed by feedback from the preview, retaining the same chat.
+ const feedback=await page.evaluate(`new Promise(resolve=>window.dispatchEvent(new CustomEvent('archetipo:preview-send',{detail:{id:'guided-fixture',message:'Commento dalla preview',resolve:()=>resolve('ok'),reject:error=>resolve(error.message)}})))`);
+ if(feedback!=='ok'||!await page.evaluate(`window.guidedReopens===1&&window.guidedMessages.length===1&&window.guidedMessages[0].preview_feedback===true&&window.guidedMessages[0].message==='Commento dalla preview'`))throw new Error('Il feedback non ha ripreso la sessione originale: '+feedback);
+ await page.evaluate(`document.querySelector('[data-increment-step-action]').click();document.querySelector('[data-increment-step-run]').click()`);
+ await page.waitFor(`window.guidedPosts.length===1`,10000,'la pubblicazione esplicita del candidato');
+ if(!await page.evaluate(`window.guidedPosts[0].head_sha==='displayed-candidate'&&window.guidedPosts[0].revision===3`))throw new Error('Pubblicato un candidato diverso da quello mostrato');
+ if(exceptions.length)throw new Error('Eccezioni nei prossimi passi: '+JSON.stringify(exceptions));
+ ok('prossimi passi e preview ripristinabile','suggerimenti e conferma conservano la bozza, la pubblicazione usa il candidato mostrato e il feedback riprende la stessa chat');
+ await page.close();
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
@@ -88,6 +89,9 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 				return r, iox.NewInvalidInput("empty verification evidence", "name each completed check and its result", nil)
 			}
 		}
+		if commit := result.SquashCommit; commit != nil && (strings.TrimSpace(commit.Title) == "" || strings.ContainsAny(commit.Title, "\r\n")) {
+			return r, iox.NewInvalidInput("squash commit title must be one non-empty line", "provide a single-line title or omit squash_commit", nil)
+		}
 		if result.PreviewURL != "" {
 			parsed, parseErr := url.Parse(result.PreviewURL)
 			if parseErr != nil || parsed.User != nil || parsed.Scheme != "http" || (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1") {
@@ -110,6 +114,10 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 		}
 		if diff == "" {
 			return r, iox.NewConflict("increment has no committed product changes", "complete and commit the development before review", nil)
+		}
+		result.Simulated, err = candidateSimulations(r.Workdir)
+		if err != nil {
+			return r, err
 		}
 		result.Evidence, err = verification.New(r.Workdir, s.Config.Paths.TestResults).Evidence(ctx)
 		if err != nil {
@@ -208,6 +216,13 @@ func (s *Service) VerifyCandidate(ctx context.Context, r Record) error {
 	if r.Result == nil {
 		return iox.NewPrecondition("candidate has no result", "verify the candidate", nil)
 	}
+	simulated, err := candidateSimulations(r.Workdir)
+	if err != nil {
+		return err
+	}
+	if hash(simulated) != hash(r.Result.Simulated) {
+		return iox.NewConflict("preview integrations changed", "verify the current preview before approval", nil)
+	}
 	if err = verification.New(r.Workdir, s.Config.Paths.TestResults).VerifyEvidence(ctx, r.Result.Evidence); err != nil {
 		return err
 	}
@@ -222,4 +237,23 @@ func (s *Service) VerifyCandidate(ctx context.Context, r Record) error {
 		return iox.NewConflict("candidate changed during verification", "verify the current committed candidate", nil)
 	}
 	return nil
+}
+
+// Simulation claims come from the recipe, never from an agent's ready payload.
+func candidateSimulations(root string) ([]string, error) {
+	recipe, err := preview.Load(root)
+	if ce, ok := err.(*iox.CodedError); ok && ce.Code == iox.CodePreconditionMissing {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return append([]string(nil), recipe.Simulated...), nil
+}
+
+func SimulatedNotice(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return "Provato con integrazioni simulate: " + strings.Join(names, ", ") + ". Le verifiche con i servizi reali seguono la ricetta del progetto."
 }

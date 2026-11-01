@@ -230,10 +230,14 @@
 	 * an orphan heading standing over nothing, which reads as a list that failed
 	 * to load rather than as a group that has no members.
 	 */
-	function renderGroup(label, entries, currentId, now, ui) {
+	function renderGroup(label, entries, currentId, now, ui, children) {
 		if (!entries.length) return "";
+		// Un thread figlio (il server lo dichiara con parent_id) sta subito
+		// sotto il suo genitore, qualunque cosa vi stia facendo l'agente.
 		const threads = entries
-			.map((entry) => renderThread(entry, currentId, now, ui))
+			.map((entry) => renderThread(entry, currentId, now, ui) + ((children && children[textAt(entry, "id")]) || [])
+				.map((child) => renderThread(child, currentId, now, ui).replace('<div class="thread-row">', '<div class="thread-row is-child">'))
+				.join(""))
 			.join("");
 		return `<p class="rail-group">${label}</p>${threads}`;
 	}
@@ -339,9 +343,14 @@
 	 * @returns {string} HTML string.
 	 */
 	function renderConversationIndex(view, ui) {
-		const entries = arrayAt(view, "conversations").filter(
-			(entry) => entry && typeof entry === "object",
-		);
+		const children = {};
+		const entries = arrayAt(view, "conversations").filter((entry) => {
+			if (!entry || typeof entry !== "object") return false;
+			const parent = textAt(entry, "parent_id");
+			if (!parent) return true;
+			(children[parent] = children[parent] || []).push(entry);
+			return false;
+		});
 		const currentId = textAt(ui, "currentId");
 		const now = ui && typeof ui === "object" ? ui.now : null;
 		const undo = renderUndoControl(objectAt(ui, "undo"));
@@ -370,9 +379,9 @@
 		const done = entries.filter((entry) => activityOf(entry) === "done");
 
 		const groups = [
-			renderGroup(TEXT.groupWorking, working, currentId, now, ui),
-			renderGroup(TEXT.groupOpen, open, currentId, now, ui),
-			renderGroup(TEXT.groupDone, done, currentId, now, ui),
+			renderGroup(TEXT.groupWorking, working, currentId, now, ui, children),
+			renderGroup(TEXT.groupOpen, open, currentId, now, ui, children),
+			renderGroup(TEXT.groupDone, done, currentId, now, ui, children),
 		]
 			.filter(Boolean)
 			.join("");

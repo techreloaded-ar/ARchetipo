@@ -101,3 +101,17 @@ the model in View and preserve the complete conversation journal and checkpoints
 This isolates controller behavior from framework installation; repeat the
 registered application checks on a real project separately before drawing
 conclusions about application delivery speed.
+
+## Local configuration in checkouts
+
+An optional `local_files` list in `.archetipo/environment.json` names local files
+chosen by the person, such as `.env.local`. Preparation copies them from the
+original workspace into the checkout before setup. Paths must stay inside both
+checkouts, refer to regular files and be ignored by Git. Missing declared files
+fail preparation. Their contents affect setup/check fingerprints but are never
+written to reports. An explicit empty list disables the legacy `.env*` copy in
+ordinary spec worktrees; preserve that list when reconfiguring the recipe.
+
+Changes require preparation and fresh relevant checks. Candidate qualification
+includes the materialized configuration. File values are local inputs, never
+assets in the shared recipe bundle.

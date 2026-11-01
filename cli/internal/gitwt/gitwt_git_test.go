@@ -254,6 +254,27 @@ func TestEnsure_CopiesRootEnvFilesIntoNewWorktree(t *testing.T) {
 	}
 }
 
+func TestEnsure_LeavesEnvFilesToRecipeThatDeclaresLocalFiles(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	c := cfg()
+	for name, body := range map[string]string{".env.local": "TOKEN=local\n", ".archetipo/environment.json": `{"version":1,"local_files":[]}`} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, worktreeRel, _, err := Ensure(ctx, root, c, "US-001", c.Base)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, worktreeRel, ".env.local")); !os.IsNotExist(err) {
+		t.Fatalf("copied an env file the recipe did not declare, err=%v", err)
+	}
+}
+
 func TestEnsure_DoesNotOverwriteEnvFilesInExistingWorktree(t *testing.T) {
 	root := initRepo(t)
 	ctx := context.Background()

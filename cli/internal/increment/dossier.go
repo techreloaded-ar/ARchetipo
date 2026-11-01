@@ -26,6 +26,12 @@ func Dossier(r Record) string {
 			fmt.Fprintf(&body, "\n### Historical delivery story %s — %s\n\n%s\n", story.Code, story.Title, story.Body)
 		}
 		if revision.Result != nil {
+			if notice := SimulatedNotice(revision.Result.Simulated); notice != "" {
+				fmt.Fprintf(&body, "\n%s\n", notice)
+			}
+			if commit := revision.Result.SquashCommit; commit != nil {
+				fmt.Fprintf(&body, "\nSuggested squash commit: %s\n\n%s\n", commit.Title, commit.Body)
+			}
 			fmt.Fprintf(&body, "\n### Verified candidate `%s`\n\n%s\n", revision.HeadSHA, revision.Result.Summary)
 			for _, report := range revision.Result.Evidence {
 				fmt.Fprintf(&body, "\nMachine check: `%s` · passed · inputs `%s` · report `%s` · %s\n", report.Operation, report.InputKey, report.ID, report.StartedAt.Format("2006-01-02T15:04:05Z"))

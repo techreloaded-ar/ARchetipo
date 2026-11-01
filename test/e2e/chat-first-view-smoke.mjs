@@ -239,9 +239,12 @@ async function main(){
   assert.equal((await read()).increment.learning.length,1);
   assert.equal((await cliJSON(["spec","list"])).items.length,0);
   if(enterprise){
-   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('[data-increment-action="publish"]:not(:disabled)')`,timeout,"tested version awaiting business approval in the work view");
+   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('[data-increment-step-action="publish"]:not(:disabled)')`,timeout,"tested version awaiting business approval in the work view");
    const approved=(await read()).increment.ready_sha;
-   await page.evaluate(`document.querySelector('[data-increment-action="publish"]').click()`);
+   await page.evaluate(`document.querySelector('[data-increment-step-action="publish"]').click()`);
+   await page.waitFor(`!!document.querySelector('[data-increment-step-run="publish"]:not(:disabled)')`,timeout,"explicit publication confirmation");
+   assert.equal((await read()).increment.status,"REVIEW","publication happened before confirmation");
+   await page.evaluate(`document.querySelector('[data-increment-step-run="publish"]').click()`);
    await until(async()=>(await read()).increment.status==="PROPOSED","one PR after human approval").catch(async error=>{throw new Error(error.message+"; "+await page.evaluate("document.body.innerText.slice(-2000)"));});
    let published=(await read()).increment;
    const repeated=await fetch(view.url+"/api/increments/"+inc.id+"/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:2,head_sha:approved})});

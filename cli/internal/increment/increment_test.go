@@ -286,6 +286,8 @@ func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 }
 
 type fakeHosting struct {
+	title      string
+	body       string
 	pr         *PullRequest
 	creates    int
 	findBase   string
@@ -296,8 +298,9 @@ func (f *fakeHosting) Find(_ context.Context, _, _, base string) (*PullRequest, 
 	f.findBase = base
 	return f.pr, nil
 }
-func (f *fakeHosting) Create(_ context.Context, dir, _, base, _, _ string) (*PullRequest, error) {
+func (f *fakeHosting) Create(_ context.Context, dir, _, base, title, body string) (*PullRequest, error) {
 	f.createBase = base
+	f.title, f.body = title, body
 	sha, err := git(context.Background(), dir, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err

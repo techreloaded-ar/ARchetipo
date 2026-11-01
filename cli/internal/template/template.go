@@ -88,6 +88,31 @@ type IncrementAction struct {
 	ID       string   `json:"id"`
 	Label    string   `json:"label"`
 	Statuses []string `json:"statuses"`
+	// Primary marks the decision the process expects next. Confirm is asked
+	// before an action that cannot be taken back. Prompts are ready-made
+	// messages offered beside the action, never a way to take it.
+	Primary bool              `json:"primary,omitempty"`
+	Confirm *IncrementConfirm `json:"confirm,omitempty"`
+	Prompts []IncrementPrompt `json:"prompts,omitempty"`
+}
+
+type IncrementConfirm struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
+	Label string `json:"label"`
+}
+
+// IncrementPrompt fills the composer with Text; the person completes and sends it.
+type IncrementPrompt struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
+
+// IncrementPhase names a stretch of the increment as the person sees it: the
+// phase holding the current status is the current one, earlier ones are done.
+type IncrementPhase struct {
+	Label    string   `json:"label"`
+	Statuses []string `json:"statuses"`
 }
 
 const (
@@ -129,6 +154,7 @@ type Stage struct {
 // the condition being evaluated by the caller, never here; Statuses are the
 // workflow labels that process works with.
 type Template struct {
+	IncrementPhases        []IncrementPhase       `json:"increment_phases,omitempty"`
 	IncrementActions       []IncrementAction      `json:"increment_actions,omitempty"`
 	ID                     string                 `json:"id"`
 	Version                string                 `json:"version"`
@@ -176,7 +202,17 @@ func (e *RegistryError) Error() string {
 func (t Template) clone() Template {
 	t.IncrementActions = slices.Clone(t.IncrementActions)
 	for i := range t.IncrementActions {
-		t.IncrementActions[i].Statuses = slices.Clone(t.IncrementActions[i].Statuses)
+		action := &t.IncrementActions[i]
+		action.Statuses = slices.Clone(action.Statuses)
+		action.Prompts = slices.Clone(action.Prompts)
+		if action.Confirm != nil {
+			confirm := *action.Confirm
+			action.Confirm = &confirm
+		}
+	}
+	t.IncrementPhases = slices.Clone(t.IncrementPhases)
+	for i := range t.IncrementPhases {
+		t.IncrementPhases[i].Statuses = slices.Clone(t.IncrementPhases[i].Statuses)
 	}
 	t.Skills = slices.Clone(t.Skills)
 	t.ConversationActivities = slices.Clone(t.ConversationActivities)
@@ -195,9 +231,17 @@ func builtin() Template {
 	return Template{
 		IncrementActions: []IncrementAction{
 			{ID: "discuss", Label: "Riprendi il lavoro", Statuses: []string{"DISCOVERY"}},
-			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}},
-			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}},
+			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}, Prompts: []IncrementPrompt{{Label: "A che punto sei?", Text: "A che punto sei con lo sviluppo?"}}},
+			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}, Primary: true,
+				Confirm: &IncrementConfirm{Title: "Aprire la pull request?", Text: "Pubblicheremo il commit verificato mostrato nel dossier e lo proporremo ai developer. Il merge e la distribuzione restano decisioni successive.", Label: "Approva e apri PR"},
+				Prompts: []IncrementPrompt{{Label: "Vorrei cambiare…", Text: "Vorrei cambiare: "}}},
 			{ID: "refresh", Label: "Aggiorna stato PR", Statuses: []string{"PROPOSED"}},
+		},
+		IncrementPhases: []IncrementPhase{
+			{Label: "Comprensione", Statuses: []string{"DISCOVERY"}},
+			{Label: "Sviluppo e prove", Statuses: []string{"DEVELOPING", "REVIEW"}},
+			{Label: "Proposta ai developer", Statuses: []string{"PUBLISHING", "PROPOSED"}},
+			{Label: "Integrato", Statuses: []string{"DELIVERED"}},
 		},
 		ID:      FabbricaDelSoftware,
 		Version: fabbricaVersion,

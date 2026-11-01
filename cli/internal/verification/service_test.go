@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -505,5 +506,67 @@ func TestEvidenceReadersDoNotMasqueradeAsRunningCommands(t *testing.T) {
 		if err := <-results; err != nil {
 			t.Fatal("read-only polling blocked candidate validation", err)
 		}
+	}
+}
+
+func TestLocalFilesComeFromTheOriginalCheckoutAndInvalidateReuse(t *testing.T) {
+	git := func(dir string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	parent := t.TempDir()
+	git(parent, "init", "-b", "main")
+	git(parent, "config", "user.email", "tests@example.test")
+	git(parent, "config", "user.name", "Tests")
+	mustWrite(t, filepath.Join(parent, ".gitignore"), ".env.local\n.archetipo/\n")
+	git(parent, "add", ".gitignore")
+	git(parent, "commit", "-m", "initial")
+	mustWrite(t, filepath.Join(parent, ".env.local"), "FIRST=1")
+	mustWrite(t, filepath.Join(parent, "tracked.env"), "SECRET=1")
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	git(parent, "worktree", "add", "-b", "feature", checkout)
+	recipe := Recipe{Version: 1, LocalFiles: []string{".env.local"}, Probe: []Command{{Name: "ready", Argv: []string{"go", "version"}, TimeoutSeconds: 1}}}
+	writeRecipe(t, checkout, recipe)
+	s := New(checkout, "evidence")
+	s.Runner = &testRunner{}
+	read := func() string {
+		raw, err := os.ReadFile(filepath.Join(checkout, ".env.local"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if first := execute(t, s, "prepare"); !first.Passed || read() != "FIRST=1" {
+		t.Fatalf("local file not copied: %+v", first)
+	}
+	if again := execute(t, s, "prepare"); !again.Reused {
+		t.Fatal("unchanged local file forced another setup")
+	}
+	mustWrite(t, filepath.Join(parent, ".env.local"), "SECOND=1")
+	if changed := execute(t, s, "prepare"); changed.Reused || read() != "SECOND=1" {
+		t.Fatalf("changed local file reused stale setup: %+v", changed)
+	}
+	if err := os.Remove(filepath.Join(checkout, ".env.local")); err != nil {
+		t.Fatal(err)
+	}
+	q, err := s.Qualify(context.Background(), nil)
+	if err != nil || !q.Passed {
+		t.Fatalf("local files prevented qualification: %+v %v", q, err)
+	}
+	if _, err = s.VerifyQualification(nil); err != nil {
+		t.Fatal(err)
+	}
+	recipe.LocalFiles = []string{}
+	writeRecipe(t, checkout, recipe)
+	configured, err := LoadLocal(checkout)
+	if err != nil || configured.LocalFiles == nil {
+		t.Fatalf("empty local_files declaration lost: %+v %v", configured, err)
+	}
+	recipe.LocalFiles = []string{"tracked.env"}
+	writeRecipe(t, checkout, recipe)
+	if _, err := s.Execute(context.Background(), "prepare", "", "", false); err == nil {
+		t.Fatal("copied a file Git would commit")
 	}
 }

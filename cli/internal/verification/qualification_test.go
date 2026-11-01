@@ -173,3 +173,22 @@ func mustJSON(t *testing.T, v any) []byte {
 	}
 	return raw
 }
+
+func TestQualificationRejectsSourceMutationInFirstPreparation(t *testing.T) {
+	s, runner, _ := fixture(t)
+	changed := false
+	runner.run = func(_ context.Context, _ string, _ Command) error {
+		if !changed {
+			changed = true
+			mustWrite(t, filepath.Join(s.Root, "lock.json"), "changed by setup")
+		}
+		return nil
+	}
+	q, err := s.Qualify(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Passed {
+		t.Fatal("first preparation silently replaced qualification source inputs")
+	}
+}

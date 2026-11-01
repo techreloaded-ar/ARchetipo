@@ -727,3 +727,35 @@ func TestConversationsIndexMarksAThreadStoppedOnAPersonAsAwaiting(t *testing.T) 
 		}
 	}
 }
+
+func TestEnvironmentConversationIsListedUnderItsProductThread(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	store := conversationsRouteTestStore(t, srv)
+	now := time.Now().UTC()
+	for _, record := range []conversationlog.Record{
+		{ID: "conv-product", Title: "Product", IncrementID: "inc-product", WorkingDir: "/product", OpenedAt: now, LastMessageAt: now, FinalState: string(execution.RunClosed)},
+		{ID: "conv-environment", Title: "Environment", Purpose: "environment", WorkingDir: "/product", OpenedAt: now, LastMessageAt: now, FinalState: string(execution.RunClosed)},
+		{ID: "conv-unrelated-env", Title: "Unrelated", Purpose: "environment", WorkingDir: "/unrelated", OpenedAt: now, LastMessageAt: now, FinalState: string(execution.RunClosed)},
+	} {
+		conversationsRouteTestSave(t, store, record)
+	}
+	w := doJSON(t, srv, http.MethodGet, conversationsRoute, nil)
+	var view struct {
+		Conversations []conversationEntryView `json:"conversations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Conversations) != 2 {
+		t.Fatalf("index: %s", w.Body.String())
+	}
+	found := false
+	for _, entry := range view.Conversations {
+		if entry.ID == "conv-environment" {
+			found = entry.ParentID == "conv-product"
+		}
+	}
+	if !found {
+		t.Fatalf("technical thread lost its product parent: %s", w.Body.String())
+	}
+}

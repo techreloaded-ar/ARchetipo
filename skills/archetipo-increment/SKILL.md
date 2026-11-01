@@ -183,3 +183,17 @@ Parse errors and warnings before dependent writes. `E_INVALID_INPUT` means repai
 the payload; `E_CONFLICT` means reread the revision, ownership or candidate;
 `E_PRECONDITION` means resolve a missing prerequisite. Other failures are blockers,
 not permission to write workflow files directly. Only the CLI persists artifacts.
+
+### Optional squash message and simulation record
+
+The existing `increment ready` JSON payload may additionally contain
+`"squash_commit":{"title":"feat: describe the product change","body":"Why and what changed"}`.
+Use a non-empty single-line title following the project's commit style. The CLI
+uses it for the PR title and retains the complete business dossier in the body.
+This does not authorize a merge or publication; explicit approval of the displayed
+candidate remains required.
+
+The CLI reads `simulated` integrations from the preview recipe and preserves them
+with the result, dossier and PR. Do not invent or override this list in `ready`.
+Explain the observed limits of the trial and keep all required checks declared
+in the recipe. A changed simulation declaration requires a new verified result.

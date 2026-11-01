@@ -2,6 +2,7 @@ package increment
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -50,7 +51,12 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 			return r, err
 		}
 		if pr == nil {
-			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, r.Title, Dossier(r))
+			title, body := r.Title, Dossier(r)
+			if r.Result != nil && r.Result.SquashCommit != nil {
+				title = strings.TrimSpace(r.Result.SquashCommit.Title)
+				body = strings.TrimSpace(r.Result.SquashCommit.Body) + "\n\n" + body
+			}
+			pr, err = s.Hosting.Create(ctx, r.Workdir, r.Branch, r.BaseBranch, title, body)
 			if err != nil {
 				return r, err
 			}

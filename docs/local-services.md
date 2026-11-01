@@ -208,3 +208,15 @@ applicazione e dipendenza dopo SIGKILL del viewer. Le unit test verificano rollb
 ordine inverso, stop fallito e ripresa, cambio ricetta, invalidazione delle verifiche
 e recupero usando gli adattatori salvati dopo la scomparsa della ricetta. Lo smoke
 verifica inoltre un arresto fallito e riprovato e il run standalone con SIGKILL.
+
+## Declared simulated integrations
+
+A preview recipe may declare `"simulated": ["calendar", "oauth"]` when owned local
+fakes replace third-party services. Names must be distinct and non-empty. This
+declares what the person actually tried; it does not waive required project
+checks or decide when real-service checks run. Use the same configurable
+endpoints as the real integration, with managed resources for the local fakes.
+
+`increment ready` reads the list from the recipe, preserves it with the candidate
+and includes it in the dossier and PR. A changed list invalidates the candidate.
+The viewer displays the declaration beside the publication decision.

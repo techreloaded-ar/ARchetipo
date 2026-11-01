@@ -29,6 +29,7 @@ import (
 // registry, the SSE broker and the registry of known workspaces do not depend
 // on the project root, and the connected browsers must survive the switch.
 type workspaceSession struct {
+	prChecks   incrementPRChecks
 	cfg        config.Config
 	conn       connector.Connector
 	store      execution.Store

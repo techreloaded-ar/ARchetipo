@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 func incrementGit(t *testing.T, dir string, args ...string) string {
@@ -241,5 +243,57 @@ func TestIncrementReportsRequirementDriftWithoutRewritingSnapshot(t *testing.T) 
 	}
 	if view.CandidateLabel != "In lavorazione" {
 		t.Fatal(view.CandidateLabel)
+	}
+}
+
+func TestIncrementGuidanceUsesTemplateAndReachesWaitingEnvironment(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	ws := srv.session()
+	root := t.TempDir()
+	if err := saveEnvironmentOperation(root, environmentOperation{State: "waiting", ConversationID: "conv-environment"}); err != nil {
+		t.Fatal(err)
+	}
+	tpl, err := srv.resolveTemplate(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := increment.Record{ID: "inc-guidance", Workdir: root, Status: increment.Review}
+	view := incrementView{}
+	offered := []template.IncrementAction{}
+	for _, action := range tpl.IncrementActions {
+		if action.ID == "publish" {
+			offered = append(offered, action)
+		}
+	}
+	srv.incrementNextSteps(ws, work, offered, &view)
+	if len(view.NextSteps) < 3 || view.NextSteps[0].Target != "conv-environment" {
+		t.Fatalf("unreachable environment: %+v", view.NextSteps)
+	}
+	decision := false
+	for _, step := range view.NextSteps {
+		if step.Action == "approve-intent" {
+			t.Fatal("reintroduced mandatory intent approval")
+		}
+		if step.Action == "publish" {
+			decision = step.Confirm != nil && step.Kind == "decision"
+		}
+	}
+	if !decision {
+		t.Fatalf("publication lacks declared confirmation: %+v", view.NextSteps)
+	}
+	phases := incrementPhases(tpl, increment.Delivered)
+	if len(phases) == 0 || phases[len(phases)-1].Label != "Integrato" {
+		t.Fatalf("merge misrepresented as deployment: %+v", phases)
+	}
+}
+
+func TestIncrementPRChecksThrottleAndRetainFailures(t *testing.T) {
+	checks := incrementPRChecks{}
+	if !checks.begin("inc-1", time.Minute) || checks.begin("inc-1", time.Minute) {
+		t.Fatal("concurrent duplicate PR check")
+	}
+	checks.end("inc-1", fmt.Errorf("offline"))
+	if checks.begin("inc-1", time.Minute) || checks.last("inc-1").err != "offline" {
+		t.Fatal("failed PR read was not retained or throttled")
 	}
 }

@@ -69,3 +69,21 @@ test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
  assert.match(open,/US-002 · Filtro/);
  assert.match(open,/Risultato molto lungo/);
 });
+
+test("i prossimi passi usano i metadati del server e mantengono la bozza durante la conferma", () => {
+ const increment={id:'guided',title:'Lavoro',phases:[{label:'Fase ricevuta',state:'current'}],next_steps_label:'Azioni ricevute',result_notice:'Provato con servizi simulati: calendario',next_steps:[{kind:'decision',action:'arbitrary-action',label:'Decisione ricevuta',confirm:{title:'Conferma ricevuta',text:'Effetto ricevuto',label:'Confermo'}},{kind:'prompt',label:'Suggerimento',prompt:'Vorrei cambiare: '},{kind:'open',open:'url',label:'Malevolo',target:'javascript:alert(1)'}]};
+ const html=renderConversation({...base,increment},'la mia bozza',{incrementConfirm:'arbitrary-action'});
+ assert.match(html,/data-increment-step-action="arbitrary-action" data-increment-step-confirm/);
+ assert.match(html,/data-increment-step-run="arbitrary-action"/);
+ assert.match(html,/Conferma ricevuta|Effetto ricevuto/);
+ assert.match(html,/la mia bozza/);
+ assert.match(html,/Provato con servizi simulati: calendario/);
+ assert.doesNotMatch(html,/href="javascript:/);
+});
+
+test("le azioni della board e del dettaglio non ereditano la chat selezionata", () => {
+ const source=readFileSync(new URL('../../cli/internal/web/assets/app.js',import.meta.url),'utf8');
+ assert.match(source,/bindActionsPanel\(storyActions, false\)/);
+ assert.match(source,/target.fromConversation \? conversationsCurrentId : ""/);
+ assert.match(source,/user_input: typed, fromConversation: true/);
+});

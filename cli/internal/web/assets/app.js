@@ -829,9 +829,9 @@
 	// container the panel can be mounted on is bound once, here: which of them
 	// is live at any moment is decided by the mounted context, not by the
 	// listeners.
-	bindActionsPanel(storyActions);
-	bindActionsPanel(inceptionActions);
-	bindActionsPanel(specDraftActions);
+	bindActionsPanel(storyActions, false);
+	bindActionsPanel(inceptionActions, true);
+	bindActionsPanel(specDraftActions, true);
 	bindExecutionPanel(storyExecution);
 	bindExecutionPanel(inceptionExecution);
 	bindExecutionPanel(specDraftExecution);
@@ -842,11 +842,11 @@
 	bindRunPanel(inceptionRun);
 	bindRunPanel(specDraftRun);
 
-	function bindActionsPanel(container) {
+	function bindActionsPanel(container, inheritsConversation) {
 		container.addEventListener("click", (e) => {
 			const btn = e.target.closest(".action-chip-run");
 			if (!btn) return;
-			startPanelAction(btn.dataset.actionId, btn, conversationsCurrentId);
+			startPanelAction(btn.dataset.actionId, btn, inheritsConversation ? conversationsCurrentId : "");
 		});
 	}
 
@@ -4154,7 +4154,7 @@
 		try {
 			const body = { action: target.action };
 			if (target.user_input) body.user_input = target.user_input;
-			const from = conversationsCurrentId;
+			const from = target.fromConversation ? conversationsCurrentId : "";
 			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
 				body.conversation_id = from;
 			}
@@ -5507,12 +5507,17 @@
 	let conversationActivitiesLoadToken = 0;
 	let conversationActivitySelection = null;
 	let conversationInputDrafts = {};
+	// The question of each questionnaire the person is on, by input id. It is
+	// the page's own, like the drafts: the server asks the questions, the page
+	// remembers which one is open across polls and re-renders.
+	let conversationInputSteps = {};
 	let conversationOpeningSpecCode = "";
 	let conversationProposalsOpen = false;
 	let conversationProposalVersion = "";
 	let conversationDraftDestinations = {};
 	let conversationProposalPreviousOpen = {};
 	let conversationIncrementSections = {};
+	let conversationIncrementConfirm = "";
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -5785,6 +5790,7 @@
 			}
    if (e.target.closest("[data-workspace-preview]")) { window.BrowserPreview?.start(); return; }
 			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
+			if (onIncrementStep(e.target)) return;
             if (e.target.closest("[data-increment-export]") && conversationView?.increment) {
                 const id = conversationView.increment.id;
                 apiGet("/api/increments/"+encodeURIComponent(id)+"/dossier").then(dossier => {
@@ -5798,7 +5804,12 @@
             const linkedStory = e.target.closest("[data-linked-story]");
             if (linkedStory) { openEditor(linkedStory.dataset.linkedStory); return; }
 			const incrementAction = e.target.closest("[data-increment-action]");
-			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
+			if (incrementAction) {
+				const id = incrementAction.getAttribute("data-increment-action");
+				const step = conversationView?.increment?.next_steps?.find(item => item.action === id && item.confirm);
+				if (step) { conversationIncrementConfirm = id; renderConversationPanel(); } else runIncrementAction(id);
+				return;
+			}
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
 			if (showProposals) {
 				conversationProposalsOpen = true;
@@ -5949,6 +5960,11 @@
 			// a waiting card live inside a run block that also carries the "go to
 			// the whole log" control, and a press must answer rather than
 			// navigate away from the very decision it just took.
+			const step = e.target.closest("[data-conversation-input-step]");
+			if (step) {
+				moveConversationInputStep(step.closest("[data-conversation-input-form]"), step.getAttribute("data-conversation-input-step") || "");
+				return;
+			}
 			const answer = e.target.closest("[data-run-approval-id]");
 			if (answer) {
 				respondConversationApproval(
@@ -6057,13 +6073,25 @@
 			const question = e.target.closest("[data-conversation-input-question]");
 			if (question) {
 				const form = question.closest("[data-conversation-input-form]");
-				if (e.target.matches("[data-conversation-input-option]")) {
-					const text = question.querySelector("[data-conversation-input-text]");
-					if (text) text.value = "";
-				} else if (e.target.matches("[data-conversation-input-text]")) {
-					question.querySelectorAll("[data-conversation-input-option]").forEach((option) => { option.checked = false; });
+				const inputID = form.getAttribute("data-conversation-input-form");
+				const typing = e.target.matches("[data-conversation-input-text]");
+				// Typing in the free-text field of a question with options selects
+				// "Altro" by itself: the words are the choice.
+				const other = question.querySelector("[data-conversation-input-other]");
+				if (typing && other && !other.checked && e.target.value.trim()) {
+					other.checked = true;
+					if (other.type === "radio") question.querySelectorAll("[data-conversation-input-option]").forEach((option) => { option.checked = false; });
 				}
-				conversationInputDrafts[form.getAttribute("data-conversation-input-form")] = conversationInputValues(form);
+				saveConversationInputAnswer(inputID, question);
+				// A choice changes what the question shows (the free-text field opens
+				// or closes with "Altro", the tab gets its check), so it is redrawn;
+				// typing is not, so the field keeps its focus and its caret.
+				if (!typing) {
+					renderConversationPanel();
+					if (e.target.matches("[data-conversation-input-other]") && e.target.checked) {
+						conversationEl.querySelector(`[data-conversation-input-form="${CSS.escape(inputID)}"] [data-conversation-input-text]`)?.focus();
+					}
+				}
 				return;
 			}
 			const requestedInput = e.target.closest("[data-conversation-input-draft]");
@@ -6915,6 +6943,7 @@
 		resetConversationActivities();
 		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
+		conversationInputSteps = {};
 		conversationModelChoiceOpen = "";
 		renderConversationsRail();
 		renderConversationPanel();
@@ -6942,6 +6971,7 @@
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
 		conversationIncrementSections = {};
+		conversationIncrementConfirm = "";
 		conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
@@ -6971,6 +7001,7 @@
 		resetConversationActivities();
 		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
+		conversationInputSteps = {};
 		conversationOpeningSpecCode = "";
 		renderConversationsRail();
 		renderConversationPanel();
@@ -7100,11 +7131,58 @@
 		}
 	}
 
-	function conversationInputValues(form) {
-		return Object.fromEntries(Array.from(form.querySelectorAll("[data-conversation-input-question]")).map((question) => [
-			question.getAttribute("data-conversation-input-question"),
-			{ options: Array.from(question.querySelectorAll("[data-conversation-input-option]:checked")).map((option) => option.value), text: question.querySelector("[data-conversation-input-text]")?.value || "" },
-		]));
+	function pendingConversationInput(inputID) {
+		const inputs = conversationView?.session?.pending_inputs;
+		return (Array.isArray(inputs) ? inputs : []).find((input) => input && input.id === inputID) || null;
+	}
+
+	// What one question's fieldset says right now — the chosen options, whether
+	// "Altro" is selected, the text typed — written into the draft of its
+	// questionnaire. The draft outlives the fieldset: only one question is drawn
+	// at a time, and the others keep their answers here.
+	function saveConversationInputAnswer(inputID, questionEl) {
+		const questionID = questionEl.getAttribute("data-conversation-input-question") || "";
+		const other = questionEl.querySelector("[data-conversation-input-other]");
+		const draft = conversationInputDrafts[inputID] && typeof conversationInputDrafts[inputID] === "object" ? conversationInputDrafts[inputID] : {};
+		draft[questionID] = {
+			options: Array.from(questionEl.querySelectorAll("[data-conversation-input-option]:checked")).map((option) => option.value),
+			other: other ? other.checked : false,
+			text: questionEl.querySelector("[data-conversation-input-text]")?.value || "",
+		};
+		conversationInputDrafts[inputID] = draft;
+	}
+
+	// The answers of one questionnaire, question by question, as the renderer
+	// counts them: an empty list is a question still open.
+	function conversationInputAnswers(input) {
+		const draft = conversationInputDrafts[input.id] && typeof conversationInputDrafts[input.id] === "object" ? conversationInputDrafts[input.id] : {};
+		const questions = Array.isArray(input.questions) ? input.questions : [];
+		return questions.map((question) => ({ question, values: window.Conversation.inputAnswerValues(question, draft[question.id]) }));
+	}
+
+	// Moving between the questions of a questionnaire: to a tab, back, or
+	// forward — forward only once the question shown has an answer, so the
+	// person is told which one is missing where they are, not at the end.
+	function moveConversationInputStep(form, target) {
+		const inputID = form?.getAttribute("data-conversation-input-form") || "";
+		const input = pendingConversationInput(inputID);
+		if (!input || conversationBusy) return;
+		form.querySelectorAll("[data-conversation-input-question]").forEach((question) => saveConversationInputAnswer(inputID, question));
+		const answers = conversationInputAnswers(input);
+		const current = Math.min(Math.max(conversationInputSteps[inputID] || 0, 0), answers.length - 1);
+		let next = current;
+		if (target === "prev") next = current - 1;
+		else if (target === "next") {
+			if (!answers[current].values.length) {
+				conversationRefusal = "Rispondi alla domanda prima di continuare";
+				renderConversationPanel();
+				return;
+			}
+			next = current + 1;
+		} else if (/^\d+$/.test(target)) next = Number(target);
+		conversationInputSteps[inputID] = Math.min(Math.max(next, 0), answers.length - 1);
+		conversationRefusal = "";
+		renderConversationPanel();
 	}
 
 	async function respondConversationInput(form) {
@@ -7112,15 +7190,20 @@
 		const inputID = form.getAttribute("data-conversation-input-form") || "";
 		if (conversationBusy || !id || !inputID) return;
 		let body;
-		if (form.querySelector("[data-conversation-input-question]")) {
-			const values = conversationInputValues(form);
-			conversationInputDrafts[inputID] = values;
-			if (Object.values(values).some((value) => !value.options.length && !value.text.trim())) {
+		const input = pendingConversationInput(inputID);
+		if (input && Array.isArray(input.questions) && input.questions.length) {
+			form.querySelectorAll("[data-conversation-input-question]").forEach((question) => saveConversationInputAnswer(inputID, question));
+			const answers = conversationInputAnswers(input);
+			const missing = answers.findIndex((answer) => !answer.values.length);
+			if (missing >= 0) {
+				// The questionnaire opens on the first question left unanswered,
+				// which is where the refusal is read.
+				conversationInputSteps[inputID] = missing;
 				conversationRefusal = "Rispondi a tutte le domande prima di inviare";
 				renderConversationPanel();
 				return;
 			}
-			body = { answers: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.options.length ? value.options : [value.text]])) };
+			body = { answers: Object.fromEntries(answers.map((answer) => [answer.question.id, answer.values])) };
 		} else {
 			try {
 				body = { payload: JSON.parse(form.querySelector("[data-conversation-input-draft]").value) };
@@ -7138,6 +7221,7 @@
 				body,
 			);
 			delete conversationInputDrafts[inputID];
+			delete conversationInputSteps[inputID];
 			applyConversationView(view);
 			conversationRefusal = "";
 		} catch (err) {
@@ -7193,6 +7277,7 @@
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
 		conversationIncrementSections = {};
+		conversationIncrementConfirm = "";
 		conversationView = null;
 		conversationAfterID = 0;
 		conversationEvents = [];
@@ -7211,6 +7296,7 @@
 		resetConversationActivities();
 		conversationSkillHighlight = 0;
 		conversationInputDrafts = {};
+		conversationInputSteps = {};
 		conversationOpeningSpecCode = "";
 		// The answers given here and the block last reached belong to the
 		// conversation being left: neither may be read as the new one's. Lo
@@ -7323,6 +7409,17 @@
 			conversationView.conversation &&
 			conversationView.conversation.state === "ACTIVE"
 		);
+	}
+
+	// Scrivibile vuol dire che il prossimo messaggio arriva all'agente: sessione
+	// non archiviata, ripristinabile, e senza un turno in corso che non accetti
+	// steering. Non è `conversationIsActive()`: una conversazione rilasciata
+	// dall'idle releaser risponde CLOSED finché nessuno la riprende, ma la
+	// riprende proprio il messaggio successivo. È la regola del composer, e la
+	// preview la condivide invece di tenerne una più stretta.
+	function conversationIsWritable() {
+		const session = conversationView?.session;
+		return !!(session && session.archive !== "ARCHIVED" && session.recovery === "RESUMABLE" && (session.work === "IDLE" || conversationCapabilities.includes("turn.steering")));
 	}
 
 	// loadConversation reads the conversations of the open workspace from the
@@ -7496,6 +7593,59 @@
 	}
 
 
+	function onIncrementStep(target) {
+		const action = target.closest("[data-increment-step-action]");
+		if (action) {
+			const id = action.getAttribute("data-increment-step-action");
+			if (action.hasAttribute("data-increment-step-confirm")) {
+				conversationIncrementConfirm = id;
+				renderConversationPanel();
+				conversationEl.querySelector("[data-increment-step-run]")?.focus({preventScroll:true});
+			} else runIncrementAction(id);
+			return true;
+		}
+		const run = target.closest("[data-increment-step-run]");
+		if (run) {
+			conversationIncrementConfirm = "";
+			runIncrementAction(run.getAttribute("data-increment-step-run"));
+			return true;
+		}
+		if (target.closest("[data-increment-step-cancel]")) {
+			conversationIncrementConfirm = "";
+			renderConversationPanel();
+			conversationEl.querySelector(".conv-composer-input")?.focus({preventScroll:true});
+			return true;
+		}
+		const prompt = target.closest("[data-increment-step-prompt]");
+		if (prompt) {
+			// A ready-made prompt never discards what the person already wrote.
+			const text = prompt.getAttribute("data-increment-step-prompt") || "";
+			conversationDraft = conversationDraft.trim() ? conversationDraft.trimEnd() + "\n" + text : text;
+			renderConversationPanel();
+			const input = conversationEl.querySelector(".conv-composer-input");
+			if (input) {
+				input.focus({preventScroll:true});
+				input.setSelectionRange(input.value.length, input.value.length);
+				adattaAltezzaCompositore(input);
+			}
+			return true;
+		}
+		const open = target.closest("[data-increment-step-open]");
+		if (!open) return false;
+		const where = open.getAttribute("data-increment-step-open");
+		const destination = open.getAttribute("data-increment-step-target") || "";
+		if (where === "preview") window.WorkspacePanels?.open("preview");
+		else if (where === "conversation") window.dispatchEvent(new CustomEvent("archetipo:environment-open", {detail:{id:destination}}));
+		else if (where === "details" && conversationView?.increment) {
+			conversationIncrementSections["panel-" + conversationView.increment.id] = true;
+			if (destination) conversationIncrementSections[destination] = true;
+			window.WorkspacePanels?.open("details");
+			renderConversationPanel();
+			conversationEl.parentElement.querySelector(destination ? '[data-increment-section="' + cssEscape(destination) + '"] summary' : ".conv-increment-panel")?.focus({preventScroll:true});
+		}
+		return true;
+	}
+
 	async function runIncrementAction(action) {
 		const current = conversationView && conversationView.increment;
 		if (!current || conversationBusy) return;
@@ -7533,12 +7683,20 @@
  });
 	window.addEventListener("archetipo:preview-send", async (event) => {
 		const {id, message, resolve, reject} = event.detail;
-		if (id !== conversationsCurrentId || conversationBusy || !conversationIsActive()) { reject(new Error("Attendi che la conversazione possa ricevere un messaggio.")); return; }
+		if (id !== conversationsCurrentId || conversationBusy || !conversationIsWritable()) { reject(new Error("Attendi che la conversazione possa ricevere un messaggio.")); return; }
 		conversationBusy = true;
 		renderConversationPanel();
 		try {
 			await conversationNextTurnSaves.get(id);
 			if (id !== conversationsCurrentId) throw new Error("La conversazione è cambiata; i commenti sono conservati.");
+			// Una conversazione rilasciata si riprende prima di scriverci, come
+			// fa il composer in resumeConversationThread: stesso id, stessa
+			// sessione nativa.
+			if (!conversationIsActive()) {
+				const reopened = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/reopen`, {});
+				if (conversationIdOf(reopened) !== id) throw new Error("il resume ha cambiato conversation ID");
+				applyConversationView(reopened);
+			}
 			const view = await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`, {message, preview_feedback: true});
 			if (id === conversationsCurrentId) { applyConversationView(view); startConversationPolling(); }
 			resolve();
@@ -7559,7 +7717,7 @@
 			try {
 				const started = activity.kind === "increment"
 					? await startIncrementFromConversation(typed)
-					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed }, null);
+					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed, fromConversation: true }, null);
 				if (started) {
 					saveConversationDraft("");
 					conversationActivitySelection = null;
@@ -7865,7 +8023,7 @@
 
 	function renderConversationPanel() {
   const currentConversation = conversationView?.conversation;
-  const previewTarget = currentConversation ? {id: currentConversation.id, root: currentConversation.working_dir, scope:"conversation", writable: conversationIsActive() && !conversationBusy, commentable:conversationIsActive() && !conversationBusy, compact: !!conversationView?.increment?.development_mode, autoStart: conversationView?.increment?.preview_auto_start === true, candidate: (conversationView?.increment?.ready_sha || "") + ":" + (conversationView?.session?.current_turn?.id || "")} : conversationActivitiesView?.workspace_preview?.target || null;
+  const previewTarget = currentConversation ? {id: currentConversation.id, root: currentConversation.working_dir, scope:"conversation", writable: conversationIsWritable() && !conversationBusy, commentable:!!(conversationView?.session && conversationView.session.archive !== "ARCHIVED" && conversationView.session.recovery === "RESUMABLE"), compact: !!conversationView?.increment?.development_mode, autoStart: conversationView?.increment?.preview_auto_start === true, candidate: (conversationView?.increment?.ready_sha || "") + ":" + (conversationView?.session?.current_turn?.id || "")} : conversationActivitiesView?.workspace_preview?.target || null;
   window.WorkspacePanels?.configure({
 			key: previewTarget ? previewTarget.root + ":" + previewTarget.id : "",
 			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
@@ -7977,9 +8135,10 @@
 				skillChoiceHtml: conversationSkillMenuMarkup(view),
 				activities: conversationActivitiesView,
 				activitySelection: conversationActivitySelection,
-				writable: !!(view && view.session && view.session.archive !== "ARCHIVED" && view.session.recovery === "RESUMABLE" && (view.session.work === "IDLE" || conversationCapabilities.includes("turn.steering"))),
+				writable: conversationIsWritable(),
 				sendBehavior: view && view.session && view.session.work !== "IDLE" ? (conversationCapabilities.includes("turn.steering") ? "steer" : "wait") : "turn",
 				inputDrafts: conversationInputDrafts,
+				inputSteps: conversationInputSteps,
 				openingSpecCode: conversationOpeningSpecCode,
 				// La bozza che questa conversazione ha consegnato, quando ne ha
 				// consegnata una. Riconoscerla vuol dire sapere quale azione la
@@ -7990,6 +8149,7 @@
 				draftDestinations: conversationDraftDestinations,
 				proposalPreviousOpen: conversationProposalPreviousOpen,
 				incrementSections: conversationIncrementSections,
+				incrementConfirm: conversationIncrementConfirm,
 				// Il parser Markdown della pagina, iniettato perché il renderer
 				// resti puro e consumabile anche dove marked non esiste.
 				markedParse:

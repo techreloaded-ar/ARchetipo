@@ -212,3 +212,19 @@ contracts. Standalone users can subsequently invoke
 `archetipo execution preview run` (`kind: preview`, foreground process).
 End with the setup result, original report references, coverage and unresolved
 blocks. Never call a product ready merely because its environment was prepared.
+
+### Local configuration and simulations
+
+Preserve an existing `local_files` list in the environment recipe, including an
+explicit empty list. Only add files the person has explicitly chosen to share
+with the checkout. Preparation copies those regular, Git-ignored files from the
+original workspace and fingerprints them; never include their values in reports,
+chat, commands or the shared recipe bundle. Declare only paths, never secrets.
+Keep data persistent across stop/restart and revisions; seed only empty owned
+databases and never reset existing data without an explicit request.
+
+If owned local fakes replace third-party integrations, declare their names in
+the preview recipe's `simulated` list. Use configurable integration endpoints,
+not bypasses in product code. Explain which checks still require real services
+and declare them in the project recipe. Simulation never replaces a required
+real browser/API/database check.

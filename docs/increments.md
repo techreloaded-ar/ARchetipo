@@ -225,3 +225,28 @@ non corrispondono più agli input e alla preparazione correnti. Report/log manca
 o alterati non diventano successi. I log sono consultabili come testo inerte dal
 pannello. Gli errori di tentativi precedenti restano storici quando la preview
 attuale ha una preparazione verificata; non descrivono più lo stato corrente.
+
+## Guided interaction and developer handover
+
+The composer offers next steps declared by the process Template: open the app,
+reach a technical environment conversation, prepare a message, approve a verified
+candidate or inspect its PR. Suggested messages preserve the current draft and
+are sent only by the person. Publication offers an inline confirmation of its
+effect. These presentation aids add no intent approval or internal story tasks.
+The environment conversation appears below the product conversation in the rail.
+
+Runtime questions use a questionnaire with one question at a time, multiple
+choices where requested, free text, and answers retained across polling,
+navigation and failed submissions. Feedback from the preview can resume a
+released connection using the same conversation and native session.
+
+An optional `squash_commit` object in the `increment ready` payload supplies a
+single-line `title` and optional `body`. Publication uses that title and puts the
+suggested body before the complete business dossier in the PR description. The
+dossier retains the suggestion as well as the exact evidence and business
+approval. It never performs a squash, merge or deployment.
+
+While a published work is open and idle, View reconciles its PR at most once per
+minute. A confirmed merge preserves the approved candidate separately from the
+developer head. It neither changes business story statuses nor removes the local
+environment: removal still requires an explicit keep/remove choice.
