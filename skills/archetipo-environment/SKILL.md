@@ -1,6 +1,6 @@
 ---
 name: archetipo-environment
-description: Discover a project's real runtime, qualify a candidate recipe and publish or repair its reusable workspace environment in a separate technical session.
+description: Discover and prepare a project's checkout-specific runtime and configuration, qualify its recipe, and publish or repair the reusable environment standalone or in View's technical session.
 ---
 
 # Workspace environment
@@ -38,6 +38,80 @@ the turn so the person can adjust the technical session and resume it.
 Record the inspected files, chosen commands, observed capability report, coverage
 rationale and missing prerequisites in the technical summary. Do not invent a
 working recipe if application scaffolding or required services are absent.
+
+## Resolve configuration for the checkout
+
+On first setup, inspect tracked examples, configuration loaders and startup scripts
+for required variable names and actual precedence (process environment, env files,
+framework-specific config). Reuse the current recipe and its recorded choices on
+later increments. Revisit only a changed requirement, failed check or missing
+prerequisite; do not ask the person to configure each new worktree manually.
+
+Distinguish the inputs by purpose:
+
+- Shared settings: reuse tracked defaults or generate reproducible local defaults.
+  Use `local_files` only for existing Git-ignored files the person has chosen to
+  share; the CLI copies them from the original workspace at preparation.
+- External credentials: reuse an already authorized source for the intended test
+  service. If missing, explain which service needs access and how the person can
+  supply it locally; never ask for secret values in chat. Do not assume existing
+  credentials authorize real email, payments or other external writes.
+- Checkout bindings: derive application/API URLs, auth callbacks, database/cache
+  connections, storage locations and service namespaces from this checkout's
+  managed resources, assigned ports and persistent data locations. A copied
+  `DATABASE_URL` or a reachable localhost service is not proof of the right target.
+
+A file can mix all three. Copying it unchanged is sufficient only when its
+settings are appropriate for this checkout. Prefer the project's supported runtime
+overrides or a generated checkout-local overlay for owned bindings; verify the
+loader's actual precedence, not just the launcher's environment. Keep generated
+configuration out of the shared bundle and declare the relevant configuration
+inputs/outputs and environment keys for verification. Do not put credential values
+in versioned helpers or the recipe. Do not edit the original workspace's env files.
+
+Preserve existing `local_files` choices, including `[]`; do not expand the list
+because another `.env*` exists. Each preparation recopies declared files and can
+overwrite worktree edits. Put per-checkout changes in the generated override, not
+in a copied source file. If the project cannot override a mixed file correctly,
+explain the concrete conflict and request only the necessary sharing/configuration
+choice before using it. Do not silently drop a declared file to make setup pass.
+
+Resolve routine technical choices from the code and existing authorization. Ask
+only when the decision changes access, external effects or the intended trial and
+cannot be inferred. Use product language, for example: "Per provare le email
+usiamo un servizio locale o il servizio di test già configurato?" Reuse an existing
+answer; do not add a general environment approval step or a new UI prerequisite.
+
+Keep the chosen setup reproducible in the qualified recipe and its non-secret
+helpers. Record service roles, real/simulated integrations, data strategy and
+unresolved decisions in the existing technical summary, never credential values.
+The common recipe carries the method; the next checkout gets its own bindings
+and runtime state. A file copy is not a database copy. Use conservative synthetic
+fixtures when appropriate; access to an original data source or importing its data
+requires the person's authorization. Never migrate or seed the original database.
+
+## Verify the effective target
+
+Make preparation run non-destructive project probes for the effective
+configuration and service identity before any application migrations or seeding.
+Start the declared owned resources as needed; place this preflight in the setup
+helper before its writes, not only in the readiness probe that runs after setup.
+Qualification must exercise this order and the target the application will use.
+Check the application's resolved target, not only the existence of an env file,
+an open port or an echoed variable. Reject an unexpected shared database/storage
+target before any writes; repair the local
+bindings or report the concrete missing choice without adopting that service.
+
+For a stateful app, include a project check that exercises its real persistence
+path against the owned test resource. Use a small identifiable synthetic fixture
+and verify it survives stop/restart without resetting existing data. When claiming
+concurrent checkout independence, also verify distinct effective targets and that
+one checkout's fixture is absent from the other's; do not write to unrelated
+resources to prove isolation. Static apps need no invented database or data check.
+Keep these probes/checks in the existing recipe and retain their original reports.
+Do not declare the environment usable merely because `.env` was copied or the
+server started. An unverified application target leaves the environment unready;
+report the missing probe or decision rather than claiming it is usable.
 
 ## Build a candidate, preserve the common revision
 
@@ -95,7 +169,9 @@ data at each revision. Cleanup stops only declared owned resources and retains
 required demonstration data. Verify stop and subsequent restart against explicit
 project probes, plus fixture preservation checks where state exists. Destructive
 resets require an explicit request; test destructive scenarios on dedicated owned
-synthetic resources. Do not copy resource journals, checkpoints or secrets.
+synthetic resources. Do not copy resource journals or checkpoints between
+checkouts. Transfer authorized local files only through `local_files`; never
+publish their secret values.
 
 ## Qualify, publish, verify
 
@@ -158,8 +234,9 @@ failure carries `kind: error` and `error.code`.
 - `archetipo execution environment show`: `kind: verification_result`, effective
   recipe in `data`. Missing common publication retains legacy local recipes.
 - `archetipo execution environment configure --candidate --file -`: stdin version
-  1 JSON with real `inputs`, `outputs`, optional `env_keys`, bounded idempotent
-  `prepare`, readiness `probe`, optional `cleanup`, `checks`, `ports`, `resources`.
+  1 JSON with real `inputs`, `outputs`, optional `env_keys` and `local_files`,
+  bounded idempotent `prepare`, readiness `probe`, optional `cleanup`, `checks`,
+  `ports`, `resources`.
   Each command has `name`, explicit `argv`, `timeout_seconds` (1..1800); each
   resource has `name`, `start`, `probe`, `stop`, `stopped` (timeouts <= 30).
   Checks have command fields, explicit `inputs`, `cache`, optional `during_preview`.
@@ -178,7 +255,8 @@ failure carries `kind: error` and `error.code`.
 - `archetipo execution preview configure --candidate --file -`: for web apps only,
   stdin `{ "version":1, "directory":".", "argv":["scripts/archetipo/preview.sh",
   "{port}"], "url":"http://127.0.0.1:{port}/", "prepare_environment":true }`,
-  adapted to the actual product. Returns `kind: preview_recipe`. Bind strictly
+  adapted to the actual product; optional `simulated` lists integrations replaced
+  by owned local fakes. Returns `kind: preview_recipe`. Bind strictly
   to the assigned loopback port. Do not launch the preview server in this skill.
 - `archetipo execution environment qualify --asset scripts/archetipo/<file> ...`:
   `kind: environment_qualification`, data `passed`, `bundle_digest`, `input_key`,
@@ -213,15 +291,7 @@ contracts. Standalone users can subsequently invoke
 End with the setup result, original report references, coverage and unresolved
 blocks. Never call a product ready merely because its environment was prepared.
 
-### Local configuration and simulations
-
-Preserve an existing `local_files` list in the environment recipe, including an
-explicit empty list. Only add files the person has explicitly chosen to share
-with the checkout. Preparation copies those regular, Git-ignored files from the
-original workspace and fingerprints them; never include their values in reports,
-chat, commands or the shared recipe bundle. Declare only paths, never secrets.
-Keep data persistent across stop/restart and revisions; seed only empty owned
-databases and never reset existing data without an explicit request.
+## Declare simulated integrations
 
 If owned local fakes replace third-party integrations, declare their names in
 the preview recipe's `simulated` list. Use configurable integration endpoints,

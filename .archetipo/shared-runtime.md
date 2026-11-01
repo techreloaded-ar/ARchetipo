@@ -110,6 +110,24 @@ these guarantees: migrate their services into resources and remove fixed ports.
 Never erase `.archetipo` to stop services: stop/reconcile resources first.
 Required real browser/API/database checks cannot be replaced with mocks.
 
+Environment configuration is chosen by the environment skill and executed through
+its project recipe. On first setup distinguish shared settings, authorized test
+credentials and checkout-specific service bindings. Reuse those choices on later
+increments. Derive each checkout's URLs, database/storage targets and namespaces
+from its owned resources; copying `.env` never proves independence. Before
+migrations or seeding, probe the application's effective target and ownership
+without modifying unrelated services. Verify the real application persistence
+path and preservation of its synthetic fixtures across restart where applicable.
+
+`local_files` names only Git-ignored files explicitly chosen for reuse. The CLI
+recopies them from the original workspace at each preparation; keep checkout
+bindings in generated local overrides with verified configuration precedence.
+Preserve existing choices, including an empty list. Never scan other checkouts
+for secrets, request secret values in chat, or include them in a shared bundle.
+Persist the setup method in the qualified recipe and non-secret helpers. Ask
+only for unresolved access, external-effect or trial choices, using the person's
+product language; no additional environment approval ceremony is required.
+
 Reuse a service only when it was explicitly supplied for this verification or its
 ownership by this working directory and test scope can be verified. A familiar
 name, a spec-code prefix, a loopback port or synthetic-looking data is not proof

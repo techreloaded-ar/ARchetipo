@@ -115,3 +115,13 @@ ordinary spec worktrees; preserve that list when reconfiguring the recipe.
 Changes require preparation and fresh relevant checks. Candidate qualification
 includes the materialized configuration. File values are local inputs, never
 assets in the shared recipe bundle.
+
+Local files can contain both shared settings and service bindings. The environment
+skill must inspect the application's configuration precedence and arrange owned
+checkout bindings through project-supported overrides or generated local config.
+Readiness probes verify the application's resolved service identity before
+migrations or seed; a copied file alone is insufficient. Stateful projects declare
+checks for their actual persistence path and fixture preservation across restart.
+Concurrent isolation claims need distinct-target and fixture-separation evidence.
+These are project-specific probes/checks executed by the existing CLI contract,
+not a framework-specific provisioner or an automatic `.env` parser in the CLI.

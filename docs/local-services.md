@@ -78,6 +78,33 @@ Conserva i fallimenti, i log completi e gli adattatori originali per poter ripro
 anche dopo modifiche o rimozione della ricetta. Nessun segreto deve essere scritto
 in argv, ricetta o registro.
 
+## Configurazione effettiva dell’incremento
+
+La skill `archetipo-environment` prepara il progetto distinguendo impostazioni
+condivise, credenziali autorizzate per i servizi di prova e collegamenti alle
+risorse del singolo checkout. Alla prima configurazione legge esempi e loader del
+progetto; negli incrementi successivi riusa la ricetta e le scelte già registrate.
+Chiede alla persona soltanto decisioni ancora aperte su accessi, effetti esterni
+o modalità della prova, senza richiedere configurazioni manuali a ogni lavoro.
+
+`local_files` resta un trasferimento esplicito di file interi, non un interprete
+di `.env` e non una riscrittura automatica di `DATABASE_URL`. Un file può mescolare
+credenziali condivisibili e connessioni da sostituire: gli helper del progetto
+usano override supportati o generano una configurazione locale per il checkout,
+verificando quale valore l’applicazione usa davvero. La preparazione ricopia i
+file dichiarati, quindi eventuali personalizzazioni vanno nell’override locale.
+File originali, valori segreti e stato runtime non entrano nel bundle comune.
+
+Prima di migrazioni e seed, probe non distruttive verificano la destinazione
+effettiva dell’app e l’identità delle risorse attese. Un server raggiungibile o
+un `.env` copiato non bastano. Per un’app con persistenza, un check esercita il
+percorso reale con una piccola fixture sintetica e ne verifica la conservazione
+al riavvio. Se si dichiara indipendenza tra checkout concorrenti, la prova deve
+verificare destinazioni distinte e separazione delle fixture senza scrivere su
+risorse estranee. La CLI conserva le evidenze dei comandi dichiarati; la skill
+sceglie e realizza i controlli adatti al progetto. Non c’è un validatore universale
+dei file `.env`, né una copia automatica dei database.
+
 ## Porte e incrementi concorrenti
 
 Ogni checkout ha proprietario, registro e porte distinti. Non versionare né copiare
