@@ -35,10 +35,13 @@ Persist the evolving specification with `increment propose <id> --file -`:
 {"intent":"Markdown: problem and people; desired behavior and concrete examples; assumptions; exclusions; decisions and open questions"}
 ```
 
-When implementation is requested, persist a proportionate initial specification
-before the first product edit. Do not leave the work in discovery with no saved
-specification until after writing the app. This is a versioned statement of the
-request, not a separate planning or approval ceremony.
+When implementation is requested, persist a proportionate specification before
+the first product edit. Present the current revision in the conversation and ask
+the person to confirm its requirements. Wait for `increment approve <id> --file -`
+with `{"revision":<current revision number>}` before changing product code. In
+View, only the person's approval control calls this command. When invoked
+standalone, call it only after the person explicitly confirms the displayed
+revision in the conversation. A new revision invalidates an earlier approval.
 
 Stories and the enterprise backlog remain optional planning tools. Read linked
 stories when present and keep acceptance criteria and documentation consistent.
@@ -47,8 +50,8 @@ the first specification, or include `story_codes` in a later `propose` payload
 to version changed links. Codes must exist in the parent backlog; never clone
 its stories into an internal delivery board. Do not change story status merely
 because this work is ready or its PR merged. No formal implementation plan is required.
-The CLI versions the specification and makes it actionable without declaring it
-human-approved. Keep the specification consistent with decisions; never rewrite
+The CLI versions the specification and marks the exact revision approved only
+after the person's decision. Keep the specification consistent with decisions; never rewrite
 requirements to conceal a failed implementation or test. Preserve unknowns.
 
 An investigation may conclude that no software change is needed. Record useful
@@ -154,9 +157,12 @@ use independent assessment for material risk such as permissions, migrations,
 concurrency or data loss. Keep unrelated failures distinct from regressions.
 Do not run a full ceremony per feature or repeat setup/checks without a reason.
 
-Update documentation affected by the implemented behavior, recording decisions and
-relevant page references. Keep product intent distinct from current implementation.
-Use targeted documentation checks; a full Wiki rebuild is not required each turn.
+Read `wiki.enabled` from the parent workspace's current `.archetipo/config.yaml`
+before any Wiki operation; the sandbox copy may predate a settings change. When
+it is false, do not create or update Wiki pages or the Wiki index,
+including during discovery. When it is true, update only documentation affected
+by implemented behavior, recording decisions and relevant page references. Keep
+product intent distinct from current implementation and use targeted checks.
 
 Commit the verified product changes on this branch, including portable
 `.archetipo/environment.json`, `.archetipo/preview.json` and non-secret

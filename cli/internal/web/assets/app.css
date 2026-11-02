@@ -24,9 +24,31 @@
 .conv-increment>header{display:flex;align-items:center;gap:10px;font-size:14px;min-width:0}
 .conv-increment>header>strong{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .conv-increment-phase{font-size:12px;color:var(--accent);font-weight:700}
-.conv-increment-progress{display:flex;gap:6px 12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted)}
-.conv-increment-progress:empty{display:none}
-.conv-increment-active{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv-phases{display:flex;align-items:center;gap:4px;min-width:0;margin:0;padding:0;list-style:none;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden}
+.conv-phase{display:flex;align-items:center;gap:5px}
+.conv-phase+.conv-phase{padding-left:14px;background:linear-gradient(var(--border-strong),var(--border-strong)) no-repeat 0 50%/10px 1.5px}
+.conv-phase::before{content:"";flex:0 0 auto;width:9px;height:9px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--border-strong);background:var(--surface)}
+.conv-phase.is-done{color:var(--text-muted)}
+.conv-phase.is-done::before{background:var(--ok);border-color:var(--ok)}
+.conv-phase.is-current{color:var(--accent);font-weight:800}
+.conv-phase.is-current::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.conv-phases.has-stories{padding-bottom:22px}
+.conv-phase:has(.conv-phase-stories){position:relative}
+.conv-phase-stories{position:absolute;left:0;top:calc(100% + 6px);display:flex;align-items:center;margin:0;padding:0;list-style:none;font-weight:600;font-size:11px;color:var(--text-dim)}
+.conv-phase+.conv-phase>.conv-phase-stories{left:14px}
+.conv-phase-stories::before{content:"";position:absolute;left:4px;top:-6px;width:1.5px;height:5px;background:var(--border-strong)}
+.conv-phase-stories>li{display:flex;align-items:center}
+.conv-phase-stories>li+li:not(.conv-phase-stories-focus)::before{content:"";width:10px;height:1.5px;margin:0 4px 0 2px;background:var(--border-strong)}
+.conv-phase-story{display:flex;align-items:center;gap:4px;padding:0;border:0;background:none;font:inherit;font-family:var(--font-mono);color:var(--text-dim);cursor:pointer}
+.conv-phase-story::before{content:"";flex:0 0 auto;width:7px;height:7px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--border-strong);background:var(--surface)}
+.conv-phase-story:hover,.conv-phase-story:focus-visible{color:var(--text-strong)}
+.conv-phase-story:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px}
+.conv-phase-story.is-current{color:var(--work)}
+.conv-phase-story.is-current::before{background:var(--work);border-color:var(--work);box-shadow:0 0 0 3px var(--work-soft);animation:conv-story-pulse 1.6s ease-in-out infinite}
+@keyframes conv-story-pulse{50%{box-shadow:0 0 0 5px transparent}}
+@media (prefers-reduced-motion:reduce){.conv-phase-story.is-current::before{animation:none}}
+.conv-phase-stories-focus{margin-left:12px;max-width:240px;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)}
+@media (max-width:900px){.conv-phase+.conv-phase>.conv-phase-stories{left:16px}.conv-phase-story:not(.is-current){font-size:0;gap:0}.conv-phase-stories-focus{display:none}.conv-phase:not(.is-current){font-size:0;gap:0}.conv-phase+.conv-phase{padding-left:16px}}
 .conv-increment-request,.conv-increment-result>p{font-size:14px;line-height:1.7;margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .conv-increment-panel details{margin:10px 0}
 .conv-increment-panel summary{cursor:pointer;font-size:14px;font-weight:700;color:var(--accent);overflow-wrap:anywhere}
@@ -8012,7 +8034,6 @@ body.no-workspace [data-workspace-scoped] {
 
 .conv-work-home > .conv-composer { background:transparent; }
 .conv-work-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
-.conv-work-caption { font-size:13px; color:var(--text-secondary,#777); }
 .conv-work-actions:empty { display:none; }
 
 /* The working app owns the screen; enterprise context stays one view away. */
@@ -8085,8 +8106,5 @@ body.no-workspace [data-workspace-scoped] {
 .conv-next-confirm{display:flex;flex-wrap:wrap;align-items:center;gap:12px;flex:1 1 100%;padding:12px 12px 12px 16px}
 .conv-next-confirm p{margin:0;flex:1 1 280px;min-width:0;font-size:15px;line-height:1.45}
 .conv-next-confirm small{display:block;color:var(--text-muted);font-size:13px}
-.conv-work-phase{font-size:11px;color:var(--text-dim)}
-.conv-work-phase.is-current{color:var(--accent);font-weight:700}
-.conv-work-phase.is-done{opacity:.65}
 .thread-row.is-child{margin-left:14px}
 .conv-input-text[hidden]{display:none}

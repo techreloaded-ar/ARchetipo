@@ -64,6 +64,7 @@ dossier che restituisce `data.id` e `data.markdown`.
 | `increment show <id>` / `list` | Legge stato o lavori attivi, senza mutazioni |
 | `increment link <id> --file -` | `{"story_codes":["US-010"]}` prima della prima specifica |
 | `increment propose <id> --file -` | `{"intent":"Markdown","story_codes":["US-010"]}`; versiona specifica e riferimenti |
+| `increment approve <id> --file -` | `{"revision":2}`; registra la conferma della persona sulla revisione corrente e abilita lo sviluppo |
 | `increment ready <id> --file -` | `{"summary":"Come provarlo e limiti","checks":["Controllo reale e riferimento alla prova"],"squash_commit":{"title":"feat: descrizione del risultato"}}`; congela candidato pulito e committato |
 | `increment feedback <id> --file -` | `{"feedback":"Comportamento da cambiare"}`; richiede una nuova specifica/verifica |
 | `increment learn <id> --file -` | `{"observation":"Osservazione reale","decision":"Decisione facoltativa"}` |
@@ -91,6 +92,8 @@ originalmente usata: aggiornare i requisiti richiede una nuova revisione esplici
 **Specifica e decisioni** apre il pannello del dossier. Il pannello conserva
 revisioni, criteri, feedback e prove; **Esporta dossier** scarica il Markdown.
 **Documentazione** conserva la Wiki consultabile e le sue operazioni dedicate.
+Con `wiki.enabled: false`, il lavoro sul prodotto non aggiorna automaticamente
+né le pagine della Wiki né il suo indice.
 PRD, epiche, priorità, stati, stime e piani sono strumenti di gestione facoltativi.
 Zero punti indica una storia non stimata. Gli stati del backlog non approvano
 codice, non fanno merge e non attestano valore business.
@@ -232,7 +235,9 @@ The composer offers next steps declared by the process Template: open the app,
 reach a technical environment conversation, prepare a message, approve a verified
 candidate or inspect its PR. Suggested messages preserve the current draft and
 are sent only by the person. Publication offers an inline confirmation of its
-effect. These presentation aids add no intent approval or internal story tasks.
+effect. The person approves the exact specification revision before product
+development starts; a later revision requires a new decision. This adds no
+internal story tasks.
 The environment conversation appears below the product conversation in the rail.
 
 Runtime questions use a questionnaire with one question at a time, multiple

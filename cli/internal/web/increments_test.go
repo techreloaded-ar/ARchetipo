@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
@@ -26,6 +28,36 @@ func incrementGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %s %v", args, raw, err)
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+func TestIncrementWikiFollowsCurrentWorkspaceSetting(t *testing.T) {
+	srv, cfg, _ := newRunServer(t, newPersistentFakeNativeProvider("native-fake", nil), true)
+	if incrementWikiEnabled(srv.session()) {
+		t.Fatal("Wiki enabled by stale workspace state")
+	}
+	cfg.Wiki.Enabled = true
+	raw, err := config.RenderFull(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = config.SaveRaw(cfg.ProjectRoot, raw); err != nil {
+		t.Fatal(err)
+	}
+	if !incrementWikiEnabled(srv.session()) {
+		t.Fatal("increment ignored effective Wiki setting")
+	}
+	srv.session().cfg.Wiki.Enabled = true
+	cfg.Wiki.Enabled = false
+	raw, err = config.RenderFull(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = config.SaveRaw(cfg.ProjectRoot, raw); err != nil {
+		t.Fatal(err)
+	}
+	if incrementWikiEnabled(srv.session()) {
+		t.Fatal("increment used stale enabled Wiki setting after it was disabled")
+	}
 }
 func finishIncrementTurn(t *testing.T, srv *Server, p *persistentFakeNativeProvider, view conversationView) {
 	t.Helper()
@@ -57,6 +89,10 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	p := newPersistentFakeNativeProvider("native-fake", nil)
 	p.acceptsAttachments = true
 	srv, cfg, conn := newRunServer(t, p, true)
+	modelChoice := doJSON(t, srv, "GET", "/api/execution/model-choice", nil)
+	if modelChoice.Code != 200 || !strings.Contains(modelChoice.Body.String(), "turn.attachments") {
+		t.Fatalf("initial composer cannot discover image attachments: %d %s", modelChoice.Code, modelChoice.Body.String())
+	}
 	seedCommonEnvironment(t, srv)
 	incrementGit(t, cfg.ProjectRoot, "init", "-b", "main")
 	incrementGit(t, cfg.ProjectRoot, "config", "user.email", "tests@example.test")
@@ -119,13 +155,13 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if err := json.Unmarshal(draftResponse.Body.Bytes(), &draft); err != nil {
 		t.Fatal(err)
 	}
-	if draft.Status != increment.Developing || draft.Revisions[0].Approved || len(draft.Stories) != 0 {
+	if draft.Status != increment.Discovery || draft.Revisions[0].Approved || len(draft.Stories) != 0 {
 		t.Fatalf("wrong product state: %+v", draft)
 	}
 	finishIncrementTurn(t, srv, p, view)
-	removed := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
-	if removed.Code != 409 {
-		t.Fatal("retired approval is still offered", removed.Code)
+	approved := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
+	if approved.Code != 200 {
+		t.Fatal("current specification was not approved", approved.Code, approved.Body.String())
 	}
 	untouched, err := conn.FetchBacklogItems(context.Background(), "")
 	if err != nil || len(untouched) != 2 {
@@ -230,6 +266,9 @@ func assertIncrementSessionGuidance(t *testing.T, prompt string) {
 	if strings.Contains(prompt, "Work only in the dedicated sandbox") || !strings.Contains(prompt, "archetipo execution environment publish") || !strings.Contains(prompt, "never modify the parent backlog") {
 		t.Fatal("increment lost the distinction between product edits and common environment publication")
 	}
+	if !strings.Contains(prompt, "Automatic Wiki updates are disabled") || !strings.Contains(prompt, "specification") {
+		t.Fatal("increment prompt lost configuration or approval gate")
+	}
 }
 
 func gitForIncrementCleanup(root, workdir string) ([]byte, error) {
@@ -297,6 +336,24 @@ func TestIncrementGuidanceUsesTemplateAndReachesWaitingEnvironment(t *testing.T)
 	phases := incrementPhases(tpl, increment.Delivered)
 	if len(phases) == 0 || phases[len(phases)-1].Label != "Integrato" {
 		t.Fatalf("merge misrepresented as deployment: %+v", phases)
+	}
+}
+
+func TestDevelopmentStoriesStayUnderCurrentPhaseWithoutInventingProgress(t *testing.T) {
+	tpl := template.Default()
+	phases := incrementPhases(tpl, increment.Developing)
+	if phases[1].Label != "Sviluppo" || phases[2].Label != "Preparazione" {
+		t.Fatalf("unexpected phase labels: %+v", phases)
+	}
+	attachDevelopmentStories(phases, []incrementStoryView{
+		{Spec: domain.Spec{Code: "US-001", Title: "Prima storia"}, StatusLabel: "Da fare"},
+		{Spec: domain.Spec{Code: "US-002", Title: "Seconda storia"}, StatusLabel: "In lavorazione", Active: true},
+	})
+	if len(phases[1].Stories) != 2 || phases[1].Stories[0].State != "todo" || phases[1].Stories[1].State != "current" || phases[1].StoriesFocus != "Ora: Seconda storia" {
+		t.Fatalf("linked stories are not shown below development: %+v", phases[1])
+	}
+	if len(phases[0].Stories) != 0 || len(phases[2].Stories) != 0 {
+		t.Fatalf("linked stories appeared under another phase: %+v", phases)
 	}
 }
 

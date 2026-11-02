@@ -148,9 +148,17 @@ async function main(){
   assert.equal(await page.evaluate(`document.getElementById("workspace-inspector").hidden`),false);
   const proposal={intent:"Problema: condividere i clienti selezionati. Comportamento: esportazione CSV con i soli clienti scelti."};
   const proposed=await cliJSON(["increment","propose",inc.id],proposal);
-  assert.equal(proposed.status,"DEVELOPING");
-  assert.equal(proposed.revisions[0].approval_source,"request");
+  assert.equal(proposed.status,"DISCOVERY");
   assert.notEqual(proposed.revisions[0].approved,true,"request is not business acceptance");
+  const acceptedRequirements=await cliJSON(["increment","approve",inc.id],{revision:1});
+  assert.equal(acceptedRequirements.status,"DEVELOPING");
+  assert.equal(acceptedRequirements.revisions[0].approval_source,"person");
+  await page.waitFor(`document.querySelector('.conv-phase.is-current')?.textContent.includes('Sviluppo') && document.querySelector('.conv-phase-story.is-current')?.textContent.includes('US-001')`,timeout,"current workflow step and active story");
+  await fs.writeFile(path.join(runDir,"developing.png"),Buffer.from((await page.send("Page.captureScreenshot",{format:"png"})).data,"base64"));
+  await page.evaluate(`document.querySelector('[data-increment-story="US-001"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-increment-section="current-story-US-001"][open]')`,timeout,"story tree opens the linked story details");
+  await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
+  await page.evaluate(`window.WorkspacePanels.open("preview")`);
   assert.equal((await cliJSON(["spec","list"])).items.length,0,"created a synthetic backlog");
   let workflow;
   if(enterprise){
@@ -235,7 +243,9 @@ async function main(){
   assert.equal(afterChat.state,"ready","chat stopped the preview");assert.equal(afterChat.url,livePreview.url,"chat replaced the preview");
   await cliJSON(["increment","feedback",inc.id],{feedback:"Aggiungi Excel"});
   const revised=await cliJSON(["increment","propose",inc.id],{intent:"Esportare CSV ed Excel"});
-  assert.equal(revised.status,"DEVELOPING");assert.equal(revised.ready_sha,undefined);
+  assert.equal(revised.status,"DISCOVERY");assert.equal(revised.ready_sha,undefined);
+  const acceptedRevision=await cliJSON(["increment","approve",inc.id],{revision:2});
+  assert.equal(acceptedRevision.status,"DEVELOPING");
   assert.equal((await cliJSON(["increment","list"],undefined,sandbox)).length,1);
   await cliJSON(["increment","learn",inc.id],{observation:"L’esportazione deve essere leggibile da Excel",decision:"Manteniamo entrambi i formati"});
   if(enterprise){
@@ -298,7 +308,7 @@ async function main(){
   assert.equal(reopened.status,200);assert.equal((await reopened.json()).session.session.native.id,native);
   ok("Report letto dal worktree come testo inerte; riapertura ripetuta conserva la stessa sessione nativa.");
   assert.deepEqual(exceptions,[],"uncaught browser exceptions");
-  ok("Primo messaggio → worktree e sessione; specifica senza conferma aggiuntiva; preview automatica; feedback e reload nello stesso lavoro; PR protetta.");
+  ok("Primo messaggio → worktree e sessione; specifica approvata prima dello sviluppo; preview automatica; feedback e reload nello stesso lavoro; PR protetta.");
  } catch(error) {
   failure=error;console.error(error.stack || error);
   if(page)try{

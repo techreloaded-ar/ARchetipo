@@ -165,7 +165,8 @@ type executionModelChoiceView struct {
 	ModelSource string            `json:"model_source"`
 	Options     map[string]string `json:"options,omitempty"`
 	// Models are the alternatives, exactly as the provider declared them.
-	Models []execution.ModelOption `json:"models,omitempty"`
+	Models       []execution.ModelOption       `json:"models,omitempty"`
+	Capabilities []execution.SessionCapability `json:"capabilities,omitempty"`
 	// Available is true only when the catalog is declared, obtainable and not
 	// empty; otherwise UnavailableReason says which of the three it is.
 	Available         bool   `json:"available"`
@@ -214,6 +215,11 @@ func (s *Server) handleGetExecutionModelChoice(w http.ResponseWriter, r *http.Re
 		view.UnavailableReason = err.Error()
 		writeJSON(w, http.StatusOK, view)
 		return
+	}
+	if sessions, native := execution.SessionProviderFor(provider); native {
+		if discovery, discoverErr := sessions.DiscoverSession(r.Context(), execution.SessionDiscoveryRequest{ProviderConfig: selection.Config, WorkingDir: ws.cfg.ProjectRoot}); discoverErr == nil {
+			view.Capabilities = execution.NormalizeSessionCapabilities(discovery.Capabilities)
+		}
 	}
 
 	resolution := execution.ResolveModelChoice(r.Context(), provider, selection.Config)

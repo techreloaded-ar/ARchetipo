@@ -231,6 +231,9 @@ func builtin() Template {
 	return Template{
 		IncrementActions: []IncrementAction{
 			{ID: "discuss", Label: "Riprendi il lavoro", Statuses: []string{"DISCOVERY"}},
+			{ID: "approve-intent", Label: "Approva i requisiti e avvia lo sviluppo", Statuses: []string{"DISCOVERY"}, Primary: true,
+				Confirm: &IncrementConfirm{Title: "Confermi questi requisiti?", Text: "Approverai la versione della specifica mostrata nel pannello. L’agente potrà iniziare lo sviluppo dopo la conferma.", Label: "Approva e avvia"},
+				Prompts: []IncrementPrompt{{Label: "Vorrei cambiare…", Text: "Vorrei cambiare: "}}},
 			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}, Prompts: []IncrementPrompt{{Label: "A che punto sei?", Text: "A che punto sei con lo sviluppo?"}}},
 			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}, Primary: true,
 				Confirm: &IncrementConfirm{Title: "Aprire la pull request?", Text: "Pubblicheremo il commit verificato mostrato nel dossier e lo proporremo ai developer. Il merge e la distribuzione restano decisioni successive.", Label: "Approva e apri PR"},
@@ -239,8 +242,8 @@ func builtin() Template {
 		},
 		IncrementPhases: []IncrementPhase{
 			{Label: "Comprensione", Statuses: []string{"DISCOVERY"}},
-			{Label: "Sviluppo e prove", Statuses: []string{"DEVELOPING", "REVIEW"}},
-			{Label: "Proposta ai developer", Statuses: []string{"PUBLISHING", "PROPOSED"}},
+			{Label: "Sviluppo", Statuses: []string{"DEVELOPING", "REVIEW"}},
+			{Label: "Preparazione", Statuses: []string{"PUBLISHING", "PROPOSED"}},
 			{Label: "Integrato", Statuses: []string{"DELIVERED"}},
 		},
 		ID:      FabbricaDelSoftware,

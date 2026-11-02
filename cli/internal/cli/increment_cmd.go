@@ -54,7 +54,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment and its local files, retaining only committed work in Git")
 	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
 	root.AddCommand(deletionPlan, deletion)
-	for _, operation := range []string{"create", "show", "dossier", "list", "propose", "link", "ready", "feedback", "publish", "refresh", "learn", "conclude"} {
+	for _, operation := range []string{"create", "show", "dossier", "list", "propose", "approve", "link", "ready", "feedback", "publish", "refresh", "learn", "conclude"} {
 		var file string
 		cmd := &cobra.Command{Use: operation, Short: operation + " a product increment"}
 		if operation == "create" || operation == "list" {
@@ -142,6 +142,8 @@ func newIncrementCmd(s streams) *cobra.Command {
 						value, err = service.CreateWithMode(cmd.Context(), input.Title, input.Request, input.OriginConversationID, input.DevelopmentMode)
 					case "link":
 						value, err = service.Link(cmd.Context(), args[0], input.StoryCodes)
+					case "approve":
+						value, err = service.ApproveIntent(cmd.Context(), args[0], input.Revision)
 					case "feedback":
 						value, err = service.RequestChanges(cmd.Context(), args[0], increment.FeedbackRequest{Feedback: input.Feedback, Kind: input.Kind, StoryCodes: input.StoryCodes})
 					case "publish":

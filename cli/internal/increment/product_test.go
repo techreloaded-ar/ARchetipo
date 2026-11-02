@@ -34,8 +34,11 @@ func TestProductWorkWithoutDeliveryArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Status != Developing || r.Revisions[0].Approved {
-		t.Fatalf("invented acceptance: %+v", r)
+	if r.Status != Discovery || r.Revisions[0].Approved {
+		t.Fatalf("proposal started development without approval: %+v", r)
+	}
+	if _, err = s.ApproveIntent(ctx, r.ID, 0); err == nil {
+		t.Fatal("stale revision approved")
 	}
 	cfg, err := config.LoadExact(r.Workdir)
 	if err != nil {
@@ -69,6 +72,32 @@ func TestProductWorkWithoutDeliveryArtifacts(t *testing.T) {
 	r, err = s.Refresh(ctx, r.ID)
 	if err != nil || r.Status != Delivered || r.ApprovedSHA != candidate || r.IntegrationSHA != "developer-revision" {
 		t.Fatalf("lost developer handoff: %+v %v", r, err)
+	}
+}
+
+func TestProductSpecificationNeedsApprovalOfCurrentRevision(t *testing.T) {
+	s, work := productWork(t)
+	ctx := context.Background()
+	work, err := s.Propose(ctx, work.ID, Proposal{Intent: "First requirements"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Ready(ctx, work.ID, Result{Summary: "Result", Checks: []string{"check"}, SquashCommit: &SquashCommit{Title: "feat: result"}}); err == nil {
+		t.Fatal("unapproved requirements passed the development gate")
+	}
+	if _, err = s.ApproveIntent(ctx, work.ID, 2); err == nil {
+		t.Fatal("a revision that was not displayed was approved")
+	}
+	work, err = s.Propose(ctx, work.ID, Proposal{Intent: "Revised requirements"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ApproveIntent(ctx, work.ID, 1); err == nil {
+		t.Fatal("stale approval authorized new requirements")
+	}
+	work, err = s.ApproveIntent(ctx, work.ID, 2)
+	if err != nil || work.Status != Developing || !work.Revisions[1].Approved || work.Revisions[1].ApprovalSource != "person" {
+		t.Fatalf("current approval not recorded: %+v %v", work, err)
 	}
 }
 
@@ -107,7 +136,7 @@ func TestProductRevisionRevokesCandidateWithoutStoryTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ReadySHA != "" || r.Status != Developing || len(r.Revisions) != 2 {
+	if r.ReadySHA != "" || r.Status != Discovery || len(r.Revisions) != 2 {
 		t.Fatalf("stale version: %+v", r)
 	}
 }

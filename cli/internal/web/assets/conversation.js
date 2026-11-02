@@ -112,6 +112,7 @@
 		pendingMessageMark: "in consegna",
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
 		seenImages: "Immagini lette dall'agente in questo turno",
+		imagesWithoutText: "Immagini prodotte o lette dall'agente",
 		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
 		// detto che il provider le accetta: il pannello non lo sa da sé.
 		attach: "Allega immagine",
@@ -1083,10 +1084,17 @@
 			// le segue e non si ripetono sotto la successiva.
 			let seenImages = [];
 			const seenImageIDs = new Set();
+			const flushImages = () => {
+				const attachments = renderEventAttachments(seenImages);
+				if (attachments) rows.push(`<li class="conv-event cev-agent conv-generated-images"><div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span></div><div class="conv-event-body"><div class="conv-seen-images"><span class="conv-seen-images-label">${escapeHtml(TEXT.imagesWithoutText)}</span>${attachments}</div></div></li>`);
+				seenImages = [];
+			};
 			let streamMetadata = [];
 			const flushAgent = () => {
 				if (!agentRun.length) return;
-				rows.push(renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"), seenImages));
+				const answer = renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"), seenImages);
+				if (answer) rows.push(answer);
+				else flushImages();
 				agentRun = [];
 				seenImages = [];
 				if (streamMetadata.length) {
@@ -1125,9 +1133,9 @@
 				} else {
 					flushTechnical();
 					flushAgent();
+					if (event && event.kind === "user_message") flushImages();
 					rows.push(renderEvent(event));
 					if (event && event.kind === "user_message") {
-						seenImages = [];
 						seenImageIDs.clear();
 					}
 				}
@@ -1150,6 +1158,7 @@
 			}
 			flushTechnical();
 			flushAgent();
+			flushImages();
 		}
 		for (const [anchor, blocks] of anchored) {
 			if (emitted.has(anchor)) continue;
@@ -1501,6 +1510,17 @@
 		return value.charAt(0).toUpperCase() + value.slice(1);
 	}
 
+	function renderPhaseStories(phase) {
+		const stories = arrayAt(phase, "stories").filter(story => story && textAt(story, "code"));
+		if (!stories.length) return "";
+		const focus = textAt(phase, "stories_focus");
+		return `<ol class="conv-phase-stories" aria-label="Storie collegate">${stories.map(story => {
+			const code = textAt(story, "code");
+			const label = `${code} · ${textAt(story, "title")} — ${textAt(story, "state_label")}`;
+			return `<li><button type="button" class="conv-phase-story is-${escapeHtml(textAt(story, "state") || "todo")}" data-increment-story="${escapeHtml(code)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${escapeHtml(code)}</button></li>`;
+		}).join("")}${focus ? `<li class="conv-phase-stories-focus" title="${escapeHtml(focus)}">${escapeHtml(focus)}</li>` : ""}</ol>`;
+	}
+
 	// `controls` is whatever the caller wants at the right end of the band —
 	// today the close control, and only while the conversation is live. The head
 	// does not decide what belongs there and never builds it: it is handed the
@@ -1517,15 +1537,18 @@
 		const metadata = objectAt(session, "session");
 		const environment = objectAt(metadata, "environment");
 		const location = textAt(environment, "location");
-		const work = objectAt(view, "increment");
-		const simple = !!work;
-		const dirHtml = simple ? `<span class="conv-work-caption">Il tuo lavoro</span>` : dir
-			? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>`
-			: "";
+		const phases = arrayAt(objectAt(view, "increment"), "phases").filter(phase => phase && textAt(phase, "label"));
+		const withStories = phases.some(phase => arrayAt(phase, "stories").length) ? " has-stories" : "";
+		const dirHtml = phases.length
+			? `<ol class="conv-phases${withStories}" aria-label="Fasi dell’incremento"${dir ? ` title="${escapeHtml(dir)}"` : ""}>${phases.map(phase => {
+				const state = textAt(phase, "state");
+				return `<li class="conv-phase is-${escapeHtml(state || "todo")}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHtml(textAt(phase, "label"))}${renderPhaseStories(phase)}</li>`;
+			}).join("")}</ol>`
+			: dir ? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>` : "";
 		const providerHtml = agent
 			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";
-		const locationHtml = !simple && location
+		const locationHtml = !phases.length && location
 			? `<span class="conv-provider" title="${escapeHtml(location)}">${escapeHtml(location)}</span>`
 			: "";
 		return `<div class="conv-head">
@@ -1828,19 +1851,19 @@
 		const parse = body => typeof ui.markedParse === "function" ? ui.markedParse(body) : "<pre>" + escapeHtml(body) + "</pre>";
 		const link = (url, label) => /^https?:\/\//.test(url) ? '<a class="ghost-btn" target="_blank" rel="noopener noreferrer" href="' + escapeHtml(url) + '">' + escapeHtml(label) + '</a>' : "";
 		const section = (key, label, body) => '<details data-increment-section="' + escapeHtml(key) + '"' + (opened[key] ? " open" : "") + '><summary>' + escapeHtml(label) + '</summary>' + body + '</details>';
-		const phases = arrayAt(increment, 'phases').map(phase => '<span class="conv-work-phase is-' + escapeHtml(textAt(phase,'state')) + '">' + escapeHtml(textAt(phase,'label')) + '</span>').join('');
 		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
 		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
         const quickActions = arrayAt(increment, "next_steps").length ? "" : arrayAt(increment, "quick_actions").map(action => '<button type="button" class="ghost-btn" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
-        if (!panel) return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><header><strong>'+escapeHtml(textAt(increment,"title"))+'</strong><span class="conv-increment-phase">'+escapeHtml(textAt(increment,"candidate_label") || textAt(increment,"status_label"))+'</span>'+phases+'<button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'">Specifica e decisioni</button></header><div class="conv-work-actions">'+quickActions+'</div></section>';
+		if (!panel) {
+			return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><header><strong>'+escapeHtml(textAt(increment,"title"))+'</strong><span class="conv-increment-phase">'+escapeHtml(textAt(increment,"candidate_label") || textAt(increment,"status_label"))+'</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'">Specifica e decisioni</button></header><div class="conv-work-actions">'+quickActions+'</div></section>';
+		}
 		if (!panelOpen) return "";
 		const renderChange = (change, feedback) => {
 			const codes = arrayAt(change, "story_codes");
 			return (feedback ? '<p class="conv-increment-feedback">' + escapeHtml(feedback) + '</p>' : "") + (codes.length ? '<p>Storie interessate: ' + codes.map(escapeHtml).join(", ") + '</p>' : "");
 		};
 		const renderRevision = revision => '<div class="markdown-rendered">' + parse(textAt(revision, "intent")) + '</div><ol class="conv-increment-stories">' + arrayAt(revision, "stories").map(story => '<li><strong>' + escapeHtml(textAt(story, "title")) + '</strong>' + section("story-" + revision.number + "-" + story.code, "Leggi la storia", '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '</li>').join("") + '</ol>';
-        const trace = typeof window !== "undefined" ? window.StoryTrace : (typeof require === "function" ? require("./story-trace.js") : null);
-        let contents = trace ? trace.renderStories(stories) : "";
+        let contents = stories.length ? '<h3>Storie collegate</h3><ol class="conv-increment-stories">' + stories.map(story => '<li' + (story.active ? ' class="is-active"' : '') + '><span class="conv-increment-story-status">' + escapeHtml(textAt(story, "status_label")) + '</span>' + section("current-story-" + story.code, story.code + " · " + story.title, '<div class="markdown-rendered">' + parse(textAt(story, "body")) + '</div>') + '<button type="button" class="ghost-btn" data-linked-story="' + escapeHtml(textAt(story, "code")) + '">Apri scheda</button></li>').join("") + '</ol>' : "";
         if (latest) contents += section("intent", "Specifica · versione " + latest.number, '<div class="markdown-rendered">'+parse(textAt(latest,"intent"))+'</div>');
         else contents += '<p>La specifica prenderà forma durante la conversazione.</p>';
 		const pendingChange = objectAt(increment, "pending_change");

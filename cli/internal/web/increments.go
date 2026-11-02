@@ -25,8 +25,16 @@ type incrementStoryView struct {
 	Active              bool   `json:"active"`
 }
 type incrementPhaseView struct {
-	Label string `json:"label"`
-	State string `json:"state"` // done, current, todo
+	Label        string                    `json:"label"`
+	State        string                    `json:"state"` // done, current, todo
+	Stories      []incrementPhaseStoryView `json:"stories,omitempty"`
+	StoriesFocus string                    `json:"stories_focus,omitempty"`
+}
+type incrementPhaseStoryView struct {
+	Code       string `json:"code"`
+	Title      string `json:"title"`
+	State      string `json:"state"` // current, todo
+	StateLabel string `json:"state_label"`
 }
 
 // incrementStepView is one of the next steps offered beside the composer. A
@@ -91,6 +99,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		story := incrementStoryView{Spec: domain.Spec{Code: linked.Code, Title: linked.Title, Body: linked.Body, URL: linked.URL}, StatusLabel: "Storia collegata"}
 		if current, readErr := ws.conn.ReadSpecDetail(ctx, linked.Code); readErr == nil {
 			story.StatusLabel = labels[current.Status]
+			story.Active = r.Status == increment.Developing && current.Status == domain.StatusInProgress
 			story.RequirementsChanged = current.Title != linked.Title || current.Body != linked.Body
 			if story.RequirementsChanged {
 				story.StatusLabel += " · requisiti aggiornati nel backlog"
@@ -98,8 +107,11 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		}
 		view.Stories = append(view.Stories, story)
 	}
+	if r.Status == increment.Developing && len(view.Stories) == 1 {
+		view.Stories[0].Active = true
+	}
 	view.ActivityLabel = "In attesa"
-	view.Note = "Specifiche, storie collegate, osservazioni e versioni del lavoro. L’approvazione riguarda il risultato provato; i developer decidono l’integrazione."
+	view.Note = "Specifiche, storie collegate, osservazioni e versioni del lavoro. Conferma i requisiti prima dello sviluppo e il risultato provato prima della PR; i developer decidono l’integrazione."
 	if r.ConversationID != "" {
 		if record, readErr := ws.conversationStore().GetMetadata(ctx, r.ConversationID); readErr == nil {
 			view.Busy = record.Work != "" && record.Work != execution.SessionIdle
@@ -161,7 +173,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		if action.ID == "publish" && !candidateValid {
 			continue
 		}
-		if action.ID == "approve-intent" {
+		if action.ID == "approve-intent" && (len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Approved) {
 			continue
 		}
 		offered = append(offered, action)
@@ -171,6 +183,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		}
 	}
 	view.Phases = incrementPhases(tpl, r.Status)
+	if r.Status == increment.Developing {
+		attachDevelopmentStories(view.Phases, view.Stories)
+	}
 	s.incrementNextSteps(ws, r, offered, &view)
 	return view
 }
@@ -195,8 +210,21 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 		s.checkIncrementPR(ws, r.ID)
 	}
 }
-func incrementPrompt(r increment.Record, message string) string {
-	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork in the dedicated worktree %s. Read the persisted increment before acting. Keep product changes in this worktree; never modify the parent backlog or open a PR before the business approval. This worktree is local working separation, not an OS security sandbox. Environment configuration and repair belong to /archetipo-environment in its separate technical session. That session may publish the common recipe and its non-secret helpers through archetipo execution environment publish from this worktree; this does not publish product code or require manual edits in the parent checkout. Respect the harness's actual permissions and report missing capabilities. You are running inside ARchetipo View: the viewer owns preview startup. Do not invoke execution preview run or launch another application server in this session. Configure the managed recipe and finish the turn so the viewer can launch it. If browser control is unavailable, report that limitation and let the person try the managed Preview; do not keep the turn open waiting for manual validation.\n%s\nWorkflow conversation: %s", r.ID, message, r.Workdir, sessionInputGuidance, r.ConversationID)
+func incrementPrompt(r increment.Record, message string, wikiEnabled bool) string {
+	approval := "The current specification is awaiting the person's approval. Do not change product code until its exact revision is approved."
+	if len(r.Revisions) > 0 && r.Revisions[len(r.Revisions)-1].Approved {
+		approval = "The current specification revision has the person's approval."
+	}
+	wiki := "Automatic Wiki updates are disabled by workspace configuration: do not create or edit Wiki pages or its index."
+	if wikiEnabled {
+		wiki = "Automatic Wiki updates are enabled; update only pages affected by implemented behavior."
+	}
+	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork in the dedicated worktree %s. Read the persisted increment before acting. %s %s Keep product changes in this worktree; never modify the parent backlog or open a PR before the business approval. This worktree is local working separation, not an OS security sandbox. Environment configuration and repair belong to /archetipo-environment in its separate technical session. That session may publish the common recipe and its non-secret helpers through archetipo execution environment publish from this worktree; this does not publish product code or require manual edits in the parent checkout. Respect the harness's actual permissions and report missing capabilities. You are running inside ARchetipo View: the viewer owns preview startup. Do not invoke execution preview run or launch another application server in this session. Configure the managed recipe and finish the turn so the viewer can launch it. If browser control is unavailable, report that limitation and let the person try the managed Preview; do not keep the turn open waiting for manual validation.\n%s\nWorkflow conversation: %s", r.ID, message, r.Workdir, approval, wiki, sessionInputGuidance, r.ConversationID)
+}
+
+func incrementWikiEnabled(ws *workspaceSession) bool {
+	current, _, _, _, err := readConfigState(ws.cfg.ProjectRoot)
+	return err == nil && current.Wiki.Enabled
 }
 func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 	ws := s.session()
@@ -274,7 +302,7 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if sendErr == nil {
-		sendErr = s.sendNativeConversationMessage(ctx, ws, opened.snapshot, sendConversationMessageReq{Message: incrementPrompt(created, body.Request), display: body.Request, attachments: attachments})
+		sendErr = s.sendNativeConversationMessage(ctx, ws, opened.snapshot, sendConversationMessageReq{Message: incrementPrompt(created, body.Request, incrementWikiEnabled(ws)), display: body.Request, attachments: attachments})
 	}
 	view := s.nativeConversationView(ctx, ws, opened.snapshot, 0)
 	if sendErr != nil {
@@ -349,6 +377,8 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 	}
 	message := ""
 	switch action {
+	case "approve-intent":
+		current, err = service.ApproveIntent(ctx, current.ID, body.Revision)
 	case "develop":
 		message = "Riprendi il lavoro dalla specifica e dalle decisioni registrate. Conserva il lavoro già verificato e fermati al risultato da provare."
 	case "discuss":
@@ -364,6 +394,9 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if action == "approve-intent" && err == nil {
+		message = fmt.Sprintf("La persona ha approvato la versione %d della specifica. Avvia lo sviluppo dei requisiti approvati.", body.Revision)
+	}
 	if message != "" {
 		snapshot, live := ws.conversation.get(current.ConversationID)
 		if !live {
@@ -374,9 +407,9 @@ func (s *Server) handleIncrementAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		send := func(sendCtx context.Context) error {
-			return s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: incrementPrompt(current, message) + "\nEnvironment preparation report: " + environmentReport(current.Workdir) + "\nL’ambiente è stato preparato separatamente. Usa la ricetta comune e i report esistenti; non ripetere configurazione o build di setup nella chat di sviluppo. Per modifiche ai requisiti dell’ambiente, segnala il blocco nel pannello ambiente.", display: message})
+			return s.sendNativeConversationMessage(sendCtx, ws, snapshot, sendConversationMessageReq{environmentPrepared: true, Message: incrementPrompt(current, message, incrementWikiEnabled(ws)) + "\nEnvironment preparation report: " + environmentReport(current.Workdir) + "\nL’ambiente è stato preparato separatamente. Usa la ricetta comune e i report esistenti; non ripetere configurazione o build di setup nella chat di sviluppo. Per modifiche ai requisiti dell’ambiente, segnala il blocco nel pannello ambiente.", display: message})
 		}
-		if action == "develop" {
+		if action == "develop" || action == "approve-intent" {
 			err = s.queueEnvironment(ctx, ws, current.Workdir, false, false, send)
 		} else {
 			err = send(ctx)
@@ -405,7 +438,7 @@ func (s *Server) prepareIncrementMessage(ctx context.Context, ws *workspaceSessi
 	// The person's message stays readable; only the harness sees the method and
 	// sandbox binding. An ordinary free conversation never enters this branch.
 	body.display = body.Message
-	body.Message = incrementPrompt(current, body.Message)
+	body.Message = incrementPrompt(current, body.Message, incrementWikiEnabled(ws))
 	return nil
 }
 
@@ -416,6 +449,33 @@ func (s *Server) handleIncrementDossier(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": record.ID, "markdown": increment.Dossier(record)})
+}
+
+// The original backlog remains independent of development. Only the story
+// currently marked in progress there can be highlighted; the other linked
+// stories stay visible without inventing task progress or completion.
+func attachDevelopmentStories(phases []incrementPhaseView, stories []incrementStoryView) {
+	if len(stories) == 0 {
+		return
+	}
+	for phaseIndex := range phases {
+		if phases[phaseIndex].State != "current" {
+			continue
+		}
+		for _, story := range stories {
+			state := "todo"
+			if story.Active {
+				state = "current"
+				if phases[phaseIndex].StoriesFocus == "" {
+					phases[phaseIndex].StoriesFocus = "Ora: " + story.Title
+				}
+			}
+			phases[phaseIndex].Stories = append(phases[phaseIndex].Stories, incrementPhaseStoryView{
+				Code: story.Code, Title: story.Title, State: state, StateLabel: story.StatusLabel,
+			})
+		}
+		return
+	}
 }
 
 func incrementPhases(tpl template.Template, status string) []incrementPhaseView {
@@ -444,6 +504,9 @@ func incrementPhases(tpl template.Template, status string) []incrementPhaseView 
 
 func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, offered []template.IncrementAction, view *incrementView) {
 	steps := []incrementStepView{}
+	if r.Status == increment.Discovery && len(r.Revisions) > 0 && !r.Revisions[len(r.Revisions)-1].Approved {
+		steps = append(steps, incrementStepView{Kind: "open", Open: "details", Target: "intent", Label: fmt.Sprintf("Leggi i requisiti · v%d", r.Revisions[len(r.Revisions)-1].Number)})
+	}
 	if environment := readEnvironmentOperation(r.Workdir); environment.ConversationID != "" {
 		switch environment.State {
 		case "waiting":

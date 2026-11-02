@@ -1046,6 +1046,13 @@ describe("renderConversation — la run dentro il flusso", () => {
 				assert.ok(row.includes("Immagini lette dall&#39;agente"), `la striscia dichiara cosa mostra: ${row}`);
 			});
 
+				it("mostra anche un'immagine generata dopo l'ultima risposta testuale", () => {
+					const generated = { id: 6, seq: 6, kind: "tool_end", tool: "imageGeneration", attachments: [seen("generated.png", "/generated.png")] };
+					const html = renderConversation(withConversation({ events: [...turn, generated], last_id: 6 }), "");
+					assert.match(html, /conv-generated-images/);
+					assert.match(html, /src="\/generated.png"/);
+				});
+
 			it("una frase successiva della persona azzera la striscia, e la risposta che segue non la ripete", () => {
 				const html = renderConversation(
 					withConversation({
@@ -2307,6 +2314,12 @@ describe('process receipt presentation', () => {
 // un fatto — e un evento che porta allegati li mostra dall'indirizzo che l'evento
 // stesso dichiara, mai da uno costruito qui.
 describe("allegati immagine", () => {
+	it("offre immagini già nel messaggio iniziale del nuovo lavoro", () => {
+		const empty = {available:true, conversation:null, events:[]};
+		const activities = {start_work:{runnable:true,placeholder:"Descrivi il problema"}};
+		const html = renderConversation(empty, "", {writable:true,attachmentsOffered:true,activities});
+		assert.match(html, /data-conversation-attach/);
+	});
 	it("offre il comando per allegare solo quando il chiamante lo dichiara", () => {
 		const without = renderConversation(LIVE, "", { writable: true });
 		assert.ok(!without.includes("data-conversation-attach"));

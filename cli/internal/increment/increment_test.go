@@ -200,10 +200,21 @@ func specify(t *testing.T, s *Service, r Record, _ ...domain.Spec) Record {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r, err = s.ApproveIntent(context.Background(), r.ID, r.Revisions[len(r.Revisions)-1].Number)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return r
 }
 func ready(t *testing.T, s *Service, r Record) Record {
 	t.Helper()
+	if len(r.Revisions) > 0 && !r.Revisions[len(r.Revisions)-1].Approved {
+		var err error
+		r, err = s.ApproveIntent(context.Background(), r.ID, r.Revisions[len(r.Revisions)-1].Number)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("increment "+r.ID+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +342,7 @@ func TestFeedbackKeepsSameSandboxAndPreservesPriorResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ID != prior.ID || r.Workdir != prior.Workdir || r.Branch != prior.Branch || r.ReadySHA != "" || r.Status != Developing || r.Revisions[0].Result == nil || r.Revisions[0].HeadSHA != prior.ReadySHA {
+	if r.ID != prior.ID || r.Workdir != prior.Workdir || r.Branch != prior.Branch || r.ReadySHA != "" || r.Status != Discovery || r.Revisions[0].Result == nil || r.Revisions[0].HeadSHA != prior.ReadySHA {
 		t.Fatalf("feedback lost identity/evidence: %+v", r)
 	}
 }

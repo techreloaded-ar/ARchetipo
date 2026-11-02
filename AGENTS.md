@@ -33,6 +33,8 @@ remove their data.
   delivery backlog or mark them DONE merely because code passes checks or a PR merges.
 - Version the Markdown specification and linked requirement snapshots. Preserve
   prior results, observations, decisions and the original request.
+- Product development requires the person's approval of the current specification
+  revision; a revised specification needs a new approval.
 - `increment dossier` and the PR carry a portable business record. Environment
   removal retains this record and its story references through the deletion receipt.
 - Only an explicit approval of the displayed commit publishes a PR. Preserve the
@@ -339,8 +341,8 @@ The page-load smoke also opens increment details from the active-story shortcut,
 checks story expansion and drawer scroll preservation across polling, verifies
 mobile overlay and desktop side-by-side layout, and closes through both the
 button and Escape. It saves increment desktop/mobile screenshots in the ignored
-run directory. Progress and active story states come from sandbox connector facts;
-unreadable legacy sandboxes keep the saved proposal without inferred progress.
+run directory. The header shows the Template phases and linked business stories;
+an in-progress backlog story is marked active without creating internal stories.
 The increment smoke opens the same drawer for intent approval and publication,
 scrolls long intent on desktop/mobile, and verifies reader focus and position
 across real polling before returning to the composer.

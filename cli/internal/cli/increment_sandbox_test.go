@@ -118,7 +118,7 @@ func TestIncrementCLIInsideNativeWriteBoundary(t *testing.T) {
 			if err := json.Unmarshal(shown.stdout.Bytes(), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			if envelope.Data.Status != increment.Developing || len(envelope.Data.Revisions) != 1 {
+			if envelope.Data.Status != increment.Discovery || len(envelope.Data.Revisions) != 1 {
 				t.Fatalf("parent did not observe local progress: %s", shown.stdout.String())
 			}
 			after, err := os.ReadFile(indexPath)

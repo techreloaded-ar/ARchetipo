@@ -56,15 +56,20 @@ test("il renderer non contiene gli stati o i comandi del processo", () => {
 });
 
 test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
- const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",progress_label:"1/2 storie completate",activity_label:"Agente al lavoro",revisions:[revision],stories:[{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
+ const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",activity_label:"Agente al lavoro",phases:[{label:"Comprensione",state:"done"},{label:"Sviluppo",state:"current",stories:[{code:"US-001",title:"Base",state:"todo",state_label:"Da fare"},{code:"US-002",title:"Filtro",state:"current",state_label:"In lavorazione"}],stories_focus:"Ora: Filtro"},{label:"Preparazione",state:"todo"}],revisions:[revision],stories:[{code:"US-001",title:"Base",body:"Requisiti della base",status_label:"Da fare"},{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
  const compact = renderConversation(view,"bozza",{});
  assert.match(compact,/Fase fornita/);
- assert.doesNotMatch(compact,/storie completate/);
  assert.match(compact,/Specifica e decisioni/);
+ assert.match(compact,/class="conv-phases has-stories"/);
+ assert.match(compact,/aria-current="step">Sviluppo<ol class="conv-phase-stories"/);
+ assert.match(compact,/data-increment-story="US-001"/);
+ assert.match(compact,/data-increment-story="US-002"/);
+ assert.match(compact,/Ora: Filtro/);
+ assert.match(compact,/Preparazione/);
  assert.doesNotMatch(compact,/Risultato molto lungo|Criteri completi|<aside id="increment-details"/);
  const open = renderConversation(view,"bozza",{incrementSections:{"panel-compact":true,"current-story-US-002":true}});
  assert.match(open,/has-increment-open/);
- assert.match(open,/data-linked-story="US-002"/);
+ assert.match(open,/data-increment-section="current-story-US-002" open/);
  assert.match(open,/Stato fornito/);
  assert.match(open,/US-002 · Filtro/);
  assert.match(open,/Risultato molto lungo/);

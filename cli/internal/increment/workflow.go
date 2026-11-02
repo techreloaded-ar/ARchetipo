@@ -57,15 +57,34 @@ func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, e
 		if len(r.Revisions) > 0 && hash(r.Revisions[len(r.Revisions)-1].Proposal) == hash(p) && hash(r.Revisions[len(r.Revisions)-1].LinkedStories) == hash(r.LinkedStories) && r.PendingChange == nil {
 			return r, nil
 		}
-		revision := Revision{Number: len(r.Revisions) + 1, Proposal: p, CreatedAt: time.Now().UTC(), ApprovalSource: "request", Change: r.PendingChange, LinkedStories: append([]StoryLink(nil), r.LinkedStories...)}
+		revision := Revision{Number: len(r.Revisions) + 1, Proposal: p, CreatedAt: time.Now().UTC(), Change: r.PendingChange, LinkedStories: append([]StoryLink(nil), r.LinkedStories...)}
 		if r.PendingChange != nil {
 			revision.Feedback = r.PendingChange.Feedback
 		}
 		r.Revisions = append(r.Revisions, revision)
 		r.PendingChange = nil
-		r.Status = Developing
+		r.Status = Discovery
 		r.ReadySHA, r.ReadyScope, r.ApprovedSHA = "", "", ""
 		r.Result = nil
+		return r, s.save(r)
+	})
+}
+
+// ApproveIntent records the person's decision on the exact displayed revision.
+// A stale revision cannot authorize development after the specification changes.
+func (s *Service) ApproveIntent(ctx context.Context, id string, revision int) (Record, error) {
+	return s.lockedRecord(ctx, id, func() (Record, error) {
+		r, err := s.Read(id)
+		if err != nil {
+			return r, err
+		}
+		if r.DevelopmentMode != Continuous || r.Status != Discovery || len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Number != revision {
+			return r, iox.NewConflict("specification revision is not awaiting approval", "read and approve the current specification", nil)
+		}
+		latest := &r.Revisions[len(r.Revisions)-1]
+		latest.Approved = true
+		latest.ApprovalSource = "person"
+		r.Status = Developing
 		return r, s.save(r)
 	})
 }
@@ -100,8 +119,8 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 				return r, iox.NewInvalidInput("preview must be a local HTTP URL", "provide the local preview address, or omit it", parseErr)
 			}
 		}
-		if len(r.Revisions) == 0 || r.PendingChange != nil {
-			return r, iox.NewConflict("specification is missing", "persist the current specification before readiness", nil)
+		if len(r.Revisions) == 0 || r.PendingChange != nil || !r.Revisions[len(r.Revisions)-1].Approved {
+			return r, iox.NewConflict("specification is not approved", "obtain the person's approval of the current revision before development", nil)
 		}
 		if err = s.requireClean(ctx, r); err != nil {
 			return r, err
@@ -184,7 +203,7 @@ func (s *Service) RequestChanges(ctx context.Context, id string, change Feedback
 		if change.Feedback == "" || change.Kind != "" || len(change.StoryCodes) != 0 {
 			return r, iox.NewInvalidInput("provide feedback without delivery classifications", "describe the requested behavior; the specification carries its scope", nil)
 		}
-		if r.Status == Developing && r.PendingChange != nil && r.PendingChange.Feedback == change.Feedback {
+		if r.Status == Discovery && r.PendingChange != nil && r.PendingChange.Feedback == change.Feedback {
 			return r, nil
 		}
 		if r.Status != Review {
@@ -192,7 +211,7 @@ func (s *Service) RequestChanges(ctx context.Context, id string, change Feedback
 		}
 		r.Feedback = append(r.Feedback, change.Feedback)
 		r.PendingChange = &change
-		r.Status = Developing
+		r.Status = Discovery
 		r.Result = nil
 		r.ReadySHA, r.ReadyScope, r.ApprovedSHA = "", "", ""
 		return r, s.save(r)

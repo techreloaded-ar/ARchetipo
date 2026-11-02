@@ -65,7 +65,8 @@ remain exclusive. Readiness and publication require intact machine reports for
 every declared check, matching the current candidate.
 
 This branch retires the `autopilot`, `design`, `implement` and `review` skills,
-internal increment delivery backlogs, intent approval and viewer branch integration.
+internal increment delivery backlogs and viewer branch integration. Product
+development starts after the person approves the current specification revision.
 `init` removes those four managed skills when updating, preserving personal skills.
 Historical work remains inspectable. Optional PRD, story planning and Wiki tools
 remain available, alongside the artifact-management CLI.
