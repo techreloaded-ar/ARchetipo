@@ -51,20 +51,27 @@ type incrementStepView struct {
 	Tone    string                     `json:"tone,omitempty"`
 	Confirm *template.IncrementConfirm `json:"confirm,omitempty"`
 }
+type incrementDecisionView struct {
+	Title     string              `json:"title"`
+	Steps     []incrementStepView `json:"steps"`
+	Reason    string              `json:"reason,omitempty"`
+	Available bool                `json:"available"`
+}
 type incrementView struct {
-	ResultNotice     string               `json:"result_notice,omitempty"`
-	Phases           []incrementPhaseView `json:"phases,omitempty"`
-	NextSteps        []incrementStepView  `json:"next_steps"`
-	NextStepsLabel   string               `json:"next_steps_label,omitempty"`
-	NextStepsNote    string               `json:"next_steps_note,omitempty"`
-	CandidateLabel   string               `json:"candidate_label,omitempty"`
-	VerificationNote string               `json:"verification_note,omitempty"`
-	QuickActions     []incrementControl   `json:"quick_actions"`
-	PreviewAutoStart bool                 `json:"preview_auto_start"`
-	Stories          []incrementStoryView `json:"stories"`
-	ProgressLabel    string               `json:"progress_label,omitempty"`
-	ActivityLabel    string               `json:"activity_label,omitempty"`
-	Note             string               `json:"note"`
+	ResultNotice     string                 `json:"result_notice,omitempty"`
+	Phases           []incrementPhaseView   `json:"phases,omitempty"`
+	NextSteps        []incrementStepView    `json:"next_steps"`
+	Decision         *incrementDecisionView `json:"decision,omitempty"`
+	NextStepsLabel   string                 `json:"next_steps_label,omitempty"`
+	NextStepsNote    string                 `json:"next_steps_note,omitempty"`
+	CandidateLabel   string                 `json:"candidate_label,omitempty"`
+	VerificationNote string                 `json:"verification_note,omitempty"`
+	QuickActions     []incrementControl     `json:"quick_actions"`
+	PreviewAutoStart bool                   `json:"preview_auto_start"`
+	Stories          []incrementStoryView   `json:"stories"`
+	ProgressLabel    string                 `json:"progress_label,omitempty"`
+	ActivityLabel    string                 `json:"activity_label,omitempty"`
+	Note             string                 `json:"note"`
 	increment.Record
 	StatusLabel string             `json:"status_label"`
 	Actions     []incrementControl `json:"actions"`
@@ -187,6 +194,23 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		attachDevelopmentStories(view.Phases, view.Stories)
 	}
 	s.incrementNextSteps(ws, r, offered, &view)
+	if r.Status == increment.Review {
+		decision := &incrementDecisionView{Title: "Decidi sul risultato", Available: candidateValid && !view.Busy}
+		for _, action := range tpl.IncrementActions {
+			if action.ID == "publish" {
+				decision.Steps = append(decision.Steps, incrementStepView{Kind: "decision", Action: action.ID, Label: action.Label, Confirm: action.Confirm})
+				for _, prompt := range action.Prompts {
+					decision.Steps = append(decision.Steps, incrementStepView{Kind: "prompt", Label: prompt.Label, Prompt: prompt.Text})
+				}
+			}
+		}
+		if view.Busy {
+			decision.Reason = "Attendi che l’agente completi il turno e registri il risultato verificato."
+		} else if !candidateValid {
+			decision.Reason = view.VerificationNote
+		}
+		view.Decision = decision
+	}
 	return view
 }
 func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, record conversationlog.Record, view *conversationView) {
@@ -219,7 +243,7 @@ func incrementPrompt(r increment.Record, message string, wikiEnabled bool) strin
 	if wikiEnabled {
 		wiki = "Automatic Wiki updates are enabled; update only pages affected by implemented behavior."
 	}
-	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork in the dedicated worktree %s. Read the persisted increment before acting. %s %s Keep product changes in this worktree; never modify the parent backlog or open a PR before the business approval. This worktree is local working separation, not an OS security sandbox. Environment configuration and repair belong to /archetipo-environment in its separate technical session. That session may publish the common recipe and its non-secret helpers through archetipo execution environment publish from this worktree; this does not publish product code or require manual edits in the parent checkout. Respect the harness's actual permissions and report missing capabilities. You are running inside ARchetipo View: the viewer owns preview startup. Do not invoke execution preview run or launch another application server in this session. Configure the managed recipe and finish the turn so the viewer can launch it. If browser control is unavailable, report that limitation and let the person try the managed Preview; do not keep the turn open waiting for manual validation.\n%s\nWorkflow conversation: %s", r.ID, message, r.Workdir, approval, wiki, sessionInputGuidance, r.ConversationID)
+	return fmt.Sprintf("/archetipo-increment %s\n\n%s\n\nWork in the dedicated worktree %s. Read the persisted increment before acting. %s %s Keep product changes in this worktree; never modify the parent backlog or open a PR before the business approval. This worktree is local working separation, not an OS security sandbox. Environment configuration and repair belong to /archetipo-environment in its separate technical session. That session may publish the common recipe and its non-secret helpers through archetipo execution environment publish from this worktree; this does not publish product code or require manual edits in the parent checkout. Respect the harness's actual permissions and report missing capabilities. You are running inside ARchetipo View: the viewer owns preview startup. Do not invoke execution preview run or launch another application server in this session. Configure the managed recipe and finish the turn so the viewer can launch it. Before asking the person to try the finished Preview, commit and verify the candidate and call increment ready. Then end the turn: the person approves publication with the viewer's control or requests changes in the conversation. Never use blocking input to request publication approval. If browser control is unavailable, report that limitation and let the person try the managed Preview; do not keep the turn open waiting for manual validation.\n%s\nWorkflow conversation: %s", r.ID, message, r.Workdir, approval, wiki, sessionInputGuidance, r.ConversationID)
 }
 
 func incrementWikiEnabled(ws *workspaceSession) bool {

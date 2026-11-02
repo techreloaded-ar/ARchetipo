@@ -178,6 +178,13 @@ Call `increment ready <id> --file -`:
 `squash_commit.title` is required and must be one non-empty line. Follow the
 base branch commit convention and workspace language. The PR uses this title and
 body followed by the complete product dossier; keep the specification and evidence.
+Call `increment ready` before asking the person to try the finished preview or
+choose whether to approve the result. The approval control is offered only for
+the exact committed and verified candidate recorded by this command. After it
+succeeds, finish the turn with a concise invitation to try Preview and choose
+the approval control or describe requested changes in the conversation. Do not
+open a blocking input request to ask for publication approval: the viewer owns
+that decision and opens the PR only when the person presses its control.
 When a change addresses linked business stories, use their original product codes
 in commit subjects where the project convention calls for a story code. Never
 create or substitute increment-local story codes.

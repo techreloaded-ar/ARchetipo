@@ -86,6 +86,20 @@ test("i prossimi passi usano i metadati del server e mantengono la bozza durante
  assert.doesNotMatch(html,/href="javascript:/);
 });
 
+test("la decisione sul risultato appare nella conversazione con approvazione e richiesta di modifiche", () => {
+ const decision={title:'Decidi sul risultato',available:true,steps:[{kind:'decision',action:'publish',label:'Approva risultato e apri PR',confirm:{title:'Aprire la pull request?',text:'Commit verificato',label:'Approva e apri PR'}},{kind:'prompt',label:'Vorrei cambiare…',prompt:'Vorrei cambiare: '}]};
+ const increment={id:'review',decision,next_steps:decision.steps,revisions:[revision]};
+ const html=renderConversation({...base,increment},'',{});
+ assert.match(html,/class="run-approval conv-run-approval conv-review-decision"/);
+ assert.match(html,/data-increment-step-action="publish" data-increment-step-confirm="true">Approva risultato e apri PR/);
+ assert.match(html,/data-increment-step-prompt="Vorrei cambiare: ">Vorrei cambiare…/);
+ assert.equal((html.match(/data-increment-step-action="publish"/g)||[]).length,1);
+ const unavailable=renderConversation({...base,increment:{...increment,decision:{...decision,available:false,reason:'Verifiche da completare'}}},'',{});
+ assert.match(unavailable,/data-increment-step-action="publish" data-increment-step-confirm="true" disabled/);
+ assert.match(unavailable,/Verifiche da completare/);
+ assert.match(unavailable,/data-increment-step-prompt="Vorrei cambiare: "/);
+});
+
 test("le azioni della board e del dettaglio non ereditano la chat selezionata", () => {
  const source=readFileSync(new URL('../../cli/internal/web/assets/app.js',import.meta.url),'utf8');
  assert.match(source,/bindActionsPanel\(storyActions, false\)/);

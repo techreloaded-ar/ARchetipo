@@ -339,6 +339,18 @@ func TestIncrementGuidanceUsesTemplateAndReachesWaitingEnvironment(t *testing.T)
 	}
 }
 
+func TestReviewDecisionRemainsVisibleWhenCandidateNeedsVerification(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	work := increment.Record{ID: "inc-review", Status: increment.Review, DevelopmentMode: increment.Continuous}
+	view := srv.incrementView(context.Background(), srv.session(), work)
+	if view.Decision == nil || view.Decision.Available || view.Decision.Reason == "" {
+		t.Fatalf("review decision should explain why approval is unavailable: %+v", view.Decision)
+	}
+	if len(view.Decision.Steps) != 2 || view.Decision.Steps[0].Action != "publish" || view.Decision.Steps[1].Prompt == "" {
+		t.Fatalf("review decision must offer approval and change request: %+v", view.Decision.Steps)
+	}
+}
+
 func TestDevelopmentStoriesStayUnderCurrentPhaseWithoutInventingProgress(t *testing.T) {
 	tpl := template.Default()
 	phases := incrementPhases(tpl, increment.Developing)

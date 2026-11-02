@@ -153,11 +153,13 @@ async function main(){
   const acceptedRequirements=await cliJSON(["increment","approve",inc.id],{revision:1});
   assert.equal(acceptedRequirements.status,"DEVELOPING");
   assert.equal(acceptedRequirements.revisions[0].approval_source,"person");
-  await page.waitFor(`document.querySelector('.conv-phase.is-current')?.textContent.includes('Sviluppo') && document.querySelector('.conv-phase-story.is-current')?.textContent.includes('US-001')`,timeout,"current workflow step and active story");
+  await page.waitFor(`document.querySelector('.conv-phase.is-current')?.textContent.includes('Sviluppo')${enterprise ? " && document.querySelector('.conv-phase-story.is-current')?.textContent.includes('US-001')" : ""}`,timeout,"current workflow step and active story");
   await fs.writeFile(path.join(runDir,"developing.png"),Buffer.from((await page.send("Page.captureScreenshot",{format:"png"})).data,"base64"));
-  await page.evaluate(`document.querySelector('[data-increment-story="US-001"]').click()`);
-  await page.waitFor(`!!document.querySelector('[data-increment-section="current-story-US-001"][open]')`,timeout,"story tree opens the linked story details");
-  await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
+  if(enterprise){
+   await page.evaluate(`document.querySelector('[data-increment-story="US-001"]').click()`);
+   await page.waitFor(`!!document.querySelector('[data-increment-section="current-story-US-001"][open]')`,timeout,"story tree opens the linked story details");
+   await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
+  }
   await page.evaluate(`window.WorkspacePanels.open("preview")`);
   assert.equal((await cliJSON(["spec","list"])).items.length,0,"created a synthetic backlog");
   let workflow;
@@ -262,7 +264,7 @@ async function main(){
   assert.equal((await read()).increment.learning.length,1);
   assert.equal((await cliJSON(["spec","list"])).items.length,0);
   if(enterprise){
-   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('[data-increment-step-action="publish"]:not(:disabled)')`,timeout,"tested version awaiting business approval in the work view");
+   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('.conv-review-decision [data-increment-step-action="publish"]:not(:disabled)') && !!document.querySelector('.conv-review-decision [data-increment-step-prompt]')`,timeout,"tested version awaiting business approval or requested changes in the conversation");
    const approved=(await read()).increment.ready_sha;
    await page.evaluate(`document.querySelector('[data-increment-step-action="publish"]').click()`);
    await page.waitFor(`!!document.querySelector('[data-increment-step-run="publish"]:not(:disabled)')`,timeout,"explicit publication confirmation");

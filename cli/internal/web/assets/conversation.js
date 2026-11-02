@@ -1800,7 +1800,9 @@
 	 * @returns {string} HTML string.
 	 */
 	function renderIncrementNext(increment, ui) {
-		const steps = arrayAt(increment, "next_steps").filter((step) => step && textAt(step, "label"));
+		const decision = objectAt(increment, "decision");
+		const decisionSteps = new Set(arrayAt(decision, "steps").map((step) => textAt(step, "action") || textAt(step, "prompt")));
+		const steps = arrayAt(increment, "next_steps").filter((step) => step && textAt(step, "label") && (!decision || !decisionSteps.has(textAt(step, "action") || textAt(step, "prompt"))));
 		const label = textAt(increment, "next_steps_label");
 		const note = textAt(increment, "next_steps_note");
 		if (!steps.length && !note) return "";
@@ -1826,6 +1828,24 @@
 			return `<button type="button" class="conv-step conv-step-open${tone}" data-increment-step-open="${escapeHtml(open)}" data-increment-step-target="${escapeHtml(target)}">${text}</button>`;
 		};
 		return `<section class="conv-increment conv-next" data-increment-id="${escapeHtml(textAt(increment, "id"))}" aria-label="Prossimi passi dell’incremento">${label ? `<span class="conv-next-label">${escapeHtml(label)}</span>` : ""}${note ? `<span class="conv-next-note">${escapeHtml(note)}</span>` : ""}${steps.map(chip).join("")}${textAt(increment,"result_notice") ? `<span class="conv-next-note">${escapeHtml(increment.result_notice)}</span>` : ""}</section>`;
+	}
+
+	function renderIncrementDecision(increment, ui) {
+		const decision = objectAt(increment, "decision");
+		if (!decision) return "";
+		const disabled = ui.busy || increment.busy || decision.available !== true ? " disabled" : "";
+		const controls = arrayAt(decision, "steps").map((step) => {
+			const label = escapeHtml(textAt(step, "label"));
+			if (textAt(step, "kind") === "decision") {
+				const confirm = objectAt(step, "confirm") ? ' data-increment-step-confirm="true"' : "";
+				return `<button type="button" class="approval-btn allow" data-increment-step-action="${escapeHtml(textAt(step, "action"))}"${confirm}${disabled}>${label}</button>`;
+			}
+			if (textAt(step, "kind") === "prompt") {
+				return `<button type="button" class="approval-btn deny" data-increment-step-prompt="${escapeHtml(textAt(step, "prompt"))}"${ui.busy ? " disabled" : ""}>${label}</button>`;
+			}
+			return "";
+		}).join("");
+		return `<div class="run-approval conv-run-approval conv-review-decision" role="group" aria-label="${escapeHtml(textAt(decision, "title"))}"><p class="run-approval-title">${escapeHtml(textAt(decision, "title"))}</p>${textAt(decision, "reason") ? `<p class="conv-run-notice">${escapeHtml(textAt(decision, "reason"))}</p>` : ""}<div class="run-approval-options">${controls}</div></div>`;
 	}
 
 	// La conferma di un passo che non si annulla prende il posto del campo, alla
@@ -2008,6 +2028,7 @@
 		// while the agent is stopped.
 		blocks.push(renderConversationApprovals(value, local));
 		blocks.push(renderConversationInputs(value, local));
+		blocks.push(renderIncrementDecision(objectAt(value, "increment"), local));
 		// Il compositore chiude il pannello e nient'altro lo segue. Aprire una
 		// conversazione nuova si comanda dall'elenco delle conversazioni e
 		// chiudere quella aperta dalla testata: ripetere qui uno dei due
