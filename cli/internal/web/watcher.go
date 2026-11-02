@@ -62,7 +62,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if ev.Op&fsnotify.Create != 0 {
+			if ev.Op&fsnotify.Create != 0 && !w.skipPath(ev.Name) {
 				// New directory: extend the watch so its contents are tracked too.
 				if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
 					_ = w.addTree(ev.Name)
@@ -107,7 +107,7 @@ func (w *Watcher) addTree(root string) error {
 		if !d.IsDir() {
 			return nil
 		}
-		if shouldSkipDir(d.Name()) {
+		if w.skipPath(path) {
 			return filepath.SkipDir
 		}
 		_ = w.fsw.Add(path)
@@ -119,6 +119,9 @@ func (w *Watcher) addTree(root string) error {
 // editor swap files, OS metadata, hidden files and any extension other than
 // yaml/yml/md (the only formats the viewer renders).
 func (w *Watcher) relevant(ev fsnotify.Event) bool {
+	if w.skipPath(ev.Name) {
+		return false
+	}
 	if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) == 0 {
 		return false
 	}
@@ -140,11 +143,48 @@ func (w *Watcher) relevant(ev fsnotify.Event) bool {
 	return false
 }
 
+// Dependency installs and per-worktree runtime artifacts have their own
+// journals/polling. Recursing into them is especially costly with kqueue, which
+// opens descriptors for directory contents, and can make the entire viewer
+// unable to read conversations after a few pristine installation checks.
+func (w *Watcher) skipPath(path string) bool {
+	rel, err := filepath.Rel(w.root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+	if rel == "." {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, part := range parts {
+		if shouldSkipDir(part) {
+			return true
+		}
+	}
+	if filepath.Base(w.root) == ".archetipo" && runtimeWatchDirectory(parts[0]) {
+		return true
+	}
+	for index, part := range parts {
+		if part == ".archetipo" && index+1 < len(parts) && runtimeWatchDirectory(parts[index+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeWatchDirectory(name string) bool {
+	switch name {
+	case "environment", "increments", "increment-local", "increment-archives", "conversations", "executions", "workflow-runs", "tmp":
+		return true
+	}
+	return false
+}
+
 func shouldSkipDir(name string) bool {
 	// Walked directories that are guaranteed to be irrelevant. Avoids burning a
 	// watch slot per node_modules entry, etc.
 	switch name {
-	case ".git", "node_modules":
+	case ".git", "node_modules", ".venv", "venv", "__pycache__", ".next", ".nuxt", ".cache", ".pytest_cache", ".mypy_cache", ".tox", "coverage":
 		return true
 	}
 	return false

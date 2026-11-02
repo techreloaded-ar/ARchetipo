@@ -72,7 +72,7 @@
 	// conversazione ferma da ore, perche' quello e' un fatto dell'infrastruttura
 	// e non della conversazione.
 	const TEXT = {
-		newThread: "Nuova conversazione",
+		newThread: "Nuovo lavoro",
 		groupWorking: "Al lavoro",
 		groupOpen: "Aperte",
 		groupDone: "Archiviate",

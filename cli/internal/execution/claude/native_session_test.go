@@ -140,10 +140,27 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 		snapshot, _ := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
 		return len(snapshot.PendingApprovals) == 1
 	})
+	process.emit(discoveryInputFrame)
+	waitFor(t, func() bool {
+		snapshot, _ := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+		return len(snapshot.PendingInputs) == 1
+	})
+	inputDelivery, inputErr := provider.RespondSessionInput(context.Background(), execution.SessionCommandRequest{
+		Session: created.Session, TurnID: "turn-approval", SubmissionID: "submission-input", InteractionID: "discovery",
+		Answers: map[string][]string{"0": {"Meno errori"}, "1": {"Clienti"}},
+	})
+	if inputErr != nil || inputDelivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("input delivery = %#v, %v", inputDelivery, inputErr)
+	}
 	delivery, err := provider.RespondSessionApproval(context.Background(), execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-approval", SubmissionID: "submission-approval", InteractionID: "approval-1", OptionID: localrun.ApprovalAllow})
 	if err != nil || delivery.State != execution.DeliveryConfirmed {
 		t.Fatalf("approval delivery = %#v, %v", delivery, err)
 	}
+	process.emit(discoveryInputFrame)
+	waitFor(t, func() bool {
+		snapshot, _ := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+		return snapshot.Work == execution.SessionWaitingInput && len(snapshot.PendingInputs) == 1
+	})
 	delivery, err = provider.InterruptTurn(context.Background(), execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-approval", SubmissionID: "submission-interrupt"})
 	if err != nil || delivery.State != execution.DeliveryConfirmed {
 		t.Fatalf("interrupt delivery = %#v, %v", delivery, err)
@@ -151,7 +168,7 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 	process.emit(resultFrame("Interrupted", true))
 	waitForNativeIdle(t, provider, created.Session)
 	snapshot, err := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
-	if err != nil || snapshot.Recovery != execution.RecoveryResumable || snapshot.CurrentTurn.State != execution.TurnInterrupted {
+	if err != nil || snapshot.Recovery != execution.RecoveryResumable || snapshot.CurrentTurn.State != execution.TurnInterrupted || len(snapshot.PendingInputs) != 0 {
 		t.Fatalf("snapshot after interrupt = %#v, %v", snapshot, err)
 	}
 	announceSessionOnFirstMessage(nextProcess, created.Session.Native.ID, "opus")

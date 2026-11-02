@@ -6,124 +6,65 @@ import (
 	"testing"
 )
 
-// askUserQuestionFrame renders the permission request Claude Code writes for an
-// AskUserQuestion call: the same `can_use_tool` envelope as any other tool, with
-// the questions as its input.
-func askUserQuestionFrame(requestID string) string {
-	payload, err := json.Marshal(map[string]any{
-		"type":       frameControlRequest,
-		"request_id": requestID,
-		"request": map[string]any{
-			"subtype":      subtypeCanUseTool,
-			"tool_name":    askUserQuestionTool,
-			"display_name": askUserQuestionTool,
-			"input": map[string]any{"questions": []map[string]any{
-				{"question": "Quale formato vuoi?", "header": "Formato", "multiSelect": false, "options": []map[string]any{
-					{"label": "Sintesi", "description": "Breve"}, {"label": "Dettaglio", "description": "Completo"},
-				}},
-				{"question": "Quali sezioni includo?", "header": "Sezioni", "multiSelect": true, "options": []map[string]any{
-					{"label": "Introduzione", "description": ""}, {"label": "Conclusione", "description": ""},
-				}},
-			}},
-			"tool_use_id": "toolu_" + requestID,
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return string(payload)
-}
+const discoveryInputFrame = `{"type":"control_request","request_id":"discovery","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"header":"Costanza","question":"Quale risultato conta?","multiSelect":false,"options":[{"label":"Risparmiare tempo","description":"Ridurre il lavoro manuale"},{"label":"Meno errori","description":"Aumentare la precisione"}]},{"header":"Livia","question":"Per chi?","multiSelect":true,"options":[{"label":"Clienti"},{"label":"Colleghi"}]}],"metadata":{"keep":"original"}}}}`
 
-// A question for the person is not a permission: it is offered as a pending
-// input with its questions and options, and never as an approval card whose
-// arguments would be the question itself.
-func TestAskUserQuestionBecomesAPendingInputWithItsQuestions(t *testing.T) {
+func TestDiscoveryQuestionsRoundTripWithoutBecomingApprovals(t *testing.T) {
 	fake := newFakeClaude()
 	client, _ := openConversation(t, fake)
-
-	fake.emit(askUserQuestionFrame("req-q"))
-	waitFor(t, func() bool { return len(client.PendingInputs()) == 1 })
-
-	if approvals := client.PendingApprovals(); len(approvals) != 0 {
-		t.Fatalf("the question was also offered as an approval: %#v", approvals)
+	fake.emit(discoveryInputFrame)
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
+	input := client.pendingInputs()[0]
+	if len(client.PendingApprovals()) != 0 || input.Questions[0].Header != "Costanza" || !input.Questions[0].AllowText || !input.Questions[1].Multiple || input.Questions[0].Options[0].Description != "Ridurre il lavoro manuale" {
+		t.Fatalf("discovery input = %#v", input)
 	}
-	input := client.PendingInputs()[0]
-	if input.ID != "req-q" || len(input.Questions) != 2 {
-		t.Fatalf("pending input = %#v, want req-q with two questions", input)
+	if err := client.RespondApproval(context.Background(), "discovery", "allow"); err == nil || len(client.pendingInputs()) != 1 {
+		t.Fatal("a permission response consumed a product question")
 	}
-	first := input.Questions[0]
-	if first.ID != "Quale formato vuoi?" || first.Header != "Formato" || !first.AllowText || first.MultiSelect || len(first.Options) != 2 || first.Options[1].Label != "Dettaglio" {
-		t.Fatalf("first question projected as %#v", first)
+	// Invalid answers keep the question pending for a corrected submission.
+	for _, answers := range []map[string][]string{
+		{"0": {"Risparmiare tempo"}},
+		{"unknown": {"x"}, "1": {"Clienti"}},
+		{"0": {" "}, "1": {"Clienti"}},
+		{"0": {"Risparmiare tempo", "Meno errori"}, "1": {"Clienti"}},
+	} {
+		if err := client.respondInput(context.Background(), "discovery", answers); err == nil || len(client.pendingInputs()) != 1 {
+			t.Fatal("invalid answer accepted or input lost")
+		}
 	}
-	if second := input.Questions[1]; !second.MultiSelect || !second.AllowText {
-		t.Fatalf("the multi-select question lost its flag: %#v", second)
-	}
-}
-
-// A single-select question takes one value: two of them are not merged into
-// an answer the person never gave, and the question stays open.
-func TestTwoValuesOnASingleSelectQuestionAreRefused(t *testing.T) {
-	fake := newFakeClaude()
-	client, _ := openConversation(t, fake)
-	fake.emit(askUserQuestionFrame("req-q"))
-	waitFor(t, func() bool { return len(client.PendingInputs()) == 1 })
-
-	err := client.RespondInput(context.Background(), "req-q", map[string][]string{
-		"Quale formato vuoi?":    {"Sintesi", "Dettaglio"},
-		"Quali sezioni includo?": {"Introduzione"},
-	})
-	if err == nil {
-		t.Fatal("two values on a single-select question were accepted")
-	}
-	if len(decisionsWritten(fake)) != 0 || len(client.PendingInputs()) != 1 {
-		t.Fatalf("a refused answer reached the process or closed the question")
-	}
-}
-
-// The answers reach the process inside the allow decision, keyed by the text
-// of each question, with the original questions handed back unchanged and a
-// multi-select answer joined with a comma; the input then stops being pending.
-func TestAnsweringAQuestionWritesTheAnswersIntoTheAllowDecision(t *testing.T) {
-	fake := newFakeClaude()
-	client, _ := openConversation(t, fake)
-	fake.emit(askUserQuestionFrame("req-q"))
-	waitFor(t, func() bool { return len(client.PendingInputs()) == 1 })
-
-	err := client.RespondInput(context.Background(), "req-q", map[string][]string{
-		"Quale formato vuoi?":    {"Sintesi"},
-		"Quali sezioni includo?": {"Introduzione", "Conclusione"},
-	})
-	if err != nil {
-		t.Fatalf("answering failed: %v", err)
+	answers := map[string][]string{"0": {"Un risultato diverso"}, "1": {"Clienti", "Colleghi"}}
+	if err := client.respondInput(context.Background(), "discovery", answers); err != nil {
+		t.Fatal(err)
 	}
 	decisions := decisionsWritten(fake)
-	if len(decisions) != 1 || decisions[0]["request_id"] != "req-q" || decisions[0]["behavior"] != "allow" {
-		t.Fatalf("decisions written = %#v, want one allow for req-q", decisions)
+	if len(decisions) != 1 || decisions[0]["behavior"] != "allow" || len(client.pendingInputs()) != 0 {
+		t.Fatalf("response = %#v", decisions)
 	}
-	updated, _ := decisions[0]["updatedInput"].(map[string]any)
-	answers, _ := updated["answers"].(map[string]any)
-	if answers["Quale formato vuoi?"] != "Sintesi" || answers["Quali sezioni includo?"] != "Introduzione, Conclusione" {
-		t.Fatalf("answers = %#v", answers)
+	updated := decisions[0]["updatedInput"].(map[string]any)
+	if updated["answers"].(map[string]any)["Quale risultato conta?"] != "Un risultato diverso" || updated["answers"].(map[string]any)["Per chi?"] != "Clienti, Colleghi" || updated["metadata"].(map[string]any)["keep"] != "original" || len(updated["questions"].([]any)) != 2 {
+		t.Fatalf("native response lost original context or choices: %#v", updated)
 	}
-	if questions, _ := updated["questions"].([]any); len(questions) != 2 {
-		t.Fatalf("the original questions were not handed back: %#v", updated)
-	}
-	if pending := client.PendingInputs(); len(pending) != 0 {
-		t.Fatalf("the input is still pending after being answered: %#v", pending)
+	if err := client.respondInput(context.Background(), "discovery", answers); err == nil {
+		t.Fatal("same question answered twice")
 	}
 }
 
-// An incomplete answer is refused and leaves the question open.
-func TestAPartialAnswerIsRefusedAndLeavesTheInputOpen(t *testing.T) {
+func TestDiscoveryQuestionWithdrawAndUnknownPayload(t *testing.T) {
 	fake := newFakeClaude()
 	client, _ := openConversation(t, fake)
-	fake.emit(askUserQuestionFrame("req-q"))
-	waitFor(t, func() bool { return len(client.PendingInputs()) == 1 })
-
-	if err := client.RespondInput(context.Background(), "req-q", map[string][]string{"Quale formato vuoi?": {"Sintesi"}}); err == nil {
-		t.Fatal("a partial answer was accepted")
+	for _, payload := range []string{`{}`, `{"questions":[{"question":""}]}`, `{"questions":[{"question":"Same?"},{"question":"Same?"}]}`} {
+		client.askInput("unknown", json.RawMessage(payload))
+		if len(client.pendingInputs()) != 0 {
+			t.Fatal("invented questions for an unknown payload")
+		}
 	}
-	if len(decisionsWritten(fake)) != 0 || len(client.PendingInputs()) != 1 {
-		t.Fatalf("a refused answer reached the process or closed the question")
+	fake.emit(discoveryInputFrame)
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
+	fake.emit(`{"type":"control_cancel_request","request_id":"discovery"}`)
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 0 })
+	fake.emit(discoveryInputFrame)
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
+	client.withdrawAll()
+	if len(client.pendingInputs()) != 0 {
+		t.Fatal("question survived process cleanup")
 	}
 }

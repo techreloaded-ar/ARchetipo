@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
@@ -100,7 +99,7 @@ func TestTransitionPreviewReviewToDoneRecommendsApprove(t *testing.T) {
 	if preview.From != "review" || preview.To != "done" {
 		t.Fatalf("edges: got %s->%s", preview.From, preview.To)
 	}
-	if !preview.Allowed || preview.RecommendedAction != "approve" {
+	if !preview.Allowed || preview.RecommendedAction != "" {
 		t.Fatalf("expected an allowed approve route, got %+v", preview)
 	}
 	// Closing through review is the intended road: nothing is skipped.
@@ -175,32 +174,11 @@ func TestTransitionPreviewRunningExecutionBlocks(t *testing.T) {
 	}
 }
 
-func TestTransitionPreviewReviewToTodo(t *testing.T) {
-	srv, conn, _ := newTransitionServer(t, false)
-	var rs connector.ReviewStore = conn
-	ctx := context.Background()
-	// Only a dossier: nothing to convert, so the raw move would orphan it.
-	if err := rs.SaveReview(ctx, "US-902", domain.Review{Dossier: &domain.ReviewDossier{Summary: "pronta"}}); err != nil {
-		t.Fatal(err)
-	}
+func TestTransitionPreviewReviewToTodoPreservesManagementChoice(t *testing.T) {
+	srv, _, _ := newTransitionServer(t, false)
 	preview := previewOf(t, srv, "US-902", "todo")
-	if preview.RecommendedAction != "" || !hasImpact(preview, "review_dangling") {
-		t.Fatalf("expected no route and review_dangling, got %+v", preview)
-	}
-
-	// With comments there is a road that carries them into the spec body.
-	if err := rs.SaveReview(ctx, "US-902", domain.Review{
-		Comments: []domain.ReviewComment{{File: "a.go", Line: 1, Side: "new", Body: "da sistemare"}},
-		Dossier:  &domain.ReviewDossier{Summary: "pronta"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	preview = previewOf(t, srv, "US-902", "todo")
-	if preview.RecommendedAction != "request_changes" {
-		t.Fatalf("expected request_changes, got %+v", preview)
-	}
-	if hasImpact(preview, "review_dangling") {
-		t.Fatalf("a routed change leaves nothing dangling: %+v", preview.Impacts)
+	if !preview.Allowed || preview.RecommendedAction != "" {
+		t.Fatal("board move routed through a code approval", preview)
 	}
 }
 

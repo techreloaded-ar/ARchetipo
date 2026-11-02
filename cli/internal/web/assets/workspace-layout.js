@@ -59,9 +59,9 @@
 	const PANE_META = {
 		conversation: {
 			className: "shell-pane-conversation",
-			label: "Conversazione",
+			label: "Lavoro",
 		},
-		board: { className: "shell-pane-board", label: "Board" },
+		board: { className: "shell-pane-board", label: "Backlog" },
 		documentation: { className: "shell-pane-documentation", label: "Documentazione" },
 		spec: { className: "shell-pane-spec", label: "Spec" },
 	};

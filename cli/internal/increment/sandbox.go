@@ -1,6 +1,7 @@
 package increment
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
@@ -22,14 +24,24 @@ import (
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return "", iox.NewConflict("git "+strings.Join(args, " ")+": "+strings.TrimSpace(string(out)), "inspect the increment working directory and retry", err)
+		return "", iox.NewConflict("git "+strings.Join(args, " ")+": "+strings.TrimSpace(string(out)+stderr.String()), "inspect the increment working directory and retry", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
 func (s *Service) Create(ctx context.Context, title, request, origin string) (Record, error) {
+	return s.CreateWithMode(ctx, title, request, origin, Continuous)
+}
+
+func (s *Service) CreateWithMode(ctx context.Context, title, request, origin, mode string) (Record, error) {
+	if mode != "" && mode != Continuous {
+		return Record{}, iox.NewInvalidInput("unknown development mode", "use continuous or omit development_mode", nil)
+	}
+	mode = Continuous
 	return s.locked(ctx, func() (record Record, err error) {
 		title, request = strings.TrimSpace(title), strings.TrimSpace(request)
 		if title == "" || request == "" {
@@ -38,7 +50,18 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 		if s.Config.Increment != nil {
 			return record, iox.NewConflict("cannot create an increment inside another increment", "open the original workspace", nil)
 		}
-		const base = "main"
+		base := "main"
+		if mode == Continuous {
+			if err = s.prepareNewApp(ctx); err != nil {
+				return record, err
+			}
+			if _, mainErr := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/main^{commit}"); mainErr != nil {
+				base, err = git(ctx, s.Config.ProjectRoot, "symbolic-ref", "--short", "HEAD")
+				if err != nil {
+					return record, err
+				}
+			}
+		}
 		sha, err := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
 		if err != nil {
 			return record, iox.NewPrecondition("increment base branch main is unavailable", "create or fetch the local main branch before starting an increment", err)
@@ -48,7 +71,7 @@ func (s *Service) Create(ctx context.Context, title, request, origin string) (Re
 			return record, err
 		}
 		id := "inc-" + hex.EncodeToString(entropy[:])
-		record = Record{ID: id, Title: title, Request: request, OriginConversationID: origin, Status: Discovery, CreatedAt: time.Now().UTC(), BaseBranch: base, BaseSHA: sha, Branch: "archetipo/increments/" + id, Workdir: filepath.Join(s.dir(), "worktrees", id), Revisions: []Revision{}, Feedback: []string{}}
+		record = Record{DevelopmentMode: mode, ID: id, Title: title, Request: request, OriginConversationID: origin, Status: Discovery, CreatedAt: time.Now().UTC(), BaseBranch: base, BaseSHA: sha, Branch: "archetipo/increments/" + id, Workdir: filepath.Join(s.dir(), "worktrees", id), Revisions: []Revision{}, Feedback: []string{}}
 		if err = os.MkdirAll(filepath.Dir(record.Workdir), 0o700); err != nil {
 			return Record{}, err
 		}
@@ -152,6 +175,12 @@ func (s *Service) excludeRuntime(ctx context.Context) error {
 }
 
 func (s *Service) installRuntime(target string) error {
+	// A recipe published from another worktree can exist only in the common
+	// bundle, with no materialized files in the parent checkout. Resolve it in
+	// this new worktree before falling back to legacy local recipe copies.
+	if err := environmentrecipe.Inherit(target); err != nil {
+		return err
+	}
 	// Copy only workflow assets, never environment files or credentials.
 	// A project recipe declares commands and variable names. Never copy its
 	// resource checkpoint: every checkout prepares and owns its own environment.
@@ -195,10 +224,14 @@ func (s *Service) installRuntime(target string) error {
 		if installedErr != nil && !selected {
 			continue
 		}
-		for _, name := range append([]string{"archetipo-increment"}, "archetipo-spec", "archetipo-plan", "archetipo-implement", "archetipo-review", "archetipo-autopilot", "archetipo-wiki") {
-			from := filepath.Join(source, name)
-			if _, err := os.Stat(from); os.IsNotExist(err) && dataDir != "" {
-				from = filepath.Join(dataDir, "skills", name)
+		names := []string{"archetipo-increment", "archetipo-environment", "archetipo-wiki"}
+		if err := workspace.RemoveRetiredSkills(filepath.Join(target, tool.SkillsDir)); err != nil {
+			return err
+		}
+		for _, name := range names {
+			from := filepath.Join(dataDir, "skills", name)
+			if _, err := os.Stat(from); os.IsNotExist(err) || dataDir == "" {
+				from = filepath.Join(source, name)
 			}
 			if _, err := os.Stat(from); err != nil {
 				if selected {
@@ -207,12 +240,58 @@ func (s *Service) installRuntime(target string) error {
 				continue
 			}
 			dest := filepath.Join(target, tool.SkillsDir, name)
-			if _, err := os.Stat(dest); os.IsNotExist(err) {
-				if err = workspace.CopyTree(from, dest); err != nil {
-					return err
-				}
+			if err := os.RemoveAll(dest); err != nil {
+				return err
+			}
+			if err := workspace.CopyTree(from, dest); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// prepareNewApp initializes only a workspace containing installed workflow assets.
+// Existing source directories must be explicitly imported into Git by their owner.
+func (s *Service) prepareNewApp(ctx context.Context) error {
+	root := s.Config.ProjectRoot
+	if top, repoErr := git(ctx, root, "rev-parse", "--show-toplevel"); repoErr == nil {
+		actual, pathErr := filepath.EvalSymlinks(root)
+		canonicalTop, topErr := filepath.EvalSymlinks(top)
+		if pathErr != nil || topErr != nil || actual != canonicalTop {
+			return iox.NewPrecondition("workspace is inside another repository", "open the repository root or initialize a dedicated repository for this workspace", nil)
+		}
+		if _, headErr := git(ctx, root, "rev-parse", "--verify", "HEAD^{commit}"); headErr == nil {
+			return nil
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{".git": true, ".DS_Store": true, ".archetipo": true, ".agents": true, ".claude": true, ".cursor": true, ".gemini": true, ".opencode": true, ".github": true, ".pi": true, ".gitignore": true, "AGENTS.md": true, "GEMINI.md": true}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] && (!entry.IsDir() || !emptyDirectory(filepath.Join(root, entry.Name()))) {
+			return iox.NewPrecondition("existing project is not versioned in Git: "+entry.Name(), "initialize and commit the existing application before starting a worktree", nil)
+		}
+	}
+	if _, err = git(ctx, root, "init", "-b", "main"); err != nil {
+		return err
+	}
+	_, err = git(ctx, root, "-c", "user.name=ARchetipo", "-c", "user.email=workspace@archetipo.local", "commit", "--allow-empty", "--only", "-m", "chore: initialize app workspace")
+	return err
+}
+
+// Config initialization may create empty output directories before the first app.
+func emptyDirectory(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !emptyDirectory(filepath.Join(path, entry.Name())) {
+			return false
+		}
+	}
+	return true
 }

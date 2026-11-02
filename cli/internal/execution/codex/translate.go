@@ -172,6 +172,9 @@ func (a *appServer) project(method string, params json.RawMessage) {
 }
 
 func (a *appServer) append(kind, text, tool string, params json.RawMessage, final ...string) {
+	if (kind == localrun.KindText || kind == localrun.KindUserMessage) && !a.ownsNotification(params, false) {
+		kind, tool = localrun.KindWorkerMessage, "subAgentActivity"
+	}
 	a.mu.Lock()
 	seq := a.seq
 	turnID, submissionID := a.turnCoreID, a.submissionID

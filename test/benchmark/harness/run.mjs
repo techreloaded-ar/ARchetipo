@@ -28,7 +28,7 @@ const recipe = {
 };
 writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
 const rows = [];
-function invoke(label, args, expectedError) {
+function invoke(label, args, expectedError, expectedKind = 'verification_result') {
   const start = performance.now();
   let stdout, stderr, exit = 0;
   try { stdout = execFileSync(bin, ['-C', project, 'execution', 'environment', ...args], { encoding: 'utf8', timeout: 15000 }); }
@@ -36,7 +36,7 @@ function invoke(label, args, expectedError) {
   const elapsed_ms = Math.round(performance.now() - start);
   const envelope = JSON.parse(expectedError ? stderr : stdout);
   if (expectedError) assert.equal(envelope.error?.code, expectedError);
-  else { assert.equal(exit, 0, stderr); assert.equal(envelope.kind, 'verification_result'); }
+  else { assert.equal(exit, 0, stderr); assert.equal(envelope.kind, expectedKind); }
   const row = { label, elapsed_ms, exit, envelope };
   rows.push(row);
   console.log(`${label}: ${elapsed_ms} ms; passed=${envelope.data?.passed}; reused=${envelope.data?.reused}`);
@@ -61,6 +61,7 @@ try {
   writeFileSync(join(project, 'src/fail.txt'), 'force a real failed assertion');
   r = check('failed-check'); assert(!r.passed && !r.reused); assert.equal(r.steps[0].exit_code, 7);
   const failedLog = r.steps[0].log_path;
+  const observations=invoke('observe-failed-check',['checks']);assert.equal(observations.find(check=>check.name==='functional').state,'failed');assert.equal(observations.find(check=>check.name==='functional').current,true);
   r = check('failed-check-repeated'); assert(!r.passed && !r.reused); assert(existsSync(failedLog));
   unlinkSync(join(project, 'src/fail.txt'));
   r = check('fixed-check'); assert(r.passed && !r.reused);
@@ -84,15 +85,16 @@ try {
   const before = readFileSync(beat, 'utf8');
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(readFileSync(beat, 'utf8'), before, 'cancelled command leaked a live descendant');
+  for (const groupKill of process.platform==='win32' ? [false] : [false,true]) {
   unlinkSync(join(project, '.archetipo/environment/descendant.pid'));
   const crashStart = performance.now();
-  const crash = spawn(bin, ['-C', project, 'execution', 'environment', 'check', 'slow', '--spec', 'US-001'], { stdio: 'ignore' });
+  const crash = spawn(bin, ['-C', project, 'execution', 'environment', 'check', 'slow', '--spec', 'US-001'], { detached:groupKill, stdio: 'ignore' });
   const crashed = new Promise(resolve => crash.on('exit', resolve));
   while (!existsSync(join(project, '.archetipo/environment/descendant.pid'))) {
     assert(performance.now() - crashStart < 5000, 'hard-kill fixture did not start');
     await new Promise(resolve => setTimeout(resolve, 10));
   }
-  crash.kill('SIGKILL');
+  if(groupKill)process.kill(-crash.pid,'SIGKILL');else crash.kill('SIGKILL');
   await crashed;
   // Wait for the owned supervisor to release its command lock, not a fixed
   // delay that could hide an orphan. Recovery is required within four seconds.
@@ -105,9 +107,76 @@ try {
   await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(readFileSync(beat, 'utf8'), hardBeat, 'CLI hard kill leaked a live descendant');
   r = check('hard-kill-recovery'); assert(r.passed && r.reused);
-  rows.push({ label: 'hard-kill-no-orphan', elapsed_ms: Math.round(performance.now() - crashStart), envelope: { data: { passed: true, reused: false } } });
+  rows.push({ label: groupKill?'group-kill-no-orphan':'hard-kill-no-orphan', elapsed_ms: Math.round(performance.now() - crashStart), envelope: { data: { passed: true, reused: false } } });
+  }
   invoke('cleanup', ['cleanup']);
   r = check('after-cleanup'); assert(r.passed && !r.reused); assert.equal(counts().prepare, 4);
+  // A real parent dies while a compatible check uses its service. Its private
+  // pipe must cancel the command tree before the guard runs registered cleanup.
+  recipe.checks.functional.during_preview = true;
+  recipe.checks.slow.during_preview = true;
+  recipe.checks.slow.timeout_seconds = 30;
+  writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
+  const liveOwner = spawn(process.execPath, ['-e', `
+    const {spawn}=require('node:child_process');
+    const guard=spawn(process.argv[1],['execution','environment','_guard'],{stdio:['pipe','pipe','inherit']});
+    guard.stdin.write(JSON.stringify({root:process.argv[2]})+'\\n');
+    guard.stdout.pipe(process.stdout); guard.on('exit',code=>process.exit(code||0));
+  `, bin, project], {cwd:project, stdio:['ignore','pipe','pipe']});
+  const ownerExit = new Promise(resolve => liveOwner.once('exit',resolve));
+  let ownerReady=''; liveOwner.stdout.on('data',data=>{ownerReady+=data;});liveOwner.stderr.resume();
+  const waitFor = async (predicate,label,start=performance.now()) => {
+    while(!predicate()) {
+      assert(performance.now()-start<10000,label);
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+  };
+  let live;
+  try {
+    await waitFor(()=>ownerReady.includes('\n'),'live owner did not start');
+    assert.deepEqual(JSON.parse(ownerReady.trim()),{});
+    const installed=counts().prepare;
+    r=check('live-preview-check');assert(r.passed && r.stable);assert.equal(counts().prepare,installed);
+    const descendantFile=join(project,'.archetipo/environment/descendant.pid');
+    if(existsSync(descendantFile))unlinkSync(descendantFile);
+    live=spawn(bin,['-C',project,'execution','environment','check','slow','--fresh'],{stdio:['ignore','pipe','pipe']});
+    let liveOutput='',ended=false;
+    live.stdout.on('data',data=>{liveOutput+=data;});live.stderr.resume();live.once('exit',()=>{ended=true;});
+    const liveStart=performance.now();
+    await waitFor(()=>existsSync(descendantFile),'live check did not start',liveStart);
+    const pid=Number(readFileSync(descendantFile,'utf8'));
+    liveOwner.kill('SIGKILL');await ownerExit;
+    await waitFor(()=>ended,'live check survived owner death',liveStart);
+    const outcome=JSON.parse(liveOutput).data;assert.equal(outcome.passed,false);
+    await waitFor(()=>!existsSync(join(project,'.archetipo/environment/owned-server.json')),'guard cleanup did not finish',liveStart);
+    assert.throws(()=>process.kill(pid,0),'live descendant survived owner death');
+    assert.equal(JSON.parse(readFileSync(join(project,'.archetipo/environment/state.json'),'utf8')).preparation_id,'');
+    rows.push({label:'live-check-owner-hard-death',elapsed_ms:Math.round(performance.now()-liveStart),exit:0,envelope:{data:outcome}});
+  } finally {liveOwner.kill('SIGTERM');live?.kill('SIGTERM');}
+
+  // A real candidate is tested before it replaces the common bundle. No agent,
+  // package manager or stack assumption is involved in this contract test.
+  const capabilities = invoke('runtime-capabilities', ['capabilities', '--tool', process.execPath], undefined, 'environment_capabilities');
+  assert.equal(capabilities.external_network.state, 'unknown');
+  assert.equal(capabilities.loopback_binding.state, 'available');
+  const helper = 'scripts/archetipo/qualification.txt';
+  mkdirSync(join(project, 'scripts/archetipo'), { recursive: true });
+  writeFileSync(join(project, helper), 'candidate helper');
+  recipe.inputs.push(helper);
+  writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
+  const prepareCount = counts().prepare;
+  const qualified = invoke('candidate-repeatability', ['qualify', '--asset', helper], undefined, 'environment_qualification');
+  assert.equal(qualified.passed, true);
+  assert.equal(counts().prepare, prepareCount + 2);
+  assert.deepEqual(qualified.reports.map(report => report.reused), [false, false, true]);
+  assert.equal(existsSync(join(project, '.archetipo/environment-recipe.json')), false);
+  invoke('qualified-publication', ['publish', '--qualified', '--asset', helper], undefined, 'environment_recipe');
+  const common = readFileSync(join(project, '.archetipo/environment-recipe.json'), 'utf8');
+  writeFileSync(join(project, helper), 'later helper mutation');
+  invoke('reject-stale-qualification', ['publish', '--qualified', '--asset', helper], 'E_PRECONDITION');
+  assert.equal(readFileSync(join(project, '.archetipo/environment-recipe.json'), 'utf8'), common);
+  writeFileSync(join(project, helper), 'candidate helper');
+
 } catch (error) { failure = error; }
 finally {
   try { invoke('final-cleanup', ['cleanup']); } catch (error) { failure ||= error; }

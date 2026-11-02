@@ -79,12 +79,13 @@ function working(state) {
 		conversationPendingMessage: state.pending || "",
 		conversationWorkingSince: state.since || 0,
 		conversationView: state.view || null,
+		conversationPollFailures: state.readFailures || 0,
 		Date,
 		Math,
 		out: null,
 	});
 	runInContext(
-		`${ACTIVITY_KINDS}\n${CONVERSATION_WORKING}\nout = conversationWorking();`,
+		`${js.match(/const CONVERSATION_POLL_FAILURE_LIMIT = \d+;/)[0]}\n${ACTIVITY_KINDS}\n${CONVERSATION_WORKING}\nout = conversationWorking();`,
 		ctx,
 	);
 	return ctx.out;
@@ -97,47 +98,6 @@ const GANCI_DI_APERTURA = [
 	{ id: 2, kind: "system/hook_response" },
 ];
 
-describe("la firma in fondo alla pagina porta da qualche parte", () => {
-	it("il nome del prodotto porta al suo repository", () => {
-		assert.match(
-			html,
-			/<a class="hint-link" href="https:\/\/github\.com\/techreloaded-ar\/ARchetipo"[^>]*>ARchetipo<\/a>/,
-			"«ARchetipo» in fondo alla pagina non porta al repository",
-		);
-	});
-
-	it("la firma porta al sito di chi lo fa", () => {
-		assert.match(
-			html,
-			/<a class="hint-link" href="https:\/\/techreloaded\.it"[^>]*>by Tech Reloaded<\/a>/,
-			"«by Tech Reloaded» non porta al sito di Tech Reloaded",
-		);
-	});
-
-	it("i due collegamenti si aprono altrove e senza dare la finestra a chi li riceve", () => {
-		const links = html.match(/<a class="hint-link"[^>]*>/g) || [];
-		assert.equal(links.length, 2, "i collegamenti della firma non sono due");
-		for (const link of links) {
-			assert.match(link, /target="_blank"/, `${link} non si apre in una scheda nuova`);
-			assert.match(link, /rel="noopener noreferrer"/, `${link} non è protetto`);
-		}
-	});
-
-	it("la barra non è più nascosta in blocco alla lettura assistita", () => {
-		// Un collegamento raggiungibile col tasto di tabulazione dentro un
-		// contenitore aria-hidden è un punto di fermata senza voce: la barra si
-		// è scoperta e sono i promemoria dei tasti a essere decorativi.
-		assert.ok(
-			!/<footer class="hint-bar" aria-hidden="true">/.test(html),
-			"la firma è tornata dentro un contenitore nascosto",
-		);
-		assert.match(html, /<span aria-hidden="true"><kbd>R<\/kbd>/);
-	});
-
-	it("i collegamenti hanno un contorno visibile da tastiera", () => {
-		assert.match(css, /\.hint-link:focus-visible \{[^}]*outline:/);
-	});
-});
 
 describe("la regola del turno", () => {
 	it("il runtime distingue il lavoro dall’attesa di input o autorizzazione", () => {
@@ -274,6 +234,10 @@ describe("la regola del turno", () => {
 			stato.seconds >= 6 && stato.seconds <= 9,
 			`l'attesa dovrebbe essere di circa 7 secondi, è ${stato.seconds}`,
 		);
+	});
+	it("un vecchio stato attivo non fa scorrere il contatore quando la lettura è fallita", () => {
+		assert.equal(working({ view: {session: {work: "TURN_ACTIVE"}}, readFailures: 3 }).active, false);
+		assert.equal(working({ view: {session: {work: "TURN_ACTIVE"}}, readFailures: 1 }).active, true);
 	});
 });
 

@@ -19,10 +19,13 @@ const (
 	// instead of passing for a message of the person.
 	KindInstruction = "instruction"
 	KindText        = "text"
-	KindThinking    = "thinking"
-	KindToolStart   = "tool_start"
-	KindToolEnd     = "tool_end"
-	KindToolError   = "tool_error"
-	KindTurnEnd     = "turn_end"
-	KindError       = "error"
+	// Worker messages belong to the technical history, not the owning agent's
+	// answer or the person's messages. Their original protocol remains in Raw.
+	KindWorkerMessage = "worker_message"
+	KindThinking      = "thinking"
+	KindToolStart     = "tool_start"
+	KindToolEnd       = "tool_end"
+	KindToolError     = "tool_error"
+	KindTurnEnd       = "turn_end"
+	KindError         = "error"
 )

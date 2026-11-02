@@ -14,6 +14,39 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/arcipelago"
 )
 
+func TestSaveFirstProviderMakesConversationAvailableWithoutRestart(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("first-native", nil)
+	srv, cfg, _ := newEmptyRunServer(t, provider, false)
+	before := doJSON(t, srv, http.MethodGet, conversationsRoute, nil)
+	var initial conversationsView
+	if err := json.Unmarshal(before.Body.Bytes(), &initial); err != nil || initial.Available {
+		t.Fatalf("initial availability: %s, %v", before.Body.String(), err)
+	}
+	next := config.Default()
+	next.ProjectRoot = cfg.ProjectRoot
+	response := doJSON(t, srv, http.MethodPut, "/api/config", saveConfigReq{Config: &next, Provider: &saveDefaultProviderReq{ID: provider.ID()}})
+	var saved configView
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &saved) != nil {
+		t.Fatalf("save: %d %s", response.Code, response.Body.String())
+	}
+	if saved.RestartRequired {
+		t.Fatal("a live-read default provider unnecessarily requires a viewer restart")
+	}
+	after := doJSON(t, srv, http.MethodGet, conversationsRoute, nil)
+	var available conversationsView
+	if err := json.Unmarshal(after.Body.Bytes(), &available); err != nil || !available.Available {
+		t.Fatalf("same-server availability after save: %s, %v", after.Body.String(), err)
+	}
+	// The idle releaser, unlike the selected provider, is initialized at startup.
+	seconds := 42
+	next.Execution.DefaultProvider = &config.DefaultProviderConfig{ID: provider.ID()}
+	next.Execution.IdleReleaseSeconds = &seconds
+	response = doJSON(t, srv, http.MethodPut, "/api/config", saveConfigReq{Config: &next})
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &saved) != nil || !saved.RestartRequired {
+		t.Fatalf("idle policy change lost its required restart: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestGetConfigMissing(t *testing.T) {
 	srv, cfg := newFileServer(t)
 	w := httptest.NewRecorder()

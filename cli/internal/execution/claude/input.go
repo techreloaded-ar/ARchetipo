@@ -4,193 +4,123 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
-// askUserQuestionTool is the built-in tool Claude Code calls to ask the person
-// a question with options. With `--permission-prompt-tool stdio` the call
-// reaches the host as an ordinary `can_use_tool` request, and the answers
-// travel back inside the allow decision as `updatedInput.answers`, keyed by
-// the question text — the contract the Agent SDK documents for canUseTool.
-// Rendered as a plain permission it was unanswerable: the person could only
-// consent to "a tool" whose arguments were the question itself.
-const askUserQuestionTool = "AskUserQuestion"
-
-const inputTitle = "Rispondi all’agente"
-
-// askUserQuestionInput is the input of one AskUserQuestion call, field for
-// field, kept whole so the answer can hand the questions back unchanged.
-type askUserQuestionInput struct {
-	Questions []struct {
-		Question    string `json:"question"`
-		Header      string `json:"header"`
-		MultiSelect bool   `json:"multiSelect"`
-		Options     []struct {
-			Label       string `json:"label"`
-			Description string `json:"description"`
-		} `json:"options"`
-	} `json:"questions"`
-}
-
-// inputQuestions projects the questions of an AskUserQuestion call into the
-// provider-neutral form the viewer draws. The question text is the identity,
-// because that is what the answer is keyed by on the way back. An input that
-// does not read as questions answers nil, and the request falls back to the
-// permission card rather than to an invented form.
-func inputQuestions(payload json.RawMessage) []execution.InputQuestion {
-	var native askUserQuestionInput
-	if json.Unmarshal(payload, &native) != nil || len(native.Questions) == 0 {
-		return nil
+// AskUserQuestion uses the same can_use_tool transport as permissions, but
+// answers are product choices, never permission decisions. The native response
+// preserves the original input and adds answers keyed by the question text.
+// https://code.claude.com/docs/en/agent-sdk/user-input
+func (s *streamSession) askInput(id string, payload json.RawMessage) {
+	var native struct {
+		Questions []struct {
+			Question    string `json:"question"`
+			Header      string `json:"header"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
 	}
-	seen := map[string]bool{}
+	if json.Unmarshal(payload, &native) != nil || len(native.Questions) == 0 {
+		return
+	}
 	questions := make([]execution.InputQuestion, 0, len(native.Questions))
-	for _, question := range native.Questions {
-		text := strings.TrimSpace(question.Question)
-		if text == "" || seen[text] {
-			return nil
+	seen := map[string]bool{}
+	for index, question := range native.Questions {
+		if strings.TrimSpace(question.Question) == "" || seen[question.Question] {
+			return
 		}
-		seen[text] = true
-		// Claude Code always offers "Other" beside the options, so free text is
-		// always allowed; a multi-select question keeps its flag and the form
-		// offers checkboxes instead of radios.
-		projected := execution.InputQuestion{ID: text, Header: question.Header, Prompt: text, MultiSelect: question.MultiSelect, AllowText: true}
+		seen[question.Question] = true
+		projected := execution.InputQuestion{ID: strconv.Itoa(index), Header: question.Header, Prompt: question.Question, AllowText: true, Multiple: question.MultiSelect}
 		for _, option := range question.Options {
 			if strings.TrimSpace(option.Label) == "" {
-				return nil
+				return
 			}
 			projected.Options = append(projected.Options, execution.InputOption{Value: option.Label, Label: option.Label, Description: option.Description})
 		}
 		questions = append(questions, projected)
 	}
-	return questions
-}
-
-// askInput records an AskUserQuestion call as a pending input. The caller
-// holds mu. It answers false when the input does not read as questions, so
-// the caller can keep the permission path.
-func (s *streamSession) askInputLocked(id string, request canUseToolRequest) bool {
-	questions := inputQuestions(request.Input)
-	if questions == nil {
-		return false
-	}
-	if _, already := s.inputs[id]; already {
-		return true
-	}
-	s.inputs[id] = execution.PendingInput{ID: id, Title: inputTitle, Payload: localrun.RawOf(request.Input), Questions: questions, CreatedAt: s.now().UTC()}
-	s.inputsIn = append(s.inputsIn, id)
-	return true
-}
-
-// forgetInputLocked removes one pending input from both the lookup and the
-// order. The caller holds mu.
-func (s *streamSession) forgetInputLocked(id string) {
-	if _, ok := s.inputs[id]; !ok {
-		return
-	}
-	delete(s.inputs, id)
-	for i, kept := range s.inputsIn {
-		if kept == id {
-			s.inputsIn = append(s.inputsIn[:i], s.inputsIn[i+1:]...)
-			return
-		}
-	}
-}
-
-// PendingInputs lists the questions the process is waiting an answer to,
-// oldest first.
-func (s *streamSession) PendingInputs() []execution.PendingInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]execution.PendingInput, 0, len(s.inputsIn))
-	for _, id := range s.inputsIn {
-		if input, ok := s.inputs[id]; ok {
-			out = append(out, input)
-		}
+	if _, exists := s.inputs[id]; !exists {
+		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
 	}
-	return out
 }
 
-// encodeInputAnswers renders the person's answers as the `updatedInput` of an
-// allow decision: the original questions, handed back as they were, and one
-// answer per question keyed by its text. Several values — the options chosen
-// on a multi-select question, and a free-text answer beside them — are joined
-// with a comma, which is the documented encoding of a multi-select answer. A
-// single-select question takes one value; a second one is refused rather than
-// merged into an answer the person did not give.
-func encodeInputAnswers(input execution.PendingInput, answers map[string][]string) (map[string]any, error) {
-	if len(answers) != len(input.Questions) {
-		return nil, fmt.Errorf("answer every question of the pending input request")
+func (s *streamSession) pendingInputs() []execution.PendingInput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inputs := make([]execution.PendingInput, 0, len(s.inputs))
+	for _, input := range s.inputs {
+		inputs = append(inputs, input)
 	}
-	encoded := make(map[string]string, len(input.Questions))
-	for _, question := range input.Questions {
-		var values []string
-		for _, value := range answers[question.ID] {
-			if value = strings.TrimSpace(value); value != "" {
-				values = append(values, value)
-			}
+	sort.Slice(inputs, func(i, j int) bool {
+		if inputs[i].CreatedAt.Equal(inputs[j].CreatedAt) {
+			return inputs[i].ID < inputs[j].ID
 		}
-		if len(values) == 0 {
-			return nil, fmt.Errorf("answer question %q", question.ID)
-		}
-		if !question.MultiSelect && len(values) > 1 {
-			return nil, fmt.Errorf("question %q takes one answer", question.ID)
-		}
-		encoded[question.ID] = strings.Join(values, ", ")
-	}
-	var original map[string]any
-	if err := json.Unmarshal(input.Payload, &original); err != nil {
-		return nil, fmt.Errorf("re-reading the questions of %q: %w", input.ID, err)
-	}
-	return map[string]any{"questions": original["questions"], "answers": encoded}, nil
+		return inputs[i].CreatedAt.Before(inputs[j].CreatedAt)
+	})
+	return inputs
 }
 
-// RespondInput answers one pending AskUserQuestion and gives it up, with the
-// same take-before-write rule RespondApproval follows and for the same reason.
-func (s *streamSession) RespondInput(ctx context.Context, inputID string, answers map[string][]string) error {
+func (s *streamSession) respondInput(ctx context.Context, id string, answers map[string][]string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	id := strings.TrimSpace(inputID)
 	s.mu.Lock()
-	input, open := s.inputs[id]
+	input, exists := s.inputs[id]
+	if !exists {
+		s.mu.Unlock()
+		return fmt.Errorf("claude input %q is not pending", id)
+	}
+	payload, err := inputResponse(input, answers)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	// Claim before writing so concurrent tabs cannot answer the same request.
+	delete(s.inputs, id)
 	s.mu.Unlock()
-	if !open {
-		return &execution.RunCommandError{
-			Reason: execution.RunRefusedUnsupported,
-			RunID:  s.session.RunID(),
-			Err:    fmt.Errorf("the claude session is not waiting on the input %q", id),
+	return s.process.Send(payload)
+}
+
+func inputResponse(input execution.PendingInput, answers map[string][]string) ([]byte, error) {
+	if len(answers) != len(input.Questions) {
+		return nil, fmt.Errorf("answer every question of the pending input request")
+	}
+	nativeAnswers := make(map[string]string, len(answers))
+	for _, question := range input.Questions {
+		values := answers[question.ID]
+		if len(values) == 0 || (!question.Multiple && len(values) != 1) {
+			return nil, fmt.Errorf("answer question %q", question.ID)
 		}
-	}
-	updated, err := encodeInputAnswers(input, answers)
-	if err != nil {
-		return &execution.RunCommandError{Reason: execution.RunRefusedUnsupported, RunID: s.session.RunID(), Err: err}
-	}
-	s.mu.Lock()
-	s.forgetInputLocked(id)
-	s.mu.Unlock()
-	payload, err := json.Marshal(map[string]any{
-		"type": frameControlResponse,
-		"response": map[string]any{
-			"subtype":    controlSuccess,
-			"request_id": id,
-			"response":   map[string]any{"behavior": "allow", "updatedInput": updated},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("encoding the answers for the claude session: %w", err)
-	}
-	if err := s.process.Send(payload); err != nil {
-		if s.sessionOver() {
-			return &execution.RunCommandError{
-				Reason: execution.RunRefusedNotActive,
-				RunID:  s.session.RunID(),
-				Err:    fmt.Errorf("the claude session is already over"),
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("answer question %q", question.ID)
 			}
 		}
-		return fmt.Errorf("sending the answers to the claude session: %w", err)
+		nativeAnswers[question.Prompt] = strings.Join(values, ", ")
 	}
-	return nil
+	var updated map[string]json.RawMessage
+	if err := json.Unmarshal(input.Payload, &updated); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(nativeAnswers)
+	if err != nil {
+		return nil, err
+	}
+	updated["answers"] = encoded
+	return json.Marshal(map[string]any{
+		"type": frameControlResponse,
+		"response": map[string]any{
+			"subtype": controlSuccess, "request_id": input.ID,
+			"response": map[string]any{"behavior": "allow", "updatedInput": updated},
+		},
+	})
 }

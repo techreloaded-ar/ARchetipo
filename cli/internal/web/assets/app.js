@@ -29,7 +29,7 @@
 		noPRD: "*(nessun PRD ancora)*",
 		deleteSpec: (code) => `Elimina ${code}`,
 		deleteStory: "Elimina la storia",
-		specTitle: (code) => `Spec ${code}`,
+		specTitle: (code) => `Storia ${code}`,
 		blockedBy: (list) => `bloccata da ${list}`,
 		emptyDone: "trascina qui una card per chiuderla",
 		emptyColumn: "nessuna spec",
@@ -46,7 +46,7 @@
 			review_dangling:
 				"I commenti e il dossier di revisione restano orfani; una run di revisione in corso verrebbe declassata.",
 			reopen_done:
-				"La history conserva il passaggio in Done: le metriche di ciclo e di lead time restano falsate, e l'autopilot può rimettere la spec in lavorazione.",
+				"La history conserva il passaggio in Done: le metriche di ciclo e di lead time restano falsate, e la storia può essere ripresa.",
 			rework_stuck:
 				"Il badge rework resta appeso: lo azzera soltanto una nuova pianificazione a partire da Todo.",
 			planned_without_plan:
@@ -64,7 +64,7 @@
 		transitionViaRequestChanges:
 			"Il passaggio viene registrato come richiesta di modifiche: i commenti di revisione entrano nel corpo della spec come feedback di rework.",
 		transitionRaw:
-			"Il passaggio è uno spostamento diretto sulla board: non attraversa nessun flusso di revisione.",
+			"Il passaggio è uno spostamento diretto sulla board: non approva codice e non integra branch.",
 		transitionBlockedRunning:
 			"C'è una run in corso su questa spec: aspetta che finisca, oppure annullala, prima di spostarla.",
 		transitionDone: (code, column) => `${code} spostata in ${column}`,
@@ -76,7 +76,6 @@
 		boardGoConversation: "Vai alla conversazione",
 		cardActions: "Azioni",
 		cardDiscuss: "Conversa",
-		cardOpenReview: "Decidi sulla revisione",
 		cardActionsFor: (code) => `Azioni per ${code}`,
 		cardDiscussFor: (code) => `Conversa su ${code}`,
 		stepNotStartable: "Questo passo non si può avviare adesso",
@@ -273,13 +272,11 @@
 		workspaceAddFailed: (reason) => `Aggiunta fallita: ${reason}`,
 		workspaceFallbackName: "Workspace",
 
-		// PRD e mockup
+		// Documento di prodotto
 		prdLoadFailed: (reason) => `Lettura fallita: ${reason}`,
 		prdSaving: "Salvataggio in corso…",
 		prdSaved: "Salvato",
 		prdUpdated: "PRD aggiornato",
-		noMockups: "Nessun mockup dell'app",
-		mockupsSpecs: (n) => `Spec (${n})`,
 
 		// Bozze non confermate
 		discardDraft: "Ci sono modifiche non salvate. Scartare la bozza?",
@@ -526,9 +523,6 @@
 	const storyActions = document.getElementById("story-actions");
 	const storyExecution = document.getElementById("story-execution");
 	const storyRun = document.getElementById("story-run");
-	const mockupsBtn = document.getElementById("mockups-btn");
-	const mockupsMenu = document.getElementById("mockups-menu");
-	const mockupsDropdown = document.getElementById("mockups-dropdown");
 	// The collector menu of the topbar (US-061): everything that used to sit
 	// one click away is inside it now, with the same ids, so nothing here binds
 	// a behaviour — this is the menu itself, not what it holds.
@@ -536,13 +530,6 @@
 	const topbarMoreMenu = document.getElementById("topbar-more-menu");
 	const topbarMoreDropdown = document.getElementById("topbar-more");
 	const themeToggle = document.getElementById("theme-toggle");
-	const reviewTab = document.getElementById("review-tab");
-	const reviewBranch = document.getElementById("review-branch");
-	const reviewDiff = document.getElementById("review-diff");
-	const reviewStatus = document.getElementById("review-status");
-	const reviewRequestBtn = document.getElementById("review-request-btn");
-	const reviewApproveBtn = document.getElementById("review-approve-btn");
-	const reviewDossier = document.getElementById("review-dossier");
 	const densityToggle = document.getElementById("density-toggle");
 
 	const THEME_KEY = "archetipo.theme";
@@ -659,17 +646,12 @@
 	});
 
 	let currentSpecCode = null;
-	let reviewComments = []; // inline comments for the spec currently under review
-	let reviewLoaded = false; // whether the review tab has been loaded for this spec
-	let currentReview = null; // ultima review letta: serve a contare i rilievi del dossier
-	let reviewBranchName = ""; // ramo della spec in revisione, "" quando non ne ha
 	// I file grandi del diff nascono ripiegati: costruire una riga DOM per ogni
 	// riga di un file generato blocca il thread, e quasi mai è quello che si sta
 	// rivedendo. La mappa tiene, per ogni percorso del file, la funzione che lo
 	// apre — sotto tutti e due i suoi nomi, perché un commento sul lato «old» è
 	// ancorato al vecchio percorso.
 	const DIFF_FILE_COLLAPSE_LINES = 400;
-	let diffFileExpanders = new Map();
 	let currentSpecSnapshot = null; // last loaded spec (for cancel + re-render after save)
 	let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
 	let boardSnapshot = null; // last loaded board (for undo on failed drag)
@@ -684,7 +666,6 @@
 	let currentConfigRaw = ""; // last loaded/saved config YAML
 	let currentConfigExists = false; // whether config.yaml existed on open
 	let activeConfigTab = "guided";
-	let mockupsCache = []; // cached list of mockups (refreshed lazily)
 	let executionProviders = []; // providers offered by the server, in its order
 	let executionDefault = null; // persisted workspace default, or null
 	// The action/execution/run trio is one panel that can be mounted on more than
@@ -766,6 +747,25 @@
 			if (currentSpecCode) openSpecConversation(currentSpecCode);
 		});
 	}
+    const specDevelopBtn = document.getElementById("spec-develop-btn");
+    specDevelopBtn.addEventListener("click", async () => {
+        if (!currentSpecSnapshot || specDevelopBtn.disabled) return;
+        const story = currentSpecSnapshot;
+        specDevelopBtn.disabled = true;
+        try {
+            const view = await apiPost("/api/increments", {title:story.title, request:"Lavora sulla storia " + story.code + ": " + story.title + "\n\n" + (story.body || ""), story_codes:[story.code], ...(conversationModelOverride() || {})});
+            setShellView("conversation");
+            await switchToConversation(conversationIdOf(view), view);
+            await loadConversationsIndex();
+        } catch (err) { showToast(err.message || String(err), "err"); }
+        finally { specDevelopBtn.disabled = false; }
+    });
+    document.getElementById("story-linked-work").addEventListener("click", async event => {
+        const button = event.target.closest("[data-linked-conversation]");
+        if (!button) return;
+        try { setShellView("conversation"); await switchToConversation(button.dataset.linkedConversation); }
+        catch (err) { showToast(err.message || String(err), "err"); }
+    });
 	// No backdrop click any more: the spec detail is a pane of the primary
 	// column, so a click on its own padding is a click inside the work, not a
 	// dismissal of a window laid over the page.
@@ -824,16 +824,11 @@
 	addTaskBtn.addEventListener("click", () => addTaskRow());
 	// Un solo listener per tutto il diff invece di uno per riga: su un diff di
 	// migliaia di righe la differenza è tutta nel costo di costruzione.
-	reviewDiff.addEventListener("click", onDiffClick);
-	reviewRequestBtn.addEventListener("click", onRequestChanges);
-	reviewApproveBtn.addEventListener("click", onApprove);
 	// The action chips are re-rendered on every open, so the handler lives on
 	// their container instead of on buttons that no longer exist. Every
 	// container the panel can be mounted on is bound once, here: which of them
 	// is live at any moment is decided by the mounted context, not by the
 	// listeners.
-	// Il dettaglio di una spec non sta dentro nessuna conversazione: la sua
-	// azione apre un thread suo invece di accodarsi a quello aperto nel rail.
 	bindActionsPanel(storyActions, false);
 	bindActionsPanel(inceptionActions, true);
 	bindActionsPanel(specDraftActions, true);
@@ -1083,11 +1078,6 @@
 	configModal.addEventListener("input", refreshConfigDirty);
 	configModal.addEventListener("change", refreshConfigDirty);
 
-	mockupsBtn.addEventListener("click", toggleMockupsMenu);
-	document.addEventListener("click", (e) => {
-		if (!mockupsDropdown.contains(e.target))
-			mockupsMenu.classList.add("hidden");
-	});
 
 	topbarMoreBtn.addEventListener("click", toggleTopbarMoreMenu);
 	// A click outside the collector closes it. The mockups dropdown is *inside*
@@ -1102,7 +1092,6 @@
 	// and the one that opens the nested submenu are the two exceptions — the
 	// first toggles it, the second opens something inside it.
 	topbarMoreMenu.addEventListener("click", (e) => {
-		if (e.target.closest("#mockups-btn")) return;
 		if (e.target.closest("button, a")) closeTopbarMoreMenu();
 	});
 
@@ -1168,7 +1157,6 @@
 			// route would be refused, and the refusal is not news the home has to
 			// report.
 			loadWorkspaceRuns();
-			loadMockups();
 			connectBoardStream();
 			// Per ultimo, perché è l'indirizzo a decidere: se porta una spec, il
 			// dettaglio si riapre sopra la board appena chiesta, e la voce
@@ -1361,6 +1349,7 @@
 		// La vista corrente sta scritta sulla shell, cosi' il foglio di stile
 		// puo' decidere che cosa ha senso mostrare in ciascuna.
 		shellEl.dataset.view = layout.view;
+        newSpecBtn.classList.toggle("hidden", layout.view !== "board");
 		applyPaneState(conversationEl, layout.panes.conversation);
 		applyPaneState(boardEl, layout.panes.board);
 		applyPaneState(documentationEl, layout.panes.documentation);
@@ -1403,6 +1392,9 @@
 			return;
 		}
 		clearDocumentationLocation(view);
+        if (view === "conversation" && historySupported() && specCodeInLocation()) {
+            window.history.pushState({archetipoView: view}, "", locationWithSpec(""));
+        }
 		if (view === "board" && specOpen && previousView === "documentation") {
 			closeModal();
 			return;
@@ -2396,15 +2388,6 @@
 						group.appendChild(note);
 					}
 				});
-				if (view.spec && view.spec.status === "REVIEW") {
-					const decide = document.createElement("button");
-					decide.type = "button";
-					decide.className = "ghost-btn";
-					decide.textContent = TEXT.cardOpenReview;
-					decide.dataset.cardOpenReview = spec.code;
-					decide.addEventListener("click", () => openSpecReview(spec.code).catch((err) => showToast(err.message || String(err), "err")));
-					group.appendChild(decide);
-				}
 				controls.appendChild(group);
 			} catch (err) { showToast(err.message || String(err), "err"); }
 			finally { actionsButton.disabled = false; }
@@ -2534,16 +2517,12 @@
 	}
 
 	function askTransition(code, columnLabel, preview) {
+        if (!(preview.impacts || []).length) return Promise.resolve(true);
 		transitionConfirmTitle.textContent = TEXT.transitionConfirmTitle(
 			code,
 			columnLabel,
 		);
-		transitionConfirmIntro.textContent =
-			preview.recommended_action === "approve"
-				? TEXT.transitionViaApprove
-				: preview.recommended_action === "request_changes"
-					? TEXT.transitionViaRequestChanges
-					: TEXT.transitionRaw;
+		transitionConfirmIntro.textContent = TEXT.transitionRaw;
 		const impacts = preview.impacts || [];
 		transitionImpactList.innerHTML = "";
 		const lines = impacts.length
@@ -2587,23 +2566,7 @@
 			return;
 		}
 		try {
-			if (preview.recommended_action === "approve") {
-				await apiPost(`/api/spec/${encodeURIComponent(code)}/approve`, {});
-			} else if (preview.recommended_action === "request_changes") {
-				await apiPost(
-					`/api/spec/${encodeURIComponent(code)}/request-changes`,
-					{},
-				);
-			} else {
-				// L'ancora vale solo sullo spostamento grezzo: i due flussi
-				// corretti portano la spec dove decidono loro, e l'ordine della
-				// colonna d'arrivo non è quello che la persona stava curando.
-				await apiPost("/api/board/move", {
-					code,
-					to,
-					...(options.anchor || {}),
-				});
-			}
+            await apiPost("/api/board/move", {code, to, ...(options.anchor || {})});
 			showToast(TEXT.transitionDone(code, columnLabel), "ok");
 			await loadBoard();
 			await loadWorkspaceStatus();
@@ -2652,8 +2615,6 @@
 		planStatus.textContent = "";
 		showSpecView();
 		showPlanView();
-		reviewLoaded = false;
-		reviewComments = [];
 		try {
 			const detail = await apiGet(`/api/spec/${encodeURIComponent(code)}`);
 			currentSpecSnapshot = detail.spec || {};
@@ -2661,7 +2622,9 @@
 				plan_body: detail.plan_body || "",
 				tasks: detail.tasks || [],
 			};
-			fillSpecView(currentSpecSnapshot);
+            fillSpecView(currentSpecSnapshot);
+            document.getElementById("story-linked-work").innerHTML = StoryTrace.renderWorks(detail.works || []);
+
 			renderSpecActions(detail.actions);
 			// The server hands back the last execution of the spec on every read,
 			// so a reload finds the run it left behind — and resumes following it
@@ -2671,7 +2634,6 @@
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
-			updateReviewTabVisibility(currentSpecSnapshot);
 			specStatus.textContent = "";
 		} catch (err) {
 			specStatus.textContent = TEXT.loadFailed(err.message || err);
@@ -2717,11 +2679,7 @@
 			metaParts.push(
 				`<span class="meta-chip blocked">${escapeHtml(TEXT.blockedBy(s.blocked_by.join(", ")))}</span>`,
 			);
-		const mockup = findMockupForSpec(s.code);
-		if (mockup)
-			metaParts.push(
-				`<a class="meta-chip mockup-link" href="${escapeHtml(mockup.url)}" target="_blank" rel="noopener">↗ mockup</a>`,
-			);
+
 		specViewMeta.innerHTML = metaParts.join("");
 		specDeleteBtn.title = s.code ? TEXT.deleteSpec(s.code) : TEXT.deleteStory;
 		specDeleteBtn.setAttribute(
@@ -2758,11 +2716,6 @@
 		const current = columns.find((column) => column.status === status);
 		specStatusSelect.value = current ? current.id : "";
 		specStatusSelect.disabled = columns.length === 0;
-	}
-
-	function findMockupForSpec(code) {
-		if (!code) return null;
-		return mockupsCache.find((m) => m.spec_code === code) || null;
 	}
 
 	function fillSpecForm(s) {
@@ -3009,9 +2962,6 @@
 		if (name === "story" && !specForm.classList.contains("hidden")) {
 			setTimeout(() => specEditor.codemirror.refresh(), 0);
 		}
-		if (name === "review" && !reviewLoaded) {
-			loadReview();
-		}
 	}
 
 	function closeModal() {
@@ -3033,18 +2983,9 @@
 		currentSpecCode = null;
 		currentSpecSnapshot = null;
 		currentPlanSnapshot = null;
-		reviewComments = [];
-		reviewLoaded = false;
-		currentReview = null;
 		// Il pannello di revisione è unico e riusato: il DOM del diff lasciato
 		// dentro un pannello nascosto continua a pesare su ogni ridisegno della
 		// board, ed è quello che costringeva a ricaricare la pagina.
-		diffFileExpanders = new Map();
-		reviewDiff.innerHTML = "";
-		reviewDossier.innerHTML = "";
-		reviewBranch.innerHTML = "";
-		reviewBranchName = "";
-		reviewTab.classList.add("hidden");
 	}
 
 	// ---- Toast ---------------------------------------------------------------
@@ -3296,430 +3237,6 @@
 		return parts.join("\u0000");
 	}
 
-	// ---- Review (diff + inline comments) -----------------------------------
-
-	// openSpecReview porta al tab Revisione della spec con il dossier già letto,
-	// così chi decide da fuori del dettaglio — la conversazione, la board —
-	// passa per la stessa domanda e gli stessi pulsanti del tab. Risponde false
-	// quando la spec non è più in revisione.
-	async function openSpecReview(code) {
-		await openEditor(code);
-		if (currentSpecCode !== code || !currentSpecSnapshot || currentSpecSnapshot.status !== "REVIEW") return false;
-		if (!reviewLoaded) await loadReview();
-		activateTab("review");
-		return currentSpecCode === code && reviewLoaded;
-	}
-
-	function updateReviewTabVisibility(spec) {
-		const inReview = spec && spec.status === "REVIEW";
-		reviewTab.classList.toggle("hidden", !inReview);
-		if (!inReview && reviewTab.classList.contains("active")) {
-			activateTab("story");
-		}
-	}
-
-	// Il dossier e il verdetto sono quello che serve per decidere, il diff è
-	// quello che serve per capire: le due richieste partono insieme ma si
-	// aspettano separatamente, così «Approva» è premibile prima che il diff
-	// abbia finito di arrivare.
-	async function loadReview() {
-		reviewLoaded = true;
-		reviewStatus.textContent = "";
-		reviewStatus.className = "status-msg";
-		reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffLoading)}</div>`;
-		const code = currentSpecCode;
-		const pendingDiff = apiGet(`/api/spec/${encodeURIComponent(code)}/diff`);
-		// Se è la review a fallire, il diff non viene mai atteso: il catch vuoto
-		// evita la unhandled rejection, l'errore vero lo riporta l'await.
-		pendingDiff.catch(() => {});
-		try {
-			const review = await apiGet(
-				`/api/spec/${encodeURIComponent(code)}/review`,
-			);
-			currentReview = review || null;
-			reviewComments = (review && review.comments) || [];
-			renderDossier(review || {});
-			const diff = await pendingDiff;
-			renderReviewBranch(diff);
-			renderDiff(diff);
-		} catch (err) {
-			reviewLoaded = false;
-			reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffError(err.message || err))}</div>`;
-		}
-	}
-
-	function renderReviewBranch(diff) {
-		const parts = [];
-		if (diff.branch)
-			parts.push(
-				`<span class="review-chip">⎇ ${escapeHtml(diff.branch)}</span>`,
-			);
-		parts.push(
-			diff.base_fallback
-				? `<span class="review-chip" title="${escapeHtml(TEXT.baseFallbackHint)}">base ${escapeHtml(diff.base || "")} ⚠</span>`
-				: `<span class="review-chip">base ${escapeHtml(diff.base || "")}</span>`,
-		);
-		if (diff.branch)
-			parts.push(
-				`<span class="review-chip">+${diff.ahead || 0} / −${diff.behind || 0}</span>`,
-			);
-		reviewBranch.innerHTML = parts.join("");
-		// Integrare vuol dire fondere un ramo: senza ramo — worktree spento, o
-		// spec mai partita in un worktree — il server rifiuta e basta, e il
-		// bottone prometteva una chiusura che non poteva dare. Chi vuole chiudere
-		// lo stesso una spec respinta passa da Approva, che di rami non ne ha
-		// bisogno.
-		reviewBranchName = diff.branch || "";
-		updateCloseButton();
-	}
-
-	// updateCloseButton dà al bottone di chiusura la faccia del caso in cui si
-	// trova. La spec si chiude sempre — è la persona a decidere, non il dossier —
-	// ma le due cose che può fare non sono la stessa: approvare un incremento che
-	// il dossier ha promosso, o chiuderne uno che dichiara bloccato. L'etichetta
-	// e lo stile dicono quale delle due, e il ramo dice se l'integrazione viaggia
-	// con la chiusura: è la stessa condizione che il server usa per decidere se
-	// integrare, cioè un ramo registrato sulla spec.
-	//
-	// Dossier e diff arrivano da due richieste separate e in ordine non garantito,
-	// quindi ognuna delle due aggiorna quello che sa e richiama questa: il
-	// bottone si compone da sé, invece di dipendere da chi è arrivato prima.
-	function updateCloseButton() {
-		const blockers =
-			((currentReview && currentReview.dossier) || {}).blockers || [];
-		const forced = blockers.length > 0;
-		const integrates = reviewBranchName !== "";
-		reviewApproveBtn.textContent = forced
-			? integrates
-				? TEXT.closeForceIntegrate
-				: TEXT.closeForce
-			: integrates
-				? TEXT.closeApproveIntegrate
-				: TEXT.closeApprove;
-		reviewApproveBtn.title = forced
-			? TEXT.approveBlocked(blockers.length)
-			: integrates
-				? TEXT.approveHintIntegrate
-				: TEXT.approveHint;
-		// Chiudere sopra i rilievi resta premibile, ma non si veste da azione
-		// consigliata: chi passa di lì per abitudine deve accorgersi che questa
-		// volta sta scavalcando qualcosa.
-		reviewApproveBtn.classList.toggle("primary-btn", !forced);
-		reviewApproveBtn.classList.toggle("danger-ghost-btn", forced);
-	}
-
-	function findingsBlock(className, heading, findings) {
-		const items = findings
-			.map((f) => `<li>${marked.parseInline(f)}</li>`)
-			.join("");
-		return `<div class="${className}"><strong>${escapeHtml(heading)}</strong><ul>${items}</ul></div>`;
-	}
-
-	// renderDossier shows the evidence a provider prepared for this spec, and the
-	// verdict already taken on it. Its three states are rendered explicitly, and
-	// the empty one says what to do about it: an absent panel would read as a
-	// broken page rather than as work not yet done.
-	function renderDossier(review) {
-		const dossier = review && review.dossier;
-		const verdict = review && review.verdict;
-		const parts = [];
-		if (verdict) {
-			const decided =
-				verdict.decision === "approved"
-					? TEXT.verdictApproved
-					: verdict.decision === "closed_over_blockers"
-						? TEXT.verdictClosedOverBlockers
-						: TEXT.verdictChangesRequested;
-			const when = verdict.decided_at
-				? escapeHtml(TEXT.verdictWhen(verdict.decided_at))
-				: "";
-			const from = verdict.execution_id
-				? escapeHtml(TEXT.verdictFrom(verdict.execution_id))
-				: "";
-			parts.push(
-				`<div class="review-verdict">${decided}${when}${from}</div>`,
-			);
-		}
-		if (!dossier) {
-			parts.push(
-				`<div class="review-empty">${TEXT.noDossier}</div>`,
-			);
-			reviewDossier.innerHTML = parts.join("");
-			updateCloseButton();
-			return;
-		}
-		const head = [];
-		if (dossier.execution_id)
-			head.push(
-				`<span class="review-chip">execution ${escapeHtml(dossier.execution_id)}</span>`,
-			);
-		if (dossier.prepared_at)
-			head.push(
-				`<span class="review-chip">${escapeHtml(dossier.prepared_at)}</span>`,
-			);
-		parts.push(`<div class="review-dossier-head">${head.join("")}</div>`);
-		if (dossier.summary)
-			parts.push(
-				`<div class="review-dossier-summary markdown-rendered">${marked.parse(dossier.summary)}</div>`,
-			);
-		const criteria = dossier.criteria || [];
-		if (criteria.length > 0) {
-			const rows = criteria
-				.map((c) => {
-					const verdictClass = `criterion-${escapeHtml(c.verdict || "unclear")}`;
-					const note = c.note
-						? `<span class="criterion-note">${marked.parseInline(c.note)}</span>`
-						: "";
-					return `<li><span class="criterion-badge ${verdictClass}">${escapeHtml(c.verdict || "")}</span><span class="criterion-id">${escapeHtml(c.id || "")}</span>${note}</li>`;
-				})
-				.join("");
-			parts.push(`<ul class="review-criteria">${rows}</ul>`);
-		}
-		// I due secchi si leggono uguale e pesano diverso: quello bloccante si
-		// veste di rosso perché la chiusura dovrà scavalcarlo, l'altro no perché
-		// non c'è niente da scavalcare — resta però scritto, che è tutto il
-		// motivo per cui il provider lo ha riportato.
-		const blockers = dossier.blockers || [];
-		if (blockers.length > 0) {
-			parts.push(
-				findingsBlock("review-blockers", TEXT.blockersHeading, blockers),
-			);
-		}
-		const minorFindings = dossier.minor_findings || [];
-		if (minorFindings.length > 0) {
-			parts.push(
-				findingsBlock(
-					"review-minor",
-					TEXT.minorFindingsHeading,
-					minorFindings,
-				),
-			);
-		}
-		reviewDossier.innerHTML = parts.join("");
-		updateCloseButton();
-	}
-
-	function renderDiff(diff) {
-		reviewDiff.innerHTML = "";
-		diffFileExpanders = new Map();
-		const files = diff.files || [];
-		if (files.length === 0) {
-			reviewDiff.innerHTML =
-				`<div class="review-empty">${escapeHtml(TEXT.diffEmpty)}</div>`;
-			return;
-		}
-		files.forEach((file) => reviewDiff.appendChild(renderFileDiff(file)));
-		renderAllComments();
-	}
-
-	function renderFileDiff(file) {
-		const path = file.new_path || file.old_path || TEXT.unknownPath;
-		const wrap = document.createElement("div");
-		wrap.className = "diff-file";
-		const header = document.createElement("div");
-		header.className = "diff-file-header";
-		header.innerHTML = `<span class="diff-file-status diff-${escapeHtml(file.status || "modified")}">${escapeHtml(file.status || "modified")}</span><span class="diff-file-path">${escapeHtml(path)}</span>`;
-		wrap.appendChild(header);
-		const hunks = file.hunks || [];
-		const lineCount = hunks.reduce((n, h) => n + (h.lines || []).length, 0);
-		const buildLines = () => {
-			const body = document.createDocumentFragment();
-			hunks.forEach((hunk) => {
-				const hh = document.createElement("div");
-				hh.className = "diff-hunk-header";
-				hh.textContent = hunk.header;
-				body.appendChild(hh);
-				(hunk.lines || []).forEach((line) =>
-					body.appendChild(renderDiffLine(path, file, line)),
-				);
-			});
-			wrap.appendChild(body);
-		};
-		if (lineCount <= DIFF_FILE_COLLAPSE_LINES) {
-			buildLines();
-			return wrap;
-		}
-		const toggle = document.createElement("button");
-		toggle.type = "button";
-		toggle.className = "diff-file-expand";
-		toggle.textContent = TEXT.diffFileCollapsed(lineCount);
-		wrap.appendChild(toggle);
-		const expand = () => {
-			if (!toggle.isConnected) return;
-			toggle.remove();
-			buildLines();
-		};
-		toggle.addEventListener("click", expand);
-		[file.new_path, file.old_path, path].forEach((p) => {
-			if (p) diffFileExpanders.set(p, expand);
-		});
-		return wrap;
-	}
-
-	function renderDiffLine(path, file, line) {
-		const row = document.createElement("div");
-		row.className = `diff-line diff-${line.kind}`;
-		const side = line.new_line > 0 ? "new" : "old";
-		const lineNo = side === "new" ? line.new_line : line.old_line;
-		const anchorFile = side === "old" ? file.old_path || path : path;
-		row.dataset.file = anchorFile;
-		row.dataset.side = side;
-		row.dataset.line = String(lineNo);
-		const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
-		row.innerHTML = `
-            <span class="diff-gutter old">${line.old_line > 0 ? line.old_line : ""}</span>
-            <span class="diff-gutter new">${line.new_line > 0 ? line.new_line : ""}</span>
-            <span class="diff-comment-add" title="${escapeHtml(TEXT.addComment)}">+</span>
-            <span class="diff-sign">${sign}</span>
-            <span class="diff-code">${escapeHtml(line.text)}</span>
-        `;
-		return row;
-	}
-
-	function onDiffClick(e) {
-		const add = e.target.closest(".diff-comment-add");
-		if (!add) return;
-		const row = add.closest(".diff-line");
-		if (!row) return;
-		e.stopPropagation();
-		openComposer(
-			row,
-			row.dataset.file,
-			row.dataset.side,
-			Number(row.dataset.line),
-		);
-	}
-
-	function expandDiffFile(path) {
-		const expand = diffFileExpanders.get(path);
-		if (expand) expand();
-	}
-
-	function renderAllComments() {
-		// Remove existing comment blocks then re-attach from state.
-		reviewDiff
-			.querySelectorAll(".diff-comment-block")
-			.forEach((n) => n.remove());
-		reviewComments.forEach((c) => {
-			// Un commento salvato su un file ripiegato lo apre: tenerlo chiuso
-			// nasconderebbe anche il rilievo che qualcuno ci ha lasciato.
-			expandDiffFile(c.file);
-			const row = findLineRow(c.file, c.side, c.line);
-			if (row) insertCommentBlock(row, c);
-		});
-	}
-
-	function findLineRow(file, side, line) {
-		return reviewDiff.querySelector(
-			`.diff-line[data-file="${cssEscape(file)}"][data-side="${side}"][data-line="${line}"]`,
-		);
-	}
-
-	function insertCommentBlock(row, comment) {
-		const block = document.createElement("div");
-		block.className = "diff-comment-block";
-		block.innerHTML = `
-            <div class="diff-comment-body">${escapeHtml(comment.body)}</div>
-            <button type="button" class="diff-comment-del" aria-label="${escapeHtml(TEXT.deleteComment)}">&times;</button>
-        `;
-		block
-			.querySelector(".diff-comment-del")
-			.addEventListener("click", () => deleteComment(comment));
-		insertAfterTrailing(row, block);
-	}
-
-	function openComposer(row, file, side, line) {
-		// Avoid duplicate composers on the same row.
-		const existing = nextComposer(row);
-		if (existing) {
-			existing.querySelector("textarea").focus();
-			return;
-		}
-		const box = document.createElement("div");
-		box.className = "diff-comment-block diff-composer";
-		box.innerHTML = `
-            <textarea class="diff-comment-input" rows="3" placeholder="${escapeHtml(TEXT.commentPlaceholder)}"></textarea>
-            <div class="diff-composer-actions">
-                <button type="button" class="primary-btn diff-comment-save">${escapeHtml(TEXT.commentSave)}</button>
-                <button type="button" class="ghost-btn diff-comment-cancel">${escapeHtml(TEXT.commentCancel)}</button>
-            </div>
-        `;
-		box
-			.querySelector(".diff-comment-cancel")
-			.addEventListener("click", () => box.remove());
-		box
-			.querySelector(".diff-comment-save")
-			.addEventListener("click", async () => {
-				const body = box.querySelector("textarea").value.trim();
-				if (!body) return;
-				box.remove();
-				await addComment({
-					file,
-					side,
-					line,
-					body,
-					created_at: new Date().toISOString(),
-				});
-			});
-		insertAfterTrailing(row, box);
-		box.querySelector("textarea").focus();
-	}
-
-	// insertAfterTrailing inserts node after row and any comment blocks already
-	// attached to it, so comments and composer stack in order under the line.
-	function insertAfterTrailing(row, node) {
-		let ref = row;
-		while (
-			ref.nextSibling &&
-			ref.nextSibling.classList &&
-			ref.nextSibling.classList.contains("diff-comment-block")
-		) {
-			ref = ref.nextSibling;
-		}
-		ref.parentNode.insertBefore(node, ref.nextSibling);
-	}
-
-	function nextComposer(row) {
-		let ref = row.nextSibling;
-		while (
-			ref &&
-			ref.classList &&
-			ref.classList.contains("diff-comment-block")
-		) {
-			if (ref.classList.contains("diff-composer")) return ref;
-			ref = ref.nextSibling;
-		}
-		return null;
-	}
-
-	async function addComment(comment) {
-		reviewComments.push(comment);
-		await persistReview();
-		renderAllComments();
-	}
-
-	async function deleteComment(comment) {
-		reviewComments = reviewComments.filter((c) => c !== comment);
-		await persistReview();
-		renderAllComments();
-	}
-
-	// La PUT salva la review intera, non i soli commenti: mandare solo quelli
-	// cancellava dal file il dossier e il verdetto: lasciare un commento inline
-	// buttava via le evidenze su cui lo si stava lasciando, e con loro i rilievi
-	// che «Chiedi modifiche» avrebbe riportato nella spec.
-	async function persistReview() {
-		const review = { ...(currentReview || {}), comments: reviewComments };
-		currentReview = review;
-		try {
-			await apiPut(
-				`/api/spec/${encodeURIComponent(currentSpecCode)}/review`,
-				review,
-			);
-		} catch (err) {
-			showToast(TEXT.saveFailed(err.message || err), "err");
-		}
-	}
 
 	async function confirmAndDeleteSpec(code, title) {
 		if (!code) return false;
@@ -3741,139 +3258,6 @@
 			showToast(TEXT.deleteFailed(err.message || err), "err");
 			return false;
 		}
-	}
-
-	// withBusyButton tiene il bottone occupato per la durata dell'azione e lo
-	// rimette com'era in ogni caso. Il ripristino sta nel `finally` perché la
-	// strada del successo chiude la scheda ma non distrugge il pannello: è unico
-	// e riusato, e una label lasciata a «Approvazione in corso…» accoglierebbe la
-	// prossima spec che si apre. Serve anche a impedire il doppio invio, che su
-	// azioni irreversibili manderebbe due POST.
-	async function withBusyButton(btn, busyLabel, action) {
-		const label = btn.textContent;
-		btn.disabled = true;
-		btn.textContent = busyLabel;
-		try {
-			return await action();
-		} finally {
-			btn.disabled = false;
-			btn.textContent = label;
-		}
-	}
-
-	// countReworkItems conta quello che il server riporterà nella spec, con la
-	// stessa regola di domain.ReworkFeedbackItems: serve solo a far dire alla
-	// domanda quanti rilievi partiranno. Il conteggio che vale resta quello del
-	// server, che è l'unico a vedere la review salvata.
-	function countReworkItems(freeText) {
-		const dossier = (currentReview && currentReview.dossier) || {};
-		const unmet = (dossier.criteria || []).filter((c) => c.verdict !== "met");
-		return (
-			reviewComments.length +
-			(dossier.blockers || []).length +
-			(dossier.minor_findings || []).length +
-			unmet.length +
-			(freeText.trim() ? 1 : 0)
-		);
-	}
-
-	// Un'azione di revisione che fallisce lo dice in due posti: la riga di
-	// stato del pannello e un toast. La riga di stato da sola non basta —
-	// sta in fondo, sotto il diff, e su un incremento lungo cade fuori dallo
-	// schermo: il rifiuto del server sembrava un click andato nel vuoto.
-	function reviewFailed(err) {
-		const msg = TEXT.failed(err.message || err);
-		reviewStatus.textContent = msg;
-		reviewStatus.className = "status-msg err";
-		showToast(msg, "err");
-	}
-
-	async function onRequestChanges() {
-		if (!currentSpecCode) return;
-		const freeText = window.prompt(TEXT.requestChangesFeedback, "");
-		if (freeText === null) return;
-		if (countReworkItems(freeText) === 0) {
-			showToast(TEXT.requestChangesEmpty, "err");
-			return;
-		}
-		if (
-			!window.confirm(
-				TEXT.requestChangesConfirm(
-					countReworkItems(freeText),
-					currentSpecCode,
-				),
-			)
-		)
-			return;
-		reviewStatus.textContent = TEXT.requestingChanges;
-		reviewStatus.className = "status-msg";
-		await withBusyButton(
-			reviewRequestBtn,
-			TEXT.requestingChanges,
-			async () => {
-				try {
-					const res = await apiPost(
-						`/api/spec/${encodeURIComponent(currentSpecCode)}/request-changes`,
-						{ feedback: freeText },
-					);
-					showToast(TEXT.changesRequested(currentSpecCode, res.items), "ok");
-					closeModal();
-					await loadBoard();
-				} catch (err) {
-					reviewFailed(err);
-				}
-			},
-		);
-	}
-
-	// L'approvazione si può chiedere da due strade — il bottone Approva e il
-	// trascinamento di una card da Review a Done — ma è la stessa azione
-	// irreversibile, quindi deve fare la stessa domanda. La domanda sta scritta
-	// qui una volta sola: due formulazioni diverse sarebbero due promesse
-	// diverse sullo stesso effetto.
-	function confirmApproval(code) {
-		const blockers =
-			((currentReview && currentReview.dossier) || {}).blockers || [];
-		return window.confirm(
-			blockers.length > 0
-				? TEXT.approveConfirmBlocked(blockers.length, code)
-				: TEXT.approveConfirm(code),
-		);
-	}
-
-	async function onApprove() {
-		if (!currentSpecCode) return;
-		const code = currentSpecCode;
-		if (!confirmApproval(code)) return;
-		reviewStatus.textContent = TEXT.approving;
-		reviewStatus.className = "status-msg";
-		await withBusyButton(reviewApproveBtn, TEXT.approving, async () => {
-			try {
-				const res = await apiPost(
-					`/api/spec/${encodeURIComponent(code)}/approve`,
-					{},
-				);
-				showToast(
-					res.decision === "closed_over_blockers"
-						? TEXT.closedOverBlockers(code)
-						: res.integrated
-							? TEXT.approvedIntegrated(code)
-							: TEXT.approved(code),
-					"ok",
-				);
-				closeModal();
-				await loadBoard();
-			} catch (err) {
-				reviewFailed(err);
-			}
-		});
-	}
-
-	// cssEscape escapes a string for use in a CSS attribute selector. Falls back
-	// to a manual escape when CSS.escape is unavailable.
-	function cssEscape(s) {
-		if (window.CSS && CSS.escape) return CSS.escape(s);
-		return String(s).replace(/["\\]/g, "\\$&");
 	}
 
 	// ---- Config ------------------------------------------------------------
@@ -4264,7 +3648,7 @@
 	function bindModelFieldRedraw(provider) {
 		if (!provider || !provider.model_field) return;
 		const control = executionFields.querySelector(
-			`[name="provider_${cssEscape(provider.model_field)}"]`,
+			`[name="provider_${CSS.escape(provider.model_field)}"]`,
 		);
 		if (!control) return;
 		control.addEventListener("change", () => {
@@ -4278,7 +3662,7 @@
 		const config = {};
 		(provider.config_fields || []).forEach((f) => {
 			const input = executionFields.querySelector(
-				`[name="provider_${cssEscape(f.name)}"]`,
+				`[name="provider_${CSS.escape(f.name)}"]`,
 			);
 			if (!input) return;
 			const raw = input.value.trim();
@@ -4313,7 +3697,7 @@
 			.forEach((label) => label.classList.remove("field-error"));
 		if (!name) return;
 		const label = executionFields.querySelector(
-			`[data-provider-field="${cssEscape(name)}"]`,
+			`[data-provider-field="${CSS.escape(name)}"]`,
 		);
 		if (!label) return;
 		label.classList.add("field-error");
@@ -4707,7 +4091,7 @@
 	function renderSpecActionChip(action) {
 		const label = escapeHtml(action.label || action.id);
 		const id = escapeHtml(action.id);
-		const body = `<span class="action-chip-label">${label}</span><code class="action-chip-id">${id}</code>`;
+		const body = `<span class="action-chip-label">${label}</span>`;
 		if (action.runnable) {
 			return `<button type="button" class="action-chip action-chip-run" data-action-id="${id}" title="${escapeHtml(TEXT.runAction(action.label || action.id))}">${body}</button>`;
 		}
@@ -4770,8 +4154,6 @@
 		try {
 			const body = { action: target.action };
 			if (target.user_input) body.user_input = target.user_input;
-			// Solo un gesto fatto dentro la conversazione aperta la nomina: la
-			// board non sta in nessun thread, e la sua azione ne apre uno suo.
 			const from = target.fromConversation ? conversationsCurrentId : "";
 			if (from && liveConversationEntries().some((entry) => entry.id === from)) {
 				body.conversation_id = from;
@@ -6010,6 +5392,12 @@
 			// server, cosi' il pannello mostra esattamente quello che c'e' su
 			// disco e non quello che c'era nel form.
 			await loadExecutionProviders();
+			await loadConversationsIndex();
+			if (!conversationsCurrentId && !conversationBusy) {
+				conversationView = emptyConversationView();
+				renderConversationPanel();
+				loadConversationModelChoice();
+			}
 			configSummaryConnector.textContent =
 				(currentConfigSnapshot && currentConfigSnapshot.connector) || "file";
 			configSummaryExists.textContent = TEXT.configPresent;
@@ -6050,6 +5438,7 @@
 	// cursor survives and the loop keeps trying, and it gives up only after this
 	// many consecutive failures rather than polling forever.
 	const CONVERSATION_POLL_MS = 2000;
+	const CONVERSATION_READ_TIMEOUT_MS = 15000;
 	const CONVERSATION_POLL_FAILURE_LIMIT = 3;
 	// Ogni quanto scorre il contatore dell'attesa, e dove resta scritto che il
 	// dettaglio tecnico va tenuto aperto.
@@ -6069,8 +5458,19 @@
 
 	let conversationView = null; // last read of GET /api/workspace/conversation
 	let conversationAfterID = 0; // highest event id already rendered — the only cursor
+	let conversationReportsCache = null;
 	let conversationEvents = []; // timeline, appended to and never rebuilt
 	let conversationDraft = ""; // composer text, preserved across re-renders
+	function saveConversationDraft(value) {
+		conversationDraft = value;
+		const root = conversationsIndex?.workspace_root;
+		if (!root) return;
+		try {
+			const key = "archetipo.chat-draft:" + root;
+			if (value) sessionStorage.setItem(key, value);
+			else sessionStorage.removeItem(key);
+		} catch { /* The in-memory draft remains usable when storage is blocked. */ }
+	}
 	// Il messaggio consegnato all'agente e non ancora tornato indietro come
 	// evento. Non è una copia della storia: è ciò che sta *fuori* dalla storia
 	// per la finestra di tempo in cui il server non ha ancora niente da dire —
@@ -6084,6 +5484,8 @@
 	let conversationLink = ""; // note about the reading loop itself
 	let conversationPollTimer = null; // interval following the open conversation
 	let conversationPollBusy = false; // a poll is in flight: ticks never overlap
+	let conversationPollController = null;
+	let conversationPollGeneration = 0; // obsolete reads cannot change a newer loop
 	let conversationPollFailures = 0; // consecutive failed reads, for the give-up threshold
 	// The model choice belongs to the conversation that is about to start. It is
 	// deliberately separate from modelChoiceSelection above, which belongs to a
@@ -6115,7 +5517,7 @@
 	let conversationDraftDestinations = {};
 	let conversationProposalPreviousOpen = {};
 	let conversationIncrementSections = {};
-	let conversationIncrementConfirm = ""; // next-step action waiting for its inline confirmation
+	let conversationIncrementConfirm = "";
 
 	// ---- Thread index (US-058, US-059) ---
 	// Three variables, and none of them a second copy of a conversation: the
@@ -6269,6 +5671,9 @@
 	// consegna — non sta aspettando: sta aspettando *chi scrive*.
 	function conversationWorking() {
 		if (!conversationIsActive()) return { active: false };
+		// Once updates are unavailable, the old snapshot cannot substantiate a
+		// live elapsed counter. The agent's native turn itself is left alone.
+		if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) return { active: false };
 		const sessionWork = typeof conversationView !== "undefined" && conversationView && conversationView.session
 			? conversationView.session.work
 			: "";
@@ -6378,16 +5783,33 @@
 				else window.WorkspacePanels?.close();
 				if (incrementStory) conversationIncrementSections["current-story-" + incrementStory.getAttribute("data-increment-story")] = true;
 				renderConversationPanel();
-				const target = open ? conversationEl.parentElement.querySelector(incrementStory ? '[data-increment-section="current-story-' + cssEscape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
+				const target = open ? conversationEl.parentElement.querySelector(incrementStory ? '[data-increment-section="current-story-' + CSS.escape(incrementStory.getAttribute("data-increment-story")) + '"] summary' : '.conv-increment-panel') : conversationEl.querySelector('[data-increment-panel="open"]');
 				target?.focus({preventScroll:true});
 				if (incrementStory) target?.scrollIntoView({block:"nearest"});
 				return;
 			}
+   if (e.target.closest("[data-workspace-preview]")) { window.BrowserPreview?.start(); return; }
 			if (e.target.closest("[data-conversation-preview]")) { window.BrowserPreview?.toggle(); return; }
 			if (onIncrementStep(e.target)) return;
+            if (e.target.closest("[data-increment-export]") && conversationView?.increment) {
+                const id = conversationView.increment.id;
+                apiGet("/api/increments/"+encodeURIComponent(id)+"/dossier").then(dossier => {
+                    const url = URL.createObjectURL(new Blob([dossier.markdown], {type:"text/markdown;charset=utf-8"}));
+                    const link = document.createElement("a"); link.href = url; link.download = id+".md"; link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                }).catch(err => showToast(err.message || String(err), "err"));
+                return;
+            }
 			if (e.target.closest("[data-increment-delete]")) { deleteCurrentIncrement(); return; }
+            const linkedStory = e.target.closest("[data-linked-story]");
+            if (linkedStory) { openEditor(linkedStory.dataset.linkedStory); return; }
 			const incrementAction = e.target.closest("[data-increment-action]");
-			if (incrementAction) { runIncrementAction(incrementAction.getAttribute("data-increment-action")); return; }
+			if (incrementAction) {
+				const id = incrementAction.getAttribute("data-increment-action");
+				const step = conversationView?.increment?.next_steps?.find(item => item.action === id && item.confirm);
+				if (step) { conversationIncrementConfirm = id; renderConversationPanel(); } else runIncrementAction(id);
+				return;
+			}
 			const showProposals = e.target.closest("[data-conversation-proposals-show]");
 			if (showProposals) {
 				conversationProposalsOpen = true;
@@ -6555,19 +5977,6 @@
 			// Un passo che si legge in una conversazione sua si raggiunge
 			// andandoci: non c'è nessun pannello da montare, perché quella
 			// conversazione è il passo.
-			// La decisione su una revisione pronta passa dal tab Revisione: lì
-			// stanno il dossier, il diff e la conferma che vale per ogni strada.
-			const reviewDecision = e.target.closest("[data-conversation-review-decision]");
-			if (reviewDecision) {
-				const code = reviewDecision.getAttribute("data-spec-code") || "";
-				const decision = reviewDecision.getAttribute("data-conversation-review-decision");
-				openSpecReview(code).then((ready) => {
-					if (!ready) return;
-					if (decision === "approve") onApprove();
-					else if (decision === "request-changes") onRequestChanges();
-				}).catch((err) => showToast(err.message || String(err), "err"));
-				return;
-			}
 			const reachThread = e.target.closest("[data-conversation-reach-thread]");
 			if (reachThread) {
 				const target = reachThread.getAttribute("data-conversation-reach-thread");
@@ -6692,7 +6101,7 @@
 			}
 			const input = e.target.closest(".conv-composer-input");
 			if (!input) return;
-			conversationDraft = input.value;
+			saveConversationDraft(input.value);
 			adattaAltezzaCompositore(input);
 			// Il menu delle skill vive del testo: ogni battuta lo riapre, lo
 			// filtra o lo chiude, e riparte sempre dalla prima voce perché
@@ -6751,7 +6160,7 @@
 			// Col menu delle skill aperto invio sceglie e non manda: si sta
 			// ancora decidendo che cosa dire, non lo si sta dicendo.
 			if (!e.isComposing && e.keyCode !== 229 && !e.shiftKey && !e.altKey) {
-				conversationDraft = input.value;
+				saveConversationDraft(input.value);
 				if (conversationSkillKeydown(e)) {
 					e.preventDefault();
 					return;
@@ -6761,7 +6170,7 @@
 			if (e.isComposing || e.keyCode === 229) return;
 			if (e.shiftKey || e.altKey) return;
 			e.preventDefault();
-			conversationDraft = input.value;
+			saveConversationDraft(input.value);
 			sendConversationMessage();
 		});
 	}
@@ -7422,7 +6831,7 @@
 	function pickConversationSkill(name) {
 		const item = conversationActivityItems().find((entry) => entry.kind === "skill" && entry.skill === name);
 		if (!item || !item.runnable) return;
-		if (conversationSkillQuery() !== null) conversationDraft = "";
+		if (conversationSkillQuery() !== null) saveConversationDraft("");
 		conversationSkillHighlight = 0;
 		chooseConversationActivity(item.id);
 	}
@@ -7519,8 +6928,9 @@
 	function prepareConversationOpen(specCode) {
 		if (conversationBusy) return;
 		stopConversationPolling();
-		conversationsCurrentId = "";
-		conversationView = null;
+  try{if(conversationsIndex?.workspace_root)sessionStorage.removeItem("archetipo.last-chat:"+conversationsIndex.workspace_root);}catch{}
+  conversationsCurrentId = "";
+  conversationView = null;
 		conversationEvents = [];
 		conversationAfterID = 0;
 		conversationPendingMessage = "";
@@ -7610,8 +7020,9 @@
 			// would draw one conversation under the name of another.
 			if (conversationsCurrentId !== id) return;
 		}
-		applyConversationView(view);
-		if (view && view.session) loadConversationModelChoice(id);
+  applyConversationView(view);
+  try{if(conversationsIndex?.workspace_root && view?.conversation?.id===id)sessionStorage.setItem("archetipo.last-chat:"+conversationsIndex.workspace_root,id);}catch{}
+  if (view && view.session) loadConversationModelChoice(id);
 		renderConversationPanel();
 		renderConversationsRail();
 		if (conversationIsActive()) startConversationPolling();
@@ -7654,7 +7065,7 @@
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
 				{ message, skill },
 			);
-			conversationDraft = "";
+			saveConversationDraft("");
 			conversationPendingMessage = message || typed;
 			conversationsRefusal = "";
 			applyConversationView(view);
@@ -7720,8 +7131,6 @@
 		}
 	}
 
-	// The pending input the page is answering, as the server last described it:
-	// its questions are what the answers are checked and keyed against.
 	function pendingConversationInput(inputID) {
 		const inputs = conversationView?.session?.pending_inputs;
 		return (Array.isArray(inputs) ? inputs : []).find((input) => input && input.id === inputID) || null;
@@ -7839,9 +7248,12 @@
 	}
 
 	function stopConversationPolling() {
-		if (conversationPollTimer === null) return;
-		clearInterval(conversationPollTimer);
+		conversationPollGeneration += 1;
+		if (conversationPollTimer !== null) clearInterval(conversationPollTimer);
 		conversationPollTimer = null;
+		conversationPollController?.abort();
+		conversationPollController = null;
+		conversationPollBusy = false;
 	}
 
 	// resetConversationState forgets the conversation of the workspace being
@@ -7865,6 +7277,7 @@
 		conversationDraftDestinations = {};
 		conversationProposalPreviousOpen = {};
 		conversationIncrementSections = {};
+		conversationIncrementConfirm = "";
 		conversationView = null;
 		conversationAfterID = 0;
 		conversationEvents = [];
@@ -8026,8 +7439,19 @@
 		}
 		resetConversationState();
 		await loadConversationsIndex();
+		try {
+			const root = conversationsIndex?.workspace_root;
+			if (root) conversationDraft = sessionStorage.getItem("archetipo.chat-draft:" + root) || "";
+		} catch { /* Storage may be unavailable; conversation loading still works. */ }
 		const live = liveConversationEntries();
-		const first = live.length ? live[0].id || "" : "";
+  let remembered="";
+  try{remembered=sessionStorage.getItem("archetipo.last-chat:"+conversationsIndex?.workspace_root)||"";}catch{}
+  if(remembered){
+   await switchToConversation(remembered);
+   if(conversationView?.conversation?.id===remembered)return;
+   try{sessionStorage.removeItem("archetipo.last-chat:"+conversationsIndex?.workspace_root);}catch{}
+  }
+  const first = live.length ? live[0].id || "" : "";
 		if (!first) {
 			// A viewer that cannot answer, or a workspace holding nothing alive:
 			// either way the panel draws the home of a workspace with no
@@ -8052,8 +7476,10 @@
 		// that comes back for a conversation the page has since left is dropped
 		// instead of being drawn over the one now on screen (AC-2).
 		const followed = conversationsCurrentId;
+		const generation = conversationPollGeneration;
 		if (!followed) return;
 		conversationPollTimer = setInterval(async () => {
+			if (generation !== conversationPollGeneration) return;
 			if (noWorkspaceMode()) {
 				stopConversationPolling();
 				return;
@@ -8070,29 +7496,39 @@
 			// reopens a long timeline. Waiting for the history button here hides
 			// current work and questions behind the first page indefinitely.
 			conversationPollBusy = true;
+			const controller = new AbortController();
+			conversationPollController = controller;
+			// Only this read has a deadline; it never interrupts the native turn.
+			const deadline = setTimeout(() => controller.abort(), CONVERSATION_READ_TIMEOUT_MS);
 			let view;
 			try {
 				view = await apiGet(
 					`/api/workspace/conversations/${encodeURIComponent(followed)}?after_id=${conversationAfterID}`,
+					{ signal: controller.signal },
 				);
 			} catch (err) {
-				conversationPollBusy = false;
-				if (conversationsCurrentId !== followed) return;
+				if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 				conversationPollFailures += 1;
+				conversationLink = "Aggiornamento chat interrotto; riprovo automaticamente. Il lavoro dell’agente può continuare.";
 				if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) {
 					stopConversationPolling();
 					// Nothing is reconnecting any more, so the panel must stop
 					// implying that it is.
-					conversationLink = TEXT.conversationUnreadable(err.message || err);
+					conversationLink = TEXT.conversationUnreadable(err.name === "AbortError" ? "il server non ha risposto entro 15 secondi" : err.message || err);
 				}
 				renderConversationPanel();
 				return;
+			} finally {
+				clearTimeout(deadline);
+				if (generation === conversationPollGeneration) {
+					conversationPollBusy = false;
+					conversationPollController = null;
+				}
 			}
-			conversationPollBusy = false;
 			// The read left for one conversation and came back for another: what
 			// it carries belongs to the conversation that was on screen when it
 			// started, and nothing of it may reach the one that is on screen now.
-			if (conversationsCurrentId !== followed) return;
+			if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 			conversationPollFailures = 0;
 			conversationLink = "";
 			const appended = applyConversationView(view);
@@ -8157,9 +7593,6 @@
 	}
 
 
-	// The next steps beside the composer. A decision with a confirmation first
-	// takes the field's place; a prompt only fills the field; an open shows the
-	// preview, the details, or the conversation the server names.
 	function onIncrementStep(target) {
 		const action = target.closest("[data-increment-step-action]");
 		if (action) {
@@ -8230,8 +7663,9 @@
 		finally { conversationBusy = false; renderConversationPanel(); }
 	}
 
-	async function startIncrementFromConversation(proposal) {
+	async function startIncrementFromConversation(proposal, developmentMode) {
 		const body = {request: proposal, origin_conversation_id: conversationsCurrentId || ""};
+		if (developmentMode) body.development_mode = developmentMode;
 		const override = conversationModelOverride();
 		if (override) Object.assign(body, override);
 		try {
@@ -8285,7 +7719,7 @@
 					? await startIncrementFromConversation(typed)
 					: await startActionOnTarget({ scope: activity.scope, action: activity.action, user_input: typed, fromConversation: true }, null);
 				if (started) {
-					conversationDraft = "";
+					saveConversationDraft("");
 					conversationActivitySelection = null;
 					startConversationPolling();
 					loadConversationActivities();
@@ -8297,6 +7731,17 @@
 			return;
 		}
 		const id = conversationsCurrentId;
+		if (!id && !conversationOpeningSpecCode && conversationActivitiesView?.start_work?.runnable && proposal) {
+			conversationBusy = true;
+			renderConversationPanel();
+			try {
+				if (await startIncrementFromConversation(proposal, conversationActivitiesView.start_work.development_mode)) {
+					saveConversationDraft("");
+					startConversationPolling();
+				}
+			} finally { conversationBusy = false; renderConversationPanel(); }
+			return;
+		}
 		if (!id || !conversationView) return;
 		// Writing in a conversation that has ended is not writing in a live one:
 		// it takes that one up again in a new conversation. One composer, two
@@ -8332,6 +7777,7 @@
 				`/api/workspace/conversations/${encodeURIComponent(id)}/messages?after_id=${conversationAfterID}`,
 				{ message, skill },
 			);
+			saveConversationDraft("");
 			// Accepted means delivered, not published: the text stays out of the
 			// timeline until the agent carries it back. Quello che si vede in
 			// coda fino ad allora è l'eco locale qui sopra, e porta scritto che
@@ -8347,7 +7793,7 @@
 			// alla conversazione, e il testo torna nel campo da cui era uscito —
 			// chi l'ha scritto non deve riscriverlo per leggere il rifiuto.
 			conversationPendingMessage = "";
-			conversationDraft = typed;
+			saveConversationDraft(typed);
 			showConversationRefusal(err);
 		} finally {
 			conversationBusy = false;
@@ -8534,18 +7980,61 @@
 	// It never fetches and never derives a state the server did not report, and
 	// it preserves the two things a re-render would otherwise steal: the text
 	// being typed and the reading position in the timeline.
+	// The server names permitted report links; the browser never turns a local
+	// filesystem path into a request. Cache by journal cursor, including reload.
+	async function bindConversationReports(view) {
+		const id = view?.conversation?.id;
+		if (!id) return;
+		const anchors = Array.from(conversationEl.querySelectorAll(".conv-event-markdown a[href]"));
+		const local = anchors.filter(anchor => {
+			const href = anchor.getAttribute("href");
+			return href && !href.startsWith("#") && (!/^[a-z][a-z0-9+.-]*:/i.test(href) || /^file:/i.test(href) || anchor.origin === location.origin);
+		});
+		if (!local.length) return;
+		for (const anchor of local) {
+			anchor.dataset.reportHref = anchor.getAttribute("href");
+			anchor.removeAttribute("href");
+			anchor.title = "Collegamento locale non disponibile";
+		}
+		const key = `${id}:${view.last_id || 0}`;
+		if (conversationReportsCache?.key !== key) {
+			conversationReportsCache = {key, promise: apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/reports`)};
+		}
+		try {
+			const links = await conversationReportsCache.promise;
+			for (const anchor of local) {
+				const link = links.find(item => item.href === anchor.dataset.reportHref);
+				if (!link) continue;
+				if (!link.available) {
+					anchor.title = "Report non più disponibile";
+					anchor.append(" · Report non più disponibile");
+					continue;
+				}
+				anchor.href = link.url;
+				anchor.target = "_blank";
+				anchor.rel = "noopener noreferrer";
+				anchor.title = "Apri report";
+			}
+		} catch (_) {
+			conversationReportsCache = null;
+			for (const anchor of local) anchor.append(" · Report non disponibile");
+		}
+	}
+
 	function renderConversationPanel() {
-		const currentConversation = conversationView?.conversation;
-		window.WorkspacePanels?.configure({
-			key: currentConversation ? currentConversation.working_dir + ":" + currentConversation.id : "",
+  const currentConversation = conversationView?.conversation;
+  const previewTarget = currentConversation ? {id: currentConversation.id, root: currentConversation.working_dir, scope:"conversation", writable: conversationIsWritable() && !conversationBusy, commentable:!!(conversationView?.session && conversationView.session.archive !== "ARCHIVED" && conversationView.session.recovery === "RESUMABLE"), compact: !!conversationView?.increment?.development_mode, autoStart: conversationView?.increment?.preview_auto_start === true, candidate: (conversationView?.increment?.ready_sha || "") + ":" + (conversationView?.session?.current_turn?.id || "")} : conversationActivitiesView?.workspace_preview?.target || null;
+  window.WorkspacePanels?.configure({
+			key: previewTarget ? previewTarget.root + ":" + previewTarget.id : "",
 			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
-			detailsLabel: conversationView?.increment ? "Incremento" : "Storie",
+			detailsLabel: conversationView?.increment ? "Specifica e verifiche" : "Storie",
+			openPreview: !!conversationView?.increment?.development_mode,
 		});
 		if (window.WorkspacePanels?.detailsSelected()) {
 			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
 			else conversationProposalsOpen = true;
 		}
-		window.BrowserPreview?.select(conversationView?.conversation ? {id: conversationView.conversation.id, root: conversationView.conversation.working_dir, writable: conversationIsWritable() && !conversationBusy} : null);
+		window.BrowserPreview?.select(previewTarget);
 		const newConversation = conversationsRailEl?.querySelector("[data-conversation-new]");
 		if (newConversation) {
 			newConversation.disabled = conversationBusy;
@@ -8560,8 +8049,8 @@
 		let incrementFocusSelector = "";
 		if (incrementFocused?.closest(".conv-increment-panel")) {
 			const section = incrementFocused.closest("[data-increment-section]");
-			if (incrementFocused.tagName === "SUMMARY" && section) incrementFocusSelector = '[data-increment-section="' + cssEscape(section.getAttribute("data-increment-section")) + '"] > summary';
-			else if (incrementFocused.hasAttribute("data-increment-action")) incrementFocusSelector = '[data-increment-action="' + cssEscape(incrementFocused.getAttribute("data-increment-action")) + '"]';
+			if (incrementFocused.tagName === "SUMMARY" && section) incrementFocusSelector = '[data-increment-section="' + CSS.escape(section.getAttribute("data-increment-section")) + '"] > summary';
+			else if (incrementFocused.hasAttribute("data-increment-action")) incrementFocusSelector = '[data-increment-action="' + CSS.escape(incrementFocused.getAttribute("data-increment-action")) + '"]';
 			else if (incrementFocused.hasAttribute("data-increment-panel")) incrementFocusSelector = '[data-increment-panel="close"]';
 			else if (incrementFocused.classList.contains("conv-increment-panel")) incrementFocusSelector = '.conv-increment-panel';
 		}
@@ -8672,6 +8161,8 @@
 			},
 		);
 
+		void bindConversationReports(view);
+
 		// Delivery details share the work panel with the persistent preview.
 		// Move only these nodes; the discussion keeps its original render path.
 		const detailNodes = Array.from(conversationEl.querySelectorAll(".conv-increment-panel, .conv-proposals-panel"));
@@ -8730,8 +8221,8 @@
 
 	// ---- API helpers --------------------------------------------------------
 
-	async function apiGet(url) {
-		const r = await fetch(url, { headers: { Accept: "application/json" } });
+	async function apiGet(url, options = {}) {
+		const r = await fetch(url, { headers: { Accept: "application/json" }, signal: options.signal });
 		return parseResponse(r);
 	}
 	async function apiPost(url, body) {
@@ -8822,7 +8313,7 @@
 		newSpecStatus.textContent = "";
 		newSpecStatus.className = "status-msg";
 		newSpecForm.priority.value = "MEDIUM";
-		newSpecForm.story_points.value = "3";
+		newSpecForm.story_points.value = "0";
 		newSpecEditor.value(specBodyTemplate());
 
 		const epics = (boardSnapshot && boardSnapshot.epics) || [];
@@ -9740,7 +9231,7 @@
 		return `${days}d ${hours % 24}h`;
 	}
 
-	// ---- PRD & Mockups -----------------------------------------------------
+	// ---- Product document -----------------------------------------------------
 
 	async function openPRD() {
 		prdModal.classList.remove("hidden");
@@ -9903,92 +9394,6 @@
 		}
 	}
 
-	async function loadMockups() {
-		try {
-			const data = await apiGet("/api/mockups");
-			mockupsCache = (data && data.mockups) || [];
-			renderMockupsMenu();
-		} catch (_) {
-			mockupsCache = [];
-			renderMockupsMenu();
-		}
-	}
-
-	function renderMockupsMenu() {
-		const appMockups = mockupsCache.filter((m) => !m.spec_code);
-		const specMockups = mockupsCache.filter((m) => !!m.spec_code);
-		mockupsMenu.innerHTML = "";
-
-		const appSection = document.createElement("div");
-		appSection.className = "mockups-section";
-		if (appMockups.length === 0) {
-			const empty = document.createElement("div");
-			empty.className = "dropdown-empty";
-			empty.textContent = TEXT.noMockups;
-			appSection.appendChild(empty);
-		} else {
-			appMockups.forEach((m) => appSection.appendChild(createMockupItem(m)));
-		}
-		mockupsMenu.appendChild(appSection);
-
-		if (specMockups.length > 0) {
-			mockupsMenu.appendChild(createSpecsSection(specMockups));
-		}
-	}
-
-	function createMockupItem(m) {
-		const a = document.createElement("a");
-		a.href = m.url;
-		a.target = "_blank";
-		a.rel = "noopener";
-		a.className = "dropdown-item";
-		a.textContent = m.name;
-		return a;
-	}
-
-	function createSpecsSection(items) {
-		const section = document.createElement("div");
-		section.className = "mockups-section mockups-section-stories collapsed";
-
-		const header = document.createElement("div");
-		header.className = "mockups-section-header clickable";
-		header.setAttribute("role", "button");
-		header.setAttribute("tabindex", "0");
-		header.innerHTML =
-			`<span>${TEXT.mockupsSpecs(items.length)}</span>` +
-			'<svg class="mockups-section-caret" width="9" height="9" viewBox="0 0 9 9" aria-hidden="true">' +
-			'<path d="M1.5 3l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
-
-		const body = document.createElement("div");
-		body.className = "mockups-section-body hidden";
-		items.forEach((m) => body.appendChild(createMockupItem(m)));
-
-		const toggle = (e) => {
-			e.stopPropagation();
-			const collapsed = section.classList.toggle("collapsed");
-			body.classList.toggle("hidden", collapsed);
-		};
-		header.addEventListener("click", toggle);
-		header.addEventListener("keydown", (e) => {
-			if (e.key === "Enter" || e.key === " ") {
-				e.preventDefault();
-				toggle(e);
-			}
-		});
-
-		section.appendChild(header);
-		section.appendChild(body);
-		return section;
-	}
-
-	function collapseSpecsSection() {
-		const section = mockupsMenu.querySelector(".mockups-section-stories");
-		if (!section) return;
-		section.classList.add("collapsed");
-		const body = section.querySelector(".mockups-section-body");
-		if (body) body.classList.add("hidden");
-	}
-
 	function toggleTopbarMoreMenu(e) {
 		e.stopPropagation();
 		const wasHidden = topbarMoreMenu.classList.contains("hidden");
@@ -9999,13 +9404,6 @@
 	function closeTopbarMoreMenu() {
 		topbarMoreMenu.classList.add("hidden");
 		topbarMoreBtn.setAttribute("aria-expanded", "false");
-	}
-
-	function toggleMockupsMenu(e) {
-		e.stopPropagation();
-		const wasHidden = mockupsMenu.classList.contains("hidden");
-		mockupsMenu.classList.toggle("hidden");
-		if (wasHidden) collapseSpecsSection();
 	}
 
 	function escapeHtml(s) {

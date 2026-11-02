@@ -110,37 +110,23 @@ these guarantees: migrate their services into resources and remove fixed ports.
 Never erase `.archetipo` to stop services: stop/reconcile resources first.
 Required real browser/API/database checks cannot be replaced with mocks.
 
-A third-party integration the local environment cannot reach (OAuth providers,
-calendars, payment or AI APIs) may be replaced by a local fake, under these rules.
-The fake is a separate service: its code lives with the project tooling (for
-example under `scripts/archetipo/` or the test directory), it is declared as a
-`resources` entry with its own port, and the application reaches it only through
-the same configurable endpoints it uses for the real service (base URLs, client
-ids and callback URLs read from configuration, with the real values as defaults).
-Product code never contains a test-mode switch, a simulated branch or a service
-route that bypasses authentication: an application must not be able to tell it
-is being tested. Declare every integration the preview simulates in the preview
-recipe's `simulated` list, with a short stable name; the result and the pull
-request repeat that list, so the person approves knowing the real integration
-was not exercised. That trial happens after the merge, on a deployed preview or
-locally on the main branch.
+Environment configuration is chosen by the environment skill and executed through
+its project recipe. On first setup distinguish shared settings, authorized test
+credentials and checkout-specific service bindings. Reuse those choices on later
+increments. Derive each checkout's URLs, database/storage targets and namespaces
+from its owned resources; copying `.env` never proves independence. Before
+migrations or seeding, probe the application's effective target and ownership
+without modifying unrelated services. Verify the real application persistence
+path and preservation of its synthetic fixtures across restart where applicable.
 
-Keep each checkout's data across stops, restarts and revision rounds: a database
-resource stores data in a persistent location owned by the checkout (for example a
-named volume), never in a container or directory that `stop` removes. When it is
-first created and the person has declared their local development database as the
-data source (for example a connection variable in a declared local file), copy it
-read-only into the checkout's own database (dump/restore or the engine's
-equivalent); otherwise start empty. Apply pending migrations on every preparation.
-Seed synthetic data automatically only into an empty database. Never reseed, reset
-or drop a database that holds data without the person's explicit request, and never
-point a checkout at the developer's own database or migrate it.
-
-The recipe's `local_files` lists untracked files (for example `.env.local`) the
-person chose to make available in every checkout; `prepare` copies them from the
-original workspace. Preserve that list whenever you reconfigure the recipe. Never
-add entries yourself: propose them and wait for the person's choice. Never print,
-summarize or copy their values elsewhere.
+`local_files` names only Git-ignored files explicitly chosen for reuse. The CLI
+recopies them from the original workspace at each preparation; keep checkout
+bindings in generated local overrides with verified configuration precedence.
+Preserve existing choices, including an empty list. Never scan other checkouts
+for secrets, request secret values in chat, or include them in a shared bundle.
+Persist the setup method in the qualified recipe and non-secret helpers. Ask
+only for unresolved access, external-effect or trial choices, using the person's
+product language; no additional environment approval ceremony is required.
 
 Reuse a service only when it was explicitly supplied for this verification or its
 ownership by this working directory and test scope can be verified. A familiar
@@ -180,6 +166,16 @@ all later phases. Describe explicit argv, timeouts, local readiness probes,
 synthetic service ownership and cleanup; never put secret values in argv/config.
 Do not infer a framework or reuse an ancestor's dependencies. A readiness probe
 must verify usable local outputs and owned services, not merely that a port opens.
+
+A check can explicitly declare `during_preview: true` only if it is safe beside
+its development server: no dependency installation, build-output collision or
+reset of shared demonstration data. Such a check uses existing valid preparation
+and is canceled when its preview/environment owner stops. Preparation and cleanup
+remain exclusive; stop the preview before changing dependencies or repairing setup.
+`execution environment evidence` reads the current original machine reports; all
+declared checks are required for product readiness. Narrative summaries do not
+replace evidence. Ready and publication require intact reports and logs matching
+the candidate's inputs; a fresh failed check revokes an earlier pass.
 
 The CLI probes readiness on reuse, serializes setup, keeps immutable full logs,
 and can reuse a passing check only for identical declared inputs. Include all
@@ -276,23 +272,71 @@ The final output must read as a single coherent document in the detected languag
 
 ## Assumptions and Questions
 
-Ask the user only when all these conditions are true:
+For a new product idea or work, explore intent before prescribing a solution.
+Read the request and existing context first. Ask one focused question per turn,
+then wait for the answer and adapt the next question. Explore the actual problem,
+who experiences it, a concrete current/desired example, the outcome that would
+make the work worthwhile, priorities and relevant constraints. Use Costanza to
+challenge a consequential assumption or offer another way to solve the problem.
+Do not turn this into a fixed questionnaire or ask for information already given.
 
-1. The missing information is critical to generate a correct output
-2. The information cannot be reasonably inferred from the rest of the context
-3. Proceeding would likely create a materially wrong result
+Offer 2–4 short, distinct suggested answers when useful, with a brief explanation
+of their implications. Prefer the runtime's blocking structured input tool
+(`request_user_input` or `AskUserQuestion`) so choices can be clicked. Include a
+free-text alternative whenever supported; never preselect an answer as consent.
+If structured input is unavailable, ask the same question in ordinary chat and
+wait. Do not use a separate host's asynchronous question UI from the viewer.
 
-If questions are needed:
+Summarize the understood intent, decisions and remaining assumptions before
+building. If the request is already precise, or the person asks to proceed, keep
+discovery proportionate and move ahead without redundant questions. A person may
+skip a question: preserve it as an assumption or unknown, not an answered fact.
+Product choices that materially change the requested behavior require an answer;
+for reversible implementation details, use explicit reasonable assumptions.
+Silence never counts as a choice. Do not repeat discovery on every follow-up.
 
-- ask at most 3
-- group them in one message
-- allow the user to skip them
+### Brainstorm before choosing a solution
 
-For non-critical gaps:
+For a new open product idea, use the inception conversation style: investigative
+Andrea, provocative Costanza and empathetic Livia lead the early exploration.
+Start from what the person already said and show a short exchange of 2–3 relevant
+named perspectives when it helps. One voice may build on another's idea or disagree
+respectfully with a concrete reason. Keep the exchange useful and brief; end with
+one focused question, including when using structured input. Do not make the
+person answer several voices at once or repeat their opening request.
 
-- infer a reasonable assumption
-- continue
-- record the assumption or open question in the final artifact
+Costanza should lead a real brainstorming exchange before converging on an open
+idea. Use at least two distinct techniques over the early conversation when they
+reveal useful alternatives or risks, adapting to the answers rather than forcing
+rounds:
+
+- **What if…**: change one constraint (budget, scale, channel or timing) and explore
+  how the solution would change.
+- **Assumption challenge**: name a specific assumption and explore what happens
+  if it is false; distinguish evidence from a guess.
+- **Audience flip**: consider another user or situation and what this reveals about
+  needs, inclusion and adoption.
+- **Anti-problem**: imagine how to make the experience fail, then reverse the
+  insight into a useful design choice or risk to test.
+
+Andrea tests value, priorities and the smallest useful scope. Livia contributes
+concrete journeys and accessibility/inclusion concerns. Leonardo joins when an
+actual feasibility constraint matters; Emanuele clarifies consequential ambiguity
+and observable examples rather than turning early ideas into requirements too soon.
+Do not let technical solutioning displace understanding the problem.
+
+Offer 2–3 materially different directions, including a simpler alternative when
+useful, with concise benefits and trade-offs. Suggested answers must represent
+real directions, not superficial variations of a solution already chosen. Let the
+person offer another idea. Treat all brainstormed directions as proposals until
+chosen. Summarize what emerged, challenged assumptions, the preferred direction
+and remaining unknowns before building; ask if a material reframing still needs
+the person's choice. Preserve existing answers and decisions in the specification.
+
+A precise correction, an already settled intent or an explicit request to proceed
+does not need an invented brainstorm. Honor a request to shorten or skip the
+exploration. No fixed number of turns, separate inception artifact, PRD or
+implementation/review ceremony is required.
 
 ## Small Model Discipline
 
@@ -314,7 +358,7 @@ Wiki commands act on the code of a spec, so they follow the **Worktree Working D
 
 The Living Wiki is opt-in. `archetipo config show` reports the gate as `data.wiki.enabled` — it is `false` unless the project set `wiki.enabled: true` in `.archetipo/config.yaml`, and it is the only place to read it: never infer the gate by looking for the config file, for `paths.wiki`, or for an existing Wiki directory, because a project can maintain a Wiki by hand with the automatic maintenance off.
 
-When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, `archetipo-implement`, `archetipo-review`, including delegated invocations — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
+When `data.wiki.enabled` is `false`, the standard workflow skills — `archetipo-inception`, `archetipo-spec`, `archetipo-plan`, including delegated invocations — perform **no Wiki work at all**: they run no `archetipo wiki` command, read no Wiki page as a source, write no `wiki_impact` contract, plan no Wiki task, and leave any existing pages and their review state untouched. Wiki absence is then the configured state, never a gap to report and never a blocker on a verdict.
 
 The gate never applies to the Wiki itself. `archetipo wiki ...` invoked by the user and the `archetipo-wiki` skill invoked explicitly always run in full, gate or no gate: a project with the automatic Wiki off can still bootstrap, query, refresh, and lint one on demand. Only the automatic maintenance inside the workflow is switched off.
 
@@ -347,24 +391,42 @@ Required pages are the ones the spec is answerable for: implementation leaves th
 
 ## Conversation Rules
 
-- Each agent speaks in character
-- Never mention internal mode names, workflow names, or routing decisions in the conversation
+Use concise, plain language about product behavior, decisions and what can be
+tried. Keep technical logs inspectable but out of the main conversation.
+Use the ARchetipo personalities as named perspectives in the same conversation:
 
-## Agent Persona
+| Personality | Perspective | Voice |
+| --- | --- | --- |
+| 💎 Andrea · Product Manager | Problem, value, priorities and scope | Direct, analytical; asks why |
+| 🧭 Costanza · Business Strategist | Alternatives, assumptions and business model | Curious, provocative; challenges the obvious solution |
+| ✨ Livia · UX Designer | People, journeys, accessibility and interaction | Empathetic, concrete, user-centered |
+| 📐 Leonardo · Architect | Feasibility, constraints and technical trade-offs | Pragmatic and buildability-focused |
+| 🔎 Emanuele · Requirements Analyst | Ambiguities, examples and observable acceptance | Precise and clarity-focused |
+| 🔧 Ugo · Full-Stack Developer | Implementation across UI, APIs, data and integrations | Practical, hands-on; follows existing project patterns |
+| 🧪 Mina · Test Architect | Verification strategy, behavior, contracts and user journeys | Systematic, concrete; reports evidence and gaps |
+| 🔍 Cesare · Code Reviewer | Quality, architecture, security and completeness | Rigorous, constructive; distinguishes defects from improvements |
 
-When an agent speaks, always render the speaker as `icon + name`, for example:
-
-```text
-💎 Andrea: [content]
-
-🧭 Costanza: [content]
-```
-
-This rule applies to any skill that defines named agents with personas.
+Introduce the relevant perspective briefly and prefix its contribution with its
+emoji and name (for example `🧭 Costanza:`). In a structured question, put the
+name in its header and make the prompt self-contained. Bring in the personalities
+that add something useful; include Costanza's challenge when exploring an open
+idea, and let others intervene as their concerns arise. Do not force every voice
+into every turn. These are perspectives of one assistant, not independent agents
+or evidence of real user research. No handoff, fixed rounds or extra ceremony is
+required. Honor requests for a single voice or direct implementation.
+During construction, let Ugo explain useful implementation choices and progress,
+Mina explain actual checks, outcomes and missing evidence, and Cesare surface
+concrete defects, risks and trade-offs. They may contribute earlier when their
+perspective helps, without taking over the initial brainstorming. Avoid repeating
+the same update under several names. Persona labels never prove that tests ran or
+that another agent reviewed the code. Call a review independent only when a
+separate reviewer actually performed it; otherwise describe it as self-review.
+Named voices do not require separate agents or revive retired delivery skills.
+Preserve the person's intent, explicit constraints and native session context.
 
 ## File Output Rules
 
 - Use the configured output path whenever present
 - Create parent directories if they do not exist
-- Overwrite the target generated artifact for the current run unless the active flow explicitly says otherwise
+- Preserve original requirements and history; update an existing artifact only within the requested scope
 - When a connector overrides write-output behavior, follow that connector for I/O and keep the domain logic unchanged

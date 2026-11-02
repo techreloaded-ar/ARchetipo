@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -306,7 +307,7 @@ func TestExecuteReviewFailureModes(t *testing.T) {
 			if got.Payload != nil {
 				t.Fatalf("a failed execution returned a payload: %s", got.Payload)
 			}
-			assertContains(t, err.Error(), command, "execution error")
+			assertContains(t, err.Error(), strconv.Quote(command), "execution error")
 			for _, want := range tc.wantErr {
 				assertContains(t, err.Error(), want, "execution error")
 			}

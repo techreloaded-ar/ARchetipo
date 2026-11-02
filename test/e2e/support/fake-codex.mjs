@@ -128,6 +128,10 @@ rl.on("line", async (line) => {
     }
     case "turn/interrupt":
       await report("turn/interrupt", { params: message.params });
+      if (message.params?.threadId && message.params.threadId !== fixtureThreadID) {
+        write({ id: message.id, result: {} });
+        break;
+      }
       if (!turnActive) {
         noActiveTurn(message.id, "interrupt");
         break;

@@ -9,10 +9,12 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/gitwt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
 type conversationActivityView struct {
 	template.ConversationActivity
+	DevelopmentMode   string `json:"development_mode,omitempty"`
 	Kind              string `json:"kind"`
 	Primary           bool   `json:"primary"`
 	Scope             string `json:"scope,omitempty"`
@@ -21,9 +23,11 @@ type conversationActivityView struct {
 }
 
 type conversationActivitiesView struct {
-	ConversationID string                     `json:"conversation_id"`
-	SkillsKnown    bool                       `json:"skills_known"`
-	Items          []conversationActivityView `json:"items"`
+	WorkspacePreview *workspacePreviewEntry     `json:"workspace_preview,omitempty"`
+	StartWork        *conversationActivityView  `json:"start_work,omitempty"`
+	ConversationID   string                     `json:"conversation_id"`
+	SkillsKnown      bool                       `json:"skills_known"`
+	Items            []conversationActivityView `json:"items"`
 }
 
 // This read does not open a session or start a turn. Process actions retain
@@ -94,8 +98,28 @@ func (s *Server) handleGetConversationActivities(w http.ResponseWriter, r *http.
 			}
 		}
 	}
+	var startWork *conversationActivityView
+	if id == "" {
+		for _, item := range items {
+			if item.Kind == "increment" {
+				item.DevelopmentMode = "continuous"
+				item.Runnable = conversationTarget.sessions != nil && conversationTarget.reason == ""
+				item.UnavailableReason = conversationTarget.reason
+				item.Label = "Sviluppa la tua app"
+				item.Placeholder = "Descrivi l’app che vuoi creare o cosa vuoi cambiare…"
+				startWork = &item
+				break
+			}
+		}
+	}
+	var workspacePreview *workspacePreviewEntry
+	if id == "" {
+		entry := s.workspacePreviewEntry(ctx, ws)
+		workspacePreview = &entry
+	}
 	writeJSON(w, http.StatusOK, conversationActivitiesView{
-		ConversationID: id, SkillsKnown: discovery.SkillsKnown, Items: items,
+		WorkspacePreview: workspacePreview,
+		StartWork:        startWork, ConversationID: id, SkillsKnown: discovery.SkillsKnown, Items: items,
 	})
 }
 
@@ -158,7 +182,7 @@ func resolveConversationActivities(tpl template.Template, actions []workspaceAct
 	}
 	if discovery.SkillsKnown {
 		for _, skill := range discovery.Skills {
-			if strings.TrimSpace(skill.Name) == "" || slices.ContainsFunc(tpl.ConversationActivities, func(activity template.ConversationActivity) bool { return activity.Skill == skill.Name }) ||
+			if workspace.IsRetiredSkill(skill.Name) || strings.TrimSpace(skill.Name) == "" || slices.ContainsFunc(tpl.ConversationActivities, func(activity template.ConversationActivity) bool { return activity.Skill == skill.Name }) ||
 				slices.ContainsFunc(tpl.WorkspaceActions, func(action template.WorkspaceAction) bool { return action.Skill == skill.Name }) {
 				continue
 			}

@@ -282,9 +282,16 @@ func (p *Provider) finishCodexNativeTurn(session *nativeSession, client *appServ
 	}
 	session.current.Error = turnError
 	session.current.CompletedAt = &now
-	session.approvals = make(map[string]execution.PendingApproval)
-	session.inputs = make(map[string]execution.PendingInput)
-	session.requests = make(map[string]rpcMessage)
+	if declaredCompletion {
+		// Workers can still be waiting for the person after the parent has
+		// answered. Their RPCs belong to their own native turns, not to the
+		// lifetime of the parent's turn.
+		session.clearTurnRequestsLocked(session.metadata.Native.ID, session.current.NativeID)
+	} else {
+		session.approvals = make(map[string]execution.PendingApproval)
+		session.inputs = make(map[string]execution.PendingInput)
+		session.requests = make(map[string]rpcMessage)
+	}
 }
 
 func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.SessionRequest, afterID int64, sink func(execution.RunEvent) error) error {
@@ -296,18 +303,60 @@ func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.Se
 }
 
 func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return p.codexNativeCommand(request, func(client *appServer) error { return client.Send(ctx, request.Message) })
+	return p.codexNativeCommand(request, func(client *appServer) error {
+		client.expectInstruction(request.Message, request.Display)
+		return client.Send(ctx, request.Message)
+	})
 }
 
 func (p *Provider) InterruptTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
 	if session := p.nativeSession(request.Session.Native.ID); session != nil {
 		session.mu.Lock()
 		if session.current != nil && session.current.ID == request.TurnID {
-			session.interruptTurnID = request.TurnID
+			if session.current.State == execution.TurnActive {
+				session.interruptTurnID = request.TurnID
+			} else {
+				client := session.client
+				scopes := make(map[codexRequestScope]bool)
+				for _, pending := range session.requests {
+					scope := codexRequestScopeOf(pending)
+					if scope.ThreadID != "" && scope.ThreadID != session.metadata.Native.ID && scope.TurnID != "" {
+						scopes[scope] = true
+					}
+				}
+				if client != nil && len(scopes) > 0 {
+					session.mu.Unlock()
+					return interruptCodexPendingChildren(ctx, client, request, scopes)
+				}
+			}
 		}
 		session.mu.Unlock()
 	}
 	return p.codexNativeCommand(request, func(client *appServer) error { return client.Interrupt(ctx) })
+}
+
+func interruptCodexPendingChildren(ctx context.Context, client *appServer, request execution.SessionCommandRequest, scopes map[codexRequestScope]bool) (execution.SessionDelivery, error) {
+	delivery := execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}
+	ordered := make([]codexRequestScope, 0, len(scopes))
+	for scope := range scopes {
+		ordered = append(ordered, scope)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].ThreadID != ordered[j].ThreadID {
+			return ordered[i].ThreadID < ordered[j].ThreadID
+		}
+		return ordered[i].TurnID < ordered[j].TurnID
+	})
+	for _, scope := range ordered {
+		// The completed parent's turn must remain completed. Interrupt only
+		// the native worker turns that still own pending interactions.
+		delivery.State = execution.DeliveryUncertain
+		if _, err := client.call(ctx, methodTurnInterrupt, map[string]any{"threadId": scope.ThreadID, "turnId": scope.TurnID}); err != nil {
+			return delivery, err
+		}
+	}
+	delivery.State = execution.DeliveryConfirmed
+	return delivery, nil
 }
 
 func (p *Provider) RespondSessionApproval(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
@@ -363,8 +412,11 @@ func (p *Provider) respondCodexServerRequest(request execution.SessionCommandReq
 	session.mu.Lock()
 	nativeRequest, ok := session.requests[request.InteractionID]
 	client, current := session.client, session.current
+	scope := codexRequestScopeOf(nativeRequest)
+	child := scope.ThreadID != "" && scope.ThreadID != session.metadata.Native.ID
+	parentActive := current != nil && current.ID == request.TurnID && current.State == execution.TurnActive
 	session.mu.Unlock()
-	if !ok || client == nil || current == nil || current.ID != request.TurnID || current.State != execution.TurnActive {
+	if !ok || client == nil || (!child && !parentActive) {
 		return delivery, fmt.Errorf("codex interaction %q is not pending on turn %q", request.InteractionID, request.TurnID)
 	}
 	payload, err := json.Marshal(map[string]any{"id": json.RawMessage(nativeRequest.ID), "result": result})
@@ -600,6 +652,20 @@ func (s *nativeSession) handleRequest(request rpcMessage) {
 }
 
 func (s *nativeSession) handleNotification(method string, params json.RawMessage) {
+	if method == "turn/completed" {
+		var completed struct {
+			ThreadID string `json:"threadId"`
+			Turn     struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		if json.Unmarshal(params, &completed) == nil && completed.ThreadID != "" && completed.ThreadID != s.metadata.Native.ID {
+			s.mu.Lock()
+			s.clearTurnRequestsLocked(completed.ThreadID, completed.Turn.ID)
+			s.mu.Unlock()
+		}
+		return
+	}
 	if method == "skills/changed" {
 		s.append(execution.RunEvent{Kind: "skill_catalog_changed", Text: "Il catalogo skill del runtime è cambiato"})
 		return
@@ -612,6 +678,35 @@ func (s *nativeSession) handleNotification(method string, params json.RawMessage
 	}
 	if json.Unmarshal(params, &resolved) == nil {
 		s.resolveRequest(fmt.Sprint(resolved.RequestID))
+	}
+}
+
+type codexRequestScope struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+}
+
+func codexRequestScopeOf(request rpcMessage) codexRequestScope {
+	var scope codexRequestScope
+	_ = json.Unmarshal(request.Params, &scope)
+	return scope
+}
+
+// Called with mu held. Unscoped legacy requests belong to the parent only;
+// a child's completion never consumes a sibling's or a newer turn's request.
+func (s *nativeSession) clearTurnRequestsLocked(threadID, turnID string) {
+	for id, request := range s.requests {
+		scope := codexRequestScopeOf(request)
+		if scope.ThreadID == "" {
+			if threadID != s.metadata.Native.ID {
+				continue
+			}
+		} else if scope.ThreadID != threadID || (scope.TurnID != "" && turnID != "" && scope.TurnID != turnID) {
+			continue
+		}
+		delete(s.requests, id)
+		delete(s.approvals, id)
+		delete(s.inputs, id)
 	}
 }
 

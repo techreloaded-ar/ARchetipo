@@ -2,6 +2,7 @@ package claude
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -31,8 +32,9 @@ func TestConfigAppliesDocumentedDefaults(t *testing.T) {
 }
 
 func TestConfigAppliesFullOverride(t *testing.T) {
+	command := filepath.Join(t.TempDir(), "claude.exe")
 	got, err := parseConfig(map[string]any{
-		"command":         "/opt/homebrew/bin/claude",
+		"command":         command,
 		"model":           "opus",
 		"permission_mode": "plan",
 		"timeout_seconds": 120,
@@ -40,7 +42,7 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Command != "/opt/homebrew/bin/claude" {
+	if got.Command != command {
 		t.Fatalf("command = %q", got.Command)
 	}
 	if got.Model != "opus" {

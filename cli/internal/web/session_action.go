@@ -38,7 +38,9 @@ import (
 // native session. It differs from the batch opening in the one way the two
 // situations differ: the session is already open, it stays open after the
 // action, and the person is reading it while the agent works.
-const sessionActionOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed. You are in a conversation a person is reading: ask them when you need something only they can decide, and keep the session open after you are done — the receipt closes the action, not this conversation. This client bridges blocking structured input requests. Do not use request_user_input_async, whose host UI is separate from this conversation; ask in ordinary conversation if blocking input is unavailable. When waiting for the person's answer, end the turn after the question. Never sleep or poll for their reply: their next message resumes this same session."
+const sessionInputGuidance = "This client bridges blocking structured input requests. Prefer request_user_input or AskUserQuestion with concise suggested answers and a free-text alternative when supported, one question at a time; put the speaking personality in the question header. Do not use request_user_input_async, whose host UI is separate from this conversation; ask in ordinary conversation if blocking input is unavailable. When waiting for the person's answer, end the turn after the question. Never sleep or poll for their reply: their next message resumes this same session. Do not treat silence as an answer or choose a product decision you have asked the person to make."
+
+const sessionActionOpening = "Work in the current working directory: it is the ARchetipo workspace, with the archetipo CLI and the ARchetipo skills already installed. You are in a conversation a person is reading: ask them when you need something only they can decide, and keep the session open after you are done — the receipt closes the action, not this conversation. " + sessionInputGuidance
 
 // actionInSession is everything starting one ARchetipo action inside a native
 // session needs to know, once the caller has already established that the
@@ -208,18 +210,12 @@ func (s *Server) startActionInSession(ctx context.Context, ws *workspaceSession,
 // A start that names no conversation is not a start with nowhere to run: it
 // opens its own thread, once, and the action then runs in that thread exactly
 // as it would in one the person already had open. What it never does is open a
-// second one beside a thread that was named — unless that thread is about
-// another spec: a step of US-002 does not belong in the thread of US-001, so it
-// gets its own thread exactly as if no thread had been named.
+// second one beside a thread that was named.
 func (s *Server) conversationForAction(ctx context.Context, ws *workspaceSession, plan actionInSession) (conversationSnapshot, error) {
 	if id := strings.TrimSpace(plan.conversationID); id != "" {
 		snapshot, live := ws.conversation.get(id)
 		if !live {
 			return conversationSnapshot{}, s.conversationGoneRefusal(ctx, ws, id, "start an action")
-		}
-		if snapshot.specCode != "" && plan.specCode != "" && snapshot.specCode != plan.specCode {
-			plan.conversationID = ""
-			return s.conversationForAction(ctx, ws, plan)
 		}
 		if snapshot.sessionProvider == nil {
 			return conversationSnapshot{}, iox.NewConflict(
@@ -574,26 +570,9 @@ func (s *Server) nativeConversationRuns(ctx context.Context, ws *workspaceSessio
 		view.Status = stored.Status
 		view.ProgressLabel, view.Working, view.AwaitingResponse = nativeActionProgress(stored, record)
 		view.CreatedAt = stored.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z")
-		view.ReviewDecisionPending = s.reviewDecisionPending(ctx, ws, stored)
 		views = append(views, view)
 	}
 	return views
-}
-
-// reviewDecisionPending reports whether a prepared review still waits for the
-// person's verdict: it is the spec's latest execution, it succeeded, and the
-// spec has not left REVIEW. Any read that fails answers false, so a card is
-// never offered on a state the workspace cannot confirm.
-func (s *Server) reviewDecisionPending(ctx context.Context, ws *workspaceSession, stored execution.Execution) bool {
-	if stored.Action != execution.ActionReview || stored.Status != execution.StatusSucceeded || stored.SpecCode == "" {
-		return false
-	}
-	latest, err := s.latestExecution(ctx, ws, stored.SpecCode)
-	if err != nil || latest == nil || latest.ID != stored.ID {
-		return false
-	}
-	spec, err := ws.conn.ReadSpecDetail(ctx, stored.SpecCode)
-	return err == nil && spec.Status == domain.StatusReview
 }
 
 func nativeActionProgress(stored execution.Execution, record conversationlog.Record) (label string, working, awaiting bool) {

@@ -228,6 +228,7 @@
 		const entries = arrayAt(view, "runs").filter(
 			(entry) => entry && typeof entry === "object",
 		);
+		if (!entries.length) return "";
 		const waiting = entries.filter(isAwaiting).length;
 		const badge = waiting
 			? `<span class="ws-runs-badge is-awaiting">${escapeHtml(String(waiting))}</span>`

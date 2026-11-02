@@ -281,7 +281,7 @@ func claudeNoisyOutput(payload string) string {
 // in for every invocation.
 func fakeClaudeBinary(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "claude-fake")
+	path := filepath.Join(t.TempDir(), "claude-fake.exe")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'this fake must never be executed' >&2\nexit 97\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

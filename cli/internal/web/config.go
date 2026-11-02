@@ -244,5 +244,10 @@ func decodeConfigPayload(root string, req saveConfigReq) ([]byte, config.Config,
 func configChanged(before, after config.Config) bool {
 	before.ProjectRoot = ""
 	after.ProjectRoot = ""
+	// New runs/conversations read the provider from disk. Changing it does not
+	// replace an existing session or need a server restart. Other settings,
+	// including the idle releaser policy, still belong to the running server.
+	before.Execution.DefaultProvider = nil
+	after.Execution.DefaultProvider = nil
 	return !reflect.DeepEqual(before, after)
 }

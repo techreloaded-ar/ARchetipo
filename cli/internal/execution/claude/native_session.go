@@ -59,7 +59,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 		Capabilities: execution.NormalizeSessionCapabilities([]execution.SessionCapability{
 			execution.SessionCapabilityResume, execution.SessionCapabilityTurnModel,
 			execution.SessionCapabilityTurnOptions, execution.SessionCapabilitySkillDiscovery,
-			execution.SessionCapabilitySkillInvocation, execution.SessionCapabilityApproval,
+			execution.SessionCapabilitySkillInvocation, execution.SessionCapabilityApproval, execution.SessionCapabilityInput,
 			execution.SessionCapabilitySteering, execution.SessionCapabilityInterrupt,
 		}),
 		PermissionProfiles: p.PermissionProfiles(), PermissionProfile: defaultNativePermissionProfile(cfg),
@@ -284,12 +284,15 @@ func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.Se
 }
 
 func (p *Provider) SteerTurn(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	return p.nativeCommand(request, func(client *streamSession) error { return client.Send(ctx, request.Message) })
+	return p.nativeCommand(request, func(client *streamSession) error {
+		client.expectInstruction(request.Message, request.Display)
+		return client.Send(ctx, request.Message)
+	})
 }
 
 func (p *Provider) RespondSessionInput(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
 	return p.nativeCommand(request, func(client *streamSession) error {
-		return client.RespondInput(ctx, request.InteractionID, request.Answers)
+		return client.respondInput(ctx, request.InteractionID, request.Answers)
 	})
 }
 
@@ -367,15 +370,20 @@ func (s *nativeSession) snapshot() execution.SessionSnapshot {
 		copy := *s.current
 		turn = &copy
 	}
-	approvals, inputs := []execution.PendingApproval{}, []execution.PendingInput{}
+	var approvals []execution.PendingApproval
+	inputs := []execution.PendingInput{}
 	if s.client != nil {
-		approvals = append(approvals, s.client.PendingApprovals()...)
-		inputs = append(inputs, s.client.PendingInputs()...)
+		approvals = s.client.PendingApprovals()
+		inputs = s.client.pendingInputs()
+	}
+	if len(inputs) > 0 {
+		work = execution.SessionWaitingInput
 	}
 	if len(approvals) > 0 {
 		work = execution.SessionWaitingApproval
-	} else if len(inputs) > 0 {
-		work = execution.SessionWaitingInput
+	}
+	if approvals == nil {
+		approvals = []execution.PendingApproval{}
 	}
 	return execution.SessionSnapshot{Session: s.metadata, Archive: execution.ArchiveOpen, Connection: connection, Recovery: execution.RecoveryResumable, Work: work, CurrentTurn: turn, PendingInputs: inputs, PendingApprovals: approvals}
 }

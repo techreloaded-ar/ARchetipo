@@ -10,9 +10,9 @@ import (
 	"strconv"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
@@ -202,17 +202,22 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				defer func() { _ = mutationLock.Unlock() }()
 				// A released native session may still have a preview owned by another
 				// viewer. Every preview lock must be free, including the standalone CLI.
-				for _, previewID := range append([]string{"standalone", "environment"}, result.ConversationIDs...) {
+				for _, previewID := range append([]string{"standalone", "environment", "command"}, result.ConversationIDs...) {
 					previewLock, lockErr := localStore.TryLock(ctx, "preview-"+previewID)
 					if lockErr != nil {
 						return r, iox.NewConflict("a preview is still running", "stop the preview in its owning viewer or terminal before deleting this increment", lockErr)
 					}
 					defer func() { _ = previewLock.Unlock() }()
 				}
+				if err = preview.VerifyStopped(r.Workdir); err != nil {
+					return r, err
+				}
 				_, stateErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "state.json"))
 				_, resourceErr := os.Stat(filepath.Join(r.Workdir, ".archetipo", "environment", "resources.json"))
 				if stateErr == nil || resourceErr == nil {
-					cleanup, cleanupErr := verification.New(r.Workdir, "").Execute(ctx, "cleanup", "", "", false)
+					// The deletion locks above already hold preview-environment,
+					// excluding every preview while registered cleanup runs.
+					cleanup, cleanupErr := verification.New(r.Workdir, "").ForOwnedPreview().Execute(ctx, "cleanup", "", "", false)
 					if cleanupErr != nil {
 						return r, cleanupErr
 					}
@@ -297,21 +302,6 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 			}
 			result.BranchRemoved = true
 			if err = save(); err != nil {
-				return r, err
-			}
-		}
-		// Without a merged PR the abandoned work never reached the product: its
-		// stories leave the original backlog. A merged PR keeps them as its record.
-		if (r.PR == nil || r.PR.State != "MERGED") && len(r.Published) > 0 && s.Connector != nil {
-			existing, backlogErr := s.officialBacklog(ctx)
-			if backlogErr != nil {
-				return r, backlogErr
-			}
-			byCode := map[string]domain.Spec{}
-			for _, st := range existing {
-				byCode[st.Code] = st
-			}
-			if err = s.retire(ctx, &r, byCode, nil); err != nil {
 				return r, err
 			}
 		}

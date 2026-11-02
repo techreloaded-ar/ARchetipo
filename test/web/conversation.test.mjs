@@ -1025,6 +1025,34 @@ describe("renderConversation — la run dentro il flusso", () => {
 			);
 		});
 
+		it("i metadati intercalati non spezzano il Markdown dello stesso messaggio", () => {
+			const calls = [];
+			const html = renderConversation(withConversation({events: [
+				{id: 1, kind: "text", message_id: "answer", text: "| Esito | Prova |\n| --- | --- |\n| PASS | rep"},
+				{id: 2, kind: "runtime-metadata", raw: {status: "observed"}},
+				{id: 3, kind: "text", message_id: "answer", text: "ort.json |"},
+				{id: 4, kind: "text", message_id: "next-answer", text: "Risposta successiva"},
+			], last_id: 4}), "", {markedParse: md => { calls.push(md); return `<x>${md}</x>`; }});
+			assert.deepEqual(calls, ["| Esito | Prova |\n| --- | --- |\n| PASS | report.json |", "Risposta successiva"]);
+			assert.ok(html.includes("runtime-metadata"), "i metadati restano ispezionabili");
+		});
+
+		it("gli strumenti di un worker non spezzano la risposta in streaming del parent", () => {
+			const calls = [];
+			const html = renderConversation(withConversation({events: [
+				{id: 1, kind: "text", message_id: "answer", text: "Da rest", raw: {threadId: "parent"}},
+				{id: 2, kind: "tool_start", tool: "commandExecution", text: "worker-probe", raw: {threadId: "worker"}},
+				{id: 3, kind: "tool_end", tool: "commandExecution", text: "worker-result", raw: {threadId: "worker"}},
+				{id: 4, kind: "text", message_id: "answer", text: "ituire", raw: {threadId: "parent"}},
+				{id: 5, kind: "tool_start", tool: "commandExecution", text: "parent-probe", raw: {threadId: "parent"}},
+				{id: 6, kind: "text", message_id: "next", text: "Nuova risposta", raw: {threadId: "parent"}},
+			], last_id: 6}), "", {technicalAll: true, markedParse: md => { calls.push(md); return `<x>${md}</x>`; }});
+			assert.deepEqual(calls, ["Da restituire", "Nuova risposta"]);
+			assert.match(html, /worker-probe/);
+			assert.match(html, /worker-result/);
+			assert.match(html, /parent-probe/);
+		});
+
 		it("la colonnina di una riga fusa porta l'intervallo degli id", () => {
 			const html = renderConversation(
 				withConversation({
@@ -1703,21 +1731,14 @@ describe("la ripresa di una conversazione finita", () => {
 		);
 	});
 
-	it("un errore della conversazione non è un passaggio tecnico", () => {
-		// Il vocabolario porta anche `error`, che non è la lavorazione ma una
-		// risposta: si legge senza premere niente.
-		const text = visibleText(
-			renderConversation(
-				withConversation({
-					events: [{ id: 1, kind: "error", text: "ERRORE-DELLA-CONVERSAZIONE" }],
-					last_id: 1,
-				}),
-				"",
-				{},
-			),
-		);
-		assert.match(text, /ERRORE-DELLA-CONVERSAZIONE/);
-	});
+	it("un’interruzione resta visibile e il messaggio tecnico si può aprire", () => {
+        const view=withConversation({events:[{id:1,kind:"error",text:"ERRORE-TECNICO-ORIGINALE"}],last_id:1});
+        const compact=renderConversation(view,"",{});
+        assert.match(visibleText(compact),/interruzione dell’agente/);
+        assert.match(visibleText(compact),/con errore/);
+        assert.doesNotMatch(visibleText(compact),/ERRORE-TECNICO-ORIGINALE/);
+        assert.match(visibleText(renderConversation(view,"",{technicalAll:true})),/ERRORE-TECNICO-ORIGINALE/);
+    });
 
 	it("i ganci di apertura sono ripiegati, e la piega li nomina", () => {
 		// Ogni conversazione vera si apre con due righe che nessun provider
@@ -2056,7 +2077,7 @@ describe('runtime input questions', () => {
  // The questionnaire alone: the composer below it has a send control of its own.
  const questionnaireOf = (html) => html.slice(html.indexOf('conv-questionnaire'), html.indexOf('<form class="conv-composer"'));
  const values = (question, entry) => Array.from(inputAnswerValues(question, entry));
- const sections = { id: 'sections', header: 'Sezioni', prompt: 'Quali sezioni includo?', multi_select: true, allow_text: true, options: [{ value: 'intro', label: 'Introduzione' }, { value: 'end', label: 'Conclusione' }] };
+ const sections = { id: 'sections', header: 'Sezioni', prompt: 'Quali sezioni includo?', multiple: true, allow_text: true, options: [{ value: 'intro', label: 'Introduzione' }, { value: 'end', label: 'Conclusione' }] };
  it('renders choices and free text without asking the person for JSON', () => {
   const html = renderConversation(pending([database]), '', { inputDrafts: { 'input-1': { db: { options: ['sqlite'], other: false, text: '' } } } });
   assert.match(html, /Quale database\?/);
@@ -2163,31 +2184,4 @@ describe('process receipt presentation', () => {
   assert.match(html,/Risposta leggibile/);
   assert.doesNotMatch(html,/COMPLETED|&quot;artifact&quot;/);
  });
-});
-
-describe("renderConversation — decisione sulla revisione", () => {
-	const run = (pending) => ({
-		execution_id: "exec-rev",
-		action: "AZIONE-X",
-		spec_code: "XX-777",
-		status: "SUCCEEDED",
-		in_this_thread: true,
-		review_decision_pending: pending,
-	});
-
-	it("una revisione pronta offre in coda approvazione, modifiche e dossier", () => {
-		const html = renderConversation(withConversation({ runs: [run(true)] }), "");
-		assert.ok(visibleText(html).includes("La revisione di XX-777 è pronta"), "la decisione non è annunciata");
-		for (const decision of ["approve", "request-changes", "open"]) {
-			assert.ok(
-				html.includes(`data-conversation-review-decision="${decision}" data-spec-code="XX-777"`),
-				`manca il comando ${decision}`,
-			);
-		}
-	});
-
-	it("senza una decisione dovuta non disegna niente", () => {
-		const html = renderConversation(withConversation({ runs: [run(false)] }), "");
-		assert.ok(!html.includes("data-conversation-review-decision"), "una decisione non dovuta è offerta");
-	});
 });

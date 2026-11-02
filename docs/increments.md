@@ -1,202 +1,252 @@
-# Incrementi di prodotto
+# Lavoro sul prodotto
 
-Un incremento è un percorso guidato disponibile fra le **Attività** della
-conversazione. Le conversazioni libere e le azioni sulle singole storie
-continuano a funzionare come prima.
+Il termine tecnico `increment` identifica un lavoro durevole sul prodotto. Il suo
+risultato può essere una soluzione funzionante da consegnare ai developer oppure
+una decisione motivata che non richiede altro codice.
 
-## Percorso
+## Capire l’intento in chat
 
-1. Scegli **Sviluppa un incremento** e racconta il risultato desiderato.
-2. L'agente chiarisce l'intento e propone storie piccole e verificabili.
-3. Apri **Dettagli incremento**, leggi **Intento e storie** e premi **Approva intento e avvia sviluppo**.
-   Le storie approvate entrano subito nel backlog ufficiale, con i codici
-   definitivi, in IN PROGRESS. Una revisione approvata le aggiorna, ne aggiunge
-   o ritira; eliminare l'incremento prima della PR le rimuove.
-4. Pianificazione, implementazione e verifica usano le skill esistenti dentro
-   la sandbox. Il risultato comprende istruzioni di prova, verifiche eseguite
-   e, quando il progetto la prevede, un'anteprima HTTP locale. Se la ricetta
-   dell'anteprima dichiara integrazioni simulate (`simulated`), il risultato e
-   il pulsante di approvazione lo dicono: l'approvazione è consapevole e la
-   prova con i servizi reali avviene dopo il merge.
-5. Scrivi in chat cosa cambiare. Una domanda sul risultato lascia valida la
-   verifica; una richiesta esplicita di modifica avvia una breve esplorazione, seguita da
-   una nuova proposta da approvare. Codici locali, conversazione nativa e
-   worktree restano gli stessi.
-6. **Approva risultato e apri PR** congela la versione provata, pubblica il
-   branch e apre una sola PR verso `main`. Le storie ufficiali passano a REVIEW
-   con il collegamento alla PR.
-7. **Aggiorna stato PR** riconcilia lo stato effettivo di GitHub. Solo un merge
-   confermato del codice approvato porta le storie a DONE e l'incremento a
-   consegnato. ARchetipo non esegue il merge. A quel punto il viewer rimuove da
-   solo la sandbox (worktree, branch e servizi), conserva il ref Git di
-   recupero e archivia la conversazione, che resta leggibile. Se la rimozione
-   fallisce, l'incremento resta consegnato e la nota ne spiega il motivo.
+Un nuovo lavoro parte dalla richiesta e approfondisce problema, persone, risultato
+atteso, esempi concreti e vincoli prima di costruire. La conversazione segue una
+domanda alla volta e riusa le risposte già date. Le prospettive ARchetipo rendono
+esplicito chi interviene: Andrea sul valore, Costanza sulle ipotesi e alternative,
+Livia sull’esperienza, Leonardo sulla fattibilità ed Emanuele sui requisiti.
+Sono voci dello stesso assistente; intervengono quando aggiungono qualcosa.
+Nella prima parte Andrea, Costanza e Livia fanno brainstorming nello stile di
+inception: brevi scambi, alternative concrete, ipotesi messe alla prova, tecniche
+«E se…», cambio di pubblico e anti-problema. La conversazione converge sulle
+scelte della persona senza imporre un numero fisso di turni. Durante la
+costruzione intervengono anche Ugo (sviluppo), Mina (test e prove) e Cesare
+(revisione e rischi). Le voci riferiscono solo attività effettive: una diversa
+personalità non costituisce una revisione indipendente.
 
-L'interfaccia riusa il pannello di conversazione e le sue approvazioni native.
-Non introduce una seconda board, una chat diversa o nuovi stati delle storie.
+Quando il runtime offre input strutturato, le domande mostrano risposte suggerite
+selezionabili e, quando consentito, una risposta libera. Si sceglie e si invia;
+nessuna opzione viene scelta automaticamente. Le richieste native Codex e
+`AskUserQuestion` di Claude usano lo stesso modulo del viewer; le domande di Claude
+con `multiSelect` permettono più scelte. Una consegna fallita conserva la selezione
+per riprovare. Se lo strumento strutturato non è disponibile, la domanda continua
+nella chat. Una richiesta già precisa o l’invito a procedere abbreviano
+l’esplorazione; le modifiche successive non ricominciano un questionario.
 
-## Seguire il lavoro nella chat
+## Contratto
 
-Una barra compatta mostra titolo, fase dell’incremento, attività della sessione
-ed eventuale conteggio delle storie completate. L’avviso generico «Lavoro in
-corso» non viene duplicato sopra la chat dell’incremento; restano visibili
-gli avvisi di recupero, blocco o interruzione. Le storie segnate in lavorazione
-nel backlog della sandbox sono apribili direttamente dalla barra; non si presume
-che la prima storia incompleta sia quella attiva.
+Un lavoro conserva richiesta originale, specifica Markdown versionata, riferimenti
+alle storie originali, feedback, osservazioni, decisioni e risultati delle verifiche.
+Ogni risultato è legato a un commit pulito e alla specifica provata. Una modifica
+esplicita revoca il candidato corrente, conservando prove e versione precedenti.
+Una domanda o un’osservazione non riscrivono i requisiti e non approvano codice.
+`ready` richiede i report originali di **tutti** i check dichiarati nella ricetta:
+comandi conclusi con successo, input correnti, preparazione valida e log integri.
+`checks` è una spiegazione leggibile, non una prova. Report, impronte degli input,
+exit code e hash dei log vengono congelati con il commit; la pubblicazione li
+ricontrolla. Una verifica fallita successiva revoca un precedente successo.
 
-**Dettagli incremento** apre un pannello laterale con tutte le storie, i loro
-stati e criteri espandibili, intento, risultato da provare, verifiche e comandi.
-La chat conserva lo spazio quando il pannello è chiuso. Su schermi piccoli il
-pannello occupa la vista; **Chiudi** o Escape riportano alla chat. Apertura,
-sezioni espanse e posizione di lettura si conservano durante gli aggiornamenti.
+La sessione nativa e il worktree rimangono gli stessi nelle revisioni e nei recuperi.
+L’indice vive in `.archetipo/increments/`; il record e il lock del lavoro nel suo
+worktree, sotto `.archetipo/increment-local/`. Gli artefatti del runtime non entrano
+nei commit dell’app. Il workspace principale e i suoi file non committati non sono
+copiati nel worktree.
 
-Lo stesso pannello serve gli incrementi già esistenti, senza migrare i dati.
-Se la sandbox non è leggibile, intento, storie e risultati salvati restano
-consultabili, mentre gli stati non verificabili sono dichiarati non disponibili.
+La base è `main` quando esiste, altrimenti il branch corrente committato. In un
+workspace vuoto può essere inizializzato Git con un commit vuoto; sorgenti di app
+esistenti non vengono importati automaticamente. L’agente lavora soltanto nel
+worktree assegnato, con la politica di permessi del provider.
 
-## Isolamento e persistenza
+## Operazioni CLI
 
-L’indice sta in `.archetipo/increments/<id>.json`; lo stato corrente e il suo
-lock restano nel worktree, sotto `.archetipo/increment-local/increment.json` e
-`.archetipo/conversations/`. I record precedenti vengono letti senza modifiche
-e migrano nello stesso worktree al primo aggiornamento. Il worktree dedicato sta in
-`.archetipo/increments/worktrees/<id>`, sul branch
-`archetipo/increments/<id>`. La base è il commit del branch locale `main`,
-che deve essere disponibile prima della creazione. Il branch corrente del
-workspace di origine e le sue modifiche non committate non vengono copiati.
+Tutte restituiscono `archetipo/v1`, `kind: increment`, record in `data`, salvo il
+dossier che restituisce `data.id` e `data.markdown`.
 
-Il worktree contiene il normale codice e la configurazione versionata.
-Un piccolo riferimento runtime, `.archetipo/increment-workspace.json`,
-seleziona un backlog file locale sotto `.archetipo/increment-local/` e
-disabilita i worktree per singola storia. Il caricamento della configurazione
-riconosce esplicitamente questa radice anche senza `config.yaml` locale.
-Le impostazioni del padre vengono lette senza prove di scrittura; le verifiche
-dei percorsi si eseguono solo dopo averle riportate nella sandbox. I comandi
-delle skill non risalgono
-al backlog principale. PRD, Wiki, mockup e risultati puntano al checkout
-isolato; percorsi configurati esterni al progetto sono rifiutati.
+| Operazione | Payload / effetto |
+| --- | --- |
+| `increment create --file -` | `{"title":"Titolo","request":"Problema"}`; crea ambiente di lavoro e branch |
+| `increment show <id>` / `list` | Legge stato o lavori attivi, senza mutazioni |
+| `increment link <id> --file -` | `{"story_codes":["US-010"]}` prima della prima specifica |
+| `increment propose <id> --file -` | `{"intent":"Markdown","story_codes":["US-010"]}`; versiona specifica e riferimenti |
+| `increment ready <id> --file -` | `{"summary":"Come provarlo e limiti","checks":["Controllo reale e riferimento alla prova"]}`; congela candidato pulito e committato |
+| `increment feedback <id> --file -` | `{"feedback":"Comportamento da cambiare"}`; richiede una nuova specifica/verifica |
+| `increment learn <id> --file -` | `{"observation":"Osservazione reale","decision":"Decisione facoltativa"}` |
+| `increment conclude <id> --file -` | Stesso payload, decisione obbligatoria; conclude senza pubblicare codice |
+| `increment publish <id> --file -` | `{"revision":2,"head_sha":"commit visualizzato"}`; approvazione esplicita del candidato e PR idempotente |
+| `increment refresh <id>` | Rilegge PR; distingue SHA approvato e successivo head integrato dai developer |
+| `increment dossier <id>` | Esporta richiesta, versioni, storie, prove, decisioni e consegna; funziona anche dopo rimozione dell’ambiente |
 
-I file runtime e le skill installate non entrano nei commit del prodotto.
-L'installazione copia soltanto gli asset del workflow, senza file .env.
-I file locali non versionati che la persona dichiara in `local_files` della
-ricetta (per esempio `.env.local`) arrivano nel checkout con la preparazione.
-Il worktree isola codice e processo, non costituisce una barriera di sicurezza
-del sistema operativo. L'agente conserva la politica di permessi del provider.
-L'anteprima deve usare dati e servizi di prova separati, seguendo il comando di
-avvio già documentato dal progetto. Le skill predispongono il necessario
-ambiente di prova locale usando gli strumenti del progetto.
+Da dentro il worktree, `-C <workdir>` seleziona il lavoro; il suo riferimento
+runtime permette ai comandi increment di risalire al record proprietario senza
+scrivere nel backlog principale. `story_codes` assente conserva i collegamenti;
+un array esplicito li aggiorna nella nuova revisione. Titolo e corpo originali
+restano nella copia versionata. I riferimenti non richiedono né piani né transizioni
+sintetiche delle storie.
 
-L'incremento mantiene tutte le revisioni dell'intento e le evidenze dei
-risultati precedenti. All'approvazione di una revisione:
+## Esperienza e gestione aziendale
 
-- le storie invariate conservano piano, stato e lavoro verificato;
-- le storie cambiate mantengono il codice locale e lo storico degli stati ma perdono piano e accettazione
-  precedenti, così da essere ripianificate e verificate;
-- le storie ritirate escono dal backlog interno; lo sviluppo deve riconciliare
-  anche codice, test e documentazione con il risultato corrente.
+Il primo messaggio della home avvia direttamente il lavoro. In alternativa,
+**Backlog → storia → Lavora su questa storia** porta gli stessi requisiti in un
+nuovo lavoro. Nel dettaglio della storia si trovano lavori e PR collegati;
+nel lavoro si torna alle storie originali. Se titolo o criteri della storia sono
+cambiati nel backlog, il lavoro segnala lo scostamento e conserva la specifica
+originalmente usata: aggiornare i requisiti richiede una nuova revisione esplicita.
 
-I commenti sugli elementi della preview restano nella stessa conversazione e
-nello stesso incremento. La skill registra richiesta e riferimento all’elemento,
-collegandoli ai codici delle storie interessate:
+**Specifica e decisioni** apre il pannello del dossier. Il pannello conserva
+revisioni, criteri, feedback e prove; **Esporta dossier** scarica il Markdown.
+**Documentazione** conserva la Wiki consultabile e le sue operazioni dedicate.
+PRD, epiche, priorità, stati, stime e piani sono strumenti di gestione facoltativi.
+Zero punti indica una storia non stimata. Gli stati del backlog non approvano
+codice, non fanno merge e non attestano valore business.
 
-- `correction`: corregge un criterio già approvato, conserva i requisiti e riapre
-  soltanto le storie collegate. Una nuova revisione di lavorazione conserva
-  l’approvazione dell’intento e lo storico dei risultati; la correzione viene
-  sviluppata e verificata senza richiedere un’altra approvazione dell’intento.
-- `refinement`: cambia i criteri della stessa capacità, aggiorna le storie
-  esistenti e richiede l’approvazione della nuova revisione. Non basta annotare
-  il cambiamento nell’intento lasciando invariate le storie.
-- `scope`: aggiunge o cambia l’ambito; può aggiungere storie nello stesso
-  incremento, prima dello sviluppo e previa approvazione. Un commento non crea
-  automaticamente un nuovo incremento. Dopo la consegna si avvia un nuovo
-  incremento con una decisione esplicita.
+La PR contiene il dossier e il commit approvato dal business. I developer possono
+modificare la soluzione senza attribuire alle loro modifiche la verifica precedente.
+`approved_sha` e `approved_at` conservano la decisione originaria;
+`integration_sha` è l’head della PR osservata come integrata, non il commit di deploy.
+Una PR chiusa senza merge non è una consegna.
 
-La classificazione spetta alla skill; il CLI valida codici e transizioni.
-Le domande mantengono valido il risultato. Ogni nuovo risultato verificato,
-comprese le correzioni, richiede l’approvazione finale prima della pubblicazione.
-Le revisioni riusano i servizi, le porte e i dati sintetici dell’ambiente corrente;
-la sospensione della preview per tornare allo sviluppo non equivale a Ferma ambiente.
+## Ambiente locale
 
-Il record, la sessione nativa e le identità di pubblicazione sopravvivono al
-riavvio. Interrompere un turno non elimina l'incremento o la sessione.
-Una conversazione libera di origine resta distinta dalla nuova conversazione
-creata direttamente nel worktree.
+Le ricette `execution environment` e `execution preview` gestiscono risorse,
+porte, preparazione, verifiche e cleanup. Lavori distinti hanno risorse e dati
+separati; le revisioni riusano quelli del lavoro corrente. Le configurazioni
+portabili si propagano dal progetto; checkpoint e possesso dei processi no.
 
-La gestione di servizi, porte concorrenti e arresto è descritta in
-[Ambienti e servizi locali](local-services.md). Le dipendenze dichiarate
-condividono lo stesso ciclo di vita da CLI e view; i vecchi script con servizi
-avviati in background richiedono una migrazione esplicita.
+La preview si apre quando l’app è configurata e il turno termina, anche durante
+lo sviluppo. Rimane aperta durante domande, feedback e modifiche; i server con
+ricaricamento automatico mostrano gli aggiornamenti senza creare un altro ambiente.
+**In lavorazione** distingue l’app corrente dalla **Versione verificata**: quest’ultima
+richiede commit pulito e prove valide. Solo il server abilita l’approvazione.
+**Ferma** resta esplicito anche dopo reload. Il browser conserva la scelta per
+il checkout: una risposta successiva della chat non riavvia l’ambiente; occorre
+premere di nuovo Preview.
 
-## Pubblicazione
+Un check può dichiarare `during_preview: true` se non reinstalla dipendenze,
+non riscrive gli output del server e non azzera dati condivisi. Il check usa la
+preparazione esistente; se cambia, richiede di fermare la preview e preparare di
+nuovo. Quando il proprietario dell’ambiente termina, il check viene annullato e
+il supervisore procede al cleanup. Build incompatibili, setup e pulizia restano
+esclusivi. `execution environment evidence` legge le prove senza eseguire comandi.
 
-La prima versione è locale, lavora sulle storie in sequenza e apre PR GitHub
-tramite il comando `gh` già autenticato dall'utente. Serve un remote
-`origin` scrivibile. Il backlog ufficiale continua a usare il connector
-configurato nel workspace originale.
+La ricetta comune include gli helper espliciti e si riusa nei worktree; installazioni,
+porte, dati e report rimangono locali a ciascuno. Gli installer devono rispettare il
+lockfile: un lock incoerente si corregge esplicitamente, senza fallback silenziosi
+a versioni risolte nuovamente. Questo rende ripetibile l’ambiente nei futuri worker.
 
-Prima della pubblicazione la CLI verifica nuovamente il commit, la pulizia
-del checkout, il contenuto delle storie accettate e il completamento dei task.
-Una modifica dopo la prova richiede una nuova verifica. Il mapping fra codici
-locali e codici ufficiali viene salvato all'approvazione dell'intento, prima di
-scrivere; una pubblicazione parziale si riprende con **Approva risultato e apri PR**,
-senza duplicare la PR o le storie già scritte. Fino alla consegna l'incremento è
-l'autorità sul contenuto delle sue storie ufficiali. Un codice occupato da una
-storia che non appartiene all'incremento viene rifiutato, senza sovrascriverla.
-Eliminare un incremento la cui PR non è stata mergiata ritira le sue storie
-ufficiali. Con connector che non sanno cancellare (github, jira) una storia
-ritirata torna a TODO e va chiusa a mano.
+Worktree e porte separate non costituiscono isolamento di sicurezza del sistema
+operativo. Runtime remoto e sandbox di sicurezza sono fasi successive. Anche il
+ciclo di modifica e riapprovazione dopo l’apertura della PR resta a una fase
+successiva: la consegna corrente rimane congelata per i developer.
 
-La PR rimane soggetta alla normale revisione tecnica. Una PR chiusa senza merge
-non consegna l'incremento. Se commit della PR o storie pubblicate cambiano dopo
-l'approvazione, la riconciliazione si ferma e segnala il conflitto.
-Lo stato della PR si aggiorna su richiesta; non vengono avviati monitor.
+## Rimozione e storico
 
-## Uso standalone e CLI
+La cancellazione richiede il piano di rimozione, conferma e SHA osservato. Ferma
+solo risorse possedute, esegue il cleanup dichiarato e rimuove branch e worktree.
+Resta un riferimento Git di recupero per i commit e una ricevuta con il dossier
+business. Il dossier e i collegamenti alle storie rimangono consultabili anche
+quando i file dell’ambiente non esistono più. La conservazione della conversazione
+è una scelta distinta; il transcript nativo del provider non viene cancellato.
 
-La skill `/archetipo-increment <id>` espone lo stesso metodo anche senza il
-viewer. I comandi deterministici usano il normale envelope JSON
-`archetipo/v1`, con `kind: increment`:
+Il contratto del vecchio incremento — copie delle storie, classificazioni
+correzione/refinement/scope e approvazione preventiva dell’intento — è rimosso.
+I record storici sono leggibili senza ripristinare quella macchina a stati.
+Le skill di implementazione, review, autopilot e mockup non sono distribuite;
+`init` elimina soltanto quelle directory gestite, conservando skill personali.
 
-- `increment create --file -`: `{"title":"…","request":"…"}`
-- `increment list` e `increment show <id>`: record persistenti.
-- `increment propose <id> --file -`: `{"intent":"…","stories":[…]}`.
-- `increment approve <id> --file -`: `{"revision":N}`.
-- `increment ready <id> --file -`: `{"summary":"…","checks":["comando — risultato"],"preview_url":"http://127.0.0.1:3000"}`; anteprima facoltativa.
-- `increment feedback <id> --file -`: `{"feedback":"…"}`.
-  Sono opzionali `kind` (`correction`, `refinement`, `scope`) e `story_codes`;
-  i codici sono obbligatori per correction/refinement. Il payload storico senza
-  classificazione mantiene il passaggio attraverso definizione e approvazione.
-- `increment publish <id> --file -`: `{"revision":N,"head_sha":"commit provato"}`.
-- `increment refresh <id>`: stato effettivo della PR e riconciliazione.
+## Verifiche
 
-Le approvazioni standalone devono essere richieste dalla persona sulla
-versione effettivamente mostrata. Il testo dell'agente non sostituisce gli
-effetti persistenti verificati dalla CLI.
+`test:view-chat-smoke` usa la pagina, CLI e adattatore Codex reali con agente finto.
+`test:view-increment-smoke` aggiunge l’ingresso dal backlog, il recupero dopo morte
+del processo, riferimenti bidirezionali, dossier, approvazione umana, PR unica e
+riconciliazione di modifiche dei developer. GitHub è simulato. Le prove su browser
+non attestano la qualità del codice prodotto da un modello reale.
 
-## Verifica
 
-`npm run test:view-increment-smoke` attraversa l'interfaccia reale in Chrome,
-con il server, il connector file, Git, i worktree e l'adapter nativo reali.
-Solo agente e GitHub sono simulati. Prova due giri, il riavvio della pagina,
-la stessa sessione nativa, assenza di modifiche al prodotto principale,
-pubblicazione ripetuta senza duplicati, consegna solo dopo merge e accesso
-alla conversazione libera. Controlla anche il layout a 390 px e conserva
-screenshot e report sotto `test/workspaces/`, ignorato da Git.
+### Prima configurazione e riparazione della ricetta
 
-## Composizione e recupero
+La skill `archetipo-environment` ricostruisce requisiti, strumenti e copertura dai
+file effettivi del progetto, anche in un clone appena inizializzato. Non esiste
+un catalogo di stack scelto dal viewer. Il contesto passato dal viewer indica
+provider, directory e profilo richiesto; le capacità reali si osservano nella
+sessione con `execution environment capabilities`, che funziona senza ricetta.
+Tool e probe aggiuntivi sono espliciti; rete e servizi non provati restano ignoti.
+I report non espongono valori delle variabili d'ambiente.
 
-Increment compone spec e Autopilot; le skill di base e Autopilot non dipendono
-dall’incremento. Checkpoint, recuperi della sessione e verifiche sono descritti
-in [Esecuzioni riprendibili](execution-recovery.md).
+`environment configure --candidate` e `preview configure --candidate` preparano
+file locali senza aggiornare il bundle comune. `environment qualify --asset ...`
+esegue due preparazioni effettive e una prova di riuso con readiness; conserva
+report e log originali e fallisce su input instabili. `publish --qualified` adotta
+atomicamente solo lo stesso bundle con evidenze ancora valide. Una nuova
+qualificazione revoca il risultato precedente prima di iniziare. I comandi legacy
+restano disponibili, ma la sessione tecnica del viewer richiede la pubblicazione
+qualificata: una vecchia ricetta comune non dimostra che una riparazione sia finita.
 
-## Eliminazione degli ambienti
+La qualificazione riguarda la ripetibilità del setup: non certifica da sola
+installazione da zero, integrità semantica dei dati o correttezza del prodotto.
+La skill sceglie prove specifiche per installazione pulita in risorse dedicate,
+conservazione delle fixture e stop/ripresa. I check prodotto restano distinti e
+obbligatori per la readiness del candidato; non si indeboliscono per pubblicare
+una ricetta. I permessi restano quelli dell'harness, senza escalation automatica.
 
-La rimozione confermata ferma il lavoro e i servizi posseduti dall’incremento,
-esegue il cleanup e rimuove worktree, branch e file locali, incluse dipendenze,
-file ignorati e modifiche non committate. Non crea archivi dell’ambiente.
-Rimangono una ricevuta di eliminazione per i tentativi successivi e un riferimento
-Git `refs/archetipo/deleted/<id>` per recuperare esclusivamente i commit salvati.
-Per recuperarli si può creare un nuovo branch dal riferimento con
-`git branch recupero-incremento refs/archetipo/deleted/<id>`.
-La ricevuta permette anche di leggere una conversazione archiviata dopo averne
-rimosso l’ambiente; non contiene una copia dei file del worktree.
+
+### Preview prima di un nuovo lavoro
+
+La schermata iniziale offre «Apri l’app attuale» senza creare una conversazione
+prodotto o un incremento. Le route `/api/workspace/preview` usano il checkout
+servito dal viewer e gli stessi contratti standalone di configurazione,
+preparazione e preview delle conversazioni. Se manca la ricetta viene avviata
+soltanto la sessione tecnica. Un'app già configurata può essere esplorata anche
+senza un agente disponibile. I commenti diretti richiedono una conversazione
+aperta; la preview iniziale consente navigazione e gestione dell'ambiente.
+
+Il server legge da Git branch o commit effettivo e distingue un worktree dal
+checkout principale. Il contesto, sempre visibile anche a preview ferma, espone
+la directory e, se presenti, lavoro e conversazione aperta. `main` non è imposto:
+la preview esegue i file del checkout selezionato, incluse modifiche locali. Più
+conversazioni sulla stessa directory condividono il processo; il nome della chat
+indica il contesto aperto, non un secondo proprietario del servizio.
+
+
+### Richieste e cronologia dell’ambiente
+
+La Preview mostra una sezione permanente Ambiente: stato di preparazione,
+esiti delle verifiche e collegamento alla chat tecnica. Domande strutturate,
+richieste di autorizzazione e messaggi da completare restano rispondibili nel
+pannello, usando gli stessi endpoint e la stessa sessione nativa della chat.
+Le opzioni vengono dall’harness; il viewer non decide autorizzazioni. Il polling
+non ricrea un modulo invariato, così mantiene testo, scelta e focus. Una risposta
+fallita conserva il modulo; dopo una consegna riuscita il controllo resta disabilitato
+finché il runtime non annuncia la richiesta successiva.
+
+Il browser conserva per workspace l’ultima chat selezionata, incluse quelle
+tecniche, e lo stato del pannello nella sessione del browser. Ricaricare legge
+la stessa cronologia senza avviare un turno. La chat tecnica resta separata
+dall’elenco prodotto, ma è sempre raggiungibile dall’Ambiente.
+
+`execution environment checks` legge gli ultimi report originali, compresi quelli
+falliti. Una nuova preparazione non li elimina: li presenta da riconfermare quando
+non corrispondono più agli input e alla preparazione correnti. Report/log mancanti
+o alterati non diventano successi. I log sono consultabili come testo inerte dal
+pannello. Gli errori di tentativi precedenti restano storici quando la preview
+attuale ha una preparazione verificata; non descrivono più lo stato corrente.
+
+## Guided interaction and developer handover
+
+The composer offers next steps declared by the process Template: open the app,
+reach a technical environment conversation, prepare a message, approve a verified
+candidate or inspect its PR. Suggested messages preserve the current draft and
+are sent only by the person. Publication offers an inline confirmation of its
+effect. These presentation aids add no intent approval or internal story tasks.
+The environment conversation appears below the product conversation in the rail.
+
+Runtime questions use a questionnaire with one question at a time, multiple
+choices where requested, free text, and answers retained across polling,
+navigation and failed submissions. Feedback from the preview can resume a
+released connection using the same conversation and native session.
+
+An optional `squash_commit` object in the `increment ready` payload supplies a
+single-line `title` and optional `body`. Publication uses that title and puts the
+suggested body before the complete business dossier in the PR description. The
+dossier retains the suggestion as well as the exact evidence and business
+approval. It never performs a squash, merge or deployment.
+
+While a published work is open and idle, View reconciles its PR at most once per
+minute. A confirmed merge preserves the approved candidate separately from the
+developer head. It neither changes business story statuses nor removes the local
+environment: removal still requires an explicit keep/remove choice.

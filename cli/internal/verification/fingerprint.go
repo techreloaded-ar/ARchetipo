@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 )
 
 // Only declared inputs are hashed. The recipe is responsible for declaring all
@@ -24,7 +25,10 @@ func fingerprint(root string, recipe Recipe, inputs []string, extra any) (string
 		Extra  any
 	}{recipe, extra})
 	_, _ = h.Write(encoded)
-	_, _ = fmt.Fprintln(h, root, runtime.GOOS, runtime.GOARCH, os.Getenv("PATH"))
+	// Harnesses prepend per-session shim directories to PATH. Hash the actual
+	// resolved tools below; unrelated search entries are not project inputs.
+	// A project that depends on PATH itself can declare it through EnvKeys.
+	_, _ = fmt.Fprintln(h, root, runtime.GOOS, runtime.GOARCH)
 	for _, key := range recipe.EnvKeys {
 		value, present := os.LookupEnv(key)
 		_, _ = fmt.Fprintf(h, "%s\x00%t\x00%s\x00", key, present, value)
@@ -38,7 +42,11 @@ func fingerprint(root string, recipe Recipe, inputs []string, extra any) (string
 	}
 	sort.Slice(commands, func(i, j int) bool { return commands[i].Argv[0] < commands[j].Argv[0] })
 	for _, command := range commands {
-		path, err := exec.LookPath(command.Argv[0])
+		executable := command.Argv[0]
+		if !filepath.IsAbs(executable) && strings.ContainsAny(executable, `/\`) {
+			executable = filepath.Join(root, executable)
+		}
+		path, err := exec.LookPath(executable)
 		if err != nil {
 			_, _ = fmt.Fprintln(h, command.Argv[0], "missing")
 			continue

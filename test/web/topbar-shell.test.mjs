@@ -118,7 +118,6 @@ function idsIn(markup) {
 const COLLECTED = [
 	"metrics-btn",
 	"prd-btn",
-	"mockups-dropdown",
 	"new-workspace-btn",
 	"workspaces-btn",
 	"config-btn",
@@ -188,7 +187,7 @@ describe("AC-5 — la barra superiore espone quattro cose a un click", () => {
 		);
 	});
 
-	it("aprire il sottomenu dei mockup non chiude il menu che lo contiene", () => {
+	it("il menu delle impostazioni si chiude soltanto fuori dal contenitore", () => {
 		const body = blockAfter(js, "function toggleTopbarMoreMenu(");
 		assert.ok(
 			body.includes("stopPropagation"),

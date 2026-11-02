@@ -62,5 +62,7 @@ update.sh
 !cli/internal/environmentrecipe/**
 !cli/internal/web/environment.go
 !cli/internal/web/environment_test.go
+!cli/internal/web/environment_services.go
+!cli/internal/web/environment_services_test.go
 !skills/archetipo-environment/
 !skills/archetipo-environment/**

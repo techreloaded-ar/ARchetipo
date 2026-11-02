@@ -287,11 +287,12 @@ func TestAcceptingAProposalStartsTheSameExecutionAsTheBoard(t *testing.T) {
 // the identical case, character for character.
 func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) {
 	provider := newConversingProvider("chatty", 0)
-	srv, _ := newProposalServer(t, provider)
+	srv, conn := newProposalServer(t, provider)
+	moveSpecTo(t, conn, "US-901", domain.StatusPlanned)
 	conversationID := openProposalConversation(t, srv)
 
-	// US-901 is TODO, and the process admits "review" only on a spec in REVIEW.
-	eventID := emitProposal(t, provider, conversationID, "Posso rivedere US-901.", "review", "US-901")
+	// US-901 is TODO, and the process admits "plan" only on a spec in REVIEW.
+	eventID := emitProposal(t, provider, conversationID, "Posso rivedere US-901.", "plan", "US-901")
 
 	view := readProposalConversation(t, srv, conversationID)
 	if view.Proposal == nil {
@@ -300,7 +301,7 @@ func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) 
 	if view.Proposal.Runnable {
 		t.Fatalf("a proposal the process does not admit is runnable: %#v", view.Proposal)
 	}
-	if view.Proposal.SpecCode != "US-901" || view.Proposal.Action != "review" {
+	if view.Proposal.SpecCode != "US-901" || view.Proposal.Action != "plan" {
 		t.Errorf("a refused proposal must still name action and target: %#v", view.Proposal)
 	}
 	if view.Proposal.UnlockedBy == "" {
@@ -308,7 +309,7 @@ func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) 
 	}
 
 	// The board refuses the very same start; the two sentences must be one.
-	boardStatus, boardBody := startAction(t, srv, "US-901", "review")
+	boardStatus, boardBody := startAction(t, srv, "US-901", "plan")
 	if boardStatus != http.StatusConflict {
 		t.Fatalf("POST board execution = %d, want 409: %v", boardStatus, boardBody)
 	}
@@ -316,7 +317,7 @@ func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) 
 	if view.Proposal.UnavailableReason != boardReason {
 		t.Errorf("the proposal refuses with %q, want the process's own sentence %q", view.Proposal.UnavailableReason, boardReason)
 	}
-	want := fmt.Sprintf("the %s process does not admit the %q action while %s is %s", template.FabbricaDelSoftware, "review", "US-901", domain.StatusTodo)
+	want := fmt.Sprintf("the %s process does not admit the %q action while %s is %s", template.FabbricaDelSoftware, "plan", "US-901", domain.StatusPlanned)
 	if boardReason != want {
 		t.Errorf("the refusal drifted from the process's formulation: %q, want %q", boardReason, want)
 	}
@@ -330,7 +331,7 @@ func TestAProposalTheProcessDoesNotAdmitIsRefusedWithItsOwnReason(t *testing.T) 
 		t.Errorf("the acceptance refuses with %q, want %q", refused, view.Proposal.UnavailableReason)
 	}
 	requireNoExecution(t, srv, "US-901")
-	if got := specStatusOf(t, srv, "US-901"); got != domain.StatusTodo {
+	if got := specStatusOf(t, srv, "US-901"); got != domain.StatusPlanned {
 		t.Errorf("US-901 is %s after a refused acceptance, want TODO", got)
 	}
 }

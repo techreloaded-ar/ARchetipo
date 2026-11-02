@@ -1,394 +1,199 @@
 ---
 name: archetipo-increment
-description: Guide an isolated product increment from a business intent through development, feedback and one final PR. Keep ordinary conversations and standalone spec delivery unchanged.
+description: Explore a product problem, build and test a working solution, preserve learning and hand a verified version to developers.
 ---
 
-# Product increment
+# Product work
 
-This skill owns discovery, delivery and business approval for an isolated increment. It works standalone
-and inside a native View conversation. Never assume View is running.
+Read `.archetipo/shared-runtime.md` once. Use the person's language. Start with
+`archetipo increment show <id>`; use `-C <workdir>` for all subsequent commands.
+The worktree, native session and test data belong to this work throughout its life.
+## Understand and preserve the problem
 
-Read `.archetipo/shared-runtime.md` exactly once at activation. Use the
-workspace language. Read context progressively; avoid unrelated backlog work.
+Read the request, current specification, learning and applicable repository
+instructions. Understand whose problem this is, the desired outcome, current
+behavior and relevant constraints. Follow the shared runtime's intent discovery
+and named personalities, including the inception-style brainstorming for an open
+idea: let Andrea, Costanza and Livia explore and challenge alternative directions
+before converging. Use the shared brainstorming techniques, adapting to what the
+person says. Ask one focused question at a time, offer useful
+clickable choices through blocking structured input, and let Costanza challenge
+assumptions before settling on a solution. Explore outcome, people, concrete
+examples, priorities and constraints without repeating known answers. Summarize
+the understood intent before implementation; keep precise requests and later
+edits proportionate. Do not assume that a proposed feature is the best solution.
+Respect requests to explore or discuss an idea before implementing it. When a
+product choice needs the person's answer, ask and wait before implementing the
+behavior that depends on it. Use blocking input when available; otherwise end
+the turn with the question so the next message resumes this work. Silence is not
+a choice. State reversible implementation assumptions without presenting them
+as decisions the person made.
 
-## Resolve the increment
-
-The argument is the increment ID. Run `archetipo increment show <id>`.
-Success is the standard `archetipo/v1` envelope, `kind: increment`, with
-the record in `data`. Its `workdir` is the only code/workflow root for
-this increment. Inside it, ordinary CLI commands use the isolated file
-connector; increment commands resolve its owning record automatically.
-Always pass `-C <workdir>` for subsequent CLI calls.
-The sandbox marker resolves inherited configuration even when no local
-`.archetipo/config.yaml` is present. Use `archetipo config show` to inspect the
-effective isolated settings; do not copy the parent configuration or infer a
-missing configuration from the absence of that file.
-
-Without an ID, discover the idea in conversation first. When the person asks
-to begin an isolated increment, use `increment create --file -` with
-`{"title":"…","request":"…"}`, then continue in its returned workdir.
-The CLI creates a dedicated branch and worktree from local `main`. If `main`
-is unavailable, report the prerequisite instead of using another branch.
-This does not approve the intent or authorize publication.
-
-Never retarget an existing native session to another directory. A standalone
-agent that cannot work in the returned directory must report that limitation;
-a View conversation is already created in that sandbox. Never seed/resume a
-native session by copying a transcript.
-
-## Discovery and feedback
-
-When `status` is `DISCOVERY`, interview the person briefly, using the
-installed archetipo-spec skill in its proposal-only mode: clarify benefit, users, scope, exclusions
-and a concrete demonstration. That skill receives the request and project context,
-produces a proposal without persisting it, and needs no knowledge of this controller.
-Ask one focused question at a time. For a
-feedback round, concentrate on the requested delta and show its consequences.
-Do not write product code before the latest intent is approved.
-
-Propose the complete current intent and story set with:
-
-`archetipo -C <workdir> increment propose <id> --file -`
-
-Payload:
-
-    {"intent":"Complete agreed intent in Markdown","stories":[{"code":"US-001","title":"…","epic":{"code":"EP-001","title":"Increment title"},"priority":"MEDIUM","points":3,"status":"TODO","scope":"MVP","blocked_by":[],"body":"Complete story with Demonstrates and - [ ] acceptance criteria"}]}
-
-This persists a proposal only. Preserve local story codes across title or
-requirement changes, preserve unchanged stories, and omit retired stories from
-the current set. Never invent a main-backlog US code: local codes are sandbox
-identities. Use small, independently demonstrable stories and existing spec
-validation rules. History is retained by the CLI.
-
-Feedback from a preview element belongs to this increment, conversation and
-checkout. Keep its page/element reference in the recorded request. Do not call
-`increment create`, start a replacement environment, or create a story for each
-comment. Classify requests against the approved acceptance criteria:
-
-- A correction fixes an implementation that fails an already approved criterion.
-  Link it to the existing story codes; do not change the accepted requirements.
-- A refinement changes a criterion of an existing capability (for example, a
-  newly requested badge colour). Update those same stories and their criteria in
-  the proposal, preserving their codes and the unrelated stories. Recording the
-  change only in the intent while leaving the affected story unchanged is invalid.
-- A scope change adds an independently demonstrable capability. Add a story in
-  this increment if the person wants it included; get approval before developing
-  the expanded scope. Separate work or requests after delivery need a separate
-  increment started by an explicit decision, never an automatic consequence of a
-  preview comment. Do not invent stories retrospectively after writing the code.
-
-For mixed requests, use the scope/refinement approval path and describe all
-affected stories. If the classification is uncertain, clarify the requirement
-before declaring a correction.
-
-Explain the proposal and wait for the human's approval. The View approval
-button calls `increment approve <id> --file -` with
-`{"revision":N}`. Standalone, call it only after the person explicitly
-approves that exact displayed revision. The CLI reconciles sandbox stories,
-preserving unchanged work and invalidating changed/retired work artifacts.
-It also mirrors the approved stories into the original backlog with their
-official codes, in progress; publication moves them to review, the confirmed
-merge to done, and deleting an increment without a PR removes them. Never move
-or edit those official stories yourself: the increment is their authority.
-In proposal `body` fields omit the template heading and metadata line (code,
-epic, priority, points, status): they are structured fields, and the official
-backlog receives different codes.
-
-## Develop and prepare the result
-
-After intent approval and before development, prepare the checkout in a separate
-technical worker/session using `/archetipo-environment`. View performs this
-orchestration automatically and supplies the preparation evidence. Reuse it for
-this exact checkout; do not repeat configuration/install/build commands in the
-product conversation. Standalone, delegate the same skill, require persisted
-`passed && stable`, and keep setup logs in the technical worker. If delegation is
-unavailable or prerequisites are missing, report the concrete blocker. Discovery
-does not prepare an environment. A later setup requirement is a technical blocker,
-not permission to move setup output into the development thread.
-
-### Execution ownership and checkpoints
-
-After the intent is approved, own delivery until `increment ready` has frozen the
-verified result. A child phase finishing is not the end of this invocation. Keep
-human product decisions at discovery/intent approval and verified-result review.
-Local setup, failed checks and recoverable worker failures belong to delivery.
-
-Use the shared checkpoint protocol, with `skill: archetipo-increment`, `scope: <id>`,
-`invocation: /archetipo-increment <id>` and the supplied `Workflow conversation`
-binding when present. This skill uses
-`execution workflow start --file -`, `list`, `show <run-id>` and
-`checkpoint <run-id> --file -`.
-
-Start payload:
+Persist the evolving specification with `increment propose <id> --file -`:
 
 ```json
-{"skill":"archetipo-increment","invocation":"/archetipo-increment <id>","scope":"<id>","conversation_id":"optional supplied Workflow conversation","state":{"revision":1,"stories":["US-001"],"phase":"implementation","review_attempts":0,"recoveries":{}}}
+{"intent":"Markdown: problem and people; desired behavior and concrete examples; assumptions; exclusions; decisions and open questions"}
 ```
 
-Omit the binding when not supplied. Checkpoint with the last observed `revision`,
-`status` (`running`, `blocked` or `complete`), `phase`, `worker_id`, the full `state`
-and `last_error` for a blocker. All four operations return `archetipo/v1`,
-`kind: workflow_run`, with the record in `data` (an array for list).
-`E_INVALID_INPUT`: repair input; `E_NOT_FOUND`: resolve the run; `E_CONFLICT`:
-reread/reconcile the revision or conflicting scope/binding; `E_INTERNAL`: preserve
-state and report the failure. Never edit checkpoint files directly.
-Its `state` holds the approved intent revision, selected story codes, delivery
-phase (`implementation`, `technical-review`, `verify`, `ready`), worker IDs,
-review attempts, recovery counts, diff base/candidate and evidence references. Store delegated worker
-IDs before waiting. On resume, reconcile CLI story states, partial changes and
-existing workers before dispatching work; preserve approval and completed work.
-An older checkpoint with phase `autopilot` is a recovery input: reconcile its
-existing workers and nested run, retain findings and consumed review attempts,
-then continue the unfinished work with the methods below. Do not invoke another
-coordinator, duplicate a live worker or reset an exhausted review budget.
+When implementation is requested, persist a proportionate initial specification
+before the first product edit. Do not leave the work in discovery with no saved
+specification until after writing the app. This is a versioned statement of the
+request, not a separate planning or approval ceremony.
 
-Allow at most three recovery attempts per failed phase, retaining their counts
-across resume. Technical review allows an initial assessment and at most three
-correction rounds. Record the chosen review scope, all blockers and consumed
-attempts before starting another round. An exhausted budget, unresolved product
-ambiguity or unavailable required capability is a concrete `blocked` checkpoint,
-with remaining findings and the minimum intervention. Never mark a run complete
-until `increment ready` succeeds.
+Stories and the enterprise backlog remain optional planning tools. Read linked
+stories when present and keep acceptance criteria and documentation consistent.
+Use `increment link <id> --file -` with `{"story_codes":["US-010"]}` before
+the first specification, or include `story_codes` in a later `propose` payload
+to version changed links. Codes must exist in the parent backlog; never clone
+its stories into an internal delivery board. Do not change story status merely
+because this work is ready or its PR merged. No formal implementation plan is required.
+The CLI versions the specification and makes it actionable without declaring it
+human-approved. Keep the specification consistent with decisions; never rewrite
+requirements to conceal a failed implementation or test. Preserve unknowns.
 
-If an interruption occurred after `increment ready` persisted but before this
-checkpoint closed, reread the increment. A frozen result already in `REVIEW`
-settles this delivery run as complete before waiting for the business verdict;
-do not rerun development or publication to repair bookkeeping.
+An investigation may conclude that no software change is needed. Record useful
+observations with `increment learn <id> --file -`:
 
-Apply the shared local verification environment policy when preparing tests and
-preview. The methods and workers receive ordinary project/spec context and generic
-execution constraints. Keep business state and approvals in this coordinator.
-For a browser preview, first read `execution preview show` in the code checkout.
-Reuse a valid project recipe instead of rediscovering startup at every increment.
-When creating or repairing it, persist through `execution preview configure
---file -` a version 1 JSON object with `directory` relative to that checkout,
-explicit `argv`, a loopback HTTP `url`, and `prepare_environment: true`. Use
-`{port}` in the URL port and launch arguments, with the project's strict-port
-option or equivalent so it cannot silently switch endpoints. The technical worker publishes the sole common workspace configuration, including
-its explicit non-secret helpers, through `execution environment publish`. Keep
-configuration and helpers versioned with the project;
-do not copy runtime checkpoints, credentials or dependencies between checkouts.
-`show`/`configure` return `kind: preview_recipe`; `execution preview prepare`
-returns `kind: preview` with `data.preparation` containing the standard environment
-result. Require `passed && stable` and inspect its report (including original
-evidence on reuse). Preparation does not start the preview server. Declare dependencies in the
-project environment's `resources` (name plus finite start/probe/stop/stopped
-commands, max 30s each) and `ports` (uppercase names), following shared ownership
-rules. Use assigned `ARCHETIPO_PORT_<NAME>` endpoints in launch/configuration;
-never put `docker run -d`, nohup or other unregistered services in the preview
-command. Start/Stop and viewer death then use the same generic resource lifecycle,
-independently of framework or service tool. Version the adapters with the recipe.
-Standalone `prepare` intentionally retains registered services for reuse; explicit
-cleanup ends them, while preview run owns them until its terminal ends.
-Missing recipe
-is `E_PRECONDITION`, invalid configuration is `E_INVALID_INPUT`, and concurrent
-ownership is `E_CONFLICT`; repair the specific cause rather than starting another
-setup. The viewer's Start and standalone `execution preview run` use the same
-preparation contract when the flag is enabled; neither needs a new agent turn.
-Preserve the model and options explicitly requested by the person across
-delegation, resume and recovery.
+```json
+{"observation":"What was observed, source and limits","decision":"Optional decision and its rationale"}
+```
 
-### Keep delivery context bounded
+To conclude without publishing code, use `increment conclude <id> --file -` with
+the same payload and a required decision. Do this when the person agrees to the
+conclusion or explicitly delegated that decision. Do not equate technical success
+with validated business value. Never invent user research or observations.
 
-At approval, feedback or recovery, resolve the latest persisted increment and
-workflow before choosing work. Carry the approved revision, selected story codes,
-roots, diff base/candidate, applicable product decisions, unresolved questions,
-worker ownership and original evidence references in the existing checkpoint.
-Keep references and concise decisions there, not copies of the proposal, reports
-or conversation. Current approved stories remain authoritative for scope; retain
-relevant product context beyond their text and do not silently discard a decision
-merely because it is absent from an acceptance criterion.
+## Build and try
 
-A long discovery conversation is not a useful implementation handoff. When it
-contains substantial document/tool output and a bounded implementation scope
-benefits from delegation, prefer a worker with its own context; use the harness's
-documented non-inheriting spawn option when available. Supply the scope and exact
-source paths below, not the discovery transcript. Use the active runtime's
-documented native tools: do not assume a shared
-spawn flag, fork mode or compaction command. Keep this conversation and its
-native session as coordinator; do not spawn another coordinator or force workers
-for a small change. Without that capability, work inline with targeted reads.
-Context isolation never removes required instructions, permissions or the chosen
-model/options from a worker.
+Implement directly in this worktree using the project's architecture, design and
+checks. Read `.archetipo/CUSTOM_INSTRUCTIONS.md` and `docs/DESIGN.md` if present.
+Use a short internal plan only when useful. Use Ugo's practical voice for
+construction, Mina's concrete voice for verified behavior and gaps, and Cesare's
+constructive voice for defects and risks. Report only actual work and evidence;
+a change of persona is not an independent review. Do not invoke delivery skills or create
+an internal backlog merely to satisfy a workflow. Give concise progress updates
+about behavior and what can be tried; keep logs in original evidence files.
 
-Load only the method needed for the active phase. Reuse unchanged documents and
-envelopes already read in this activation; after edits or a revision change,
-reread the affected sources. Handoffs name outcomes, blockers and original
-reports; inspect targeted evidence rather than echoing full logs, proposals or
-source into messages. Expand reads when a concrete concern requires it. Full
-diagnostics and acceptance evidence must remain available at their original paths.
-These rules apply equally standalone and in View. They limit new context growth;
-they do not compact existing native history. Never reset the session, replace it
-with a transcript/summary, or claim compaction the harness did not perform.
+Reuse an already running preview through compatible checks directly; do not
+prepare again merely because a new turn started. Prepare the project's environment
+recipe when setup is missing or changed; delegate `/archetipo-environment`
+when configuration or repair is needed, preserving its technical session identity.
+Discovery and setup design may overlap product edits; final qualification,
+publication and product checks must use settled declared inputs. Coordinate this
+handoff with the technical session. If you change an input after qualification,
+tell that same session to requalify before publication instead of attributing
+`E_PRECONDITION` to sandbox permissions. Before reporting a blocker, read the
+worker's actual latest CLI envelope and current pending runtime requests.
+Keep worker ownership in the checkpoint and resume the same worker after an
+approval; a parent answer does not imply its worker has finished.
+Keep product edits in this worktree. The technical environment session can publish
+the common recipe and non-secret helpers through the CLI from this worktree;
+this is environment configuration, not product publication or a manual parent
+checkout edit. Worktrees do not override actual harness permissions. When View's
+environment controls are available, direct repair there rather than asking the
+person to create and coordinate a replacement session manually.
+Use managed resources, assigned ports and synthetic data. Never touch production
+services, copy secrets, start unowned background processes or reset demo data just
+because a revision starts. A missing capability is a concrete blocker.
 
-### Delivery workflow
+For long-running work, use `execution workflow start --file -` with
+`{"skill":"archetipo-increment","invocation":"/archetipo-increment <id>","scope":"<id>","conversation_id":"supplied conversation, omit if absent","state":{"phase":"building","revision":1}}`.
+Use `execution workflow list`, `show <run-id>` and `checkpoint <run-id> --file -`
+to resume. A checkpoint passes the last observed `revision`, `status`
+(`running`, `blocked`, `complete`), `phase` and full `state` with original evidence
+references and worker ownership. These return `kind: workflow_run` in the standard
+envelope. Keep one run and bounded retry counters across recovery; complete it
+after `increment ready` or `conclude` succeeds. Store decisions, not copied logs.
+Respect existing ownership and retry budgets; never replace the native session
+with a transcript. For a small change, work directly in this session.
 
-When `status` is `DEVELOPING`, read and apply
-[implementation](references/implementation.md) for the approved local stories.
-Then read and apply [technical review](references/technical-review.md) to the
-combined change. These are internal methods, not separately installed skills.
-No formal plan, synthetic task list or additional delivery skill is required.
-Keep stories independently demonstrable and individually tracked; choose a
-bounded working group from dependencies, overlap and available context. Do not
-collapse their acceptance criteria into an undifferentiated assignment.
+Verify changed behavior with appropriate real browser, API and database checks.
+Run EVERY declared recipe check with `archetipo execution environment check <name>`
+(kind `verification_result`, require `data.passed && data.stable`). Reuse only the
+CLI's retained original evidence. `--fresh` deliberately reruns a check; a failure
+revokes its previous pass. Use `execution environment evidence` to inspect all
+current reports (`kind: verification_result`, `data` is the original report array).
+No declared checks, missing reports, changed inputs or missing logs block readiness.
+Do not remove or narrow a failing check to claim a verified candidate. Explain
+existing application failures and fix the relevant cause before readiness.
 
-Choose whether to use workers and parallelism. Delegate independent scopes when
-useful; coordinate shared files and serialize CLI state changes and commits.
-Avoid a second coordinator that merely relays the same work. Workers receive the
-absolute code/CLI roots, selected stories, approved intent, relevant product
-context, applicable instructions, explicit diff base (the increment BaseSHA for
-the full result), candidate and evidence,
-language, execution constraints and model/options; no business-state dependency.
-Preserve worker ownership and await terminal results before handing over their
-files. A worker's completion is an internal handoff: continue until ready or blocked.
+Keep the preview running during questions and ordinary edits. Checks explicitly
+marked `during_preview: true` can use its prepared services without reinstalling
+or stopping them. Other operations remain exclusive. For dependency/setup changes,
+stop the preview, repair/prepare through the environment method, and restart it;
+never take over another process's services. A check is canceled if its owner stops.
+Reuse evidence only when its inputs remain valid. Review the combined change;
+use independent assessment for material risk such as permissions, migrations,
+concurrency or data loss. Keep unrelated failures distinct from regressions.
+Do not run a full ceremony per feature or repeat setup/checks without a reason.
 
-Review the combined result once per working group, rather than automatically
-opening a review session per story. Use a fresh independent reviewer for material
-risks or uncertain evidence (for example access control, data loss, migrations,
-concurrency or cross-story behavior). For a small low-risk change, an in-context
-assessment is sufficient; disclose that it was not independent. Persist this
-choice and its reason before review. Reuse valid original evidence; independence
-does not require repeating all tests. On blockers, use the reference's rework
-contract and the same checkpoint/budget, then recheck fixes and affected flows.
-A required independent review unavailable in the harness blocks completion.
+Update documentation affected by the implemented behavior, recording decisions and
+relevant page references. Keep product intent distinct from current implementation.
+Use targeted documentation checks; a full Wiki rebuild is not required each turn.
 
-Only stories with sufficient implementation, evidence and no unresolved technical
-blocker move to DONE. Verify persisted effects through the CLI; reuse immediately
-observed states when no intervening write occurred. `increment ready` enforces the
-approved story snapshot, completion of any existing tasks and a clean committed
-result. Technical completion does not authorize publication or replace the final
-human result approval. When wiki.enabled is false, perform no automatic Wiki work.
+Commit the verified product changes on this branch, including portable
+`.archetipo/environment.json`, `.archetipo/preview.json` and non-secret
+`scripts/archetipo/` helpers when they were added or changed. Exclude local
+environment journals, databases, conversations, ownership markers and secrets;
+portable recipes are source assets, not disposable runtime state.
+Call `increment ready <id> --file -`:
 
-For a revised intent, reconcile the whole code diff with the current outcome.
-Removing a story does not remove its implementation automatically: remove or
-adapt obsolete code, tests and docs, then verify the combined result.
+```json
+{"summary":"What can be tried, instructions and known limits","checks":["Actual check and result; original evidence path"],"preview_url":"http://127.0.0.1:3000"}
+```
 
-Use the existing verified reports and prepare a demonstration appropriate to the
-changed surface. A UI change needs an interactive preview when runnable. For an
-API/CLI-only change, reproducible real request/response or command traces already
-produced by the accepted tests are a valid demonstration. Do not invent an ad-hoc
-persistent preview or rerun those same requests solely to duplicate that evidence,
-unless the person requested a running endpoint or the project already provides
-its documented preview command. Re-run
-checks only when inputs changed, evidence is missing, or a specific concern needs
-reproduction. Batch independent final state/diff/report reads instead of serial
-rediscovery. Use the project's
-documented preview command when it exists; otherwise inspect the project and
-attempt the permitted local setup before reporting missing startup information.
-Never invent a preview URL, a passing check, or a deployment. A preview uses separate test data and local services; never copy
-production credentials or point it at production resources.
+The preview URL is optional and must be observed, never invented. Configure a
+managed preview recipe through the environment method for a web app. The viewer
+launches the app through that same deterministic contract.
+When invoked inside View, do not run `execution preview run` or start another
+application server yourself: that would hold the environment under a different
+owner and prevent View from opening its preview. Finish the turn after
+configuration and checks so View can launch it. Report unavailable browser
+control honestly and let the person try Preview; do not wait or poll for their
+manual validation inside a running turn.
+Readiness freezes a
+clean committed candidate, current specification and machine reports. Text in
+`checks` explains the result; it cannot substitute for those reports. Publication
+revalidates the code and evidence. No story state is needed.
 
-Commit any remaining verified product changes on the existing increment branch; do not create another commit when the accepted branch is already clean. Keep
-runtime journals and sandbox process files out of commits. Then call:
+## Learn, adapt and hand over
 
-`archetipo -C <workdir> increment ready <id> --file -`
+A question alone preserves the specification and candidate. An explicit requested
+change after readiness is recorded with `increment feedback <id> --file -`:
 
-Payload:
+```json
+{"feedback":"Requested behavior and any selected page/element reference"}
+```
 
-    {"summary":"What the person can now try, with demonstration instructions","preview_url":"http://127.0.0.1:3000","checks":["Exact command — actual result"],"squash_commit":{"title":"One line saying what the increment introduces","body":"What the product now does and why, in a few lines"}}
+Then update the specification, implement and verify in this same work. Keep
+observations and decisions with `learn` when they add product knowledge. Do not
+create another environment or require another approval for ordinary iteration.
+Do not expand scope beyond the person's request without discussing it.
 
-`squash_commit` is the single commit the increment leaves on `main` after a
-squash merge: the PR is opened with its title, and its description holds only
-the body and the list of published stories. The CLI posts the increment,
-intent, summary and checks once as a PR comment. Follow the commit convention visible in `git log` of the base
-branch (for example `feat(scope): …`), in the workspace language. The title is
-one line, about 72 characters, naming the product capability introduced, never
-the increment ID, branch or "merge". The body explains the change for someone
-reading the history; omit story codes (the CLI lists them), checks and any
-co-author or tool attribution.
-preview_url is optional and must be a real local HTTP preview. An unavailable
-interactive preview must be stated plainly in the summary; provide other
-appropriate observable evidence. The CLI copies the preview recipe's `simulated`
-list into the result; do not claim or hide a simulated integration yourself. Every story and every existing task must be
-complete (a plan is optional), the accepted story content must match, and the
-product working tree must be clean.
-The CLI freezes the verified code and story snapshot.
+Only publish after explicit human approval of the displayed tested version:
+`increment publish <id> --file -` with `{"revision":N,"head_sha":"tested commit"}`.
+The PR carries the specification, original story references, decisions and evidence. Developers may evolve its code;
+that does not retroactively approve or verify their commits. `increment refresh`
+reads the actual PR state. Never merge or deploy on behalf of this method.
 
-## Business review, another round, publication
+## Deterministic contract
 
-At `REVIEW`, present the result, its evidence and any limitations. When the
-result's `simulated` list is not empty, say plainly which integrations were
-tried against local fakes and that the real trial happens after the merge;
-approval is still the person's choice. Wait.
-An ordinary question about the result does not invalidate it. When the
-person explicitly requests a change, both in View and standalone, call
-`archetipo -C <workdir> increment feedback <id> --file -` with one of:
+All increment operations return `archetipo/v1`, `kind: increment`, record in `data`.
+Parse errors and warnings before dependent writes. `E_INVALID_INPUT` means repair
+the payload; `E_CONFLICT` means reread the revision, ownership or candidate;
+`E_PRECONDITION` means resolve a missing prerequisite. Other failures are blockers,
+not permission to write workflow files directly. Only the CLI persists artifacts.
 
-    {"feedback":"Request, element reference and the approved criterion being corrected","kind":"correction","story_codes":["US-001"]}
-    {"feedback":"Requested refinement and its element reference","kind":"refinement","story_codes":["US-001"]}
-    {"feedback":"Requested additional capability","kind":"scope","story_codes":["US-001"]}
+### Optional squash message and simulation record
 
-`story_codes` is required for correction/refinement and optional for scope (a new
-capability may have no existing story). The legacy `{"feedback":"…"}` payload
-still takes the scope/discovery path. The CLI returns `kind: increment`:
+The existing `increment ready` JSON payload may additionally contain
+`"squash_commit":{"title":"feat: describe the product change","body":"Why and what changed"}`.
+Use a non-empty single-line title following the project's commit style. The CLI
+uses it for the PR title and retains the complete business dossier in the body.
+This does not authorize a merge or publication; explicit approval of the displayed
+candidate remains required.
 
-- `correction` preserves the approved intent/stories in a new delivery revision,
-  reopens only the linked stories to TODO, and returns `DEVELOPING`. Previous
-  results remain inspectable. Explain the affected stories and continue directly
-  with implementation, technical review and relevant verification; no new intent
-  approval is needed because its requirements have not changed. Preserve existing
-  completed tasks; verify the requested correction explicitly rather than treating
-  their DONE status as proof of the fix. A new result still needs business approval
-  before publication.
-  If interrupted while `pending_change.kind` is `correction`, retry the identical
-  feedback payload to finish reopening the stories; readiness is blocked until
-  reconciliation finishes, and retrying does not create another revision.
-- `refinement` and `scope` return `DISCOVERY`, with the classified request in
-  `pending_change`. Repeat the shorter discovery and exact-revision approval.
-  The next revision's `change` records the kind and linked stories. A refinement
-  proposal must update exactly those stories while preserving the story set.
-
-All rounds stay in this increment and its environment. Reuse the environment
-preparation/report for this checkout and keep synthetic demonstration data. The
-View suspends its application/proxy for preview feedback and development, retaining
-registered dependencies and their ports. Use the standalone environment contract
-for readiness/checks; do not run cleanup or create replacement services merely
-because a revision starts. Explicit environment stop/removal, failed readiness or
-a changed resource recipe still follow their existing cleanup/recovery contract.
-If another live owner refuses an operation with `E_CONFLICT`, report the actual
-owner conflict; do not bypass its lock or move work to another environment.
-
-Speak to the person in business terms: publication (pushing the code and
-opening the PR) is "preparing the release" («preparazione al rilascio»), and
-the confirmed merge is the release itself. Never describe it as sending work to
-a technical team. When the environment needs the person, name the technical
-conversation «Ambiente di sviluppo»; View shows how to open it.
-
-Only after explicit human approval of the verified result may standalone
-execution call `increment publish <id> --file -` with
-`{"head_sha":"ready_sha from the displayed record","revision":N}`.
-View performs this operation deterministically from its approval button.
-Never create a PR yourself with another command, publish early, or merge it.
-The CLI opens/reuses one GitHub PR targeting `main` using gh and moves the current
-official stories to review with the PR link. Retrying the same publication
-must use the same increment.
-
-For `PUBLISHING`, explain any publication failure and retry only after an
-explicit user request; never automatically retry uncertain native deliveries.
-For `PROPOSED`, answer questions without changing the approved code/stories.
-Call `increment refresh <id>` when requested to reconcile the actual PR:
-stories become delivered only after GitHub confirms its merge and approved
-head. `DELIVERED` is complete; keep the history inspectable. In View the
-sandbox (worktree, branch, services) is then removed automatically and the
-conversation archived. Standalone, tell the person the sandbox can be removed
-with `increment deletion-plan <id>` and `increment delete <id>` from the
-original workspace; never run that deletion from inside the sandbox.
-
-## CLI errors and output
-
-All commands above return `kind: increment` and the current record.
-Read-only `increment list` returns an array of records for the current
-workspace. Use it to locate an already-created increment after interruption.
-
-Branch on `error.code`: `E_INVALID_INPUT` means fix the payload,
-`E_PRECONDITION`/`E_NOT_FOUND` means restore missing prerequisites or
-select the right increment, `E_CONFLICT` means reread current state and
-resolve the named stale approval/working-tree/publication conflict,
-`E_CONNECTOR`/`E_NETWORK`/`E_AUTH_SCOPE` means report the external
-failure without claiming success, and `E_INTERNAL` means stop and report.
-Never bypass a refused approval by writing JSON or backlog files directly.
-
-Show readable product outcomes in the conversation. Do not paste CLI envelopes
-or technical receipts into user messages. The persisted record is the effect
-verification for this conversation; these internal methods emit no standalone
-implement/review receipt. Existing workflow actions retain their own contracts.
+The CLI reads `simulated` integrations from the preview recipe and preserves them
+with the result, dossier and PR. Do not invent or override this list in `ready`.
+Explain the observed limits of the trial and keep all required checks declared
+in the recipe. A changed simulation declaration requires a new verified result.

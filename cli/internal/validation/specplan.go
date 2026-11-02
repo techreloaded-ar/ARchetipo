@@ -47,8 +47,8 @@ func ValidateSpecs(target string, specs []domain.Spec) domain.ValidationResult {
 		if !validPriority(spec.Priority) {
 			findings = addFinding(findings, SeverityError, "SPEC_PRIORITY_INVALID", base+".priority", "priority must be HIGH, MEDIUM, or LOW", "")
 		}
-		if spec.Points <= 0 {
-			findings = addFinding(findings, SeverityError, "SPEC_POINTS_INVALID", base+".points", "points must be greater than zero", "")
+		if spec.Points < 0 {
+			findings = addFinding(findings, SeverityError, "SPEC_POINTS_INVALID", base+".points", "points must be non-negative; zero means not estimated", "")
 		}
 		if spec.Status == "" {
 			findings = addFinding(findings, SeverityError, "SPEC_STATUS_EMPTY", base+".status", "status is required", "use the configured TODO status for new specs")

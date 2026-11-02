@@ -182,16 +182,13 @@ type SessionDelivery struct {
 // InputQuestion is a presentation of a question actually requested by a runtime.
 // Providers translate native fields; the viewer never interprets their protocol.
 type InputQuestion struct {
-	ID      string        `json:"id"`
-	Header  string        `json:"header,omitempty"`
-	Prompt  string        `json:"prompt"`
-	Options []InputOption `json:"options,omitempty"`
-	// MultiSelect lets the person pick several options; the answer then
-	// carries every chosen value. A free-text answer, when AllowText, can be
-	// added beside the chosen options.
-	MultiSelect bool `json:"multi_select,omitempty"`
-	AllowText   bool `json:"allow_text"`
-	Secret      bool `json:"secret,omitempty"`
+	ID        string        `json:"id"`
+	Header    string        `json:"header,omitempty"`
+	Prompt    string        `json:"prompt"`
+	Options   []InputOption `json:"options,omitempty"`
+	AllowText bool          `json:"allow_text"`
+	Multiple  bool          `json:"multiple,omitempty"`
+	Secret    bool          `json:"secret,omitempty"`
 }
 
 type InputOption struct {
@@ -277,10 +274,13 @@ type StartTurnRequest struct {
 // SteerTurn uses Message, approval responses use InteractionID and OptionID,
 // and structured input responses use InteractionID and Payload.
 type SessionCommandRequest struct {
-	Session       SessionMetadata `json:"session"`
-	TurnID        string          `json:"turn_id"`
-	SubmissionID  string          `json:"submission_id"`
-	Message       string          `json:"message,omitempty"`
+	Session      SessionMetadata `json:"session"`
+	TurnID       string          `json:"turn_id"`
+	SubmissionID string          `json:"submission_id"`
+	Message      string          `json:"message,omitempty"`
+	// Display preserves the person's text when steering carries an expanded
+	// skill instruction, with the same history contract as StartTurnRequest.
+	Display       string          `json:"display,omitempty"`
 	InteractionID string          `json:"interaction_id,omitempty"`
 	OptionID      string          `json:"option_id,omitempty"`
 	Payload       json.RawMessage `json:"payload,omitempty"`

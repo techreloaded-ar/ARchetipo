@@ -1,5 +1,5 @@
-// Package increment composes the existing delivery workflow in an isolated
-// workspace. It owns durable facts; agent judgement remains in the skills.
+// Package increment records product work in a dedicated workspace.
+// It owns durable facts; agent judgement remains in the skills.
 package increment
 
 import (
@@ -9,9 +9,11 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 const (
+	Concluded  = "CONCLUDED"
 	Discovery  = "DISCOVERY"
 	Developing = "DEVELOPING"
 	Review     = "REVIEW"
@@ -20,9 +22,14 @@ const (
 	Delivered  = "DELIVERED"
 )
 
+// Continuous development authorizes local iterations from the request, never publication.
+const Continuous = "continuous"
+
+// Stories is decoded only to reject retired delivery payloads explicitly.
 type Proposal struct {
-	Intent  string        `json:"intent"`
-	Stories []domain.Spec `json:"stories"`
+	StoryCodes []string      `json:"story_codes,omitempty"`
+	Intent     string        `json:"intent"`
+	Stories    []domain.Spec `json:"stories,omitempty"`
 }
 
 // FeedbackRequest classifies agent judgement explicitly. The CLI validates the
@@ -32,53 +39,73 @@ type FeedbackRequest struct {
 	Kind       string   `json:"kind,omitempty" yaml:"kind,omitempty"`
 	StoryCodes []string `json:"story_codes,omitempty" yaml:"story_codes,omitempty"`
 }
-type Revision struct {
-	Number int `json:"number"`
-	Proposal
-	Approved  bool             `json:"approved"`
-	CreatedAt time.Time        `json:"created_at"`
-	Feedback  string           `json:"feedback,omitempty"`
-	Result    *Result          `json:"result,omitempty"`
-	HeadSHA   string           `json:"head_sha,omitempty"`
-	Change    *FeedbackRequest `json:"change,omitempty"`
+type StoryLink struct {
+	Body  string `json:"body,omitempty"`
+	Code  string `json:"code"`
+	Title string `json:"title"`
+	URL   string `json:"url,omitempty"`
 }
-type Result struct {
-	Summary    string   `json:"summary"`
-	PreviewURL string   `json:"preview_url,omitempty"`
-	Checks     []string `json:"checks"`
-	// Simulated is read from the preview recipe at readiness, never from the
-	// agent: which integrations the person tried against local fakes.
-	Simulated []string `json:"simulated,omitempty"`
-	// SquashCommit is written by the skill so that the PR title and the head of
-	// its body read as the single commit a squash merge leaves on main.
-	SquashCommit *SquashCommit `json:"squash_commit,omitempty"`
+type Revision struct {
+	LinkedStories []StoryLink `json:"linked_stories,omitempty"`
+	Number        int         `json:"number"`
+	Proposal
+	ApprovalSource string           `json:"approval_source,omitempty"`
+	Approved       bool             `json:"approved,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
+	Feedback       string           `json:"feedback,omitempty"`
+	Result         *Result          `json:"result,omitempty"`
+	HeadSHA        string           `json:"head_sha,omitempty"`
+	Change         *FeedbackRequest `json:"change,omitempty"`
 }
 type SquashCommit struct {
 	Title string `json:"title"`
 	Body  string `json:"body,omitempty"`
 }
+
+type Result struct {
+	Simulated    []string              `json:"simulated,omitempty"`
+	SquashCommit *SquashCommit         `json:"squash_commit,omitempty"`
+	Evidence     []verification.Result `json:"evidence,omitempty"`
+	Summary      string                `json:"summary"`
+	PreviewURL   string                `json:"preview_url,omitempty"`
+	Checks       []string              `json:"checks"`
+}
+type Learning struct {
+	Observation string    `json:"observation"`
+	Decision    string    `json:"decision,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type Record struct {
-	ID                   string            `json:"id"`
-	Title                string            `json:"title"`
-	Request              string            `json:"request"`
-	Status               string            `json:"status"`
-	CreatedAt            time.Time         `json:"created_at"`
-	BaseBranch           string            `json:"base_branch"`
-	BaseSHA              string            `json:"base_sha"`
-	Branch               string            `json:"branch"`
-	Workdir              string            `json:"workdir"`
-	ConversationID       string            `json:"conversation_id,omitempty"`
-	OriginConversationID string            `json:"origin_conversation_id,omitempty"`
-	Revisions            []Revision        `json:"revisions"`
-	Feedback             []string          `json:"feedback"`
-	PendingChange        *FeedbackRequest  `json:"pending_change,omitempty"`
-	Result               *Result           `json:"result,omitempty"`
-	ReadySHA             string            `json:"ready_sha,omitempty"`
-	ReadyStories         string            `json:"ready_stories,omitempty"`
-	ApprovedSHA          string            `json:"approved_sha,omitempty"`
-	PR                   *PullRequest      `json:"pull_request,omitempty"`
-	Published            map[string]string `json:"published_stories,omitempty"`
-	PublishedEpic        string            `json:"published_epic,omitempty"`
+	ApprovedAt           *time.Time       `json:"approved_at,omitempty"`
+	LinkedStories        []StoryLink      `json:"linked_stories,omitempty"`
+	Learning             []Learning       `json:"learning,omitempty"`
+	Conclusion           string           `json:"conclusion,omitempty"`
+	IntegrationSHA       string           `json:"integration_sha,omitempty"`
+	ID                   string           `json:"id"`
+	DevelopmentMode      string           `json:"development_mode,omitempty"`
+	Title                string           `json:"title"`
+	Request              string           `json:"request"`
+	Status               string           `json:"status"`
+	CreatedAt            time.Time        `json:"created_at"`
+	BaseBranch           string           `json:"base_branch"`
+	BaseSHA              string           `json:"base_sha"`
+	Branch               string           `json:"branch"`
+	Workdir              string           `json:"workdir"`
+	ConversationID       string           `json:"conversation_id,omitempty"`
+	OriginConversationID string           `json:"origin_conversation_id,omitempty"`
+	Revisions            []Revision       `json:"revisions"`
+	Feedback             []string         `json:"feedback"`
+	PendingChange        *FeedbackRequest `json:"pending_change,omitempty"`
+	Result               *Result          `json:"result,omitempty"`
+	ReadySHA             string           `json:"ready_sha,omitempty"`
+	ReadyScope           string           `json:"ready_scope,omitempty"`
+	// Historical hash is retained only when reading old delivery records.
+	ReadyStories  string            `json:"ready_stories,omitempty"`
+	ApprovedSHA   string            `json:"approved_sha,omitempty"`
+	PR            *PullRequest      `json:"pull_request,omitempty"`
+	Published     map[string]string `json:"published_stories,omitempty"`
+	PublishedEpic string            `json:"published_epic,omitempty"`
 }
 type PullRequest struct {
 	URL     string `json:"url"`
@@ -93,7 +120,6 @@ type Hosting interface {
 	Find(context.Context, string, string, string) (*PullRequest, error)
 	Create(context.Context, string, string, string, string, string) (*PullRequest, error)
 	Read(context.Context, string, int) (*PullRequest, error)
-	Comment(context.Context, string, int, string) error
 }
 
 type Service struct {

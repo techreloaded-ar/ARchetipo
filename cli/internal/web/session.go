@@ -29,6 +29,7 @@ import (
 // registry, the SSE broker and the registry of known workspaces do not depend
 // on the project root, and the connected browsers must survive the switch.
 type workspaceSession struct {
+	prChecks   incrementPRChecks
 	cfg        config.Config
 	conn       connector.Connector
 	store      execution.Store
@@ -58,7 +59,6 @@ type workspaceSession struct {
 	// write the threads of one project into the directory of another.
 	journal         *conversationJournal
 	nativeFollowers *nativeSessionFollowers
-	prChecks        incrementPRChecks
 
 	// nativeRuntime is which native sessions this View process owns. It is per
 	// session for the same reason the journal is — the locks live under this
