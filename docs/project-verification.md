@@ -16,7 +16,6 @@ owned cleanup commands and invalidates setup and checks before doing so.
   "inputs": ["package.json", "package-lock.json", "prisma/schema.prisma", "test/support/setup.mjs"],
   "outputs": ["node_modules/.package-lock.json", "node_modules/.prisma/client/index.js"],
   "env_keys": ["NODE_OPTIONS"],
-  "local_files": [".env.local"],
   "prepare": [{"name":"setup", "argv":["node","test/support/setup.mjs"], "timeout_seconds":120}],
   "probe": [{"name":"ready", "argv":["node","test/support/setup.mjs","status"], "timeout_seconds":5}],
   "cleanup": [{"name":"cleanup", "argv":["node","test/support/setup.mjs","stop"], "timeout_seconds":10}],
@@ -38,13 +37,6 @@ fixtures and cleanup belong in idempotent project tooling. Never store real
 secrets in the recipe or argv. Environment input values are hashed, not recorded.
 Declare every environment variable affecting validity in `env_keys`.
 
-`local_files` names untracked local configuration (for example `.env.local`)
-that the person chose to make available in every checkout. `prepare` copies each
-file from the original workspace before setup, refuses a file Git would commit,
-and hashes its content, so a change invalidates reuse; values are never recorded.
-A recipe that declares `local_files`, even empty, replaces the legacy copy of
-every root `.env*` file into new spec worktrees. Only the person adds entries.
-
 All recipe paths are project-relative; symlinks are rejected so a worktree cannot
 silently certify a parent's installation. Inputs are files or directories, not
 globs. Directory contents include new untracked files. Declare all relevant code,
@@ -52,6 +44,12 @@ tests, configuration, dependency and toolchain inputs; exclude generated output,
 logs and runtime state. Time/network/external-state-dependent tests remain
 `cache:false` unless that state is explicitly controlled and verified. Missing
 inputs are fingerprinted as missing, so creating them invalidates evidence.
+Glob syntax is rejected instead of treating patterns as missing literal files.
+Project-relative executables are resolved from the recipe's checkout, including
+when a viewer serves a different worktree from its own working directory. The
+resolved tool paths and metadata are fingerprinted; unrelated PATH entries
+injected by a native harness are not. Declare PATH in `env_keys` only if its full
+value is itself a project input.
 
 Every check records complete output, real exit status, command, duration and an
 input fingerprint. Reports are unique and never overwritten. Readiness runs and
@@ -103,3 +101,27 @@ the model in View and preserve the complete conversation journal and checkpoints
 This isolates controller behavior from framework installation; repeat the
 registered application checks on a real project separately before drawing
 conclusions about application delivery speed.
+
+## Local configuration in checkouts
+
+An optional `local_files` list in `.archetipo/environment.json` names local files
+chosen by the person, such as `.env.local`. Preparation copies them from the
+original workspace into the checkout before setup. Paths must stay inside both
+checkouts, refer to regular files and be ignored by Git. Missing declared files
+fail preparation. Their contents affect setup/check fingerprints but are never
+written to reports. An explicit empty list disables the legacy `.env*` copy in
+ordinary spec worktrees; preserve that list when reconfiguring the recipe.
+
+Changes require preparation and fresh relevant checks. Candidate qualification
+includes the materialized configuration. File values are local inputs, never
+assets in the shared recipe bundle.
+
+Local files can contain both shared settings and service bindings. The environment
+skill must inspect the application's configuration precedence and arrange owned
+checkout bindings through project-supported overrides or generated local config.
+Readiness probes verify the application's resolved service identity before
+migrations or seed; a copied file alone is insufficient. Stateful projects declare
+checks for their actual persistence path and fixture preservation across restart.
+Concurrent isolation claims need distinct-target and fixture-separation evidence.
+These are project-specific probes/checks executed by the existing CLI contract,
+not a framework-specific provisioner or an automatic `.env` parser in the CLI.

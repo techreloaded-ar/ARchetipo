@@ -102,7 +102,7 @@ func (p *Provider) ConfigFields() []execution.ConfigField {
 			Name:        "timeout_seconds",
 			Label:       "Timeout (seconds)",
 			Type:        "integer",
-			Help:        fmt.Sprintf("How long the local Claude process may run, between %d and %d. Defaults to %d.", minTimeout, maxTimeout, defaultTimeout),
+			Help:        fmt.Sprintf("Timeout for a batch execution, between %d and %d seconds. Defaults to %d. Interactive conversation turns have no timeout.", minTimeout, maxTimeout, defaultTimeout),
 			Placeholder: fmt.Sprintf("%d", defaultTimeout),
 		},
 	}

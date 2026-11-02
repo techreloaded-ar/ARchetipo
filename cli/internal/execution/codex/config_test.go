@@ -2,6 +2,7 @@ package codex
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -31,8 +32,9 @@ func TestConfigAppliesDocumentedDefaults(t *testing.T) {
 }
 
 func TestConfigAppliesFullOverride(t *testing.T) {
+	command := filepath.Join(t.TempDir(), "codex.exe")
 	got, err := parseConfig(map[string]any{
-		"command":         "/opt/homebrew/bin/codex",
+		"command":         command,
 		"model":           "gpt-5-codex",
 		"sandbox":         "read-only",
 		"timeout_seconds": 120,
@@ -40,7 +42,7 @@ func TestConfigAppliesFullOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Command != "/opt/homebrew/bin/codex" {
+	if got.Command != command {
 		t.Fatalf("command = %q", got.Command)
 	}
 	if got.Model != "gpt-5-codex" {

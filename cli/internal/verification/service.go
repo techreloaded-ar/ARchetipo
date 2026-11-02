@@ -64,6 +64,8 @@ type Service struct {
 	Runner        Runner
 	env           []string
 	lifetimeOwner bool
+	previewOwner  bool
+	candidate     bool
 }
 
 func New(root, results string) *Service {
@@ -106,7 +108,7 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if spec != "" && !regexpSpec(spec) {
 		return result, invalid("invalid verification spec code")
 	}
-	recipe, err := Load(s.Root)
+	recipe, err := s.loadRecipe()
 	if err != nil {
 		if operation != "cleanup" {
 			return result, err
@@ -117,6 +119,8 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		}
 		recipe = Recipe{}
 	}
+	liveCheck := false
+	watched := []string{}
 	if !s.lifetimeOwner {
 		leaseStore, leaseErr := conversationlog.NewFileStore(s.Root)
 		if leaseErr != nil {
@@ -124,9 +128,34 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		}
 		lease, leaseErr := leaseStore.TryLock(ctx, "environment-lifetime")
 		if leaseErr != nil {
-			return result, iox.NewConflict("an active preview or environment run owns these services", "stop its owning preview or terminal before operating on these services", leaseErr)
+			if !errors.Is(leaseErr, conversationlog.ErrLockHeld) || operation != "check" || !recipe.Checks[name].DuringPreview {
+				return result, iox.NewConflict("an active preview or environment run owns these services", "use a check explicitly declared during_preview, or stop the owning preview before changing its environment", leaseErr)
+			}
+			liveCheck = true
+			watched = append(watched, "environment-lifetime")
+		} else {
+			defer func() { _ = lease.Unlock() }()
 		}
-		defer func() { _ = lease.Unlock() }()
+		previewLease, previewErr := leaseStore.TryLock(ctx, "preview-environment")
+		if previewErr == nil {
+			_ = previewLease.Unlock()
+		} else if errors.Is(previewErr, conversationlog.ErrLockHeld) && s.previewOwner {
+			// The caller already holds the preview lease.
+		} else if errors.Is(previewErr, conversationlog.ErrLockHeld) {
+			if operation != "check" || !recipe.Checks[name].DuringPreview {
+				return result, iox.NewConflict("a preview owns this checkout", "stop the preview before preparing or cleaning its environment", previewErr)
+			}
+			liveCheck = true
+			watched = append(watched, "preview-environment")
+		} else {
+			return result, previewErr
+		}
+		if liveCheck {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			go monitorLifetime(ctx, cancel, leaseStore, s.Root, watched)
+		}
 	}
 	store, err := conversationlog.NewFileStore(s.Root)
 	if err != nil {
@@ -140,6 +169,15 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		return result, err
 	}
 	defer func() { _ = lock.Unlock() }()
+	if !liveCheck && !s.previewOwner {
+		previewLock, previewErr := store.TryLock(ctx, "preview-command")
+		if previewErr != nil {
+			return result, iox.NewConflict("the preview command is still ending", "wait for its owned server tree to terminate before preparing or cleaning", previewErr)
+		}
+		if err = previewLock.Unlock(); err != nil {
+			return result, err
+		}
+	}
 	// A dead CLI's supervisor may still be terminating its command. Never start
 	// another writer until that separate command owner has exited as well.
 	commandLock, err := store.TryLock(ctx, "verification-command")
@@ -152,13 +190,13 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if err = commandLock.Unlock(); err != nil {
 		return result, err
 	}
-	if operation != "cleanup" {
+	if operation != "cleanup" && !liveCheck && !s.candidate {
 		if err = environmentrecipe.Sync(s.Root); err != nil {
 			return result, err
 		}
 	}
 	if operation != "cleanup" {
-		recipe, err = Load(s.Root)
+		recipe, err = s.loadRecipe()
 		if err != nil {
 			return result, err
 		}
@@ -195,7 +233,16 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if resourceErr != nil {
 		return result, resourceErr
 	}
-	if len(recipe.Resources) > 0 || len(resources.Resources) > 0 {
+	if liveCheck {
+		s.env = resourceEnv(resources, "")
+		if len(recipe.Resources) == 0 {
+			s.env = nil
+		}
+		if err = s.prepared(recipe, value); err != nil {
+			return result, err
+		}
+	}
+	if !liveCheck && (len(recipe.Resources) > 0 || len(resources.Resources) > 0) {
 		result, err = s.newResult("resources", "")
 		if err != nil {
 			return result, err
@@ -208,7 +255,16 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 			return result, err
 		}
 	}
-	preparation, err := s.prepare(ctx, recipe, &value)
+	preparation := Result{Passed: true, Stable: true}
+	if !liveCheck {
+		if operation == "prepare" && fresh {
+			value = state{Checks: map[string]string{}}
+			if err = s.saveState(value); err != nil {
+				return result, err
+			}
+		}
+		preparation, err = s.prepare(ctx, recipe, &value)
+	}
 	if (err != nil || !preparation.Passed) && len(recipe.Resources) > 0 {
 		// Compensate a failed install/project probe as well as a failed resource start.
 		cleanup, cleanupErr := s.newResult("prepare-rollback", "")
@@ -323,7 +379,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 		if err = s.run(ctx, &result, recipe.Probe); err != nil {
 			return result, err
 		}
-		after, hashErr := preparationFingerprint(s.Root, s.env)
+		after, hashErr := s.preparationFingerprint()
 		if hashErr != nil {
 			return result, hashErr
 		}
@@ -356,7 +412,7 @@ func (s *Service) prepare(ctx context.Context, recipe Recipe, value *state) (Res
 	if err = s.run(ctx, &result, commands); err != nil {
 		return result, err
 	}
-	after, err := preparationFingerprint(s.Root, s.env)
+	after, err := s.preparationFingerprint()
 	if err != nil {
 		return result, err
 	}
@@ -483,9 +539,12 @@ func (s *Service) cached(path, key string) (Result, bool) {
 	return s.cachedEvidence(path, key, 1)
 }
 func (s *Service) cachedEvidence(path, key string, steps int) (Result, bool) {
+	return s.retainedEvidence(path, key, steps, false)
+}
+func (s *Service) retainedEvidence(path, key string, steps int, allowReuse bool) (Result, bool) {
 	var result Result
 	raw, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &result) != nil || result.EnvironmentID != s.environmentID() || result.Status != "complete" || !result.Passed || !result.Stable || result.Reused || result.InputKey != key || len(result.Steps) != steps {
+	if err != nil || json.Unmarshal(raw, &result) != nil || result.EnvironmentID != s.environmentID() || result.Status != "complete" || !result.Passed || !result.Stable || (result.Reused && !allowReuse) || result.InputKey != key || len(result.Steps) != steps {
 		return result, false
 	}
 	for _, step := range result.Steps {
@@ -499,11 +558,24 @@ func (s *Service) cachedEvidence(path, key string, steps int) (Result, bool) {
 
 // A shared recipe can be updated from another checkout while a command runs.
 // Re-read its effective preparation contract before certifying the result.
-func preparationFingerprint(root string, env []string) (string, error) {
-	recipe, err := Load(root)
+// ForOwnedPreview is for a caller already holding preview-environment, such as
+// the preview manager or confirmed removal. It never bypasses the lifetime lease.
+func (s *Service) ForOwnedPreview() *Service { s.previewOwner = true; return s }
+
+// ForCandidate keeps the shared bundle untouched while testing local recipe files.
+// It retains the same checkout leases and resource ownership as normal execution.
+func (s *Service) ForCandidate() *Service { s.candidate = true; return s }
+func (s *Service) loadRecipe() (Recipe, error) {
+	if s.candidate {
+		return LoadLocal(s.Root)
+	}
+	return Load(s.Root)
+}
+func (s *Service) preparationFingerprint() (string, error) {
+	recipe, err := s.loadRecipe()
 	if err != nil {
 		return "", err
 	}
 	recipe.Checks, recipe.Cleanup = nil, nil
-	return fingerprint(root, recipe, recipe.Inputs, env)
+	return fingerprint(s.Root, recipe, recipe.Inputs, s.env)
 }

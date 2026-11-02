@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,8 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 func TestDeleteIncrementRetainsOnlyCommitsAndPreservesNativeSession(t *testing.T) {
@@ -205,6 +209,9 @@ func TestDeleteIncrementPreservesWorkWhenCleanupCannotRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = os.Remove(filepath.Join(r.Workdir, verification.RecipePath)); err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(r.Workdir, ".archetipo", "environment")
 	if err = os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -283,19 +290,73 @@ func TestDeleteIncrementRefusesPreviewOwnedByAnotherViewer(t *testing.T) {
 	}
 }
 
-func TestDeleteIncrementWithoutPRRemovesItsPublishedStories(t *testing.T) {
-	ctx := context.Background()
+func TestDeletePreparedEnvironmentUsesItsOwnPreviewLease(t *testing.T) {
 	s := fixture(t)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
+	r := create(t, s)
+	ctx := context.Background()
+	environment := verification.New(r.Workdir, "")
+	environment.Runner = productRunner{}
+	prepared, err := environment.Execute(ctx, "prepare", "", "", false)
+	if err != nil || !prepared.Passed {
+		t.Fatal("fixture preparation", err, prepared)
+	}
 	plan, err := s.DeletionPlan(ctx, r.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Delete(ctx, r.ID, DeletionOptions{HeadSHA: plan.HeadSHA, Confirm: true}); err != nil {
+	result, err := s.Delete(ctx, r.ID, DeletionOptions{HeadSHA: plan.HeadSHA, Confirm: true})
+	if err != nil || !result.Deleted {
+		t.Fatal("cleanup mistook deletion's lease for a running preview", err, result)
+	}
+}
+
+func TestDeletePreservesWorktreeWhilePreviewSupervisorStops(t *testing.T) {
+	s := fixture(t)
+	r := create(t, s)
+	ctx := context.Background()
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	items, err := s.Connector.FetchBacklogItems(ctx, "")
-	if err != nil || len(items) != 1 || items[0].Code != "US-010" {
-		t.Fatalf("abandoned increment left its stories: %v %v", items, err)
+	store, err := conversationlog.NewFileStore(r.Workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := store.TryLock(ctx, "preview-command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Unlock() }()
+	if _, err = s.Delete(ctx, r.ID, DeletionOptions{Confirm: true, HeadSHA: plan.HeadSHA}); err == nil {
+		t.Fatal("removed worktree while the server supervisor was still stopping")
+	}
+	if _, err = os.Stat(r.Workdir); err != nil {
+		t.Fatal("lost worktree", err)
+	}
+}
+
+func TestDeletePreservesWorktreeWhenPreviewStopWasNotVerified(t *testing.T) {
+	s := fixture(t)
+	r := create(t, s)
+	ctx := context.Background()
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	state, _ := json.Marshal(preview.ServerState{Version: 1, RunID: strings.Repeat("a", 32), URL: server.URL, State: "running"})
+	dir := filepath.Join(r.Workdir, ".archetipo", "environment")
+	if err = os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "preview-process.json"), state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Delete(ctx, r.ID, DeletionOptions{Confirm: true, HeadSHA: plan.HeadSHA}); err == nil {
+		t.Fatal("removed worktree while its retained preview endpoint was listening")
+	}
+	if _, err = os.Stat(r.Workdir); err != nil {
+		t.Fatal("lost worktree", err)
 	}
 }

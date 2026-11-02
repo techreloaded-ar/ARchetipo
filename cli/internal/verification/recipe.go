@@ -29,8 +29,9 @@ type Command struct {
 
 type Check struct {
 	Command
-	Inputs []string `json:"inputs"`
-	Cache  bool     `json:"cache"`
+	Inputs        []string `json:"inputs"`
+	Cache         bool     `json:"cache"`
+	DuringPreview bool     `json:"during_preview,omitempty"`
 }
 
 // Resource commands are finite project adapters. Start must register/create only
@@ -53,7 +54,7 @@ type Recipe struct {
 	EnvKeys   []string   `json:"env_keys,omitempty"`
 	// LocalFiles are untracked files (for example .env.local) the person chose
 	// to make available in every checkout, copied from the original workspace.
-	LocalFiles []string         `json:"local_files,omitempty"`
+	LocalFiles []string         `json:"local_files"`
 	Prepare    []Command        `json:"prepare"`
 	Probe      []Command        `json:"probe"`
 	Cleanup    []Command        `json:"cleanup,omitempty"`
@@ -75,7 +76,24 @@ func Load(root string) (Recipe, error) {
 	return parseRecipe(root, raw)
 }
 
+// LoadLocal reads a candidate without materializing or updating the common bundle.
+func LoadLocal(root string) (Recipe, error) {
+	raw, err := os.ReadFile(filepath.Join(root, RecipePath))
+	if err != nil {
+		return Recipe{}, err
+	}
+	return parseRecipe(root, raw)
+}
+
 func Configure(root string, raw []byte) (Recipe, error) {
+	return configure(root, raw, false)
+}
+
+func ConfigureCandidate(root string, raw []byte) (Recipe, error) {
+	return configure(root, raw, true)
+}
+
+func configure(root string, raw []byte, candidate bool) (Recipe, error) {
 	recipe, err := parseRecipe(root, raw)
 	if err != nil {
 		return recipe, err
@@ -85,8 +103,10 @@ func Configure(root string, raw []byte) (Recipe, error) {
 	if err != nil {
 		return recipe, err
 	}
-	if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
-		return recipe, err
+	if !candidate {
+		if err = environmentrecipe.Update(root, RecipePath, encoded); err != nil {
+			return recipe, err
+		}
 	}
 	return recipe, recordfile.WriteAtomic(dir, filepath.Join(root, RecipePath), ".recipe-", recipe)
 }
@@ -160,7 +180,10 @@ func validateCommands(commands []Command) error {
 // Reject lexical escapes and symlinks at every existing component, including
 // dangling links. Dependency outputs must belong to this checkout.
 func localPath(root, rel string) (string, error) {
-	if rel == "" || rel == "." || filepath.IsAbs(rel) || strings.ContainsAny(rel, `\:`) || filepath.ToSlash(filepath.Clean(rel)) != rel || strings.HasPrefix(rel, "../") || rel == ".." {
+	if strings.ContainsAny(rel, "*?[]{}") {
+		return "", invalid("recipe paths must name explicit files or directories, not glob patterns: " + rel)
+	}
+	if rel == "" || rel == "." || strings.HasPrefix(rel, "/") || filepath.IsAbs(rel) || strings.ContainsAny(rel, `\:`) || filepath.ToSlash(filepath.Clean(rel)) != rel || strings.HasPrefix(rel, "../") || rel == ".." {
 		return "", invalid("expected a project-relative file or directory: " + rel)
 	}
 	current := root
@@ -222,8 +245,9 @@ func validateResources(recipe Recipe) error {
 // so credentials cannot reach a commit.
 func copyLocalFiles(ctx context.Context, root string, files []string) error {
 	source := environmentrecipe.Workspace(root)
-	if same, _ := sameDir(source, root); same {
-		return nil
+	same, err := sameDir(source, root)
+	if err != nil {
+		return err
 	}
 	for _, rel := range files {
 		from, err := localPath(source, rel)
@@ -244,6 +268,12 @@ func copyLocalFiles(ctx context.Context, root string, files []string) error {
 		if err != nil {
 			return err
 		}
+		if !info.Mode().IsRegular() {
+			return invalid("local file is not a regular file: " + rel)
+		}
+		if same {
+			continue
+		}
 		raw, err := os.ReadFile(from)
 		if err != nil {
 			return err
@@ -252,6 +282,9 @@ func copyLocalFiles(ctx context.Context, root string, files []string) error {
 			return err
 		}
 		if err = os.WriteFile(target, raw, info.Mode().Perm()); err != nil {
+			return err
+		}
+		if err = os.Chmod(target, info.Mode().Perm()); err != nil {
 			return err
 		}
 	}

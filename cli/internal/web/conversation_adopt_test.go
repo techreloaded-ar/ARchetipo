@@ -8,11 +8,13 @@ package web
 // the conversation and the rows of the runs strip — never the server's structs.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
 
@@ -25,6 +27,23 @@ type adoptTestRunsView struct {
 		ConversationID string `json:"conversation_id"`
 		AnchorEventID  int64  `json:"anchor_event_id"`
 	} `json:"runs"`
+}
+
+// The strip lists only active executions. Keep the fake execution in flight
+// until assertions finish instead of racing its immediate successful receipt.
+func adoptTestHoldExecution(t *testing.T, provider *conversingProvider) {
+	t.Helper()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	execute := provider.execute
+	provider.execute = func(ctx context.Context, request execution.Request) (execution.Result, error) {
+		select {
+		case <-ctx.Done():
+			return execution.Result{}, ctx.Err()
+		case <-release:
+			return execute(ctx, request)
+		}
+	}
 }
 
 func adoptTestWorkspaceRuns(t *testing.T, srv *Server) adoptTestRunsView {
@@ -62,6 +81,7 @@ func adoptTestStart(t *testing.T, srv *Server, code, action, conversationID stri
 // asked for — instead of existing only in the workspace strip.
 func TestARunStartedFromTheThreadIsReadInTheThread(t *testing.T) {
 	srv, provider := journalTestPlanningServer(t)
+	adoptTestHoldExecution(t, provider)
 	id := journalTestOpenOnSpec(t, srv, "US-901")
 	provider.emit(t, id, localrun.KindUserMessage, "Pianifica la US-901")
 	said := provider.emit(t, id, localrun.KindText, "Va bene.")
@@ -119,6 +139,7 @@ func TestARunStartedFromTheThreadIsReadInTheThread(t *testing.T) {
 // there is one agent process rather than the two the viewer used to light.
 func TestARunStartedNamingNoThreadIsItsOwnThread(t *testing.T) {
 	srv, provider := journalTestPlanningServer(t)
+	adoptTestHoldExecution(t, provider)
 	id := journalTestOpenOnSpec(t, srv, "US-901")
 	provider.emit(t, id, localrun.KindUserMessage, "Pianifica la US-901")
 
@@ -180,7 +201,8 @@ func containsString(values []string, want string) bool {
 // first message into that thread, and an index full of "Conversazione del
 // <date>" answers "which one is the planning of US-901?" with nothing.
 func TestAThreadOpenedForAStepCarriesTheNameItWasGiven(t *testing.T) {
-	srv, _ := journalTestPlanningServer(t)
+	srv, provider := journalTestPlanningServer(t)
+	adoptTestHoldExecution(t, provider)
 	status, body := journalTestOpenWith(t, srv, map[string]any{"spec_code": "US-901", "title": "Pianifica"})
 	if status != http.StatusCreated {
 		t.Fatalf("POST conversation = %d, want 201: %s", status, body)

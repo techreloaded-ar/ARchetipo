@@ -151,7 +151,7 @@ func (s *FileStore) GetMetadata(ctx context.Context, id string) (Record, error) 
 	if err != nil {
 		return Record{}, err
 	}
-	body, err := os.ReadFile(path)
+	body, err := recordfile.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Record{}, &StoreError{Kind: StoreNotFound, ID: id, Err: err}
 	}
@@ -452,14 +452,14 @@ func (s *FileStore) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil {
+	if err := recordfile.Remove(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return &StoreError{Kind: StoreNotFound, ID: id, Err: err}
 		}
 		return err
 	}
 	if eventsPath, eventsErr := s.eventsPath(id); eventsErr == nil {
-		if eventsErr = os.Remove(eventsPath); eventsErr != nil && !errors.Is(eventsErr, fs.ErrNotExist) {
+		if eventsErr = recordfile.Remove(eventsPath); eventsErr != nil && !errors.Is(eventsErr, fs.ErrNotExist) {
 			return eventsErr
 		}
 	}
@@ -497,7 +497,7 @@ func (s *FileStore) List(ctx context.Context) ([]Record, error) {
 			continue
 		}
 		path := filepath.Join(s.dir, entry.Name())
-		body, err := os.ReadFile(path)
+		body, err := recordfile.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read conversation record %q: %w", entry.Name(), err)
 		}
@@ -553,25 +553,30 @@ func (s *FileStore) lock(ctx context.Context, id string, wait bool) (*Conversati
 		}
 		owner := []byte(strconv.Itoa(os.Getpid()) + "\n" + time.Now().UTC().Format(time.RFC3339Nano))
 		if writeErr := os.WriteFile(filepath.Join(candidate, "owner"), owner, 0o600); writeErr != nil {
-			_ = os.RemoveAll(candidate)
+			_ = recordfile.RemoveAll(candidate)
 			return nil, writeErr
 		}
 		err = os.Rename(candidate, lockPath)
 		if err == nil {
 			return &ConversationLock{path: lockPath}, nil
 		}
-		_ = os.RemoveAll(candidate)
+		_ = recordfile.RemoveAll(candidate)
 		if _, statErr := os.Stat(lockPath); statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
 			return nil, err
 		}
 		if _, statErr := os.Stat(lockPath); errors.Is(statErr, fs.ErrNotExist) {
 			continue
 		}
-		owner, readErr := os.ReadFile(filepath.Join(lockPath, "owner"))
+		owner, readErr := recordfile.ReadFile(filepath.Join(lockPath, "owner"))
+		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+			return nil, readErr
+		}
 		fields := strings.Fields(string(owner))
 		pid, parseErr := strconv.Atoi(first(fields))
 		if readErr != nil || parseErr != nil || !processAlive(pid) {
-			_ = os.RemoveAll(lockPath)
+			if removeErr := recordfile.RemoveAll(lockPath); removeErr != nil {
+				return nil, removeErr
+			}
 			continue
 		}
 		if !wait {
@@ -601,8 +606,10 @@ func (l *ConversationLock) Unlock() error {
 	if l == nil || l.path == "" {
 		return nil
 	}
-	err := os.RemoveAll(l.path)
-	l.path = ""
+	err := recordfile.RemoveAll(l.path)
+	if err == nil {
+		l.path = ""
+	}
 	return err
 }
 

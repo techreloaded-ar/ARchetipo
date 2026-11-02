@@ -38,14 +38,16 @@ async function main(){
   await run('init',cli,['init','--tool','codex','--connector','file','--yes'],{cwd:sandbox});
   await fs.appendFile(path.join(sandbox,'.archetipo/config.yaml'),'\nexecution:\n  default_provider:\n    id: codex\n    config:\n      command: '+JSON.stringify(path.join(repo,'test/e2e/support/fake-codex.mjs'))+'\n      model: gpt-fake\n      sandbox: workspace-write\n');
   const app=path.join(sandbox,'server.mjs');
+  await fs.writeFile(path.join(sandbox,'package.json'),JSON.stringify({private:true,scripts:{dev:'node launcher.mjs'}}));
+  await fs.writeFile(path.join(sandbox,'launcher.mjs'),`import {spawn} from 'node:child_process';import fs from 'node:fs';const child=spawn(process.execPath,['server.mjs',process.argv[2]],{stdio:'inherit'});child.on('exit',code=>process.exit(code??1));setInterval(()=>{if(fs.existsSync('exit-launcher'))process.exit(0);},20);`);
   await fs.writeFile(app,`import http from 'node:http';import fs from 'node:fs';fs.writeFileSync('server.pid',String(process.pid));for(let i=0;i<150;i++)console.log('Output fixture '+i);http.createServer((req,res)=>{res.setHeader('X-Checkout',process.cwd());res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Preview smoke</title><h1>Risultato</h1><p id=descrizione>Descrizione del risultato</p><a href="/seconda">Seconda pagina</a><button data-testid="salva" onclick="document.body.dataset.clicked=1">Salva</button><script>window.mountId=Math.random();</script>');}).listen(Number(process.argv[2]),'127.0.0.1');`);
   const recipe=path.join(dir,'recipe.json');
-  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,'server.mjs','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
+  await fs.writeFile(recipe,JSON.stringify({version:1,directory:'.',argv:['npm','run','dev','--','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
   await run('preview-configure',cli,['execution','preview','configure','--file',recipe],{cwd:sandbox});
   const environmentRecipe=path.join(dir,'environment-recipe.json');
   await fs.copyFile(path.join(repo,'test/e2e/support/managed-resource.mjs'),path.join(sandbox,'managed-resource.mjs'));
   const resourceCommand=action=>({name:'dependency-'+action,argv:[process.execPath,'managed-resource.mjs',action],timeout_seconds:10});
-  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,ports:['DATABASE'],resources:[{name:'database',start:resourceCommand('start'),probe:resourceCommand('probe'),stop:resourceCommand('stop'),stopped:resourceCommand('stopped')}],inputs:['server.mjs','setup.mjs','managed-resource.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
+  await fs.writeFile(environmentRecipe,JSON.stringify({version:1,ports:['DATABASE'],resources:[{name:'database',start:resourceCommand('start'),probe:resourceCommand('probe'),stop:resourceCommand('stop'),stopped:resourceCommand('stopped')}],inputs:['package.json','launcher.mjs','server.mjs','setup.mjs','managed-resource.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'setup.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(require('node:fs').readFileSync('dependency.ready','utf8')!=='ready')process.exit(1)"],timeout_seconds:10}],checks:{}}));
   await fs.writeFile(path.join(sandbox,'setup.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
   await run('environment-configure',cli,['execution','environment','configure','--file',environmentRecipe],{cwd:sandbox});
   // Two real increments inherit committed recipes and helpers from main.
@@ -53,7 +55,7 @@ async function main(){
   await run('git-init','git',['init','-b','main'],{cwd:sandbox});
   await run('git-name','git',['config','user.name','Preview smoke'],{cwd:sandbox});
   await run('git-email','git',['config','user.email','preview@example.test'],{cwd:sandbox});
-  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','server.mjs','setup.mjs','managed-resource.mjs'],{cwd:sandbox});
+  await run('git-add','git',['add','.archetipo/config.yaml','.archetipo/environment.json','.archetipo/preview.json','package.json','launcher.mjs','server.mjs','setup.mjs','managed-resource.mjs'],{cwd:sandbox});
   await run('git-baseline','git',['commit','-m','test: reusable preview setup'],{cwd:sandbox});
   const incrementInput=path.join(dir,'increment.json');
   await fs.writeFile(incrementInput,JSON.stringify({title:'Isolated preview',request:'Verify inherited setup'}));
@@ -211,7 +213,7 @@ async function main(){
    await page.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:pt.x,y:pt.y+dy,button:'left',buttons:1});
    await page.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:pt.x,y:pt.y+dy,button:'left',clickCount:1});
   };
-  const firstSize=await geometry();await resize(-80);const resized=await geometry();assert.ok(resized.height>firstSize.height+60,JSON.stringify({firstSize,resized}));
+  await resize(100);const firstSize=await geometry();await resize(-80);const resized=await geometry();assert.ok(resized.height>firstSize.height && Math.abs(resized.height-Math.min(firstSize.height+80,firstSize.max))<2,JSON.stringify({firstSize,resized}));
   assert.equal(await page.evaluate('!!document.querySelector(".preview-drag-cover")'),false);
   await page.evaluate('document.querySelector(".preview-separator").focus()');await key('Home');let g=await geometry();assert.equal(g.now,g.min);assert.ok(Math.abs(g.height-g.min)<2);assert.match(g.text,/pixel/);await footerReachable();
   await key('ArrowUp');g=await geometry();assert.equal(g.now,g.min+20);
@@ -320,7 +322,7 @@ async function main(){
   // Reload loses in-memory controller state, but must retain browser drafts.
   await page.send('Page.reload');
   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'conversation after reload');
-  await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
+  await page.evaluate('(()=>{if(!window.WorkspacePanels.isPreviewActive())document.querySelector("[data-conversation-preview]").click();})()');
   await page.waitFor('document.querySelector(".preview-comment textarea")?.value === "Commento da conservare"',timeout,'draft restored after page reload');
   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'picker after page reload');
   frameID=(await page.send('Page.getFrameTree')).frameTree.childFrames[0].frame.id;
@@ -359,6 +361,8 @@ async function main(){
   await page.waitFor('document.querySelector(".preview-comment-reference").textContent.includes("non è più presente")',timeout,'missing component explained');
   assert.equal(await evaluateFrame('document.querySelector("[data-archetipo-highlight]").style.display'),'none');
   ok('Riferimenti ripristinati dopo reload; nessuna evidenziazione errata su altre pagine o componenti rimossi.');
+  const browserOrigin=(await (await fetch(endpoint+'/preview')).json()).url;
+  await evaluateFrame('localStorage.setItem("acceptance-retained-loan","Proiettore a Marco")');
   const failStop=path.join(sandbox,'.archetipo/environment/fail-resource-stop');
   await fs.writeFile(failStop,'fail stop');
   await page.evaluate('document.querySelector("[data-preview=stop]").click()');
@@ -374,22 +378,80 @@ async function main(){
   // Hard viewer death closes the private supervisor pipe and its app tree.
   const started=await fetch(endpoint+'/preview',{method:'POST'});assert.equal(started.status,202);
   await until(async()=>{const state=await (await fetch(endpoint+'/preview')).json();return state.state==='ready';},'second app startup');
+  assert.equal((await (await fetch(endpoint+'/preview')).json()).url,browserOrigin,'restart changed the browser storage origin');
+  await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'preview reattached after restart');
+  frameID=(await page.send('Page.getFrameTree')).frameTree.childFrames[0].frame.id;
+  await until(()=>contexts.has(frameID),'restarted browser context');
+  assert.equal(await evaluateFrame('localStorage.getItem("acceptance-retained-loan")'),'Proiettore a Marco','browser data disappeared after stop/start');
+  ok('L’indirizzo browser e i dati locali restano gli stessi dopo Ferma ambiente e nuovo avvio.');
   const newPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));assert.notEqual(newPid,pid);
+  const services=(await (await fetch(endpoint+'/preview')).json()).services;
+  assert(services.some(service=>service.name==='Applicazione'&&service.state==='In esecuzione'&&service.endpoints.length===1));
+  assert(services.some(service=>service.name==='database'&&service.state.includes('registrato')));
+  assert.match(await page.evaluate('document.querySelector(".environment-services").textContent'),/Applicazione.*database/s);
   viewer.child.kill('SIGKILL');
   await until(()=>{try{process.kill(newPid,0);return false;}catch{return true;}},'server cleanup on hard viewer death');
   await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'external dependency cleanup on hard viewer death');
   ok('Anche la terminazione forzata del viewer chiude applicazione e servizi esterni posseduti.');
+  // npm -> launcher -> server: successful launcher exit must still reap the
+  // child, release its socket and run the registered environment cleanup.
+  for(const mode of ['cli-stop','owner-group-sigkill','launcher-exit']){
+  const orphanRun=spawn(cli,['execution','preview','run'],{cwd:sandbox,env,detached:mode==='owner-group-sigkill',stdio:['ignore','pipe','pipe']});standalone.push(orphanRun);
+  let orphanOutput='',orphanError='';
+  orphanRun.stdout.on('data',chunk=>{orphanOutput+=chunk;});orphanRun.stderr.on('data',chunk=>{orphanError+=chunk;});
+  await until(()=>{if(orphanRun.exitCode!==null)throw new Error(orphanError);try{return JSON.parse(orphanOutput).data.state==='ready';}catch{return false;}},'npm preview before launcher exit');
+  const orphanView=JSON.parse(orphanOutput).data;
+  const orphanPid=Number(await fs.readFile(path.join(sandbox,'server.pid'),'utf8'));
+  if(mode==='cli-stop'){
+   viewer=await startViewServer(cli,sandbox,env,'/api/board');
+   const external=await (await fetch(viewer.url+'/api/workspace/preview')).json();
+   assert.equal(external.state,'external');assert.equal(external.url,orphanView.recipe.url);
+   await page.send('Page.navigate',{url:viewer.url});
+   await page.waitFor(`!!document.querySelector('[data-conversation-id="${conversationID}"]')`,timeout,'retained conversation in the new viewer');
+   await page.evaluate(`document.querySelector('[data-conversation-id="${conversationID}"]').click()`);
+   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'preview control after viewer restart');
+   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
+   await page.waitFor('document.getElementById("browser-preview").dataset.state==="external"',timeout,'external owner is displayed without takeover',()=>page.evaluate('JSON.stringify({status:document.querySelector(".preview-status")?.textContent,state:document.getElementById("browser-preview")?.dataset.state,body:document.body.innerText.slice(-1000)})'));
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=start]").disabled'),true);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=stop]").disabled'),false);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=external]").href'),external.url);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=external]").hidden'),false,'external preview link is not reachable');
+   assert.match(await page.evaluate('document.querySelector(".preview-status").textContent'),/altro processo/);
+   await fs.writeFile(path.join(dir,'external-owner.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
+  if(mode==='cli-stop')await run('stop-managed-preview',cli,['execution','preview','stop'],{cwd:sandbox});
+  else if(mode==='owner-group-sigkill')process.kill(-orphanRun.pid,'SIGKILL');
+  else await fs.writeFile(path.join(sandbox,'exit-launcher'),'exit');
+  await until(()=>orphanRun.exitCode!==null||orphanRun.signalCode!==null,mode+' ends standalone preview');
+  await until(()=>{try{process.kill(orphanPid,0);return false;}catch{return true;}},'launcher exit terminates server descendant');
+  await assert.rejects(fetch(orphanView.recipe.url,{signal:AbortSignal.timeout(1000)}),'launcher exit releases app port');
+  await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),mode+' retained dependency cleanup');
+  if(mode==='launcher-exit')await fs.rm(path.join(sandbox,'exit-launcher'));
+  else if(mode==='cli-stop')assert.equal(orphanRun.exitCode,0,'explicit stop should end the owner successfully');
+  if(mode==='cli-stop'){
+   await page.waitFor('document.getElementById("browser-preview").dataset.state==="stopped"',timeout,'external owner stop appears in the viewer');
+   await stopProcess(viewer.child,run);
+   ok('Un altro proprietario ARchetipo è visibile con il suo link: avvio disabilitato, arresto disponibile e nessun takeover automatico.');
+  }
+  ok('La catena npm → launcher → server e le dipendenze si arrestano con '+mode+'.');
+  }
   // The standalone environment run uses the same independent lifetime owner.
   const environmentRun=spawn(cli,['execution','environment','run'],{cwd:sandbox,env,stdio:['ignore','pipe','pipe']});standalone.push(environmentRun);
   let environmentOutput='',environmentError='';
   environmentRun.stdout.on('data',chunk=>{environmentOutput+=chunk;});environmentRun.stderr.on('data',chunk=>{environmentError+=chunk;});
-  await until(()=>{if(environmentRun.exitCode!==null)throw new Error(environmentError);try{return JSON.parse(environmentOutput).data.passed;}catch{return false;}},'standalone environment run ready');
+  await until(()=>{if(environmentRun.exitCode!==null)throw new Error('environment run exited '+environmentRun.exitCode+': '+environmentError+'; '+environmentOutput);try{return JSON.parse(environmentOutput).data.passed;}catch{return false;}},'standalone environment run ready');
   const conflicting=await run('active-lifetime-conflict',cli,['execution','environment','prepare'],{cwd:sandbox,allowFailure:true});
   assert.notEqual(conflicting.code,0);assert.match(conflicting.stderr,/E_CONFLICT/);
   environmentRun.kill('SIGKILL');
   await until(async()=>JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(r=>r.state==='stopped'),'standalone run death cleans external dependency');
   ok('Stop fallito conservato e riprovato; environment run standalone esclusivo e cleanup anche dopo SIGKILL.');
   // First use has one Preview button and a distinct durable technical session.
+  const managedQualification=JSON.parse((await run('managed-candidate-qualification',cli,['execution','environment','qualify'],{cwd:sandbox})).stdout).data;
+  assert.equal(managedQualification.passed,true);
+  assert.deepEqual(managedQualification.reports.map(report=>report.reused),[false,false,true]);
+  await run('managed-candidate-cleanup',cli,['execution','environment','cleanup'],{cwd:sandbox});
+  assert(JSON.parse(await fs.readFile(path.join(sandbox,'.archetipo/environment/resources.json'),'utf8')).resources.every(resource=>resource.state==='stopped'));
+  ok('La qualificazione usa anche risorse gestite reali, rilascia il lifetime e conserva stop verificabile.');
   // The fake agent chooses configuration; CLI, preparation and startup are real.
   {
    const bootstrap=path.join(dir,'bootstrap');await fs.mkdir(bootstrap);
@@ -399,38 +461,72 @@ async function main(){
    for(const args of [['init','-b','main'],['config','user.name','Tests'],['config','user.email','tests@example.test'],['add','.archetipo/config.yaml','server.mjs'],['commit','-m','initial']])await run('bootstrap-git','git',args,{cwd:bootstrap});
    const early=JSON.parse((await run('early-increment',cli,['increment','create','--file',incrementInput],{cwd:bootstrap})).stdout).data;
    viewer=await startViewServer(cli,bootstrap,{...env,FAKE_CODEX_UNIQUE_THREADS:'1'},'/api/board');
-   const product=await (await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
-   const productID=product.conversation.id,productEndpoint=viewer.url+'/api/workspace/conversations/'+productID;
+   const productEndpoint=viewer.url+'/api/workspace';
    await page.send('Page.navigate',{url:viewer.url});
-   await page.waitFor(`!!document.querySelector('[data-conversation-id="${productID}"]')`,timeout,'bootstrap conversation');
-   await page.evaluate(`document.querySelector('[data-conversation-id="${productID}"]').click()`);
-   await page.waitFor('!!document.querySelector("[data-conversation-preview]")',timeout,'bootstrap preview control');
-   await page.evaluate('document.querySelector("[data-conversation-preview]").click()');
-   await page.waitFor('!document.querySelector("[data-preview=start]").disabled',timeout,'first-use Preview enabled');
-   assert.equal(await page.evaluate('!!document.querySelector("[data-preview=setup], [data-preview=prepare]")'),false);
-   await page.evaluate('document.querySelector("[data-preview=start]").click()');
+   await page.waitFor('!!document.querySelector("[data-workspace-preview]")',timeout,'preview directly on empty home');
+   assert.match(await page.evaluate('document.querySelector(".conv-work-preview").textContent'),/Checkout principale.*main/);
+   await page.evaluate('document.querySelector("[data-workspace-preview]").click()');
    let technicalID,technicalStart;
    await until(async()=>{const state=await (await fetch(productEndpoint+'/preview')).json();technicalID=state.environment?.conversation_id;technicalStart=received.find(e=>e.kind==='turn/start'&&(e.params.input||[]).some(i=>i.text?.includes('/archetipo-environment')));return technicalID&&technicalStart;},'separate technical setup session');
-   assert.notEqual(technicalID,productID);
+
    const ordinaryIndex=await (await fetch(viewer.url+'/api/workspace/conversations')).json();
-   assert(!ordinaryIndex.conversations.some(c=>c.id===technicalID),'technical session leaked into ordinary rail');
+   assert.equal(ordinaryIndex.conversations.length,0,'home preview created a product conversation');
    const technical=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
-   assert.notEqual(technical.conversation.id,productID);
+
+
+   // Native approvals and structured questions are answered inside Preview.
+   queue.push({targetPid:technicalStart.pid,kind:'request',id:971,method:'item/commandExecution/requestApproval',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'approval-home',reason:'Verifica Docker sintetico',availableDecisions:['accept','cancel']}});
+   await page.waitFor('!!document.querySelector("[data-environment-approval]")',timeout,'approval directly in Preview');
+
+   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+   await page.evaluate('document.querySelector("[data-environment-approval][data-option=allow]").scrollIntoView({block:"center"})');
+   await page.send('Page.captureScreenshot',{format:'png'}).then(result=>fs.writeFile(path.join(dir,'environment-approval-mobile.png'),Buffer.from(result.data,'base64')));
+   await page.evaluate('document.querySelector("[data-environment-approval][data-option=allow]").click()');
+   await page.send('Emulation.clearDeviceMetricsOverride');
+   await until(()=>received.some(e=>e.kind==='response'&&e.id===971&&e.result?.decision==='accept'),'approval reaches same native session');
+   queue.push({targetPid:technicalStart.pid,kind:'request',id:972,method:'item/tool/requestUserInput',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'input-home',questions:[{id:'fixture',header:'Dati',question:'Quali dati locali?',isOther:true,options:[{label:'Sintetici',description:'Nessun dato reale'}]}]}});
+   await page.waitFor('!!document.querySelector("[data-environment-input]")',timeout,'structured question directly in Preview');
+   await page.evaluate('(()=>{const form=document.querySelector("[data-environment-input]");form.querySelector("input[type=radio]").click();form.requestSubmit();})()');
+   await until(()=>received.some(e=>e.kind==='response'&&e.id===972),'input reaches same native session');
+
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'plain-question',delta:'Confermi fixture sintetiche locali?'}});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-1',status:'completed'}}});
+   await page.waitFor('!!document.querySelector("[data-environment-message]")',timeout,'plain question directly in Preview');
+   await page.evaluate('(()=>{const form=document.querySelector("[data-environment-message]");form.querySelector("textarea").value="Confermo fixture locali";form.requestSubmit();})()');
+   await until(()=>received.filter(e=>e.pid===technicalStart.pid&&e.kind==='turn/start').length===2,'plain answer continues the same native thread');
    await fs.mkdir(path.join(bootstrap,'scripts/archetipo'),{recursive:true});
    await fs.writeFile(path.join(bootstrap,'scripts/archetipo/prepare.mjs'),"import fs from 'node:fs';fs.appendFileSync('setup-count','setup\\n');fs.writeFileSync('dependency.ready','ready');");
    const setupInput=path.join(dir,'bootstrap-environment.json');
    await fs.writeFile(setupInput,JSON.stringify({version:1,inputs:['scripts/archetipo/prepare.mjs'],outputs:['dependency.ready'],prepare:[{name:'setup',argv:[process.execPath,'scripts/archetipo/prepare.mjs'],timeout_seconds:10}],probe:[{name:'ready',argv:[process.execPath,'-e',"if(!require('node:fs').existsSync('dependency.ready'))process.exit(1)"],timeout_seconds:10}],checks:{}}));
-   await run('bootstrap-configure',cli,['execution','environment','configure','--file',setupInput],{cwd:bootstrap});
-   await run('bootstrap-preview',cli,['execution','preview','configure','--file',recipe],{cwd:bootstrap});
-   await run('bootstrap-publish',cli,['execution','environment','publish','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap});
-   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'setup-output',delta:'BUILD_ONLY_IN_TECHNICAL_SESSION'}});
-   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-1',status:'completed'}}});
-   await page.waitFor('!document.querySelector("[data-preview=pick]").disabled',timeout,'first-use configuration continues automatically into preview');
-   const productHistory=await (await fetch(productEndpoint)).json();
-   assert(!JSON.stringify(productHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log polluted product conversation');
+   await run('bootstrap-configure',cli,['execution','environment','configure','--candidate','--file',setupInput],{cwd:bootstrap});
+   const bootstrapPreviewRecipe=path.join(dir,'bootstrap-preview.json');
+   await fs.writeFile(bootstrapPreviewRecipe,JSON.stringify({version:1,directory:'.',argv:[process.execPath,'server.mjs','{port}'],url:'http://127.0.0.1:{port}/',prepare_environment:true}));
+   await run('bootstrap-preview',cli,['execution','preview','configure','--candidate','--file',bootstrapPreviewRecipe],{cwd:bootstrap});
+   const observed=JSON.parse((await run('bootstrap-capabilities',cli,['execution','environment','capabilities','--tool',process.execPath],{cwd:bootstrap})).stdout).data;
+   assert.equal(observed.external_network.state,'unknown');assert.equal(observed.loopback_binding.state,'available');
+   const qualification=JSON.parse((await run('bootstrap-qualify',cli,['execution','environment','qualify','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap})).stdout).data;
+   assert.equal(qualification.passed,true);assert.deepEqual(qualification.reports.map(report=>report.reused),[false,false,true]);
+   assert.equal(await fs.stat(path.join(bootstrap,'.archetipo/environment-recipe.json')).then(()=>true,()=>false),false,'candidate was published before qualification');
+   await run('bootstrap-publish',cli,['execution','environment','publish','--qualified','--asset','scripts/archetipo/prepare.mjs'],{cwd:bootstrap});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-2',itemId:'setup-output',delta:'BUILD_ONLY_IN_TECHNICAL_SESSION'}});
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'turn/completed',params:{threadId:technical.session.session.native.id,turn:{id:'turn-2',status:'completed'}}});
+   await page.waitFor('!!document.querySelector("#browser-preview iframe")',timeout,'home configuration continues automatically into preview');
+   await page.waitFor('document.querySelector(".preview-context-label").textContent.includes("main")',timeout,'workspace preview branch identity');
+   const workspacePreview=await (await fetch(productEndpoint+'/preview')).json();
+   assert.equal(workspacePreview.context.working_directory,bootstrap);assert.equal(workspacePreview.context.branch,'main');
+   assert.equal(workspacePreview.context.conversation_id,undefined);
+   assert.equal((await (await fetch(viewer.url+'/api/workspace/conversations')).json()).conversations.length,0);
+   assert.equal(await page.evaluate('document.querySelector("[data-preview=pick]").hidden'),true,'workspace preview offers comments without a recipient');
+   await page.evaluate('window.homePreviewFrame=document.querySelector("#browser-preview iframe");true');
+   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+   await page.waitFor('document.querySelector(".preview-context-label").textContent.includes("main")',timeout,'mobile checkout identity');
+   await page.send('Page.captureScreenshot',{format:'png'}).then(result=>fs.writeFile(path.join(dir,'home-preview-mobile.png'),Buffer.from(result.data,'base64')));
+   await page.send('Emulation.clearDeviceMetricsOverride');
+   assert.equal(await page.evaluate('window.homePreviewFrame.isConnected && window.homePreviewFrame===document.querySelector("#browser-preview iframe")'),true,'identity display remounted preview');
+   await page.send('Page.captureScreenshot',{format:'png'}).then(result=>fs.writeFile(path.join(dir,'home-preview-desktop.png'),Buffer.from(result.data,'base64')));
    const technicalHistory=await (await fetch(viewer.url+'/api/workspace/conversations/'+technicalID)).json();
    assert(JSON.stringify(technicalHistory.events).includes('BUILD_ONLY_IN_TECHNICAL_SESSION'),'technical log was not durable');
-   assert.equal(await fs.readFile(path.join(bootstrap,'setup-count'),'utf8'),'setup\n');
+   assert.equal(await fs.readFile(path.join(bootstrap,'setup-count'),'utf8'),'setup\nsetup\n');
    const startsBefore=received.filter(e=>e.kind==='turn/start').length;
    const inherited=JSON.parse((await run('early-increment-preparation',cli,['execution','environment','prepare'],{cwd:early.workdir})).stdout).data;
    assert(inherited.passed&&inherited.stable);assert.equal(await fs.readFile(path.join(early.workdir,'setup-count'),'utf8'),'setup\n');
@@ -441,8 +537,15 @@ async function main(){
    const another=await (await fetch(viewer.url+'/api/workspace/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
    const shared=await (await fetch(viewer.url+'/api/workspace/conversations/'+another.conversation.id+'/preview',{method:'POST'})).json();
    const original=await (await fetch(productEndpoint+'/preview')).json();assert.equal(shared.url,original.url,'same checkout launched duplicate preview');
+
+   await page.evaluate('document.querySelector("[data-preview=environment]").click()');
+   await page.waitFor('!!document.querySelector("[data-environment-chat]")',timeout,'permanent environment history link');
+   await page.evaluate('document.querySelector("[data-environment-chat]").click()');
+   await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('BUILD_ONLY_IN_TECHNICAL_SESSION')`,timeout,'technical history opened');
+   await page.send('Page.reload');
+   await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('BUILD_ONLY_IN_TECHNICAL_SESSION')`,timeout,'technical history restored after reload');
    await fetch(productEndpoint+'/preview',{method:'DELETE'});
-   ok('Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; nessun log nella chat di sviluppo. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
+   ok('Capacità osservate e candidata qualificata con due preparazioni e riuso prima della pubblicazione. Un solo Preview configura in una sessione tecnica durevole e avvia automaticamente; avvio dalla home senza conversazione prodotto, branch e directory visibili anche su mobile. Ricetta e helper riusati da incrementi già aperti e nuovi, senza agente; due chat sullo stesso checkout condividono il server.');
   }
   assert.deepEqual(exceptions,[],'uncaught browser exceptions');
   await fs.writeFile(path.join(dir,'summary.json'),JSON.stringify({status:'pass',checks},null,2));

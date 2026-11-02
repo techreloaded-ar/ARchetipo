@@ -65,6 +65,7 @@ type persistentFakeNativeProvider struct {
 	// when the turn ended between the read and the command: the typed refusal,
 	// and the session already idle.
 	steerFindsNoTurn bool
+	lastSteer        execution.SessionCommandRequest
 	lastStart        execution.StartTurnRequest
 	// capabilities are the ARchetipo actions this fake accepts. They are empty
 	// by default, which is the honest shape of a provider that only holds
@@ -244,9 +245,12 @@ func (p *persistentFakeNativeProvider) StreamSessionEvents(ctx context.Context, 
 	return nil
 }
 func (p *persistentFakeNativeProvider) SteerTurn(_ context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
-	if p.steerFindsNoTurn {
-		p.store.mu.Lock()
-		session := p.store.sessions[request.Session.Native.ID]
+	p.store.mu.Lock()
+	p.lastSteer = request
+	session := p.store.sessions[request.Session.Native.ID]
+	// A journal can still show ACTIVE after the native turn has completed.
+	// Match real adapters: refuse steering so delivery starts the next turn.
+	if p.steerFindsNoTurn || session.snapshot.Work == execution.SessionIdle {
 		completed := time.Now().UTC()
 		if session.snapshot.CurrentTurn != nil {
 			session.snapshot.CurrentTurn.State = execution.TurnCompleted
@@ -257,6 +261,7 @@ func (p *persistentFakeNativeProvider) SteerTurn(_ context.Context, request exec
 		return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUncertain},
 			&execution.RunCommandError{Reason: execution.RunRefusedNotActive, Err: fmt.Errorf("no active turn to steer")}
 	}
+	p.store.mu.Unlock()
 	return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryConfirmed}, nil
 }
 func (p *persistentFakeNativeProvider) RespondSessionInput(ctx context.Context, request execution.SessionCommandRequest) (execution.SessionDelivery, error) {
@@ -591,8 +596,26 @@ func TestRestoredReleasedNativeConversationIsWritableWithoutReopen(t *testing.T)
 	if !view.Available || view.Conversation.State != string(execution.RunActive) {
 		t.Fatalf("a released conversation this workspace holds reads as ended: available=%v state=%q", view.Available, view.Conversation.State)
 	}
-	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/reopen", map[string]any{}); w.Code != http.StatusConflict {
-		t.Fatalf("reopen of a held conversation = %d, want the refusal that says it is already open: %s", w.Code, w.Body.String())
+	released := metadataOf(t, restarted, id)
+	past := restarted.pastNativeConversationView(restarted.session(), released, restarted.conversationOpenabilityOf(context.Background(), restarted.session()), 0)
+	if past.Conversation.State != execution.RunActive {
+		t.Fatal("an open native record without a runtime was presented as closed")
+	}
+	released.Archive = execution.ArchiveArchived
+	past = restarted.pastNativeConversationView(restarted.session(), released, restarted.conversationOpenabilityOf(context.Background(), restarted.session()), 0)
+	if past.Conversation.State != execution.RunClosed {
+		t.Fatal("an archived record was presented as open")
+	}
+	resumesBefore, startsBefore := provider.store.resumes, provider.store.starts
+	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/reopen", map[string]any{}); w.Code != http.StatusOK {
+		t.Fatalf("idempotent reopen of a held conversation = %d: %s", w.Code, w.Body.String())
+	}
+	if provider.store.resumes != resumesBefore || provider.store.starts != startsBefore {
+		t.Fatal("reopening an already open thread resumed its runtime or started a turn")
+	}
+	index, indexBody := conversationsRouteTestReadIndex(t, restarted)
+	if !conversationsRouteTestEntryOf(t, index, id).Live {
+		t.Fatalf("released native conversation disappeared from open threads: %s", indexBody)
 	}
 	if w := doJSON(t, restarted, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "second"}); w.Code != http.StatusAccepted {
 		t.Fatalf("message into a restored released conversation = %d: %s", w.Code, w.Body.String())
@@ -605,6 +628,28 @@ func TestRestoredReleasedNativeConversationIsWritableWithoutReopen(t *testing.T)
 // person's words still have to be delivered, into the next turn. Only that
 // refusal falls through: a fault decided nothing and stays a conflict, with
 // the delivery left uncertain, which is what the sibling test asserts.
+func TestNativeSteeringPreservesDisplayedUserMessage(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, _ := newRunServer(t, provider, true)
+	id := openConversationOK(t, srv).Conversation.ID
+	first := doJSON(t, srv, "POST", conversationsRoute+"/"+id+"/messages", map[string]any{"message": "first turn"})
+	if first.Code != 202 {
+		t.Fatalf("first turn: %s", first.Body.String())
+	}
+	snapshot, found := srv.session().conversation.get(id)
+	if !found {
+		t.Fatal("no active native session")
+	}
+	if err := srv.sendNativeConversationMessage(context.Background(), srv.session(), snapshot, sendConversationMessageReq{Message: "/archetipo-increment expanded instruction", display: "Ho provato il CSV"}); err != nil {
+		t.Fatal(err)
+	}
+	provider.store.mu.Lock()
+	defer provider.store.mu.Unlock()
+	if provider.lastSteer.Display != "Ho provato il CSV" || provider.lastSteer.Message != "/archetipo-increment expanded instruction" {
+		t.Fatalf("steering lost the display boundary: %+v", provider.lastSteer)
+	}
+}
+
 func TestSteeringRefusedByAFinishedTurnOpensTheNextOneInstead(t *testing.T) {
 	provider := newPersistentFakeNativeProvider("native-fake", nil)
 	srv, _, _ := newRunServer(t, provider, true)

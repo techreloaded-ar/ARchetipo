@@ -159,10 +159,7 @@ type streamSession struct {
 	// written under mu like every other fact of the session.
 	asked   map[string]execution.PendingApproval
 	askedIn []string
-	// inputs holds the AskUserQuestion calls the process is waiting an answer
-	// to, with the same lifecycle as asked: a question dies with the process.
-	inputs   map[string]execution.PendingInput
-	inputsIn []string
+	inputs  map[string]execution.PendingInput
 	// now stamps a question with the instant it was asked. It is a field with a
 	// real default rather than a constructor parameter so that the seven places
 	// that build a session for a test keep building it unchanged; the provider
@@ -787,6 +784,7 @@ func (s *streamSession) claimTurnEnd() chan struct{} {
 		return nil
 	}
 	s.turnClosed = true
+	s.inputs = make(map[string]execution.PendingInput)
 	return s.turnDone
 }
 

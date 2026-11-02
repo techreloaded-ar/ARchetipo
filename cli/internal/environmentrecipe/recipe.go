@@ -6,12 +6,15 @@ package environmentrecipe
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -111,42 +114,22 @@ func Load(root string) (Recipe, error) {
 
 // Publish explicitly names every non-secret helper; there is no directory scan.
 // One atomic bundle is the authoritative revision, including before Git merge.
-func Publish(root string, assets []string) (Recipe, error) {
+func Publish(root string, assets []string) (Recipe, error) { return publish(root, assets, "") }
+func PublishQualified(root string, assets []string, digest string) (Recipe, error) {
+	return publish(root, assets, digest)
+}
+func publish(root string, assets []string, digest string) (Recipe, error) {
 	lease, err := writeLease(root)
 	if err != nil {
 		return Recipe{}, err
 	}
 	defer func() { _ = lease.Unlock() }()
-	r := Recipe{Version: 1, Files: []File{}}
-	names := append([]string{Environment, Preview}, assets...)
-	seen := map[string]bool{}
-	for _, name := range names {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		path, err := safe(root, name)
-		if err != nil {
-			return r, err
-		}
-		raw, err := os.ReadFile(path)
-		if os.IsNotExist(err) && name == Preview {
-			continue
-		}
-		if err != nil {
-			return r, err
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return r, err
-		}
-		if !info.Mode().IsRegular() {
-			return r, fmt.Errorf("recipe asset is not a regular file: %s", name)
-		}
-		r.Files = append(r.Files, File{Path: name, Content: raw, Executable: info.Mode()&0o111 != 0})
-	}
-	if err := validate(r); err != nil {
+	r, err := Collect(root, assets)
+	if err != nil {
 		return r, err
+	}
+	if digest != "" && Digest(r) != digest {
+		return r, iox.NewConflict("candidate bundle changed after qualification", "qualify the exact recipe and assets again", nil)
 	}
 	dir := filepath.Join(Workspace(root), ".archetipo")
 	raw, err := json.Marshal(r)
@@ -163,6 +146,17 @@ func Publish(root string, assets []string) (Recipe, error) {
 // checkpoints or uses another checkout's services. Unknown helper changes are
 // refused rather than overwritten; a previous inherited helper can be updated.
 func Sync(root string) error {
+	return sync(root, false)
+}
+
+// Inherit installs the shared bundle in a newly created checkout. Its unchanged
+// versioned helpers may come from an older main commit; edited or untracked
+// helpers remain protected exactly as during ordinary synchronization.
+func Inherit(root string) error {
+	return sync(root, true)
+}
+
+func sync(root string, freshCheckout bool) error {
 	r, err := Load(root)
 	if os.IsNotExist(err) {
 		return nil
@@ -193,7 +187,9 @@ func Sync(root string) error {
 			continue
 		}
 		if readErr == nil && f.Path != Environment && f.Path != Preview && !bytes.Equal(raw, previous[f.Path]) {
-			return iox.NewConflict("environment helper differs from the workspace recipe: "+f.Path, "repair and publish the common workspace configuration before preparing", nil)
+			if !freshCheckout || !unchangedVersionedHelper(root, f.Path) {
+				return iox.NewConflict("environment helper differs from the workspace recipe: "+f.Path, "repair and publish the common workspace configuration before preparing", nil)
+			}
 		}
 	}
 	for _, f := range r.Files {
@@ -231,6 +227,13 @@ func Sync(root string) error {
 		}
 	}
 	return recordfile.WriteAtomic(filepath.Dir(checkpoint), checkpoint, ".inherited-", r)
+}
+
+func unchangedVersionedHelper(root, path string) bool {
+	if err := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", path).Run(); err != nil {
+		return false
+	}
+	return exec.Command("git", "-C", root, "diff", "--quiet", "HEAD", "--", path).Run() == nil
 }
 
 // Read resolves the sole common configuration without materializing files during
@@ -311,4 +314,48 @@ func writeLease(root string) (*conversationlog.ConversationLock, error) {
 		return nil, err
 	}
 	return store.Lock(context.Background(), "environment-recipe-write")
+}
+
+// Collect snapshots explicitly selected files without publishing them.
+func Collect(root string, assets []string) (Recipe, error) {
+	r := Recipe{Version: 1, Files: []File{}}
+	names := append([]string{Environment, Preview}, assets...)
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		path, err := safe(root, name)
+		if err != nil {
+			return r, err
+		}
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) && name == Preview {
+			continue
+		}
+		if err != nil {
+			return r, err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return r, err
+		}
+		if !info.Mode().IsRegular() {
+			return r, fmt.Errorf("recipe asset is not a regular file: %s", name)
+		}
+		r.Files = append(r.Files, File{Path: name, Content: raw, Executable: info.Mode()&0o111 != 0})
+	}
+	if err := validate(r); err != nil {
+		return r, err
+	}
+	return r, nil
+}
+
+func Digest(r Recipe) string {
+	files := append([]File(nil), r.Files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	raw, _ := json.Marshal(Recipe{Version: r.Version, Files: files})
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:])
 }

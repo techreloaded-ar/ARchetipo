@@ -245,9 +245,8 @@ type conversationRunResponse struct {
 	Decision      string `json:"decision"`
 	// ThreadID names the conversation the step is happening in, empty for a run
 	// that is read nowhere else.
-	ThreadID              string `json:"thread_id"`
-	ReviewDecisionPending bool   `json:"review_decision_pending"`
-	Run                   *struct {
+	ThreadID string `json:"thread_id"`
+	Run      *struct {
 		RunID string `json:"run_id"`
 		State string `json:"state"`
 	} `json:"run"`

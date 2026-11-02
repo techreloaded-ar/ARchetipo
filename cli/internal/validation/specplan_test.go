@@ -67,7 +67,7 @@ func TestValidateSpecs_Empty(t *testing.T) {
 }
 
 func TestValidateSpecs_StructuralErrors(t *testing.T) {
-	bad := domain.Spec{Code: "1", Title: "", Priority: "URGENT", Points: 0, Status: "", Epic: domain.Epic{Code: "E1"}, Body: "no checklist"}
+	bad := domain.Spec{Code: "1", Title: "", Priority: "URGENT", Points: -1, Status: "", Epic: domain.Epic{Code: "E1"}, Body: "no checklist"}
 	r := ValidateSpecs("specs.yaml", []domain.Spec{bad})
 	if r.OK {
 		t.Fatalf("expected not ok")

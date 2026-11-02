@@ -207,10 +207,18 @@ func newTemplateView(tpl template.Template) templateView {
 	return templateView{ID: tpl.ID, Version: tpl.Version, Label: tpl.Label}
 }
 
+type specWorkView struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	StatusLabel    string `json:"status_label"`
+	ConversationID string `json:"conversation_id"`
+	PRURL          string `json:"pr_url,omitempty"`
+}
 type specDetailView struct {
-	Spec     domain.Spec   `json:"spec"`
-	PlanBody string        `json:"plan_body"`
-	Tasks    []domain.Task `json:"tasks"`
+	Works    []specWorkView `json:"works"`
+	Spec     domain.Spec    `json:"spec"`
+	PlanBody string         `json:"plan_body"`
+	Tasks    []domain.Task  `json:"tasks"`
 	// Template and Actions answer "what can I do with this spec now?" with the
 	// process rules, so the browser never has to know them. Actions is always a
 	// list: a status with no admissible action is an empty one, never a null.
@@ -256,7 +264,29 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	works := []specWorkView{}
+	records, err := s.incrementService(ws).History()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for _, record := range records {
+		for _, link := range record.LinkedStories {
+			if link.Code == spec.Code {
+				work := specWorkView{ID: record.ID, Title: record.Title, StatusLabel: tpl.IncrementStatusLabel(record.Status), ConversationID: record.ConversationID}
+				if _, readErr := ws.conversationStore().GetMetadata(ctx, record.ConversationID); readErr != nil {
+					work.ConversationID = ""
+				}
+				if record.PR != nil {
+					work.PRURL = record.PR.URL
+				}
+				works = append(works, work)
+				break
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, specDetailView{
+		Works:     works,
 		Spec:      spec,
 		PlanBody:  planBody,
 		Tasks:     tasks,

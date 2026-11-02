@@ -4,6 +4,22 @@ ARchetipo gestisce i servizi dichiarati dal progetto, senza riconoscere framewor
 né richiedere Docker. La CLI possiede registro, porte, serializzazione ed evidenze;
 le skill scelgono i comandi del progetto e la view usa lo stesso contratto.
 
+## Indirizzo browser e dati locali
+
+La preview conserva per ogni checkout il proprio indirizzo proxy in
+`.archetipo/environment/browser-origin.json`. Stop, revisioni e riavvii del viewer
+riusano quell'origine: i dati dell'app in localStorage rimangono accessibili.
+Il server applicativo può ricevere una porta diversa; il token del selettore viene
+rinnovato. Se la porta proxy conservata è occupata, l'avvio segnala un conflitto
+senza passare a un'origine vuota o fermare listener estranei. Il file contiene
+stato runtime locale e non va incluso nella ricetta pubblicata.
+
+Una ricetta pubblicata da un incremento può non avere copie locali nel checkout
+principale. I nuovi lavori ereditano direttamente il bundle comune e gli helper.
+Solo creando un worktree nuovo gli helper versionati e invariati della base
+possono essere aggiornati alla revisione comune. Modifiche locali e helper non
+versionati restano protetti dai conflitti.
+
 ## Ricetta del progetto
 
 La ricetta versionata `.archetipo/environment.json` versione 1 accetta i campi
@@ -62,6 +78,33 @@ Conserva i fallimenti, i log completi e gli adattatori originali per poter ripro
 anche dopo modifiche o rimozione della ricetta. Nessun segreto deve essere scritto
 in argv, ricetta o registro.
 
+## Configurazione effettiva dell’incremento
+
+La skill `archetipo-environment` prepara il progetto distinguendo impostazioni
+condivise, credenziali autorizzate per i servizi di prova e collegamenti alle
+risorse del singolo checkout. Alla prima configurazione legge esempi e loader del
+progetto; negli incrementi successivi riusa la ricetta e le scelte già registrate.
+Chiede alla persona soltanto decisioni ancora aperte su accessi, effetti esterni
+o modalità della prova, senza richiedere configurazioni manuali a ogni lavoro.
+
+`local_files` resta un trasferimento esplicito di file interi, non un interprete
+di `.env` e non una riscrittura automatica di `DATABASE_URL`. Un file può mescolare
+credenziali condivisibili e connessioni da sostituire: gli helper del progetto
+usano override supportati o generano una configurazione locale per il checkout,
+verificando quale valore l’applicazione usa davvero. La preparazione ricopia i
+file dichiarati, quindi eventuali personalizzazioni vanno nell’override locale.
+File originali, valori segreti e stato runtime non entrano nel bundle comune.
+
+Prima di migrazioni e seed, probe non distruttive verificano la destinazione
+effettiva dell’app e l’identità delle risorse attese. Un server raggiungibile o
+un `.env` copiato non bastano. Per un’app con persistenza, un check esercita il
+percorso reale con una piccola fixture sintetica e ne verifica la conservazione
+al riavvio. Se si dichiara indipendenza tra checkout concorrenti, la prova deve
+verificare destinazioni distinte e separazione delle fixture senza scrivere su
+risorse estranee. La CLI conserva le evidenze dei comandi dichiarati; la skill
+sceglie e realizza i controlli adatti al progetto. Non c’è un validatore universale
+dei file `.env`, né una copia automatica dei database.
+
 ## Porte e incrementi concorrenti
 
 Ogni checkout ha proprietario, registro e porte distinti. Non versionare né copiare
@@ -78,19 +121,9 @@ In caso di collisione l'avvio fallisce e viene compensato; un nuovo tentativo
 assegna nuove porte. Non riutilizzare il server sconosciuto che risponde alla porta.
 
 Due incrementi possono girare insieme; due anteprime che vogliono possedere i
-servizi dello stesso checkout ricevono invece un conflitto, evitando che lo stop
-nell'una interrompa silenziosamente l'altra.
-
-## Integrazioni simulate
-
-Un servizio terzo irraggiungibile in locale (OAuth, calendari, API a pagamento)
-può essere sostituito da un finto locale: un servizio separato, registrato in
-`resources` con la propria porta, raggiunto dall'applicazione solo attraverso gli
-endpoint configurabili che usa anche per il servizio reale. Il codice di prodotto
-non contiene interruttori di test, rami simulati o route che saltano la login.
-`.archetipo/preview.json` dichiara in `simulated` i nomi delle integrazioni
-simulate; `increment ready` li copia nel risultato, il viewer li mostra accanto
-all'approvazione e la PR li ripete. La prova reale avviene dopo il merge.
+servizi dello stesso checkout ricevono invece un conflitto. Uno stop esplicito
+può raggiungere il supervisore dello stesso checkout anche da un altro terminale
+o viewer, attraverso una richiesta indirizzata all'identità della singola esecuzione.
 
 ## Uso e arresto
 
@@ -107,6 +140,43 @@ all'approvazione e la PR li ripete. La prova reale avviene dopo il merge.
   prepare/check esterna riceve un conflitto finché quel proprietario è attivo.
 - `archetipo execution preview run`: prepara l'ambiente e supervisiona applicazione
   e dipendenze finché il terminale resta attivo.
+- `archetipo execution preview status`: restituisce `kind: preview`, con l'ultimo
+  endpoint applicativo, l'esito dello stop e la presenza del supervisore proprietario.
+- `archetipo execution preview stop`: richiede lo stop al supervisore registrato
+  di questo checkout e attende il rilascio e il cleanup; riconcilia poi i registri.
+  Un timeout conserva la richiesta e restituisce `E_CONFLICT`, senza dichiarare
+  il server fermo. Se il proprietario è scomparso ma la porta resta occupata,
+  conserva l'errore e richiede intervento: non termina un listener sconosciuto.
+
+Su macOS e Linux il comando in primo piano possiede un gruppo di processi:
+riceve SIGTERM, poi SIGKILL dopo una breve attesa se necessario. Anche l'uscita
+anticipata del launcher ferma i figli rimasti. I wrapper devono restare in primo
+piano, senza `nohup`, detach o nuove sessioni. Su Windows resta il percorso
+di cancellazione tramite `taskkill /T`; il recupero dei figli di un launcher già
+terminato non è garantito da questa modifica.
+
+I supervisori privati di comando e cleanup hanno un gruppo POSIX separato da
+quello del chiamante. Se l’harness termina l’intero gruppo del proprio comando,
+il canale di controllo si chiude e i supervisori possono ancora fermare app e
+risorse prima di uscire. Non sono server applicativi staccati: la loro vita
+resta vincolata al canale privato. La morte del supervisore stesso resta distinta
+e richiede riconciliazione delle evidenze, senza terminare listener sconosciuti.
+
+Il registro `.archetipo/environment/preview-process.json` conserva endpoint,
+identità dell'esecuzione ed esito verificato dell'arresto. La verifica usa una
+connessione TCP, non il successo di una risposta HTTP. `preview-stop.json`
+indirizza le richieste alla sola esecuzione indicata: una richiesta vecchia non
+ferma quella successiva. Non sono registri di PID da terminare al riavvio.
+La rimozione di un incremento attende anche il supervisore applicativo e rifiuta
+di rimuovere il worktree se l'ultimo arresto risulta ancora da verificare.
+
+Il test opzionale `npm run test:next-preview-process-smoke -- --node-modules
+/percorso/assoluto/node_modules` usa una copia di Next già installata, senza
+installare dipendenze o modificare quel progetto. Crea una piccola app separata
+e prova la catena npm → wrapper → Next con stop normale, stop da un altro
+terminale, morte forzata del proprietario, morte del suo intero gruppo POSIX e
+uscita anticipata del wrapper.
+Report e log restano sotto `test/workspaces/next-preview-process-smoke/`.
 
 I comandi environment usano `archetipo/v1`, `kind: verification_result`.
 `status` restituisce il registro; `run` annuncia il risultato di preparazione e
@@ -116,7 +186,9 @@ Errori di contratto sono `E_INVALID_INPUT`, ownership concorrente `E_CONFLICT`,
 ricetta/registro mancanti o corrotti `E_PRECONDITION`.
 
 Nella view **Ferma ambiente** attende l'arresto dell'applicazione e dei servizi;
-Output mostra gli stati e le porte. Un fallimento di cleanup resta visibile e
+il dettaglio Ambiente elenca servizi, porte e gestione, distinguendo i server
+esterni dagli ultimi stati registrati delle dipendenze. Output mostra i log.
+Un fallimento di cleanup resta visibile e
 riprovabile. Il pulsante funziona anche dopo un riavvio, leggendo il registro.
 Un supervisore separato riceve la chiusura del canale privato anche se il viewer
 viene terminato con SIGKILL ed esegue il cleanup. Lo stesso vale per il run CLI.
@@ -163,3 +235,15 @@ applicazione e dipendenza dopo SIGKILL del viewer. Le unit test verificano rollb
 ordine inverso, stop fallito e ripresa, cambio ricetta, invalidazione delle verifiche
 e recupero usando gli adattatori salvati dopo la scomparsa della ricetta. Lo smoke
 verifica inoltre un arresto fallito e riprovato e il run standalone con SIGKILL.
+
+## Declared simulated integrations
+
+A preview recipe may declare `"simulated": ["calendar", "oauth"]` when owned local
+fakes replace third-party services. Names must be distinct and non-empty. This
+declares what the person actually tried; it does not waive required project
+checks or decide when real-service checks run. Use the same configurable
+endpoints as the real integration, with managed resources for the local fakes.
+
+`increment ready` reads the list from the recipe, preserves it with the candidate
+and includes it in the dossier and PR. A changed list invalidates the candidate.
+The viewer displays the declaration beside the publication decision.

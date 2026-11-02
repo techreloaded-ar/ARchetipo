@@ -2,19 +2,18 @@ package increment
 
 import (
 	"context"
-	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
-	"gopkg.in/yaml.v3"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -36,7 +35,7 @@ func fixture(t *testing.T) *Service {
 	if err := os.MkdirAll(filepath.Join(root, ".archetipo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{config.RelativePath: "connector: file\n", ".archetipo/shared-runtime.md": "test runtime\n", "hello.txt": "original\n"} {
+	for name, body := range map[string]string{config.RelativePath: "connector: file\n", ".archetipo/shared-runtime.md": "test runtime\n", "hello.txt": "original\n", verification.RecipePath: `{"version":1,"probe":[{"name":"git","argv":["git","--version"],"timeout_seconds":5}],"checks":{"diff":{"name":"diff","argv":["git","diff","--check","HEAD~1","HEAD"],"timeout_seconds":5,"inputs":["hello.txt"],"cache":true,"during_preview":true}}}`} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -74,6 +73,8 @@ func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(`{"preparation_id":"parent-only"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	runGit(t, s.Config.ProjectRoot, "add", verification.RecipePath)
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: recipe")
 	r := create(t, s)
 	got, err := os.ReadFile(filepath.Join(r.Workdir, ".archetipo", "environment.json"))
 	if err != nil || string(got) != string(recipe) {
@@ -88,6 +89,47 @@ func TestSandboxCopiesRecipeWithoutEnvironmentCheckpoint(t *testing.T) {
 	}
 }
 
+func TestSandboxInheritsBundlePublishedOnlyFromAnotherIncrement(t *testing.T) {
+	s := fixture(t)
+	helper := "scripts/archetipo/preview.sh"
+	if err := os.MkdirAll(filepath.Join(s.Config.ProjectRoot, "scripts/archetipo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, helper), []byte("old committed launcher\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, s.Config.ProjectRoot, "add", helper)
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: original launcher")
+	first := create(t, s)
+	preview := []byte(`{"version":1,"directory":".","argv":["sh","scripts/archetipo/preview.sh","{port}"],"url":"http://127.0.0.1:{port}","prepare_environment":true}`)
+	if err := os.WriteFile(filepath.Join(first.Workdir, environmentrecipe.Preview), preview, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(first.Workdir, "scripts/archetipo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first.Workdir, helper), []byte("exec actual-server \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := environmentrecipe.Publish(first.Workdir, []string{helper}); err != nil {
+		t.Fatal(err)
+	}
+	parentPreview := filepath.Join(s.Config.ProjectRoot, environmentrecipe.Preview)
+	if _, err := os.Stat(parentPreview); !os.IsNotExist(err) {
+		t.Fatal("fixture unexpectedly materialized the parent preview", err)
+	}
+	second := create(t, s)
+	for path, expected := range map[string]string{environmentrecipe.Preview: string(preview), helper: "exec actual-server \"$1\"\n"} {
+		got, err := os.ReadFile(filepath.Join(second.Workdir, path))
+		if err != nil || string(got) != expected {
+			t.Fatalf("published asset missing in the new worktree: %s, %v", path, err)
+		}
+	}
+	if _, err := os.Stat(parentPreview); !os.IsNotExist(err) {
+		t.Fatal("new increment changed the parent checkout", err)
+	}
+}
+
 func TestSandboxDoesNotBorrowWorkspacePreviewEndpoint(t *testing.T) {
 	s := fixture(t)
 	if err := os.WriteFile(filepath.Join(s.Config.ProjectRoot, ".archetipo", "preview.json"), []byte(`{"version":1,"directory":".","url":"http://127.0.0.1:41987"}`), 0o600); err != nil {
@@ -96,6 +138,29 @@ func TestSandboxDoesNotBorrowWorkspacePreviewEndpoint(t *testing.T) {
 	r := create(t, s)
 	if _, err := os.Stat(filepath.Join(r.Workdir, ".archetipo", "preview.json")); !os.IsNotExist(err) {
 		t.Fatal("inherited another checkout's fixed endpoint", err)
+	}
+}
+
+func TestUnusedSandboxRollbackIgnoresGitLineEndingWarnings(t *testing.T) {
+	s := fixture(t)
+	runGit(t, s.Config.ProjectRoot, "config", "core.autocrlf", "true")
+	raw, err := os.ReadFile(filepath.Join(s.Config.ProjectRoot, verification.RecipePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verification.Configure(s.Config.ProjectRoot, raw); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, s.Config.ProjectRoot, "add", verification.RecipePath)
+	runGit(t, s.Config.ProjectRoot, "commit", "-m", "test: portable formatted recipe")
+	if _, err := environmentrecipe.Publish(s.Config.ProjectRoot, nil); err != nil {
+		t.Fatal(err)
+	}
+	r := create(t, s)
+	if err := s.RemoveUnused(context.Background(), r.ID); err != nil {
+		status := runGit(t, r.Workdir, "status", "--porcelain")
+		diff := runGit(t, r.Workdir, "diff", "--", verification.RecipePath)
+		t.Fatalf("unused sandbox cannot roll back with autocrlf: %v; status: %s; diff: %s", err, status, diff)
 	}
 }
 
@@ -129,56 +194,23 @@ func create(t *testing.T, s *Service) Record {
 	})
 	return r
 }
-func proposeApprove(t *testing.T, s *Service, r Record, stories ...domain.Spec) Record {
+func specify(t *testing.T, s *Service, r Record, _ ...domain.Spec) Record {
 	t.Helper()
-	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Export the current customers.", Stories: stories})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Approve(context.Background(), r.ID, len(r.Revisions)); err != nil {
-		t.Fatal(err)
-	}
-	// The viewer and the unconfined CLI mirror the approval into the original backlog.
-	r, err = s.SyncStories(context.Background(), r.ID)
+	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Export the current customers."})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return r
 }
-func complete(t *testing.T, s *Service, r Record) {
-	t.Helper()
-	local, err := s.local(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, st := range r.Revisions[len(r.Revisions)-1].Stories {
-		tasks, taskErr := local.ReadSpecTasks(context.Background(), st.Code)
-		if taskErr != nil {
-			tasks = nil
-		}
-		if len(tasks) == 0 {
-			_, err = local.SavePlan(context.Background(), st.Code, domain.PlanInput{PlanBody: "Implement and verify.", Tasks: []domain.Task{{ID: "TASK-01", Title: "Implement", Type: domain.TaskType("Impl"), Status: domain.StatusTodo, Body: "Implement and verify"}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err = local.CompleteTask(context.Background(), st.Code, "TASK-01"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = local.TransitionStatus(context.Background(), st.Code, domain.StatusDone); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
 func ready(t *testing.T, s *Service, r Record) Record {
 	t.Helper()
-	complete(t, s, r)
 	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("increment "+r.ID+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, r.Workdir, "add", "hello.txt")
 	runGit(t, r.Workdir, "commit", "-m", "feat: export")
-	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try the customer export.", Checks: []string{"go test ./... — passed"}, SquashCommit: &SquashCommit{Title: "feat: export"}})
+	verifyProduct(t, r)
+	r, err := s.Ready(context.Background(), r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: export customers"}, Summary: "Try the customer export.", Checks: []string{"git diff --check HEAD~1 HEAD — passed"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,10 +237,10 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 	if err != nil || len(items) != 0 {
 		t.Fatalf("local backlog = %v, %v", items, err)
 	}
-	r = proposeApprove(t, s, r, story("US-001", "Export Excel"))
+	r = specify(t, s, r, story("US-001", "Export Excel"))
 	items, err = s.Connector.FetchBacklogItems(context.Background(), "")
-	if err != nil || len(items) != 2 || items[1].Code != "US-011" || items[1].Status != domain.StatusInProgress || !strings.Contains(items[1].Body, sourceMarker(r.ID, "US-001")) {
-		t.Fatalf("approved story not shown in progress in the original backlog: %v %v", items, err)
+	if err != nil || len(items) != 1 || items[0].Code != "US-010" {
+		t.Fatalf("parent backlog touched: %v %v", items, err)
 	}
 	r = ready(t, s, r)
 	if got := runGit(t, s.Config.ProjectRoot, "rev-parse", "HEAD"); got != parentHEAD {
@@ -219,7 +251,7 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 		t.Fatal("parent code changed")
 	}
 	unchanged, _ := os.ReadFile(filepath.Join(r.Workdir, config.RelativePath))
-	if string(unchanged) != string(configBefore) {
+	if strings.ReplaceAll(string(unchanged), "\r\n", "\n") != strings.ReplaceAll(string(configBefore), "\r\n", "\n") {
 		t.Fatal("sandbox rewrote tracked configuration")
 	}
 	diff := runGit(t, r.Workdir, "diff", "--name-only", r.BaseSHA+"...HEAD")
@@ -233,57 +265,10 @@ func TestSandboxKeepsCodeAndProcessAwayFromParent(t *testing.T) {
 	}
 }
 
-func TestRevisionsPreserveUnchangedWorkAndInvalidateChangedStories(t *testing.T) {
-	s := fixture(t)
-	r := create(t, s)
-	first, keep, retire := story("US-001", "CSV"), story("US-002", "Unchanged"), story("US-003", "Retire")
-	r = proposeApprove(t, s, r, first, keep, retire)
-	complete(t, s, r)
-	first.Title = "Excel"
-	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Excel replaces CSV.", Stories: []domain.Spec{first, keep}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Approve(context.Background(), r.ID, 1); err == nil {
-		t.Fatal("accepted a superseded intent")
-	}
-	r, err = s.Approve(context.Background(), r.ID, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local, _ := s.local(r)
-	items, err := local.FetchBacklogItems(context.Background(), "")
-	if err != nil || len(items) != 2 {
-		t.Fatalf("stories: %v %v", items, err)
-	}
-	for _, st := range items {
-		if st.Code == "US-001" && st.Status != domain.StatusTodo {
-			t.Fatal("changed story kept old acceptance")
-		}
-		if st.Code == "US-002" && st.Status != domain.StatusDone {
-			t.Fatal("unchanged story lost its work")
-		}
-	}
-	tasks, _ := local.ReadSpecTasks(context.Background(), "US-001")
-	if len(tasks) != 0 {
-		t.Fatal("stale plan survived revision")
-	}
-	if len(r.Revisions) != 2 || r.Revisions[0].Stories[0].Title != "CSV" {
-		t.Fatal("revision history rewritten")
-	}
-	if _, err = s.Approve(context.Background(), r.ID, 2); err != nil {
-		t.Fatalf("approval retry: %v", err)
-	}
-	items, _ = local.FetchBacklogItems(context.Background(), "")
-	if len(items) != 2 {
-		t.Fatal("approval duplicated stories")
-	}
-}
-
 func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 	s := fixture(t)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	if _, err := s.Ready(context.Background(), r.ID, Result{Summary: "Result", Checks: []string{"check"}, SquashCommit: &SquashCommit{Title: "feat: export"}}); err == nil {
+	r := specify(t, s, create(t, s), story("US-001", "Export"))
+	if _, err := s.Ready(context.Background(), r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: export customers"}, Summary: "Result", Checks: []string{"check"}}); err == nil {
 		t.Fatal("unfinished story was reviewable")
 	}
 	r = ready(t, s, r)
@@ -300,99 +285,13 @@ func TestReadyAndPublishRejectUnfinishedOrStaleEvidence(t *testing.T) {
 	}
 }
 
-func TestReadyWithoutPlanRetainsCompletionAndSnapshotGates(t *testing.T) {
-	for _, scenario := range []string{"ready", "unfinished story", "unfinished task", "malformed plan", "changed intent", "dirty tree", "no product commit", "missing evidence", "missing squash commit"} {
-		t.Run(scenario, func(t *testing.T) {
-			s := fixture(t)
-			r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-			local, err := s.local(r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if scenario == "unfinished task" {
-				_, err = local.SavePlan(context.Background(), "US-001", domain.PlanInput{PlanBody: "Verify export", Tasks: []domain.Task{{ID: "TASK-01", Title: "Verify", Type: "Test", Status: domain.StatusTodo, Body: "Verify export"}}})
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario == "changed intent" {
-				changed := story("US-001", "A different export")
-				if _, err = local.UpdateSpec(context.Background(), changed.Code, domain.SpecUpdate{Title: &changed.Title}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario == "malformed plan" {
-				cfg, loadErr := config.LoadExact(r.Workdir)
-				if loadErr != nil {
-					t.Fatal(loadErr)
-				}
-				planDir := cfg.AbsPath(cfg.File.Planning)
-				if err = os.MkdirAll(planDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err = os.WriteFile(filepath.Join(planDir, "US-001-plan.yaml"), []byte("tasks: ["), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario != "unfinished story" {
-				if _, err = local.TransitionStatus(context.Background(), "US-001", domain.StatusDone); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if scenario != "no product commit" {
-				if err = os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("verified export\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				runGit(t, r.Workdir, "add", "hello.txt")
-				runGit(t, r.Workdir, "commit", "-m", "feat: export without a plan")
-			}
-			if scenario == "dirty tree" {
-				if err = os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("unverified export\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			result := Result{Summary: "Try the verified export", Checks: []string{"export check — passed"}, SquashCommit: &SquashCommit{Title: "feat: export"}}
-			if scenario == "missing evidence" {
-				result.Checks = nil
-			}
-			if scenario == "missing squash commit" {
-				result.SquashCommit = nil
-			}
-			got, err := s.Ready(context.Background(), r.ID, result)
-			if scenario != "ready" {
-				if err == nil {
-					t.Fatal("invalid delivery became reviewable")
-				}
-				persisted, readErr := s.Read(r.ID)
-				if readErr != nil || persisted.Status != Developing || persisted.ReadySHA != "" {
-					t.Fatal("rejected delivery changed readiness", persisted, readErr)
-				}
-				return
-			}
-			if err != nil || got.Status != Review || got.ReadySHA != runGit(t, r.Workdir, "rev-parse", "HEAD") || got.ReadyStories == "" {
-				t.Fatal("planless delivery not frozen", got, err)
-			}
-			tasks, taskErr := local.ReadSpecTasks(context.Background(), "US-001")
-			if !errors.Is(taskErr, os.ErrNotExist) || len(tasks) != 0 {
-				t.Fatal("planless delivery acquired tasks", tasks, taskErr)
-			}
-		})
-	}
-}
-
 type fakeHosting struct {
-	createBody  string
-	pr          *PullRequest
-	creates     int
-	findBase    string
-	createBase  string
-	createTitle string
-	comments    []string
-}
-
-func (f *fakeHosting) Comment(_ context.Context, _ string, _ int, body string) error {
-	f.comments = append(f.comments, body)
-	return nil
+	title      string
+	body       string
+	pr         *PullRequest
+	creates    int
+	findBase   string
+	createBase string
 }
 
 func (f *fakeHosting) Find(_ context.Context, _, _, base string) (*PullRequest, error) {
@@ -401,8 +300,7 @@ func (f *fakeHosting) Find(_ context.Context, _, _, base string) (*PullRequest, 
 }
 func (f *fakeHosting) Create(_ context.Context, dir, _, base, title, body string) (*PullRequest, error) {
 	f.createBase = base
-	f.createTitle = title
-	f.createBody = body
+	f.title, f.body = title, body
 	sha, err := git(context.Background(), dir, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err
@@ -413,35 +311,6 @@ func (f *fakeHosting) Create(_ context.Context, dir, _, base, title, body string
 }
 func (f *fakeHosting) Read(context.Context, string, int) (*PullRequest, error) { return f.pr, nil }
 
-// Remote connectors normalize leading/trailing Markdown whitespace.
-type trimmedConnector struct{ connector.Connector }
-
-func (c trimmedConnector) FetchBacklogItems(ctx context.Context, status domain.Status) ([]domain.Spec, error) {
-	stories, err := c.Connector.FetchBacklogItems(ctx, status)
-	for i := range stories {
-		stories[i].Body = strings.TrimSpace(stories[i].Body)
-	}
-	return stories, err
-}
-func (c trimmedConnector) ReadSpecDetail(ctx context.Context, ref string) (domain.Spec, error) {
-	story, err := c.Connector.ReadSpecDetail(ctx, ref)
-	story.Body = strings.TrimSpace(story.Body)
-	return story, err
-}
-
-type failAfterUpdate struct {
-	connector.Connector
-	failed bool
-}
-
-func (f *failAfterUpdate) UpdateSpec(ctx context.Context, code string, patch domain.SpecUpdate) (domain.WriteResult, error) {
-	result, err := f.Connector.UpdateSpec(ctx, code, patch)
-	if err == nil && !f.failed {
-		f.failed = true
-		return result, errors.New("connection lost after write")
-	}
-	return result, err
-}
 func remote(t *testing.T, s *Service) {
 	t.Helper()
 	bare := filepath.Join(t.TempDir(), "origin.git")
@@ -452,98 +321,17 @@ func remote(t *testing.T, s *Service) {
 	runGit(t, s.Config.ProjectRoot, "remote", "add", "origin", bare)
 	runGit(t, s.Config.ProjectRoot, "push", "-u", "origin", "main")
 }
-func TestPublicationRecoversPartialWritesAndDeliversOnlyAfterConfirmedMerge(t *testing.T) {
-	s := fixture(t)
-	remote(t, s)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Excel"), story("US-002", "Area filter"))
-	r = ready(t, s, r)
-	hosting := &fakeHosting{}
-	s.Hosting = hosting
-	s.Connector = &failAfterUpdate{Connector: trimmedConnector{Connector: s.Connector}}
-	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err == nil {
-		t.Fatal("injected partial publication did not fail")
-	}
-	partial, err := s.Read(r.ID)
-	if err != nil || partial.Status != Publishing || partial.PR == nil || len(partial.Published) != 2 {
-		t.Fatalf("lost recovery state: %+v %v", partial, err)
-	}
-	r, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hosting.creates != 1 || r.Status != Proposed {
-		t.Fatalf("duplicate PR or wrong state: %+v creates=%d", r, hosting.creates)
-	}
-	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
-		t.Fatal(err)
-	}
-	specs, _ := s.Connector.FetchBacklogItems(context.Background(), "")
-	if len(specs) != 3 {
-		t.Fatalf("duplicated stories: %d", len(specs))
-	}
-	for _, st := range specs {
-		if st.Code != "US-010" && (st.Status != domain.StatusReview || !strings.Contains(st.Body, hosting.pr.URL)) {
-			t.Fatalf("story with an open PR is not in review: %+v", st)
-		}
-	}
-	if _, err = s.Refresh(context.Background(), r.ID); err != nil {
-		t.Fatal(err)
-	}
-	current, _ := s.Read(r.ID)
-	if current.Status != Proposed {
-		t.Fatal("open PR delivered")
-	}
-	hosting.pr.State = "CLOSED"
-	current, err = s.Refresh(context.Background(), r.ID)
-	if err != nil || current.Status != Proposed {
-		t.Fatal("closed, unmerged PR delivered")
-	}
-	hosting.pr.State = "MERGED"
-	hosting.pr.HeadSHA = "another-unapproved-head"
-	if _, err = s.Refresh(context.Background(), r.ID); err == nil {
-		t.Fatal("unapproved PR head delivered")
-	}
-	hosting.pr.HeadSHA = r.ApprovedSHA
-	code := r.Published["US-001"]
-	original, readErr := s.Connector.ReadSpecDetail(context.Background(), code)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	changedBody := original.Body + "A new unapproved requirement."
-	if _, err = s.Connector.UpdateSpec(context.Background(), code, domain.SpecUpdate{Body: &changedBody}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Refresh(context.Background(), r.ID); err == nil {
-		t.Fatal("changed official story delivered")
-	}
-	if _, err = s.Connector.UpdateSpec(context.Background(), code, domain.SpecUpdate{Body: &original.Body}); err != nil {
-		t.Fatal(err)
-	}
-	current, err = s.Refresh(context.Background(), r.ID)
-	if err != nil || current.Status != Delivered {
-		t.Fatalf("merge not reconciled: %+v %v", current, err)
-	}
-	specs, _ = s.Connector.FetchBacklogItems(context.Background(), "")
-	for _, st := range specs {
-		if st.Code != "US-010" && st.Status != domain.StatusDone {
-			t.Fatal("merged story not delivered")
-		}
-	}
-	if got := runGit(t, s.Config.ProjectRoot, "show", "HEAD:hello.txt"); got != "original" {
-		t.Fatal("publication merged the code itself")
-	}
-}
 
 func TestFeedbackKeepsSameSandboxAndPreservesPriorResult(t *testing.T) {
 	s := fixture(t)
-	r := ready(t, s, proposeApprove(t, s, create(t, s), story("US-001", "Export")))
+	r := ready(t, s, specify(t, s, create(t, s), story("US-001", "Export")))
 	prior := r
 	var err error
 	r, err = s.FeedbackFor(context.Background(), r.ID, "Use Excel instead of CSV.")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ID != prior.ID || r.Workdir != prior.Workdir || r.Branch != prior.Branch || r.ReadySHA != "" || r.Status != Discovery || r.Revisions[0].Result == nil || r.Revisions[0].HeadSHA != prior.ReadySHA {
+	if r.ID != prior.ID || r.Workdir != prior.Workdir || r.Branch != prior.Branch || r.ReadySHA != "" || r.Status != Developing || r.Revisions[0].Result == nil || r.Revisions[0].HeadSHA != prior.ReadySHA {
 		t.Fatalf("feedback lost identity/evidence: %+v", r)
 	}
 }
@@ -609,27 +397,6 @@ func TestMissingSandboxMarkerNeverFallsBackToTheParentConnector(t *testing.T) {
 	}
 }
 
-func TestTechnicalReworkNotesDoNotChangeTheApprovedProductIntent(t *testing.T) {
-	s := fixture(t)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	local, err := s.local(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := local.ReadSpecDetail(context.Background(), "US-001")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := domain.AppendReworkFeedback(spec.Body, []domain.ReviewComment{{File: "hello.txt", Line: 1, Body: "Fix the implementation to satisfy the existing criterion."}})
-	if _, err = local.UpdateSpec(context.Background(), spec.Code, domain.SpecUpdate{Body: &body}); err != nil {
-		t.Fatal(err)
-	}
-	r = ready(t, s, r)
-	if r.Status != Review || len(r.Revisions) != 1 {
-		t.Fatal("technical fix required another business-intent revision")
-	}
-}
-
 func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
 	s := fixture(t)
 	remote(t, s)
@@ -649,7 +416,7 @@ func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(r.Workdir, "unrelated.txt")); !os.IsNotExist(err) {
 		t.Fatalf("unrelated branch content leaked into increment: %v", err)
 	}
-	r = ready(t, s, proposeApprove(t, s, r, story("US-001", "Export")))
+	r = ready(t, s, specify(t, s, r, story("US-001", "Export")))
 	hosting := &fakeHosting{}
 	s.Hosting = hosting
 	if _, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
@@ -663,249 +430,89 @@ func TestIncrementFromAnotherBranchStartsAndPublishesAgainstMain(t *testing.T) {
 	}
 }
 
-func TestIncrementWithoutMainDoesNotCreateWorktree(t *testing.T) {
+func TestInvalidDevelopmentModeDoesNotCreateWorktree(t *testing.T) {
 	s := fixture(t)
-	root := s.Config.ProjectRoot
-	runGit(t, root, "branch", "-m", "other")
-	before := runGit(t, root, "worktree", "list", "--porcelain")
-	if _, err := s.Create(context.Background(), "Export", "Prepare export", ""); err == nil {
-		t.Fatal("increment silently used a branch other than main")
+	if _, err := s.CreateWithMode(context.Background(), "App", "Build", "", "unknown"); err == nil {
+		t.Fatal("unknown mode accepted")
 	}
-	if after := runGit(t, root, "worktree", "list", "--porcelain"); after != before {
-		t.Fatal("failed creation changed worktrees")
-	}
-	if _, err := os.Stat(filepath.Join(root, ".archetipo", "increments")); !os.IsNotExist(err) {
-		t.Fatalf("failed creation persisted increment state: %v", err)
+	records, err := s.List()
+	if err != nil || len(records) != 0 {
+		t.Fatalf("unexpected side effects: %v %v", records, err)
 	}
 }
 
-func TestApprovedRevisionsKeepTheOriginalBacklogInStep(t *testing.T) {
+func TestContinuousUsesCurrentBranchWhenMainAbsent(t *testing.T) {
 	s := fixture(t)
-	first, keep, retire := story("US-001", "CSV"), story("US-002", "Unchanged"), story("US-003", "Retire")
-	r := proposeApprove(t, s, create(t, s), first, keep, retire)
-	official := func() map[string]domain.Spec {
-		items, err := s.Connector.FetchBacklogItems(context.Background(), "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		byCode := map[string]domain.Spec{}
-		for _, st := range items {
-			byCode[st.Code] = st
-		}
-		return byCode
-	}
-	codes := map[string]string{"US-001": r.Published["US-001"], "US-002": r.Published["US-002"], "US-003": r.Published["US-003"]}
-	if codes["US-001"] != "US-011" || codes["US-003"] != "US-013" || len(official()) != 4 {
-		t.Fatalf("codes not allocated at approval: %v", codes)
-	}
-	first.Title = "Excel"
-	added := story("US-004", "Area filter")
-	r, err := s.Propose(context.Background(), r.ID, Proposal{Intent: "Excel replaces CSV.", Stories: []domain.Spec{first, keep, added}})
+	runGit(t, s.Config.ProjectRoot, "branch", "-m", "product")
+	r, err := s.CreateWithMode(context.Background(), "App", "Change app", "", Continuous)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if official()[codes["US-001"]].Title != "CSV" {
-		t.Fatal("an unapproved proposal changed the original backlog")
+	t.Cleanup(func() {
+		_, _ = git(context.Background(), s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir)
+	})
+	if r.BaseBranch != "product" {
+		t.Fatalf("wrong base: %s", r.BaseBranch)
 	}
-	if _, err = s.Approve(context.Background(), r.ID, 2); err != nil {
-		t.Fatal(err)
-	}
-	if r, err = s.SyncStories(context.Background(), r.ID); err != nil {
-		t.Fatal(err)
-	}
-	byCode := official()
-	if byCode[codes["US-001"]].Title != "Excel" || byCode[codes["US-002"]].Status != domain.StatusInProgress {
-		t.Fatalf("approved revision not mirrored: %+v", byCode)
-	}
-	if _, found := byCode[codes["US-003"]]; found {
-		t.Fatal("retired story left in the original backlog")
-	}
-	if r.Published["US-004"] != "US-014" || byCode["US-014"].Status != domain.StatusInProgress {
-		t.Fatalf("added story not published with a fresh code: %v", r.Published)
-	}
-	if _, err = s.SyncStories(context.Background(), r.ID); err != nil || len(official()) != 4 {
-		t.Fatal("approval retry duplicated the official stories", err)
-	}
+
 }
 
-// Some connectors (github) list stories without their body: the increment must
-// recognise its own stories from the detail, or every retry would conflict.
-type bodylessListConnector struct{ connector.Connector }
-
-func (c bodylessListConnector) FetchBacklogItems(ctx context.Context, status domain.Status) ([]domain.Spec, error) {
-	stories, err := c.Connector.FetchBacklogItems(ctx, status)
-	for i := range stories {
-		stories[i].Body = ""
-	}
-	return stories, err
-}
-
-func TestMirroringRecognisesItsStoriesWhenListingsCarryNoBody(t *testing.T) {
+func TestContinuousBootstrapsEmptyWorkspaceWithoutCommittingUntrackedFiles(t *testing.T) {
 	s := fixture(t)
-	s.Connector = bodylessListConnector{Connector: s.Connector}
-	remote(t, s)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"), story("US-002", "Retire"))
-	if _, err := s.SyncStories(context.Background(), r.ID); err != nil {
-		t.Fatalf("second sync conflicted with its own stories: %v", err)
+	if err := os.RemoveAll(filepath.Join(s.Config.ProjectRoot, ".git")); err != nil {
+		t.Fatal(err)
 	}
-	r = ready(t, s, r)
-	s.Hosting = &fakeHosting{}
-	if r, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil || r.Status != Proposed {
-		t.Fatalf("publication conflicted with its own stories: %+v %v", r, err)
+	if err := os.Remove(filepath.Join(s.Config.ProjectRoot, "hello.txt")); err != nil {
+		t.Fatal(err)
 	}
-	plan, err := s.DeletionPlan(context.Background(), r.ID)
+	runGit(t, s.Config.ProjectRoot, "init", "-b", "main")
+	runGit(t, s.Config.ProjectRoot, "add", ".archetipo/config.yaml")
+	r, err := s.CreateWithMode(context.Background(), "New app", "Build app", "", Continuous)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Delete(context.Background(), r.ID, DeletionOptions{HeadSHA: plan.HeadSHA, Confirm: true}); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() {
+		_, _ = git(context.Background(), s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir)
+	})
+	if files := runGit(t, s.Config.ProjectRoot, "ls-tree", "--name-only", "HEAD"); files != "" {
+		t.Fatalf("unexpected committed files: %s", files)
 	}
-	// The wrapper hides SpecDeleter too, like github: retired stories go back
-	// to TODO instead of being removed.
-	items, _ := s.Connector.FetchBacklogItems(context.Background(), "")
-	if len(items) != 3 {
-		t.Fatalf("stories of a deleted increment: %v", items)
-	}
-	for _, st := range items {
-		if st.Status != domain.StatusTodo {
-			t.Fatalf("an unmerged PR kept the story %s of a deleted increment %s", st.Code, st.Status)
-		}
+	if r.BaseBranch != "main" {
+		t.Fatal(r.BaseBranch)
 	}
 }
 
-func TestReadyRecordsSimulatedIntegrationsFromTheRecipeAndThePRRepeatsThem(t *testing.T) {
+func TestContinuousRefusesUnversionedExistingCode(t *testing.T) {
 	s := fixture(t)
-	remote(t, s)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	recipe := `{"version":1,"directory":".","argv":["server","{port}"],"url":"http://127.0.0.1:{port}","simulated":["google-oauth","google-calendar"]}`
-	if err := os.WriteFile(filepath.Join(r.Workdir, ".archetipo", "preview.json"), []byte(recipe), 0o600); err != nil {
+	if err := os.RemoveAll(filepath.Join(s.Config.ProjectRoot, ".git")); err != nil {
 		t.Fatal(err)
 	}
-	complete(t, s, r)
-	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("simulated\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if _, err := s.CreateWithMode(context.Background(), "Existing", "Change app", "", Continuous); err == nil {
+		t.Fatal("unversioned source silently omitted")
 	}
-	runGit(t, r.Workdir, "add", "hello.txt", ".archetipo/preview.json")
-	runGit(t, r.Workdir, "commit", "-m", "feat: export")
-	// The agent cannot claim a real trial: the recipe is the only source.
-	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, Simulated: []string{}, SquashCommit: &SquashCommit{Title: "feat: export"}})
-	if err != nil || strings.Join(r.Result.Simulated, ",") != "google-oauth,google-calendar" {
-		t.Fatalf("simulated integrations not taken from the recipe: %+v %v", r.Result, err)
-	}
-	hosting := &fakeHosting{}
-	s.Hosting = hosting
-	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
-		t.Fatal(err)
-	}
-	// The description is the squash commit; the trial notice travels with the details comment.
-	if len(hosting.comments) != 1 || !strings.Contains(hosting.comments[0], SimulatedNotice(r.Result.Simulated)) {
-		t.Fatalf("PR hides the simulated trial: %q", hosting.comments)
-	}
-	if SimulatedNotice(nil) != "" {
-		t.Fatal("a real trial produced a notice")
+	if _, err := os.Stat(filepath.Join(s.Config.ProjectRoot, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("created Git after refusal: %v", err)
 	}
 }
 
-func TestPRTitleAndBodyLeadWithTheSquashCommitWrittenAtReadiness(t *testing.T) {
-	s := fixture(t)
-	remote(t, s)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	complete(t, s, r)
-	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte("squash\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, r.Workdir, "commit", "-am", "wip")
-	if _, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, SquashCommit: &SquashCommit{Title: "feat: export\nsecond line"}}); err == nil {
-		t.Fatal("a multi-line squash title was accepted")
-	}
-	r, err := s.Ready(context.Background(), r.ID, Result{Summary: "Try it.", Checks: []string{"go test — passed"}, SquashCommit: &SquashCommit{Title: "feat(export): esporta i clienti per la revisione", Body: "Il commerciale scarica i clienti attivi in CSV."}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	hosting := &fakeHosting{}
-	s.Hosting = hosting
-	if _, err = s.Publish(context.Background(), r.ID, r.ReadySHA, 1); err != nil {
-		t.Fatal(err)
-	}
-	// The description is the squash commit: message and stories, nothing else.
-	if hosting.createTitle != "feat(export): esporta i clienti per la revisione" || !regexp.MustCompile(`^Il commerciale scarica i clienti attivi in CSV\.\n\n- US-\d+ — Export\n$`).MatchString(hosting.createBody) {
-		t.Fatalf("PR does not carry only the squash commit: %q\n%s", hosting.createTitle, hosting.createBody)
-	}
-	if len(hosting.comments) != 1 || !strings.HasPrefix(hosting.comments[0], detailsMarker(r.ID)+"\n") || !strings.Contains(hosting.comments[0], "Incremento "+r.ID) || !strings.Contains(hosting.comments[0], "go test — passed") {
-		t.Fatalf("intent and checks are not in the details comment: %q", hosting.comments)
-	}
-}
+// This runner executes real fixture checks without spawning the CLI supervisor
+// from a Go test binary (the supervisor itself has dedicated integration tests).
+type productRunner struct{}
 
-func TestSandboxCommitsNameTheProductBacklogStory(t *testing.T) {
-	s := fixture(t)
-	r := proposeApprove(t, s, create(t, s), story("US-001", "Export"))
-	sandbox, err := config.LoadExact(r.Workdir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The fixture backlog already holds US-010, so the published code differs.
-	if got := PublishedCode(sandbox, "US-001"); got != r.Published["US-001"] || got == "US-001" {
-		t.Fatalf("sandbox commit scope %q, published %q", got, r.Published["US-001"])
-	}
-	if got := PublishedCode(sandbox, "US-999"); got != "US-999" {
-		t.Fatalf("an unpublished story changed code: %q", got)
-	}
-	if got := PublishedCode(s.Config, "US-001"); got != "US-001" {
-		t.Fatalf("outside a sandbox the code changed: %q", got)
-	}
+func (productRunner) Run(ctx context.Context, root string, env []string, c verification.Command, out io.Writer) error {
+	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	return cmd.Run()
 }
-
-func TestReadyPayloadDecodesThroughTheYAMLReaderOfTheCLI(t *testing.T) {
-	// The CLI reads --file payloads with yaml.Unmarshal, which ignores json tags:
-	// the documented squash_commit and preview_url used to be dropped silently.
-	payload := `{"summary":"Try it","preview_url":"http://127.0.0.1:3000","checks":["go test — passed"],"squash_commit":{"title":"feat(export): esporta i clienti","body":"Perché."}}`
-	var result Result
-	if err := yaml.Unmarshal([]byte(payload), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.PreviewURL != "http://127.0.0.1:3000" || result.SquashCommit == nil || result.SquashCommit.Title != "feat(export): esporta i clienti" || result.SquashCommit.Body != "Perché." {
-		t.Fatalf("payload fields lost in decoding: %+v", result)
-	}
-}
-
-func TestPRHeadMovedAfterApprovalIsDeliveredOnlyOnceReapproved(t *testing.T) {
-	s := fixture(t)
-	remote(t, s)
-	r := ready(t, s, proposeApprove(t, s, create(t, s), story("US-001", "Excel")))
-	hosting := &fakeHosting{}
-	s.Hosting = hosting
-	r, err := s.Publish(context.Background(), r.ID, r.ReadySHA, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.PRMoved() {
-		t.Fatal("fresh PR reported as moved")
-	}
-	hosting.pr.HeadSHA = "merge-of-main"
-	if _, err = s.Refresh(context.Background(), r.ID); err == nil {
-		t.Fatal("moved PR head delivered")
-	}
-	moved, _ := s.Read(r.ID)
-	if !moved.PRMoved() || moved.PR.HeadSHA != "merge-of-main" || moved.ApprovedSHA != r.ApprovedSHA {
-		t.Fatalf("moved head not kept for the person to read: %+v", moved)
-	}
-	if want := "https://github.com/example/product/compare/" + r.ApprovedSHA + "...merge-of-main"; moved.PRCompareURL() != want {
-		t.Fatalf("compare url %q, want %q", moved.PRCompareURL(), want)
-	}
-	hosting.pr.HeadSHA = "moved-again"
-	if _, err = s.ReapprovePR(context.Background(), r.ID); err == nil {
-		t.Fatal("approved a head the person never saw")
-	}
-	again, _ := s.Read(r.ID)
-	if again.ApprovedSHA != r.ApprovedSHA || again.PR.HeadSHA != "moved-again" {
-		t.Fatalf("second move not shown: %+v", again)
-	}
-	current, err := s.ReapprovePR(context.Background(), r.ID)
-	if err != nil || current.ApprovedSHA != "moved-again" || current.PRMoved() {
-		t.Fatalf("re-approval failed: %+v %v", current, err)
-	}
-	hosting.pr.State = "MERGED"
-	if current, err = s.Refresh(context.Background(), r.ID); err != nil || current.Status != Delivered {
-		t.Fatalf("re-approved merge not delivered: %+v %v", current, err)
+func verifyProduct(t *testing.T, r Record) {
+	t.Helper()
+	service := verification.New(r.Workdir, "")
+	service.Runner = productRunner{}
+	result, err := service.Execute(context.Background(), "check", "diff", "", false)
+	if err != nil || !result.Passed || !result.Stable {
+		t.Fatalf("fixture verification: %+v %v", result, err)
 	}
 }

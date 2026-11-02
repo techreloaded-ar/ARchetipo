@@ -4,30 +4,56 @@ This file provides guidance to AI agents (Claude Code, Codex, and any other codi
 
 ## Project
 
-Starting with v30, ARchetipo is a **product that sets up and runs a software delivery workflow**, not a collection of skills. It takes a project from a rough idea to reviewed code through a defined process — inception, backlog, spec, plan, implement, review — and keeps every artifact of that process durable and inspectable.
+ARchetipo is a product workspace: understand a problem, build and try a working
+solution, record observations and decisions, and hand a business-approved candidate
+to developers through a PR. It supports enterprise traceability without requiring
+an internal delivery backlog or a plan/implementation/review ceremony for every change.
 
-The product has three parts, and a change must respect the role of each:
+The three layers have distinct responsibilities:
 
-| Part | Role | Where it lives |
+| Part | Responsibility | Location |
 | --- | --- | --- |
-| **`archetipo view`** | The **focal point** of the product. A local web application where a person opens a workspace, sees where the process stands (stage, board, next recommended step), starts process actions, and talks to the coding agent in durable native sessions. | `cli/internal/web/` (server and routes), `cli/internal/web/assets/` (frontend), `cli/internal/execution/` (providers and sessions) |
-| **The `archetipo` CLI** | The **deterministic** layer. Every read and write of workflow artifacts (PRD, backlog, specs, plans, Wiki, statuses, worktrees) goes through it, through a stable JSON envelope. It never interprets natural language and never guesses. | `cli/` (Go module) |
-| **The skills** | The **agentic** layer. Each skill carries the method of one process step (`archetipo-inception`, `-spec`, `-plan`, `-implement`, `-review`, `-autopilot`, `-wiki`, `-design`) and calls the CLI to persist its results. | `skills/` |
+| `archetipo view` | Chat, running app preview, optional Backlog and Documentation views; orchestration and presentation | `cli/internal/web/` |
+| CLI | Deterministic artifacts, connectors, worktrees, environment ownership and evidence | `cli/` |
+| Skills | Judgement, product specifications and implementation; standalone and native-session invocation | `skills/` |
 
-The skills are used in two ways, and both are first-class:
+Product work uses `archetipo-increment`, `archetipo-environment` and optionally
+`archetipo-wiki`. Optional enterprise artifact work retains the simplified
+`archetipo-inception`, `archetipo-spec` and `archetipo-plan` methods. The costly
+`autopilot`, `design`, `implement` and `review` skills and the increment's internal
+story delivery state machine have been removed. Do not reintroduce them as a hidden
+fallback. Historical records remain inspectable; only explicit user requests may
+remove their data.
 
-1. **By the view.** A process action pressed in `archetipo view` starts a turn in the harness's native session that invokes the matching skill; the viewer then verifies the persisted effect through the CLI.
-2. **Standalone.** Inside any supported coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, GitHub Copilot, Pi) a person can invoke `/archetipo-*` directly, without the viewer running.
+## Product and enterprise contract
 
-Consequences for any change:
+- The primary interaction is chat plus the working app. Backlog and Documentation
+  are secondary, fully usable product views.
+- A work can link original business stories. Never clone them into an internal
+  delivery backlog or mark them DONE merely because code passes checks or a PR merges.
+- Version the Markdown specification and linked requirement snapshots. Preserve
+  prior results, observations, decisions and the original request.
+- `increment dossier` and the PR carry a portable business record. Environment
+  removal retains this record and its story references through the deletion receipt.
+- Only an explicit approval of the displayed commit publishes a PR. Preserve the
+  approved SHA/time separately from later developer commits. The viewer never merges
+  branches or deploys; moving backlog cards is project management only.
+- Worktrees provide local working separation, not OS security isolation. Managed
+  project recipes own services, ports and test data. Remote/security runtimes are
+  future layers; do not claim them as implemented.
+- Native sessions stay durable, resumable and independent of turn/execution lifetime.
+- Process metadata belongs to the server/Template; persistence to the CLI and connector;
+  judgement/content to the skill. The frontend renders metadata and contains no
+  hidden workflow rules. Existing pure renderers remain pure.
 
-- A skill must never depend on the viewer being present, and the viewer must never reimplement what a skill or the CLI does.
-- Process rules live in the process Template and in the CLI, never in the frontend: the view renders the actions, stages and reasons it receives.
-- Persistence is deterministic and belongs to the CLI; judgement and content belong to the skill.
+## Process Template
 
-## Process Templates
-
-The workflow a workspace follows is defined by a **process Template** (`cli/internal/processdef/builtin/`): it decides which skills `archetipo init` installs, which statuses the process uses, and which actions each status admits. `fabbrica-del-software` is the default software-delivery process; `dossier` is an alternative one. The Template chosen at init is recorded in the `template:` block of `.archetipo/config.yaml`. `examples/archetypes/` holds examples of custom archetypes.
+The built-in `fabbrica-del-software` Template is revision `2.0.0`. It declares
+business labels, optional artifact operations and installed skills. Its optional
+planning/documentation offers are not prerequisites for creating product work.
+The selected identity is recorded in `.archetipo/config.yaml`. Keep this identity
+stable for existing workspace configuration; no delivery skill should be installed
+merely to preserve the old template's behavior.
 
 ## Repository structure
 
@@ -48,8 +74,7 @@ cli/                     # Go module implementing the `archetipo` CLI and the vi
     execution/           # Execution providers (claude, codex, arcipelago), sessions, receipts, effect verification
     conversationlog/     # Durable conversation journal (.archetipo/conversations/)
     viewreg/             # Registry of known workspaces and running viewers
-    processdef/          # Built-in process Templates and their prompts
-    template/            # Template loading
+    template/            # Built-in process metadata and optional artifact actions
     domain/              # Shared data types
     connector/           # Interface and implementations (filefs, github, jira, inmemory) + conformance suite
     config/              # `.archetipo/config.yaml` loader
@@ -59,7 +84,6 @@ cli/                     # Go module implementing the `archetipo` CLI and the vi
     gitwt/               # Git worktree support
     validation/          # Structural validation of artifacts
     metrics/             # Workflow metrics
-integrations/hermes/     # ARchetipo integration for Hermes
 examples/archetypes/     # Example custom archetypes
 docs/                    # ADRs, plans, releases, mockups and this repository's own Wiki
 npm/                     # npm package (@techreloaded/archetipo + 6 platform packages)
@@ -94,6 +118,11 @@ timeout and hard process death. Preserve its timing reports under the ignored
 run directory. Do not present these timings as end-to-end LLM/application speed.
 A cached check is valid only for its complete declared inputs and retained original
 evidence; a fresh failure revokes an older pass of the same candidate.
+Checks explicitly declared `during_preview` may use retained preparation while the
+app runs; setup and cleanup remain exclusive. Owner death cancels those checks
+before guard cleanup. `environment evidence` inspects original reports. Product
+readiness and publication require every declared check and preserve the exact
+reports shown with the approved candidate; agent text never substitutes for them.
 
 ## Native harness sessions (`archetipo view`)
 
@@ -116,6 +145,7 @@ Rules that follow from this, and that a change must not quietly undo:
 - **An action runs *in* the session.** `POST /api/spec/{code}/execution` and `POST /api/workspace/execution` accept a `conversation_id` and, for a provider with native sessions, start a turn in that thread instead of spawning a second agent. The receipt closes the execution; it does not close the conversation.
 - **Skills come from the runtime.** Discovery is the harness's own (`skills/list` for Codex, `system/init` for Claude) and never a scan of `.claude/skills` accumulated across providers. A catalog not yet announced is declared unknown rather than guessed.
 - **Choices are per turn.** Model and options chosen during a turn apply to the *next* one, are validated against the session's own catalog, and never move the workspace default.
+- **Worker interactions retain native ownership.** A parent turn ending must not discard a worker's pending approval or input. It remains answerable after reload until its own native turn ends, the runtime resolves it or the connection is released. Stopping such a worker preserves the already completed parent turn.
 - **Ownership is per conversation.** One viewer process at a time holds a native runtime, through the conversation lock the journal already uses; a second viewer reads it and is refused only when it writes.
 - **Conversation deletion and environment removal are distinct choices.** `DELETE …/{id}` releases the runtime. Chat-only `DELETE …/{id}/record` removes the ARchetipo record and timeline and preserves the native session. For linked worktrees, deletion and archiving require an explicit keep/remove choice; confirmed increment removal delegates to the shared CLI increment deletion contract, which stops owned work, runs the registered environment cleanup, retains only a Git recovery ref for committed work (no environment archive) and removes its local worktree, branch and live records. Archiving with removal keeps the conversation readable. Never delete the harness transcript, guess service ownership or remove working files merely because a conversation was closed.
 
@@ -170,7 +200,7 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 
 - Command: `npm run test:e2e` (equivalent to `node ./test/e2e/run.mjs`).
 - Useful options: `--scenario <id>` / `--scenarios <id1,id2>`, `--config <path>`, and `--timeout-ms <ms>`.
-  - Example: `npm run test:e2e -- --scenario worktree-from-plan-to-implement-integrate`.
+  - Example: `npm run test:e2e -- --scenario wiki-bootstrap-codebase-only`.
 - The runner always builds the Go CLI into `test/e2e/.bin/archetipo` (`go build -o ... ./cmd/archetipo`), so Go must be installed.
 - For every scenario, it creates a sandbox under `test/workspaces/<scenario>/runs/<timestamp>/sandbox`, copies the CLI into `sandbox/bin/`, sets `ARCHETIPO_DATA_DIR` to the repository root, and prepends `sandbox/bin` to `PATH`.
 - Every run produces `report.html` and `summary.json` in its run directory. Generated workspaces and the E2E binary (`test/workspaces/*`, `test/e2e/.bin/`) are ignored and must not be committed.
@@ -217,17 +247,11 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 
 ### Current scenarios
 
-- `inception-creates-valid-prd`: fixture `fixtures/inception`, prompt `/archetipo-inception`, then `validate prd`; verifies that the skill generates and persists a structurally valid PRD.
-- `wiki-bootstrap-codebase-only`: fixture `fixtures/wiki-codebase`, prompt `/archetipo-wiki`; verifies a complete codebase-first DDD map without product documents or automatic approval.
-- `wiki-bootstrap-prd-conflict`: fixture `fixtures/wiki-prd-conflict`, prompt `/archetipo-wiki`; verifies the `references/prd` concept, code authority for current state, and a conflict recorded as an issue.
-- `from-prd-to-plan`: fixture `fixtures/prd`, prompts `/archetipo-spec` and `/archetipo-plan US-001`; covers PRD -> backlog/spec -> plan.
-- `jira-init`: fixture `fixtures/jira-prd`, currently without prompts; uses the `jira` connector configuration.
-- `from-plan-to-implement`: fixture `fixtures/plan`, prompt `/archetipo-implement US-001`; worktrees disabled.
-- `worktree-from-plan-to-implement-integrate`: fixture `fixtures/worktree-plan`, prompt `/archetipo-implement US-001`, then `spec integrate US-001`; verifies integration.
-- `worktree-implement-no-integrate`: fixture `fixtures/worktree-plan`, pre-command `spec start US-001`, then `/archetipo-implement US-001`; leaves the work unintegrated.
-- `autopilot-worktree-full`: fixture `fixtures/worktree-plan`, prompt `/archetipo-autopilot US-001`; verifies the full autonomous run — plan, implement, autonomous acceptance — reaches `DONE` and leaves no branch or worktree behind.
-- `autopilot-in-context-full`: fixture `fixtures/plan` (worktrees disabled), prompt `/archetipo-autopilot US-001`; verifies the same run reaches `DONE` through `spec move` rather than integration.
-- `worktree-review-accepts-wiki`: creates a generated-evidence baseline commit, then a separate seeded-review metadata commit and verifies both seeded pages are fresh before prompting. It implements an exact greeting change with one required generated page, one affected-only tracked behavioral page, and one reviewed reference whose shared hub source is context; review approves the required page, explicitly reconfirms the verified-accurate affected-only page, preserves the fresh reference, commits exactly the accepted Wiki paths, integrates the spec, and removes its branch/worktree.
+The active manifest includes `inception-creates-valid-prd`,
+`wiki-bootstrap-codebase-only`, `wiki-bootstrap-prd-conflict`, `from-prd-to-plan`
+and `jira-init`. These exercise the retained optional product-management and
+Wiki capabilities. Former implementation/review/autopilot scenarios are retired;
+product work is covered by the browser smokes below and the increment Go suite.
 
 ### Available fixtures
 
@@ -242,7 +266,9 @@ This repository includes a local Node.js E2E harness that exercises the CLI buil
 
 ### Standalone smoke tests
 
-- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome, with only the agent and GitHub simulated. It exercises intent approval, isolated development, feedback, result approval, one PR and merge reconciliation. Publication is pressed from the next step beside the composer: its inline confirmation replaces the field, starts nothing by itself, and once confirmed the agent acknowledges the release preparation in the same native session before the phases show «Preparazione». The official story is IN PROGRESS from intent approval (a revision updates it), REVIEW once the PR opens and DONE only after the confirmed merge. Once the merge is confirmed the viewer removes the sandbox by itself (worktree, branch, services), keeps the Git recovery ref and archives the conversation, which stays readable. During development it terminates the fake agent process after one task is persisted DONE, then requires automatic continuation in the same native session and increment with that task preserved and the remaining task still TODO. The checkpoint must record one recovery; publication still requires the explicit business approval. Reports and screenshots remain in the ignored run directory.
+- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome with only the agent and GitHub simulated. It starts from an original enterprise story, develops and revises a specification, recovers the same native session after process death while preserving a checkpoint, tests preview and reload, requires business approval for a single PR, reconciles later developer commits and verifies bidirectional story/work/PR links and dossier export. Reports and desktop/mobile screenshots remain ignored.
+  It also reads an increment report from its own worktree as inert text and
+  verifies that reopening an already open thread preserves its native identity.
 
 - `npm run test:view-wiki-smoke`: drives the real Documentation page in headless Chrome against the real viewer and native Codex adapter, with only the agent binary simulated. It presses Create, Refresh, Check and Ask about this page; validates the generated bootstrap through the CLI; verifies persisted changed-page lists, exact selected-page context, separate native conversations, hidden technical receipts, history after reload and a 390px viewport. It uses no credentials or non-local traffic, reports missing Chrome as failure, skips Windows explicitly because the fake uses a POSIX shebang, and writes screenshots plus HTML/JSON reports into the ignored run directory.
 
@@ -281,6 +307,8 @@ When adding or modifying E2E tests, prefer explicit fixtures with a complete `.a
 The page-load smoke also follows a live conversation across three 500-event
 pages without clicking the history control. It verifies that old messages remain,
 the current question appears exactly once, and subsequent updates still arrive.
+It also stalls one browser read until its abort signal fires, then verifies an
+automatic retry at the same cursor, continued updates and a preserved draft.
 This covers the recovery path after an increment action reopens a long timeline;
 the deterministic provider fixture uses no agent or credentials. At 390px it also
 adds a long increment and a pending permission, verifies that the decision and
@@ -329,15 +357,6 @@ across real polling before returning to the composer.
   preferences after reload. No AI credentials or non-local services; missing Chrome fails explicitly.
   Reports and screenshots are written under ignored `test/workspaces/` paths.
 
-The page-load smoke also drives the questionnaire a pending input is answered
-through, against a fetch fixture with a single-choice and a multi-select
-question: forward is refused without an answer, «Altro» opens its text field
-focused, the multi-select question draws checkboxes, drafts survive moving
-back and forward, and the answers posted to `/inputs/{id}` are exactly the ones
-given. It saves a questionnaire screenshot. The Claude adapter projects an
-`AskUserQuestion` call into that form (`cli/internal/execution/claude/input.go`),
-answering with `updatedInput.answers` keyed by question text.
-
 The page-load smoke also verifies the shared work panel toggle, reopening the
 last selected tab, expansion of increment details across the primary area,
 retained expansion across tab changes and polling, Escape restoring before
@@ -354,3 +373,55 @@ preserve the live iframe across Preview/Increment tab changes.
   native identities, Git recovery refs without environment archives and a 390px confirmation dialog. No AI
   credentials or remote traffic; missing Chrome fails. Reports and screenshots
   remain under ignored `test/workspaces/increment-deletion-smoke/` paths.
+
+The page-load smoke also exercises discovery question cards with named personality
+headers, single and multiple choices and free text. It checks that polling and a
+failed delivery preserve the selection, retries send the same answer, and the
+next question stays in the same conversation at desktop and 390px widths.
+Screenshots remain in the ignored run directory.
+
+
+The harness benchmark also exercises runtime capability reports without a known
+stack, candidate setup qualification (two real preparations and readiness on warm
+reuse), qualified common publication and rejection after helper mutation. Reports
+retain the original preparation logs and stay under ignored test/workspaces/.
+New technical sessions discover the project through archetipo-environment and
+publish qualified candidates; setup repeatability does not replace product checks
+or prove preservation of application data.
+
+
+The preview smoke also starts directly from the empty work home, with no product
+conversation. It verifies workspace preview routes, native technical setup,
+branch/directory identity on desktop and 390px, qualified publication and reuse
+without remounting the live iframe. Server tests cover real Git worktrees,
+changing branches, detached HEAD and workspace-scoped route isolation.
+
+The preview smoke answers native approvals, structured inputs and ordinary technical
+questions directly in Preview, then reopens the technical history and verifies it
+survives reload with the same identity. The harness benchmark also inspects a failed
+check through `environment checks` without changing its evidence. Check observation
+is read-only and does not replace the product readiness/publication evidence gate.
+
+The page-load smoke verifies that an unsent workspace chat draft survives a real
+page reload. It stays in browser session storage and is cleared after successful
+delivery; a failed delivery preserves it. The preview smoke verifies a stable
+browser origin and retained localStorage across Stop/Start. Preview unit tests
+cover manager restart and refusal of an occupied retained proxy port. Increment
+tests cover common recipes published only from a worktree, without materialized
+parent files, including replacement of unchanged older versioned helpers while
+preserving edited and untracked helpers.
+
+The page-load smoke also verifies first-provider onboarding: saving the provider
+refreshes the home and removes its former unavailable notice without a restart.
+Connector/path and idle-release policy changes still declare their required
+restart. The chat smoke retains a worker approval across parent completion and
+reload, delivers it through the native adapter and stops a later pending worker
+without rewriting the completed parent turn.
+
+The chat and enterprise increment smokes also attach an image to feedback, reject
+one delivery, verify that both the text and image remain available, and retry
+through the same native session. They inspect the actual localImage input and
+stored bytes. The increment server test also verifies images on the first turn
+in its dedicated context. Readiness requires a single-line squash commit title;
+the PR retains the complete dossier. Renderer tests combine worker metadata with
+images without splitting the parent response.

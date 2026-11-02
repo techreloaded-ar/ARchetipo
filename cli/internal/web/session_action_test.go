@@ -40,25 +40,33 @@ func newActionSessionServer(t *testing.T) (*Server, *persistentFakeNativeProvide
 // something the test injected into the record.
 func (p *persistentFakeNativeProvider) completeCurrentTurn(t *testing.T, message string, state execution.TurnState) {
 	t.Helper()
-	p.store.mu.Lock()
-	defer p.store.mu.Unlock()
-	for _, session := range p.store.sessions {
-		if session.snapshot.CurrentTurn == nil || session.snapshot.Work != execution.SessionTurnActive {
-			continue
+	// The journal publishes the intended turn before the native adapter has
+	// accepted it. Wait for that acceptance rather than completing a turn that
+	// has not started yet. This also covers delivery fallback after stale steer.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.store.mu.Lock()
+		for _, session := range p.store.sessions {
+			if session.snapshot.CurrentTurn == nil || session.snapshot.Work != execution.SessionTurnActive {
+				continue
+			}
+			turn := session.snapshot.CurrentTurn
+			session.events = append(session.events, execution.RunEvent{
+				ID: int64(len(session.events) + 1), Kind: "text", Text: message,
+				TurnID: turn.ID, At: time.Now().UTC(),
+			})
+			completed := time.Now().UTC()
+			turn.State, turn.CompletedAt = state, &completed
+			session.snapshot.Work = execution.SessionIdle
+			select {
+			case session.notify <- struct{}{}:
+			default:
+			}
+			p.store.mu.Unlock()
+			return
 		}
-		turn := session.snapshot.CurrentTurn
-		session.events = append(session.events, execution.RunEvent{
-			ID: int64(len(session.events) + 1), Kind: "text", Text: message,
-			TurnID: turn.ID, At: time.Now().UTC(),
-		})
-		completed := time.Now().UTC()
-		turn.State, turn.CompletedAt = state, &completed
-		session.snapshot.Work = execution.SessionIdle
-		select {
-		case session.notify <- struct{}{}:
-		default:
-		}
-		return
+		p.store.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("no active turn to complete")
 }
@@ -186,7 +194,7 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 		t.Fatalf("next-turn = %d: %s", w.Code, w.Body.String())
 	}
 
-	status, startedImplement := startSpecActionIn(t, srv, "US-901", "implement", conversationID)
+	status, startedImplement := startSpecActionIn(t, srv, "US-902", "plan", conversationID)
 	if status != http.StatusCreated {
 		t.Fatalf("start implement = %d: %v", status, startedImplement)
 	}
@@ -196,8 +204,8 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 	}
 	// The record stamps the status the spec had when the action was accepted,
 	// not the one the action's own transition has just produced.
-	if startedImplement["spec_status_before"] != string(domain.StatusPlanned) {
-		t.Fatalf("the implementation record says the spec was %v, want %s", startedImplement["spec_status_before"], domain.StatusPlanned)
+	if startedImplement["spec_status_before"] != string(domain.StatusTodo) {
+		t.Fatalf("the implementation record says the spec was %v, want %s", startedImplement["spec_status_before"], domain.StatusTodo)
 	}
 	if conversationOfExecution(t, srv, implementID) != conversationID {
 		t.Fatalf("the implementation was started in another conversation")
@@ -210,9 +218,8 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 		t.Fatalf("the implementation turn is %+v, want the chosen model and its own execution", last)
 	}
 
-	moveSpecTo(t, conn, "US-901", domain.StatusReview)
-	completeEveryTask(t, conn, "US-901")
-	provider.completeCurrentTurn(t, "{\"spec_code\":\"US-901\",\"status\":\"REVIEW\",\"tasks_done\":2,\"tests\":\"verdi\"}", execution.TurnCompleted)
+	persistPlanFor(t, conn, "US-902")
+	provider.completeCurrentTurn(t, "{\"spec_code\":\"US-902\",\"status\":\"PLANNED\",\"tasks\":2}", execution.TurnCompleted)
 	awaitExecutionStatus(t, srv, implementID, execution.StatusSucceeded)
 
 	// The session is still the person's to talk in, and the free message it
@@ -242,19 +249,6 @@ func TestOneConversationCarriesSeveralActionsAndStaysOpen(t *testing.T) {
 
 // completeEveryTask closes every task of the persisted plan, which is what the
 // implementation gate reads before it accepts the receipt.
-func completeEveryTask(t *testing.T, conn connector.Connector, code string) {
-	t.Helper()
-	ctx := context.Background()
-	tasks, err := conn.ReadSpecTasks(ctx, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, task := range tasks {
-		if _, err := conn.CompleteTask(ctx, code, task.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
 
 // awaitRecordSettled waits for the follower to have observed the end of the
 // turn, so an assertion about "the action is still running" is made after the
@@ -294,73 +288,6 @@ func TestASecondActionIsRefusedWhileOneIsRunningInTheThread(t *testing.T) {
 	}
 	if provider.store.starts != 1 {
 		t.Fatalf("the second press opened another turn: %d", provider.store.starts)
-	}
-}
-
-// TestAnActionOnAnotherSpecGetsItsOwnThread covers the step of a second spec
-// pressed while the thread of the first is still working: it is neither refused
-// nor appended to that thread, it opens a thread of its own.
-func TestAnActionOnAnotherSpecGetsItsOwnThread(t *testing.T) {
-	srv, provider, _ := newActionSessionServer(t)
-	status, started := startSpecActionIn(t, srv, "US-901", "plan", "")
-	if status != http.StatusCreated {
-		t.Fatalf("start plan = %d: %v", status, started)
-	}
-	first, _ := started["id"].(string)
-	firstThread := conversationOfExecution(t, srv, first)
-
-	status, other := startSpecActionIn(t, srv, "US-902", "plan", firstThread)
-	if status != http.StatusCreated {
-		t.Fatalf("the plan of another spec answered %d, want 201: %v", status, other)
-	}
-	second, _ := other["id"].(string)
-	if thread := conversationOfExecution(t, srv, second); thread == firstThread {
-		t.Fatalf("the plan of US-902 was appended to the thread of US-901")
-	}
-	if len(provider.store.sessions) != 2 {
-		t.Fatalf("the workspace holds %d native sessions, want one per spec", len(provider.store.sessions))
-	}
-}
-
-// TestAPreparedReviewAsksForTheVerdictInItsThread covers the decision a
-// prepared review leaves behind: the thread says a verdict is owed while the
-// spec waits in REVIEW, and stops saying it once the spec has left it.
-func TestAPreparedReviewAsksForTheVerdictInItsThread(t *testing.T) {
-	srv, provider, conn := newActionSessionServer(t)
-	seedSpecUnderReview(t, conn)
-	status, started := startSpecActionIn(t, srv, "US-901", "review", "")
-	if status != http.StatusCreated {
-		t.Fatalf("start review = %d: %v", status, started)
-	}
-	reviewID, _ := started["id"].(string)
-	thread := conversationOfExecution(t, srv, reviewID)
-	store, ok := conn.(connector.ReviewStore)
-	if !ok {
-		t.Fatal("the test connector keeps no review dossier")
-	}
-	if err := store.SaveReview(context.Background(), "US-901", domain.Review{Dossier: &domain.ReviewDossier{
-		ExecutionID: reviewID, Summary: "pronta", Criteria: []domain.ReviewCriterion{{ID: "AC-1", Verdict: "met"}},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	pending := func() bool {
-		_, view, body := readConversation(t, srv, thread, 0)
-		if len(view.Runs) != 1 {
-			t.Fatalf("the thread shows %d actions, want the review: %s", len(view.Runs), body)
-		}
-		return view.Runs[0].ReviewDecisionPending
-	}
-	if pending() {
-		t.Fatalf("a review still running already asks for the verdict")
-	}
-	provider.completeCurrentTurn(t, "{\"spec_code\":\"US-901\",\"status\":\"REVIEW\",\"criteria\":1,\"blockers\":0}", execution.TurnCompleted)
-	awaitExecutionStatus(t, srv, reviewID, execution.StatusSucceeded)
-	if !pending() {
-		t.Fatalf("the prepared review does not ask for the verdict")
-	}
-	moveSpecTo(t, conn, "US-901", domain.StatusDone)
-	if pending() {
-		t.Fatalf("a spec already closed still asks for the verdict")
 	}
 }
 

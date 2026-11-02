@@ -38,9 +38,10 @@ func newViewCmd(s streams, registry *execution.Registry) *cobra.Command {
 	var noOpen bool
 	cmd := &cobra.Command{
 		Use:   "view",
-		Short: "Open the local Kanban view for the backlog",
-		Long: `Start a local HTTP server that serves a Kanban board for the project
-backlog and, by default, opens it in the system browser.
+		Short: "Open the product workspace with chat and app preview",
+		Long: `Start a local HTTP server for product work through chat and a running
+app preview, with optional backlog and documentation views. By default, open it
+in the system browser.
 
 If --port is not given, a free port is selected automatically starting from
 8080, so repeated invocations never fail on a busy port. Use "archetipo view

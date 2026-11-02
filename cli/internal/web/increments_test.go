@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,12 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
 )
 
 func incrementGit(t *testing.T, dir string, args ...string) string {
@@ -72,8 +70,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	incrementGit(t, cfg.ProjectRoot, "add", "-A")
 	incrementGit(t, cfg.ProjectRoot, "commit", "-m", "initial")
 	free := openConversationOK(t, srv)
-	image := map[string]any{"name": "schermata.png", "media_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))}
-	response := doJSON(t, srv, "POST", "/api/increments", map[string]any{"request": "Esportare i clienti", "origin_conversation_id": free.Conversation.ID, "attachments": []any{image}})
+	response := doJSON(t, srv, "POST", "/api/increments", map[string]any{"request": "Esportare i clienti", "origin_conversation_id": free.Conversation.ID, "attachments": []any{map[string]any{"name": "mockup.png", "media_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("MOCKUP"))}}})
 	if response.Code != 201 {
 		t.Fatalf("create: %d %s", response.Code, response.Body.String())
 	}
@@ -99,14 +96,21 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if !strings.Contains(p.lastStart.Message, "/archetipo-increment "+r.ID) || p.lastStart.Session.Environment.WorkingDir != r.Workdir {
 		t.Fatal("initial turn lost the increment context")
 	}
-	// The image attached to the request opens the increment with its words:
-	// stored beside the increment's own conversation, handed by reference.
-	attachmentsDir, _ := srv.session().conversationStore().AttachmentsDir(view.Conversation.ID)
-	if len(p.lastStart.Attachments) != 1 || filepath.Dir(p.lastStart.Attachments[0].Path) != attachmentsDir || p.lastStart.Attachments[0].Name != "schermata.png" {
-		t.Fatalf("the initial turn lost the attachment: %#v (dir %s)", p.lastStart.Attachments, attachmentsDir)
+	if len(p.lastStart.Attachments) != 1 || p.lastStart.Attachments[0].Name != "mockup.png" {
+		t.Fatalf("initial increment turn lost its image: %+v", p.lastStart.Attachments)
 	}
+	attachment := p.lastStart.Attachments[0]
+	directory, _ := srv.session().conversationStore().AttachmentsDir(view.Conversation.ID)
+	if filepath.Dir(attachment.Path) != directory {
+		t.Fatal("initial image stored outside the increment conversation")
+	}
+	if content, err := os.ReadFile(attachment.Path); err != nil || string(content) != "MOCKUP" {
+		t.Fatalf("initial image was not retained: %q %v", content, err)
+	}
+	assertIncrementSessionGuidance(t, p.lastStart.Message)
+	assertIncrementReportScope(t, srv, r.ID, r.Workdir)
 	service := increment.New(cfg, conn)
-	proposal := increment.Proposal{Intent: "Esportare i clienti in Excel.", Stories: []domain.Spec{{Code: "US-001", Title: "Esportazione", Epic: domain.Epic{Code: "EP-001", Title: "Export"}, Priority: domain.Priority("MEDIUM"), Points: 3, Status: domain.StatusTodo, Scope: domain.Scope("MVP"), Body: "## Dimostrazione\nEsporto il file.\n- [ ] Il file contiene i clienti."}}}
+	proposal := increment.Proposal{Intent: "Esportare i clienti in Excel."}
 	if _, err := service.Propose(context.Background(), r.ID, proposal); err != nil {
 		t.Fatal(err)
 	}
@@ -115,103 +119,17 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	if err := json.Unmarshal(draftResponse.Body.Bytes(), &draft); err != nil {
 		t.Fatal(err)
 	}
-	if len(draft.Stories) != 1 || draft.Stories[0].StatusLabel != "Da approvare" || draft.Stories[0].Active || draft.Phases[0].Stories != nil {
-		t.Fatalf("unapproved intent acquired sandbox progress: %s", draftResponse.Body.String())
-	}
-	// The proposal waits on the person: the phases say where, and the next steps
-	// lead with the decision, the proposal to read and the ready-made prompts.
-	if len(draft.Phases) != 5 || draft.Phases[0].State != "current" || draft.Phases[1].State != "todo" || draft.NextStepsLabel != "Prossimi passi" {
-		t.Fatalf("wrong phases: %s", draftResponse.Body.String())
-	}
-	kinds := map[string]incrementStepView{}
-	for _, step := range draft.NextSteps {
-		kinds[step.Kind+":"+step.Action+step.Open] = step
-	}
-	if _, ok := kinds["decision:approve-intent"]; !ok || kinds["open:details"].Target != "intent" || kinds["prompt:"].Prompt == "" {
-		t.Fatalf("wrong next steps: %+v", draft.NextSteps)
-	}
-	denied := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
-	if denied.Code != 409 {
-		t.Fatalf("approved while active: %d %s", denied.Code, denied.Body.String())
+	if draft.Status != increment.Developing || draft.Revisions[0].Approved || len(draft.Stories) != 0 {
+		t.Fatalf("wrong product state: %+v", draft)
 	}
 	finishIncrementTurn(t, srv, p, view)
-	accepted := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
-	if accepted.Code != 200 {
-		t.Fatalf("approve: %d %s", accepted.Code, accepted.Body.String())
-	}
-	awaitEnvironmentReady(t, srv, r.Workdir)
-	if p.lastStart.Session.Native.ID != view.Session.Session.Native.ID || p.lastStart.Session.Environment.WorkingDir != r.Workdir {
-		t.Fatal("approval started another agent outside the increment")
-	}
-	// The view reads sandbox states, never the parent card with the same code
-	// or the frozen TODO status of the approved proposal.
-	sandboxCfg, err := config.LoadExact(r.Workdir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := filefs.New(sandboxCfg)
-	current, err := service.Read(r.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	project := func() incrementView {
-		t.Helper()
-		response := doJSON(t, srv, "GET", "/api/increments/"+r.ID, nil)
-		var projected incrementView
-		if err = json.Unmarshal(response.Body.Bytes(), &projected); err != nil {
-			t.Fatal(err)
-		}
-		if len(projected.Stories) != 1 || projected.Revisions[0].Stories[0].Status != domain.StatusTodo {
-			t.Fatalf("wrong sandbox projection: %s", response.Body.String())
-		}
-		return projected
-	}
-	// Under the current development phase each story says whether it is done,
-	// being worked on or still to do; the composer no longer lists them.
-	expectProgress := func(projected incrementView, state, note string) {
-		t.Helper()
-		phase := projected.Phases[1]
-		if phase.State != "current" || len(phase.Stories) != 1 || phase.Stories[0].Code != "US-001" || phase.Stories[0].State != state || phase.StoriesNote != note || projected.Stories[0].Active != (state == "current") {
-			t.Fatalf("wrong development progress, want %s %s: %+v", state, note, projected.Phases)
-		}
-		for _, step := range projected.NextSteps {
-			if step.Open == "story" {
-				t.Fatalf("story still offered beside the composer: %+v", projected.NextSteps)
-			}
-		}
-	}
-	if _, err = local.MoveBoardCard(context.Background(), "US-001", "in_progress", domain.ReorderAnchor{}); err != nil {
-		t.Fatal(err)
-	}
-	expectProgress(project(), "current", "0/1")
-	// With a plan the tasks decide, whatever the story status says.
-	if _, err = local.SavePlan(context.Background(), "US-001", domain.PlanInput{PlanBody: "Piano", Tasks: []domain.Task{{ID: "TASK-01", Title: "Uno", Type: domain.TaskImpl, Status: domain.StatusTodo}, {ID: "TASK-02", Title: "Due", Type: domain.TaskImpl, Status: domain.StatusTodo}}}); err != nil {
-		t.Fatal(err)
-	}
-	expectProgress(project(), "todo", "0/1")
-	if _, err = local.CompleteTask(context.Background(), "US-001", "TASK-01"); err != nil {
-		t.Fatal(err)
-	}
-	working := project()
-	expectProgress(working, "current", "0/1")
-	if working.Phases[1].StoriesFocus != "Ora: "+working.Stories[0].Title {
-		t.Fatalf("the story being worked on is not named: %q", working.Phases[1].StoriesFocus)
-	}
-	if _, err = local.CompleteTask(context.Background(), "US-001", "TASK-02"); err != nil {
-		t.Fatal(err)
-	}
-	expectProgress(project(), "done", "1/1")
-	// An old record with no readable sandbox still exposes the original
-	// stories and result; it does not invent completion or activity.
-	current.Workdir = t.TempDir()
-	current.Result = &increment.Result{Summary: "Risultato precedente"}
-	fallback := srv.incrementView(context.Background(), srv.session(), current)
-	if len(fallback.Stories) != 1 || fallback.Stories[0].Active || fallback.Stories[0].Progress != "" || fallback.Stories[0].Body != proposal.Stories[0].Body || fallback.Result.Summary != "Risultato precedente" {
-		t.Fatalf("legacy content lost or progress invented: %+v", fallback)
+	removed := doJSON(t, srv, "POST", "/api/increments/"+r.ID+"/approve-intent", map[string]any{"revision": 1})
+	if removed.Code != 409 {
+		t.Fatal("retired approval is still offered", removed.Code)
 	}
 	untouched, err := conn.FetchBacklogItems(context.Background(), "")
-	if err != nil || len(untouched) != 3 || untouched[2].Status != domain.StatusInProgress {
-		t.Fatal("approved story not shown in progress in the original backlog")
+	if err != nil || len(untouched) != 2 {
+		t.Fatal("intent approval wrote stories to the parent")
 	}
 	// A separate free conversation can still execute a normal turn in the
 	// original workspace, while the increment is being developed.
@@ -247,7 +165,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	p.workingDir = ""
 	increments, listErr := service.List()
 	if listErr != nil || len(increments) != 1 {
-		t.Fatalf("failed open left an orphan increment: %v %v", increments, listErr)
+		t.Fatalf("failed open left an orphan increment: %v %v; response: %s", increments, listErr, refused.Body.String())
 	}
 	srv.session().stop(time.Second)
 	p.store.loseRuntime()
@@ -290,6 +208,7 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 		if last.Session.Native.ID != view.Session.Session.Native.ID || last.Session.Environment.WorkingDir != r.Workdir || !strings.Contains(last.Message, "/archetipo-increment "+r.ID) {
 			t.Fatalf("resume changed the increment context: %#v", last)
 		}
+		assertIncrementSessionGuidance(t, last.Message)
 	}
 	// A restarted viewer holds the durable conversation without having an
 	// in-memory Codex connection. The action must resume before checking idle.
@@ -300,65 +219,94 @@ func TestIncrementUsesDedicatedNativeContextAndKeepsFreeConversationOperational(
 	p.store.loseRuntime()
 	resumeAction()
 }
+
+// Check the prompt actually delivered to the native provider, both on creation
+// and recovery: these paths used to bypass the ordinary action's input bridge.
+func assertIncrementSessionGuidance(t *testing.T, prompt string) {
+	t.Helper()
+	if !strings.Contains(prompt, sessionInputGuidance) {
+		t.Fatal("increment bypassed native conversation input guidance")
+	}
+	if strings.Contains(prompt, "Work only in the dedicated sandbox") || !strings.Contains(prompt, "archetipo execution environment publish") || !strings.Contains(prompt, "never modify the parent backlog") {
+		t.Fatal("increment lost the distinction between product edits and common environment publication")
+	}
+}
+
 func gitForIncrementCleanup(root, workdir string) ([]byte, error) {
 	cmd := exec.Command("git", "worktree", "remove", "--force", workdir)
 	cmd.Dir = root
 	return cmd.CombinedOutput()
 }
 
-func TestIncrementPhasesAndPRChecksFollowTheTemplate(t *testing.T) {
-	srv, _, _ := newRunServer(t, newPersistentFakeNativeProvider("native-fake", nil), true)
-	tpl, err := srv.resolveTemplate(srv.session())
+func TestIncrementReportsRequirementDriftWithoutRewritingSnapshot(t *testing.T) {
+	p := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, conn := newRunServer(t, p, true)
+	items, err := conn.FetchBacklogItems(context.Background(), "")
+	if err != nil || len(items) == 0 {
+		t.Fatal("fixture backlog", err)
+	}
+	current, err := conn.ReadSpecDetail(context.Background(), items[0].Code)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var states []string
-	for _, phase := range incrementPhases(tpl, increment.Proposed) {
-		states = append(states, phase.Label+"="+phase.State)
+	record := increment.Record{Status: increment.Developing, DevelopmentMode: increment.Continuous, LinkedStories: []increment.StoryLink{{Code: current.Code, Title: "Earlier request", Body: "Original acceptance"}}}
+	view := srv.incrementView(context.Background(), srv.session(), record)
+	if len(view.Stories) != 1 || !view.Stories[0].RequirementsChanged || view.Stories[0].Body != "Original acceptance" {
+		t.Fatalf("lost requirement drift/snapshot: %+v", view.Stories)
 	}
-	if strings.Join(states, ",") != "Definizione=done,Sviluppo=done,Preview=done,Preparazione=current,Rilascio=todo" {
-		t.Fatalf("wrong phases: %v", states)
-	}
-	if incrementPhases(tpl, "UNKNOWN") != nil {
-		t.Fatal("an unknown status invented a phase")
-	}
-	var checks incrementPRChecks
-	if !checks.begin("inc", time.Minute) || checks.begin("inc", time.Minute) {
-		t.Fatal("a running check was started twice")
-	}
-	checks.end("inc", nil)
-	if checks.begin("inc", time.Minute) || !checks.begin("inc", 0) {
-		t.Fatal("checks ignore their interval")
+	if view.CandidateLabel != "In lavorazione" {
+		t.Fatal(view.CandidateLabel)
 	}
 }
 
-// The increment's environment thread is listed under its increment; the
-// workspace's own environment thread and an orphan one stay out of the rail.
-func TestEnvironmentThreadIsNestedUnderItsIncrementInTheRail(t *testing.T) {
-	srv, _, dir := newFileTestServer(t)
-	ctx := context.Background()
-	sandbox := filepath.Join(dir, "sandbox")
-	for _, record := range []conversationlog.Record{
-		{ID: "inc-thread", Title: "Incremento", WorkingDir: sandbox, IncrementID: "inc-1", FinalState: "closed"},
-		{ID: "inc-env", Title: "Ambiente di sviluppo", WorkingDir: sandbox, Purpose: "environment", FinalState: "closed"},
-		{ID: "main-env", Title: "Ambiente di sviluppo", WorkingDir: dir, Purpose: "environment", FinalState: "closed"},
-	} {
-		if err := srv.session().conversationStore().Save(ctx, record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var index conversationsView
-	if err := json.Unmarshal(doJSON(t, srv, "GET", conversationsRoute, nil).Body.Bytes(), &index); err != nil {
+func TestIncrementGuidanceUsesTemplateAndReachesWaitingEnvironment(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	ws := srv.session()
+	root := t.TempDir()
+	if err := saveEnvironmentOperation(root, environmentOperation{State: "waiting", ConversationID: "conv-environment"}); err != nil {
 		t.Fatal(err)
 	}
-	parents := map[string]string{}
-	for _, entry := range index.Conversations {
-		parents[entry.ID] = entry.ParentID
+	tpl, err := srv.resolveTemplate(ws)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if parent, ok := parents["inc-env"]; !ok || parent != "inc-thread" {
-		t.Fatalf("environment thread not nested under its increment: %+v", index.Conversations)
+	work := increment.Record{ID: "inc-guidance", Workdir: root, Status: increment.Review}
+	view := incrementView{}
+	offered := []template.IncrementAction{}
+	for _, action := range tpl.IncrementActions {
+		if action.ID == "publish" {
+			offered = append(offered, action)
+		}
 	}
-	if _, ok := parents["main-env"]; ok {
-		t.Fatal("the workspace environment thread entered the rail")
+	srv.incrementNextSteps(ws, work, offered, &view)
+	if len(view.NextSteps) < 3 || view.NextSteps[0].Target != "conv-environment" {
+		t.Fatalf("unreachable environment: %+v", view.NextSteps)
+	}
+	decision := false
+	for _, step := range view.NextSteps {
+		if step.Action == "approve-intent" {
+			t.Fatal("reintroduced mandatory intent approval")
+		}
+		if step.Action == "publish" {
+			decision = step.Confirm != nil && step.Kind == "decision"
+		}
+	}
+	if !decision {
+		t.Fatalf("publication lacks declared confirmation: %+v", view.NextSteps)
+	}
+	phases := incrementPhases(tpl, increment.Delivered)
+	if len(phases) == 0 || phases[len(phases)-1].Label != "Integrato" {
+		t.Fatalf("merge misrepresented as deployment: %+v", phases)
+	}
+}
+
+func TestIncrementPRChecksThrottleAndRetainFailures(t *testing.T) {
+	checks := incrementPRChecks{}
+	if !checks.begin("inc-1", time.Minute) || checks.begin("inc-1", time.Minute) {
+		t.Fatal("concurrent duplicate PR check")
+	}
+	checks.end("inc-1", fmt.Errorf("offline"))
+	if checks.begin("inc-1", time.Minute) || checks.last("inc-1").err != "offline" {
+		t.Fatal("failed PR read was not retained or throttled")
 	}
 }

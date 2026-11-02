@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/processtree"
 )
 
 // SupervisorRunner gives the command a parent-death signal on every supported
@@ -29,6 +30,7 @@ func (SupervisorRunner) Run(ctx context.Context, root string, env []string, comm
 		return err
 	}
 	cmd := exec.Command(executable, "execution", "environment", "_run")
+	processtree.SeparateSupervisor(cmd)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = root, env, output, output
 	cmd.WaitDelay = 2 * time.Second
 	control, err := cmd.StdinPipe()
@@ -94,8 +96,7 @@ func Supervise(parent context.Context, input io.Reader, output, stderr io.Writer
 	cmd := exec.CommandContext(ctx, request.Command.Argv[0], request.Command.Argv[1:]...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr, cmd.Env = request.Root, output, stderr, os.Environ()
 	cmd.WaitDelay = 2 * time.Second
-	isolateProcess(cmd)
-	err = cmd.Run()
+	err = processtree.Run(cmd)
 	if ctx.Err() != nil {
 		return 124, ctx.Err()
 	}

@@ -120,22 +120,18 @@ func TestMissingRecipeUsesSeparateDurableTechnicalSession(t *testing.T) {
 	if technicalID == "" || technicalID == productID {
 		t.Fatal("no separate technical identity")
 	}
-	// The journal marks the turn active before the provider sees it (the durable
-	// boundary of sendNativeConversationMessage); the fake holds a turn to
-	// complete only once that delivery is confirmed.
 	record := awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool {
-		if r.CurrentTurn == nil || r.Work != execution.SessionTurnActive {
-			return false
-		}
-		for _, delivery := range r.Deliveries {
-			if delivery.TurnID == r.CurrentTurn.ID && delivery.State == execution.DeliveryConfirmed {
-				return true
-			}
-		}
-		return false
+		// The journal reserves the turn before StartTurn reaches the provider.
+		// Wait for delivery as well before inspecting the captured prompt.
+		provider.store.mu.Lock()
+		defer provider.store.mu.Unlock()
+		return r.CurrentTurn != nil && r.Work == execution.SessionTurnActive && provider.lastStart.Session.ConversationID == technicalID
 	}, "technical setup turn")
 	if record.Purpose != "environment" || record.Session.Native.ID == metadataOf(t, srv, productID).Session.Native.ID {
 		t.Fatal("setup reused product native session")
+	}
+	if !strings.Contains(provider.lastStart.Message, sessionInputGuidance) {
+		t.Fatal("technical session bypassed native conversation input guidance")
 	}
 	provider.completeCurrentTurn(t, "Serve una decisione sul requisito mancante.", execution.TurnCompleted)
 	awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool { return r.Work == execution.SessionIdle }, "technical question")
@@ -150,12 +146,25 @@ func TestMissingRecipeUsesSeparateDurableTechnicalSession(t *testing.T) {
 	if response.Code != 202 {
 		t.Fatalf("technical answer: %d %s", response.Code, response.Body.String())
 	}
+	deadline = time.Now().Add(3 * time.Second)
+	for readEnvironmentOperation(root).State != "configuring" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if value := readEnvironmentOperation(root); value.State != "configuring" || value.Error != "" {
+		t.Fatalf("answered technical request still looks blocked: %+v", value)
+	}
 	// Simulate only the agent's chosen configuration; preparation, reports and
 	// publication use the real shared contracts.
 	if _, err := verification.Configure(root, []byte(`{"version":1,"probe":[{"name":"ready","argv":["go","version"],"timeout_seconds":10}],"checks":{}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := environmentrecipe.Publish(root, nil); err != nil {
+	service := verification.New(root, "").ForCandidate()
+	service.Runner = directEnvironmentRunner{}
+	q, err := service.Qualify(context.Background(), nil)
+	if err != nil || !q.Passed {
+		t.Fatalf("qualification: %+v %v", q, err)
+	}
+	if _, err := environmentrecipe.PublishQualified(root, nil, q.BundleDigest); err != nil {
 		t.Fatal(err)
 	}
 	provider.completeCurrentTurn(t, "Ambiente configurato.", execution.TurnCompleted)
@@ -207,4 +216,54 @@ func TestFailedPreparationDoesNotStartDevelopment(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("failed preparation did not settle")
+}
+
+func TestRepairDoesNotAcceptPreviousCommonRecipeAsSuccess(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, _ := newRunServer(t, provider, true)
+	seedCommonEnvironment(t, srv)
+	t.Cleanup(func() { srv.session().stop(time.Second) })
+	root := srv.session().cfg.ProjectRoot
+	continued := make(chan struct{}, 1)
+	if err := srv.queueEnvironment(context.Background(), srv.session(), root, false, true, func(context.Context) error { continued <- struct{}{}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var technicalID string
+	for time.Now().Before(deadline) {
+		technicalID = readEnvironmentOperation(root).ConversationID
+		if technicalID != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if technicalID == "" {
+		t.Fatal("technical session did not open")
+	}
+	awaitRecord(t, srv, technicalID, func(r conversationlog.Record) bool {
+		provider.store.mu.Lock()
+		defer provider.store.mu.Unlock()
+		return r.Work == execution.SessionTurnActive && provider.lastStart.Session.ConversationID == technicalID
+	}, "repair turn")
+	if !strings.Contains(provider.lastStart.Message, "requested_permission_profile") || !strings.Contains(provider.lastStart.Message, "capabilities") {
+		t.Fatal("missing runtime context")
+	}
+	provider.completeCurrentTurn(t, "Impossibile pubblicare: permesso negato.", execution.TurnCompleted)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		operation := readEnvironmentOperation(root)
+		if operation.State == "ready" {
+			t.Fatal("old common recipe certified failed repair")
+		}
+		if operation.State == "waiting" && strings.Contains(operation.Error, "qualificata") {
+			select {
+			case <-continued:
+				t.Fatal("continued development after failed repair")
+			default:
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("repair did not expose missing qualification: %+v", readEnvironmentOperation(root))
 }

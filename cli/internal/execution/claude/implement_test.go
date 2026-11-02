@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -300,7 +301,7 @@ func TestExecuteImplementFailureModes(t *testing.T) {
 			if errors.As(err, &remote) {
 				t.Fatalf("a local run reported a remote unit of work: %v", err)
 			}
-			assertContains(t, err.Error(), command, "execution error")
+			assertContains(t, err.Error(), strconv.Quote(command), "execution error")
 			for _, want := range tc.wantErr {
 				assertContains(t, err.Error(), want, "execution error")
 			}

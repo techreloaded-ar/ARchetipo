@@ -134,6 +134,9 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 				return iox.NewInternal("copy "+sk, err)
 			}
 		}
+		if err := workspace.RemoveRetiredSkills(target); err != nil {
+			return err
+		}
 		fmt.Fprintf(s.out, "  ✓ %s → %s\n", t.Name, target)
 	}
 
@@ -156,13 +159,13 @@ func runInitProject(s streams, toolFlags []string, connectorFlag, templateFlag s
 	fmt.Fprintln(s.out, "Done.")
 	if withWiki {
 		fmt.Fprintln(s.out, "Automatic Wiki enabled (wiki.enabled: true).")
-		fmt.Fprintln(s.out, "Next: run /archetipo-wiki bootstrap")
+		fmt.Fprintln(s.out, "Next: archetipo view")
 		return nil
 	}
 	// The skill is installed regardless: the gate only stops the standard
 	// workflow from maintaining a Wiki, never the on-demand use of one.
 	fmt.Fprintln(s.out, "Automatic Wiki disabled (wiki.enabled: false, the default). Run /archetipo-wiki explicitly to build or query one, or re-run init with --wiki.")
-	fmt.Fprintln(s.out, "Next: run /archetipo-inception")
+	fmt.Fprintln(s.out, "Next: archetipo view")
 	return nil
 }
 

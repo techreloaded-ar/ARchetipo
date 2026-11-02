@@ -174,14 +174,6 @@ describe("P1 — approvare per trascinamento chiede quanto il bottone", () => {
 		);
 	});
 
-	it("la domanda è scritta in un posto solo", () => {
-		const occurrences = [...js.matchAll(/function confirmApproval\(/g)].length;
-		assert.equal(
-			occurrences,
-			1,
-			"la conferma dell'approvazione non è più una funzione sola: le due strade potrebbero divergere",
-		);
-	});
 
 	/** Il corpo di `requestTransition`. `sectionOf` da solo non lo sa leggere:
 	 *  la firma contiene già un `{}` (`options = {}`) e il blocco bilanciato si
@@ -211,10 +203,6 @@ describe("P1 — approvare per trascinamento chiede quanto il bottone", () => {
 		assert.ok(
 			asked < transition.indexOf("apiPost("),
 			"`requestTransition` scrive prima di chiedere: la conferma arriverebbe a cose fatte",
-		);
-		assert.ok(
-			sectionOf(js, "async function onApprove(").includes("confirmApproval("),
-			"`onApprove` non chiede conferma: un'approvazione irreversibile partirebbe da sola",
 		);
 	});
 

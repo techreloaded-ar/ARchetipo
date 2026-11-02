@@ -61,6 +61,7 @@ type conversationEntryView struct {
 // nil: a workspace nobody has talked to yet answers with an empty array, so the
 // rail reads "there are none" from the list itself and never from a missing key.
 type conversationsView struct {
+	WorkspaceRoot string                  `json:"workspace_root"`
 	Conversations []conversationEntryView `json:"conversations"`
 	HasMoreClosed bool                    `json:"has_more_closed"`
 	ClosedLimit   int                     `json:"closed_limit"`
@@ -205,11 +206,9 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 		alive[snapshot.id] = true
 	}
 	running := runningExecutionIDs(ctx, ws)
-	// Holding a thread is not the same as running it. A viewer that has just
-	// started holds every native conversation of the workspace, so it can be
-	// written to again without changing identity; the ones whose runtime was
-	// released have no process behind them, and answering "live" about those
-	// would tell a person that something is going on where nothing is.
+	// Native conversation lifetime follows its archive flag, independently of
+	// the runtime connection. Work and connection describe activity separately;
+	// releasing a runtime must not hide an open thread or offer a new identity.
 	views := make([]conversationEntryView, 0, min(len(records), closedLimit+len(alive)))
 	closedCount := 0
 	hasMoreClosed := false
@@ -220,10 +219,10 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 			environments = append(environments, record)
 			continue
 		}
-		if record.IncrementID != "" {
-			incrementThreads[record.WorkingDir] = record.ID
-		}
 		live := alive[record.ID] && record.Connection != execution.ConnectionReleased
+		if record.Native() {
+			live = record.Archive != execution.ArchiveArchived
+		}
 		if !live {
 			if closedCount >= closedLimit {
 				hasMoreClosed = true
@@ -231,22 +230,26 @@ func (s *Server) handleListWorkspaceConversations(w http.ResponseWriter, r *http
 			}
 			closedCount++
 		}
+		if record.IncrementID != "" {
+			incrementThreads[record.WorkingDir] = record.ID
+		}
 		views = append(views, conversationEntryOf(record, live, running))
 	}
-	// An increment's environment thread is reachable from the rail, under the
-	// increment, instead of only from the preview menu. The workspace's own
-	// environment thread stays where it was.
 	for _, record := range environments {
 		parent, ok := incrementThreads[record.WorkingDir]
 		if !ok || record.Archive == execution.ArchiveArchived {
 			continue
 		}
-		entry := conversationEntryOf(record, alive[record.ID] && record.Connection != execution.ConnectionReleased, running)
+		live := alive[record.ID] && record.Connection != execution.ConnectionReleased
+		if record.Native() {
+			live = record.Archive != execution.ArchiveArchived
+		}
+		entry := conversationEntryOf(record, live, running)
 		entry.ParentID = parent
 		views = append(views, entry)
 	}
 	openability := s.conversationOpenabilityOf(ctx, ws)
-	writeJSON(w, http.StatusOK, conversationsView{
+	writeJSON(w, http.StatusOK, conversationsView{WorkspaceRoot: ws.cfg.ProjectRoot,
 		Conversations:     views,
 		HasMoreClosed:     hasMoreClosed,
 		ClosedLimit:       closedLimit,

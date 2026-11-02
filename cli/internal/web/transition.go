@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -141,26 +140,8 @@ func (s *Server) handleTransitionPreview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// The review is read only when leaving REVIEW, which is the only place it
-	// can say anything: it decides both the flow to route through and whether
-	// anything would be orphaned by not routing through it.
 	var review domain.Review
 	recommended := ""
-	if from == "review" {
-		if rs, ok := ws.conn.(connector.ReviewStore); ok {
-			if r, err := rs.ReadReview(ctx, code); err == nil {
-				review = r
-			}
-			switch {
-			case to == "done":
-				recommended = "approve"
-			// request-changes refuses a review without comments, so offering it
-			// there would be offering a road that ends in a 400.
-			case to == "todo" && len(review.Comments) > 0:
-				recommended = "request_changes"
-			}
-		}
-	}
 
 	hasPlan := false
 	if to == "planned" {

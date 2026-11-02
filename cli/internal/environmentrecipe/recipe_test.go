@@ -100,6 +100,35 @@ func TestPublicationNeverCopiesUnlistedFilesAndRejectsEscapes(t *testing.T) {
 	}
 }
 
+func TestInheritanceProtectsEditedAndUntrackedHelpers(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-b", "main")
+	git(t, root, "config", "user.name", "Tests")
+	git(t, root, "config", "user.email", "tests@example.test")
+	helper := "scripts/archetipo/run.sh"
+	write(t, root, helper, "committed launcher")
+	git(t, root, "add", helper)
+	git(t, root, "commit", "-m", "initial")
+	write(t, root, Environment, `{"version":1}`)
+	write(t, root, helper, "published launcher")
+	if _, err := Publish(root, []string{helper}); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, helper, "local changes")
+	for _, untracked := range []bool{false, true} {
+		if untracked {
+			git(t, root, "rm", "--cached", "--", helper)
+		}
+		if err := Inherit(root); err == nil {
+			t.Fatalf("overwrote helper, untracked=%v", untracked)
+		}
+		raw, err := os.ReadFile(filepath.Join(root, helper))
+		if err != nil || string(raw) != "local changes" {
+			t.Fatal("local work was lost", err)
+		}
+	}
+}
+
 func TestNestedWorkspaceDoesNotPublishIntoEnclosingRepository(t *testing.T) {
 	outer := t.TempDir()
 	git(t, outer, "init", "-b", "main")

@@ -95,14 +95,14 @@ func (p *Provider) ConfigFields() []execution.ConfigField {
 			// The consequence is spelled out because it is the expensive
 			// mistake: planning has to persist a plan, so a read-only session
 			// produces runs that always fail.
-			Help:        "Sandbox policy of the Codex session, one of " + strings.Join(sandboxModes, ", ") + ". Defaults to " + defaultSandbox + ", which is what lets the agent write the plan into the workspace.",
+			Help:        "Sandbox policy of the Codex session, one of " + strings.Join(sandboxModes, ", ") + ". Defaults to " + defaultSandbox + ", which lets the agent modify files in the workspace.",
 			Placeholder: defaultSandbox,
 		},
 		{
 			Name:        "timeout_seconds",
 			Label:       "Timeout (seconds)",
 			Type:        "integer",
-			Help:        fmt.Sprintf("How long the local Codex process may run, between %d and %d. Defaults to %d.", minTimeout, maxTimeout, defaultTimeout),
+			Help:        fmt.Sprintf("Timeout for a batch execution, between %d and %d seconds. Defaults to %d. Interactive conversation turns have no timeout.", minTimeout, maxTimeout, defaultTimeout),
 			Placeholder: fmt.Sprintf("%d", defaultTimeout),
 		},
 	}

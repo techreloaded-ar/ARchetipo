@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"errors"
-	"os"
-
 	"github.com/spf13/cobra"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
@@ -57,7 +54,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment and its local files, retaining only committed work in Git")
 	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
 	root.AddCommand(deletionPlan, deletion)
-	for _, operation := range []string{"create", "show", "list", "propose", "approve", "ready", "feedback", "publish", "refresh", "reapprove-pr"} {
+	for _, operation := range []string{"create", "show", "dossier", "list", "propose", "link", "ready", "feedback", "publish", "refresh", "learn", "conclude"} {
 		var file string
 		cmd := &cobra.Command{Use: operation, Short: operation + " a product increment"}
 		if operation == "create" || operation == "list" {
@@ -95,14 +92,22 @@ func newIncrementCmd(s streams) *cobra.Command {
 			switch operation {
 			case "list":
 				value, err = service.List()
-			case "show":
-				value, err = service.Read(args[0])
+			case "show", "dossier":
+				record, readErr := service.Read(args[0])
+				if operation == "dossier" {
+					record, readErr = service.ReadDossier(args[0])
+				}
+				value, err = record, readErr
+				if operation == "dossier" && err == nil {
+					value = map[string]string{"id": record.ID, "markdown": increment.Dossier(record)}
+				}
 			case "refresh":
 				value, err = service.Refresh(cmd.Context(), args[0])
-			case "reapprove-pr":
-				value, err = service.ReapprovePR(cmd.Context(), args[0])
 			default:
 				var input struct {
+					Observation          string   `json:"observation"`
+					Decision             string   `json:"decision"`
+					DevelopmentMode      string   `json:"development_mode"`
 					Title                string   `json:"title"`
 					Request              string   `json:"request"`
 					OriginConversationID string   `json:"origin_conversation_id"`
@@ -131,19 +136,12 @@ func newIncrementCmd(s streams) *cobra.Command {
 						return err
 					}
 					switch operation {
+					case "learn", "conclude":
+						value, err = service.Learn(cmd.Context(), args[0], input.Observation, input.Decision, operation == "conclude")
 					case "create":
-						value, err = service.Create(cmd.Context(), input.Title, input.Request, input.OriginConversationID)
-					case "approve":
-						value, err = service.Approve(cmd.Context(), args[0], input.Revision)
-						if err == nil {
-							// An agent confined to the sandbox cannot write the original
-							// backlog; the viewer or publication mirrors the stories later.
-							if synced, syncErr := service.SyncStories(cmd.Context(), args[0]); syncErr == nil {
-								value = synced
-							} else if !errors.Is(syncErr, os.ErrPermission) {
-								err = syncErr
-							}
-						}
+						value, err = service.CreateWithMode(cmd.Context(), input.Title, input.Request, input.OriginConversationID, input.DevelopmentMode)
+					case "link":
+						value, err = service.Link(cmd.Context(), args[0], input.StoryCodes)
 					case "feedback":
 						value, err = service.RequestChanges(cmd.Context(), args[0], increment.FeedbackRequest{Feedback: input.Feedback, Kind: input.Kind, StoryCodes: input.StoryCodes})
 					case "publish":
@@ -156,7 +154,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 			}
 			return iox.WriteOK(s.out, "increment", value)
 		}
-		if operation != "list" && operation != "show" && operation != "refresh" && operation != "reapprove-pr" {
+		if operation != "list" && operation != "show" && operation != "dossier" && operation != "refresh" {
 			cmd.Flags().StringVar(&file, "file", "-", "JSON payload path, or - for stdin")
 		}
 		root.AddCommand(cmd)

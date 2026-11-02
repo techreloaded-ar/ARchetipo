@@ -108,7 +108,10 @@ const CLAIMS = [
   "su schermo stretto intento, chat, richieste di permesso e compositore restano raggiungibili e la posizione di lettura resiste agli aggiornamenti",
   "l’archiviazione si conferma o si annulla sulla riga della rail, Nuova conversazione dichiara l’archiviazione in corso e torna utilizzabile dopo la risposta",
   "il pannello comune si riapre sull’ultima scheda, si espande attraverso schede e polling, e risponde a Escape e alla scorciatoia",
-  "una domanda dell’agente si risponde come questionario: una domanda alla volta, scelta singola o multipla, «Altro» con testo libero, bozze conservate tra le domande e invio solo a risposte complete",
+  "le domande delle personalità accettano scelte cliccabili, selezioni multiple e testo libero, conservando la risposta dopo un errore e il polling",
+  "una lettura della chat sospesa viene annullata e riprovata senza reload, perdite di messaggi o della bozza",
+  "salvare il primo provider rende subito disponibile il compositore senza riavvio o vecchi avvisi",
+  "questionario a passi: scelte multiple, testo libero e bozze conservate",
 ];
 
 // One entry per proved statement, for the report.
@@ -175,9 +178,12 @@ async function main() {
     await exercisePage(browser, view.url, runDir);
     await exerciseDocumentation(browser, view.url, runDir);
     await exerciseDocumentationRace(browser, view.url);
+    await exerciseProviderOnboarding(browser, view.url, runDir);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
     await exerciseQuestionnaire(browser, view.url, runDir);
+    await exerciseIncrementStepsAndReleasedPreview(browser, view.url);
+    await exerciseDiscoveryQuestions(browser, view.url, runDir);
     await exerciseLiveConversationPagination(browser, view.url, runDir);
     await exerciseProposalRevisionComposer(browser, view.url);
     const emptyDir = path.join(runDir, "empty-workspace");
@@ -284,6 +290,21 @@ async function exercisePage(browser, url, runDir) {
   ok(CLAIMS[0], "il caricamento della pagina non ha emesso nessuna eccezione non catturata");
   ok(CLAIMS[1], `il rail elenca la conversazione ${CONVERSATION_ID} letta dal disco del workspace`);
 
+  // Closing configuration must return to the live page without a stuck
+  // overlay. Exercise both close controls, including the provider tab.
+  phase = "apertura e chiusura configurazione";
+  for (const closeID of ['config-cancel-btn', 'config-modal-close']) {
+    await page.evaluate(`document.getElementById('topbar-more-btn').click()`);
+    await page.waitFor(`!document.getElementById('topbar-more-menu').classList.contains('hidden')`,10000,'il menu delle azioni aperto');
+    await page.evaluate(`document.getElementById('config-btn').click()`);
+    await page.waitFor(`!document.getElementById('config-modal').classList.contains('hidden') && document.getElementById('config-path').textContent.includes('config.yaml')`,10000,'la configurazione caricata');
+    await page.evaluate(`document.querySelector('[data-config-tab="execution"]').click()`);
+    await page.waitFor(`document.querySelector('[data-config-tab="execution"]').getAttribute('aria-selected') === 'true'`,10000,'la scheda provider selezionata');
+    await page.evaluate(`document.getElementById('${closeID}').click()`);
+    await page.waitFor(`document.getElementById('config-modal').classList.contains('hidden')`,10000,'la configurazione chiusa e la pagina disponibile');
+    assertNoExceptions('Eccezioni durante apertura e chiusura della configurazione:');
+  }
+
   // --- Il click su un thread apre la conversazione ---------------------------
   //
   // Questo è l'oracolo che il caricamento pulito da solo non dà: il gestore del
@@ -320,6 +341,27 @@ async function exercisePage(browser, url, runDir) {
   assertNoExceptions("Il click sul thread del rail ha emesso eccezioni non catturate:");
   ok(CLAIMS[2], "il click su un thread del rail apre quella conversazione, sentinella dell'agente compresa");
 
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.value='BOZZA CONSERVATA AL RELOAD';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await page.send('Page.reload');
+  await page.once('Page.loadEventFired',30000,'reload con bozza non inviata');
+  await page.waitFor(`!!document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]')`,10000,'conversazione dopo reload della bozza');
+  await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
+  await page.waitFor(`document.querySelector('.conv-composer-input')?.value==='BOZZA CONSERVATA AL RELOAD'`,10000,'bozza non inviata conservata al reload');
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  ok('conversation-draft-reload','la bozza non inviata sopravvive al reload nello stesso workspace');
+
+  await page.waitFor(`Array.from(document.querySelectorAll('.conv-event-markdown a')).some(a => a.textContent === 'Apri report tecnico' && a.getAttribute('href')?.includes('/reports/'))`, 10000, 'il link locale diventa un report autorizzato');
+  const reportRead = await page.evaluate(`(async () => {
+    const anchors = Array.from(document.querySelectorAll('.conv-event-markdown a'));
+    const report = anchors.find(a => a.textContent === 'Apri report tecnico');
+    const missing = anchors.find(a => a.textContent.includes('Report rimosso'));
+    const config = anchors.find(a => a.textContent === 'Configurazione privata');
+    const response = await fetch(report.href);
+    return {status:response.status, type:response.headers.get('content-type'), text:await response.text(), missing:missing?.textContent, configClickable:config?.hasAttribute('href'), path:report.getAttribute('href')};
+  })()`);
+  if (reportRead.status !== 200 || !reportRead.type.startsWith('text/plain') || !reportRead.text.includes('report originale') || !reportRead.missing.includes('Report non più disponibile') || reportRead.configClickable || reportRead.path.includes('/Users/')) throw new Error('Report della chat non sicuro o non leggibile: '+JSON.stringify(reportRead));
+  ok('conversation-reports', 'Il report della chat si apre come testo con ID stabile; report mancanti e configurazioni private non producono collegamenti rotti');
+
   // --- Il click su «Nuova spec» apre la modale -------------------------------
   //
   // L'altro sintomo della stessa rottura, e per la stessa ragione: openNewSpec
@@ -327,6 +369,7 @@ async function exercisePage(browser, url, runDir) {
   // temporal dead zone. Una modale che si apre è la prova che quella `const` è
   // stata inizializzata.
   phase = "click su Nuova spec";
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click()`);
   const pressed = await page.evaluate(
     `(() => {
       const btn = document.getElementById("new-spec-btn");
@@ -375,7 +418,7 @@ async function exercisePage(browser, url, runDir) {
 
 
   phase = "creazione manuale di una storia";
-  await page.evaluate(`document.getElementById('new-spec-btn').click()`);
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click();document.getElementById('new-spec-btn').click()`);
   await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden')`, 10000, "il form della nuova storia");
   const storyTitle = "Storia creata dal form nel browser";
   const body = "**User Story**\nCome revisore voglio creare una storia.\n\n**Dimostrazione**\nCompilo il form e osservo la storia nella board.\n\n**Criteri di accettazione**\n- [ ] AC-1 — La storia compare in TODO.\n";
@@ -486,6 +529,51 @@ async function exercisePersistedStoryRevisions(page, url, runDir) {
 
 // The real page with deterministic provider responses: no agent or credential.
 // Server tests separately prove the native cancellation and persisted effects.
+async function exerciseProviderOnboarding(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on('Runtime.exceptionThrown', event => exceptions.push(event.exceptionDetails));
+  await page.send('Runtime.enable');
+  await page.send('Page.enable');
+  await page.send('Page.addScriptToEvaluateOnNewDocument', {source:`
+    const originalFetch = window.fetch.bind(window);
+    window.firstProviderSaved = false;
+    window.firstProviderIndexReads = 0;
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const json = body => new Response(JSON.stringify(body), {headers:{'Content-Type':'application/json'}});
+      if (path === '/api/config' && options.method === 'PUT') {
+        const payload = JSON.parse(options.body);
+        if (payload.provider?.id !== 'onboarding-native') throw new Error('Missing selected provider');
+        window.firstProviderSaved = true;
+        return json({config:payload.config,raw:'connector: file\\n',exists:true,restart_required:false});
+      }
+      if (path === '/api/execution/providers') return json({providers:[{id:'onboarding-native',label:'Provider della prova',available:true,capabilities:[],config_fields:[]}],default:window.firstProviderSaved?{id:'onboarding-native',config:{}}:null});
+      if (path === '/api/execution/model-choice') return json({available:true,models:[],capabilities:[]});
+      if (path === '/api/workspace/conversations') {
+        window.firstProviderIndexReads++;
+        return json({workspace_root:'/onboarding-fixture',conversations:[],available:window.firstProviderSaved,unavailable_reason:window.firstProviderSaved?'':'Provider della prova non configurato',closed_limit:20});
+      }
+      if (path === '/api/workspace/activities') return json({items:[],start_work:{id:'increment',label:'Sviluppa la tua app',development_mode:'continuous',kind:'increment',runnable:window.firstProviderSaved}});
+      if (path === '/api/workspace/runs') return json({runs:[]});
+      return originalFetch(input,options);
+    };
+  `});
+  await page.send('Page.navigate',{url});
+  await page.once('Page.loadEventFired',30000,'il primo avvio senza provider');
+  await page.waitFor(`document.querySelector('#workspace-conversation')?.textContent.includes('Provider della prova non configurato')`,10000,'il motivo iniziale di indisponibilità');
+  await page.evaluate(`document.getElementById('topbar-more-btn').click();document.getElementById('config-btn').click()`);
+  await page.waitFor(`!!document.querySelector('input[name="execution_provider"][value="onboarding-native"]')`,10000,'il provider offerto dal server');
+  await page.evaluate(`document.querySelector('[data-config-tab="execution"]').click();document.getElementById('config-save-btn').click()`);
+  await page.waitFor(`window.firstProviderSaved && window.firstProviderIndexReads > 1 && !!document.querySelector('.conv-work-home .conv-composer-input:not(:disabled)')`,10000,'il compositore disponibile dopo il salvataggio senza reload');
+  if (await page.evaluate(`!document.getElementById('config-restart-notice').classList.contains('hidden') || document.getElementById('workspace-conversation').textContent.includes('Provider della prova non configurato')`)) throw new Error('Il primo provider lascia un avviso obsoleto o richiede riavvio');
+  await page.evaluate(`document.getElementById('config-modal-close').click()`);
+  await fs.writeFile(path.join(runDir,'provider-onboarding.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  if (exceptions.length) throw new Error('Eccezioni nel primo salvataggio provider: '+JSON.stringify(exceptions));
+  ok(CLAIMS[24],'il primo provider aggiorna disponibilità, home e compositore senza riavvio e rimuove il rifiuto precedente');
+  await page.close();
+}
+
 async function exerciseActivityComposer(browser, url) {
   const page = await browser.newPage();
   const exceptions = [];
@@ -560,6 +648,11 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
     events.push({id:1001,seq:1001,at,kind:'text',message_id:'recent',text:'DOMANDA RECENTE OLTRE DUE PAGINE'});
     events.push({id:1002,seq:1002,at,kind:'text',message_id:'latest',text:'ULTIMO AGGIORNAMENTO DOPO IL RECUPERO'});
     window.historyCursors = [];
+    // Shorten only the read deadline, keeping the actual polling loop and DOM.
+    const originalTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, ms, ...args) => originalTimeout(callback, ms === 15000 ? 50 : ms, ...args);
+    window.hangNextHistoryRead = true;
+    window.historyReadAborted = false;
     window.fetch = async (input, options = {}) => {
       const parsed = new URL(typeof input === 'string' ? input : input.url, location.href);
       const path = parsed.pathname;
@@ -574,9 +667,19 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
       if (path === '/api/workspace/conversations/pagination-fixture') {
         const after = Number(parsed.searchParams.get('after_id') || 0);
         window.historyCursors.push(after);
+        if (after === 500 && window.hangNextHistoryRead) {
+          window.hangNextHistoryRead = false;
+          // Model a stalled network read, rather than an immediate HTTP error.
+          return new Promise((resolve, reject) => {
+            options.signal?.addEventListener('abort', () => {
+              window.historyReadAborted = true;
+              reject(new DOMException('Read aborted', 'AbortError'));
+            }, {once:true});
+          });
+        }
         const pending = events.filter(event => event.id > after && (after < 1001 ? event.id <= 1001 : true));
         const batch = pending.slice(0,500);
-        const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',activity_label:'Agente al lavoro',stories:[{code:'US-801',title:'Filtro per mezzo',body:'Criteri della storia attiva. '.repeat(100),status_label:'In lavorazione',active:true},{code:'US-802',title:'Scelta del mezzo',body:'Criteri della storia completata',status_label:'Completata',active:false}],revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}],phases:[{label:'Definizione',state:'done'},{label:'Sviluppo',state:'current',stories:[{code:'US-802',title:'Scelta del mezzo',state:'done',state_label:'completata'},{code:'US-801',title:'Filtro per mezzo',state:'current',state_label:'in lavorazione'}],stories_note:'1/2',stories_focus:'Ora: Filtro per mezzo'},{label:'Preview',state:'todo'}],next_steps_label:'In sviluppo',next_steps_note:'Agente al lavoro',next_steps:[{kind:'prompt',label:'A che punto sei?',prompt:'A che punto sei?'}]} : undefined;
+        const increment = window.showIncrement ? {id:'layout-fixture',title:'Un incremento con una richiesta e una revisione da leggere',request:'Richiesta di prodotto da conservare leggibile. '.repeat(12),status_label:'Sviluppo nella sandbox',note:'Le modifiche restano nella sandbox.',activity_label:'Agente al lavoro',progress_label:'1/2 storie completate',stories:[{code:'US-801',title:'Filtro per mezzo',body:'Criteri della storia attiva. '.repeat(100),status_label:'In lavorazione',active:true},{code:'US-802',title:'Scelta del mezzo',body:'Criteri della storia completata',status_label:'Completata',active:false}],revisions:[{number:1,approved:true,intent:'Una revisione lunga. '.repeat(40),stories:[]}],actions:[{id:'continue',label:'Riprendi lo sviluppo'}]} : undefined;
         const approvals = window.showIncrement && !window.approvalResponse ? [{id:'scroll-approval',tool_name:'commandExecution',title:'Installare le dipendenze del progetto?',args:{command:'npm ci',context:'Dettaglio del comando da leggere. '.repeat(50)},options:[{id:'once',label:'Consenti una volta',kind:'allow'},{id:'deny',label:'Nega',kind:'deny'}]}] : [];
         return json({available:true,provider_id:'fixture',conversation:{id:'pagination-fixture',state:'ACTIVE'},session:{work:after<1001?'TURN_ACTIVE':'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:[]},events:batch,last_id:batch.at(-1)?.id || after,has_more:pending.length>batch.length,approvals,runs:[],increment});
       }
@@ -588,23 +691,26 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   `});
   await page.send('Page.navigate', {url});
   await page.once('Page.loadEventFired', 30000, 'la conversazione attiva con più pagine');
+  await page.waitFor(`document.querySelector('.conv-composer-input')`,10000,'il compositore durante il recupero');
+  await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.value='BOZZA DURANTE LA LETTURA SOSPESA';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await page.waitFor(`document.querySelector('.conv-timeline')?.textContent.includes('ULTIMO AGGIORNAMENTO DOPO IL RECUPERO')`, 15000, 'gli ultimi messaggi raggiunti senza premere Carica altri messaggi', () => page.evaluate(`JSON.stringify({cursors:window.historyCursors,text:document.querySelector('.conv-timeline')?.textContent.slice(-500)})`));
   const result = await page.evaluate(`({cursors:window.historyCursors,initial:document.querySelector('.conv-timeline').textContent.includes('DOMANDA INIZIALE PAGINATA'),recent:document.querySelector('.conv-timeline').textContent.split('DOMANDA RECENTE OLTRE DUE PAGINE').length-1,more:!!document.querySelector('[data-conversation-history-more]')})`);
   if (!result.initial || result.recent !== 1 || result.more || ![0,500,1000,1001].every(cursor => result.cursors.includes(cursor))) throw new Error('Cronologia incompleta o duplicata: ' + JSON.stringify(result));
+  if (!await page.evaluate(`window.historyReadAborted && window.historyCursors.filter(cursor=>cursor===500).length===2 && document.querySelector('.conv-composer-input').value==='BOZZA DURANTE LA LETTURA SOSPESA'`)) throw new Error('La lettura sospesa non è stata riprovata o ha perso la bozza');
+  ok(CLAIMS[22], 'richiesta sospesa annullata, stesso cursore riprovato e nuovi messaggi ricevuti conservando la bozza');
   if (exceptions.length) throw new Error('Eccezioni durante il recupero della cronologia: ' + JSON.stringify(exceptions));
   ok(CLAIMS[18], 'la chat attiva legge automaticamente tre pagine, conserva il passato e continua a ricevere messaggi senza duplicati');
   await page.send('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
   await page.evaluate('window.showIncrement = true');
   await page.waitFor(`!!document.querySelector('[data-run-approval-id="scroll-approval"]')`, 10000, 'la decisione nella conversazione di incremento');
-  // Le storie in sviluppo stanno sotto la fase nella testata, non accanto al compositore.
-  const compactIncrement = await page.evaluate(`({height:document.querySelector('.conv-increment').getBoundingClientRect().height,open:!!document.querySelector('.conv-increment-panel'),text:document.querySelector('.conv-increment').textContent,phase:document.querySelector('.conv-phase.is-current .conv-phase-stories')?.textContent,story:!!document.querySelector('.conv-head .conv-phase-story.is-current[data-increment-story="US-801"]')})`);
-  if (compactIncrement.open || compactIncrement.height > 150 || compactIncrement.text.includes('US-801') || !compactIncrement.story || !compactIncrement.phase?.includes('1/2')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
-  await page.evaluate(`document.querySelector('[data-increment-story="US-801"]').click()`);
-  await page.waitFor(`document.querySelector('[data-increment-section="current-story-US-801"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
+  const compactIncrement = await page.evaluate(`({height:document.querySelector('.conv-increment').getBoundingClientRect().height,open:!!document.querySelector('.conv-increment-panel'),text:document.querySelector('.conv-increment').textContent})`);
+  if (compactIncrement.open || compactIncrement.height > 150 || !compactIncrement.text.includes('Specifica e decisioni')) throw new Error('Incremento non compatto: '+JSON.stringify(compactIncrement));
+  await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click(); const summary=document.querySelector('[data-increment-section="intent"]>summary'); summary.click(); summary.focus(); window.incrementFocusedSummary=summary;`);
+  await page.waitFor(`document.querySelector('[data-increment-section="intent"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
   const drawer = await page.evaluate(`(() => {const body=document.querySelector('.conv-increment-body');body.scrollTop=120;return {reads:window.historyCursors.length,top:body.scrollTop,width:document.querySelector('.conv-increment-panel').getBoundingClientRect().width};})()`);
   if (drawer.width > 390 || drawer.width < 250) throw new Error('Laterale mobile fuori schermo: '+JSON.stringify(drawer));
-  await page.waitFor(`window.historyCursors.length > ${drawer.reads}`,10000,'un aggiornamento con il laterale aperto');
-  const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="current-story-US-801"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
+  await page.waitFor(`document.querySelector('[data-increment-section="intent"]>summary') !== window.incrementFocusedSummary && document.activeElement === document.querySelector('[data-increment-section="intent"]>summary')`,10000,'un aggiornamento DOM con il focus conservato sul riepilogo del laterale');
+  const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="intent"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
   if (!drawerAfter.open || Math.abs(drawerAfter.top-drawer.top)>2) throw new Error('Il polling perde il laterale: '+JSON.stringify({drawer,drawerAfter}));
   await page.send('Page.captureScreenshot', {format:'png'}).then(result=>fs.writeFile(path.join(runDir,'increment-mobile.png'),Buffer.from(result.data,'base64')));
   await page.evaluate(`document.querySelector('[data-increment-panel="close"]').click()`);
@@ -675,6 +781,73 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.waitFor(`!document.querySelector('.conv-timeline')?.textContent.includes('DOMANDA INIZIALE PAGINATA')`,10000,'il nuovo spazio di conversazione');
   if (exceptions.length) throw new Error('Eccezioni durante archiviazione e nuova conversazione: '+JSON.stringify(exceptions));
   ok(CLAIMS[20], 'il controllo è disabilitato durante l’archiviazione e il primo click successivo apre una nuova conversazione');
+  await page.close();
+}
+
+async function exerciseDiscoveryQuestions(browser, url, runDir) {
+  const page = await browser.newPage();
+  const exceptions = [];
+  page.on("Runtime.exceptionThrown", params => exceptions.push(params.exceptionDetails));
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {source: `
+    const originalFetch = window.fetch.bind(window);
+    window.discoveryAnswers = [];
+    window.discoveryReads = 0;
+    window.discoveryFail = true;
+    let step = 0;
+    const questions = [
+      {id:'outcome',header:'Costanza',prompt:'Quale risultato vuoi ottenere?',allow_text:true,options:[{value:'time',label:'Risparmiare tempo',description:'Ridurre il lavoro manuale'},{value:'errors',label:'Meno errori',description:'Aumentare la precisione'}]},
+      {id:'people',header:'Livia',prompt:'Chi userà il risultato?',multiple:true,allow_text:true,options:[{value:'clients',label:'Clienti'},{value:'staff',label:'Colleghi'}]},
+      {id:'example',header:'Emanuele',prompt:'Quale esempio concreto vuoi provare?',allow_text:true,options:[{value:'example',label:'Un caso tipico'}]},
+    ];
+    const view = () => ({available:true,provider_id:'fixture',conversation:{id:'discovery-fixture',state:'ACTIVE'},session:{work:step<3?'WAITING_INPUT':'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:step<3?[{id:'question-'+step,title:'Approfondiamo la tua idea',questions:[questions[step]]}]:[]},events:[],approvals:[],runs:[]});
+    const json = (body,status=200) => new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json'}});
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+      const method = options.method || 'GET';
+      if (path === '/api/workspace/conversations' && method === 'GET') return json({available:true,conversations:[{id:'discovery-fixture',title:'La tua idea',live:true,message_count:0}],closed_limit:20});
+      if (path === '/api/workspace/conversations/discovery-fixture') {window.discoveryReads++;return json(view());}
+      if (path.startsWith('/api/workspace/conversations/discovery-fixture/inputs/') && method === 'POST') {
+        window.discoveryAnswers.push({path,body:JSON.parse(options.body)});
+        if (window.discoveryFail) {window.discoveryFail=false;return json({error:'Risposta non consegnata, riprova',code:'E_CONFLICT'},409);}
+        step++;return json(view());
+      }
+      return originalFetch(input,options);
+    };
+  `});
+  await page.send("Page.navigate", {url});
+  await page.once("Page.loadEventFired",30000,"il caricamento delle domande");
+  await page.waitFor(`!!document.querySelector('[data-conversation-id="discovery-fixture"]')`,10000,'il thread di discovery');
+  await page.evaluate(`document.querySelector('[data-conversation-id="discovery-fixture"]').click()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-0"]')`,10000,'la domanda di Costanza');
+  await page.evaluate(`document.querySelector('[data-conversation-input-option][value="time"]').closest('label').click()`);
+  // Wait for a real subsequent polling read, not an arbitrary delay.
+  const reads = await page.evaluate('window.discoveryReads');
+  await page.waitFor(`window.discoveryReads > ${reads}`,10000,'un aggiornamento con la scelta ancora da inviare');
+  if (!await page.evaluate(`document.querySelector('[data-conversation-input-option][value="time"]').checked && !document.querySelector('[data-conversation-input-option][value="errors"]').checked`)) throw new Error('Il polling ha perso o cambiato la scelta');
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`window.discoveryAnswers.length===1 && !document.querySelector('[data-conversation-input-form] button').disabled`,10000,'la risposta fallita');
+  if (!await page.evaluate(`document.querySelector('[data-conversation-input-option][value="time"]').checked`)) throw new Error('La consegna fallita ha perso la selezione');
+  await page.send('Page.captureScreenshot',{format:'png'}).then(shot=>fs.writeFile(path.join(runDir,'discovery-desktop.png'),Buffer.from(shot.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-1"]')`,10000,'la domanda successiva di Livia');
+  await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await page.evaluate(`Array.from(document.querySelectorAll('[data-conversation-input-option]')).map(option=>option.value).forEach(value=>document.querySelector('[data-conversation-input-option][value="'+value+'"]').closest('label').click())`);
+  if (!await page.evaluate(`document.querySelectorAll('[data-conversation-input-option]:checked').length===2`)) throw new Error('Le risposte multiple si escludono');
+  await page.send('Page.captureScreenshot',{format:'png'}).then(shot=>fs.writeFile(path.join(runDir,'discovery-mobile.png'),Buffer.from(shot.data,'base64')));
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-input-form="question-2"]')`,10000,'la domanda con risposta personale');
+  await page.evaluate(`(() => {document.querySelector('[data-conversation-input-other]').click();const field=document.querySelector('[data-conversation-input-text]');field.value='Il mio esempio concreto';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  if (await page.evaluate(`!!document.querySelector('[data-conversation-input-option]:checked')`)) throw new Error('Il testo libero conserva una scelta incompatibile');
+  await page.evaluate(`document.querySelector('[data-conversation-input-form]').requestSubmit()`);
+  await page.waitFor(`window.discoveryAnswers.length===4 && !document.querySelector('[data-conversation-input-form]')`,10000,'tutte le risposte consegnate');
+  const answers = await page.evaluate('window.discoveryAnswers');
+  const actual = answers.map(answer=>answer.body.answers);
+  const expected = [{outcome:['time']},{outcome:['time']},{people:['clients','staff']},{example:['Il mio esempio concreto']}];
+  if (JSON.stringify(actual)!==JSON.stringify(expected)) throw new Error('Risposte inviate alterate: '+JSON.stringify(actual));
+  if (exceptions.length) throw new Error('Eccezioni nelle domande cliccabili: '+JSON.stringify(exceptions));
+  ok('discovery-input','Le domande delle personalità conservano le scelte durante polling ed errori e inviano risposte singole, multiple e libere nello stesso thread, anche a 390px');
   await page.close();
 }
 
@@ -795,7 +968,7 @@ async function exerciseQuestionnaire(browser, url, runDir) {
     window.questionnaireAnswers = [];
     const questions = [
       {id:'Quale database?',header:'Database',prompt:'Quale database?',allow_text:true,options:[{value:'SQLite',label:'SQLite',description:'Un file sul computer'},{value:'Postgres',label:'Postgres',description:'Un servizio a parte'}]},
-      {id:'Quali sezioni includo?',header:'Sezioni',prompt:'Quali sezioni includo?',multi_select:true,allow_text:true,options:[{value:'Introduzione',label:'Introduzione'},{value:'Conclusione',label:'Conclusione'}]},
+      {id:'Quali sezioni includo?',header:'Sezioni',prompt:'Quali sezioni includo?',multiple:true,allow_text:true,options:[{value:'Introduzione',label:'Introduzione'},{value:'Conclusione',label:'Conclusione'}]},
     ];
     let pending = [{id:'input-q',title:'Rispondi all’agente',payload:{questions},questions}];
     const view = () => ({available:true,provider_id:'fixture',conversation:{id:'questionnaire-fixture',state:'ACTIVE'},session:{work:pending.length ? 'WAITING_INPUT' : 'IDLE',archive:'OPEN',connection:'CONNECTED',recovery:'RESUMABLE',pending_inputs:pending,pending_approvals:[]},events:[{id:1,seq:1,at:'2026-01-01T12:00:00Z',kind:'text',text:'Ho due domande prima di procedere.'}],last_id:1,approvals:[],runs:[]});
@@ -1003,7 +1176,7 @@ async function exerciseEmptyWorkspace(browser, url) {
   await page.once("Page.loadEventFired", 30000, "il caricamento del workspace vuoto");
   await page.waitFor(`document.getElementById('new-spec-btn').title.includes('epica') && !document.getElementById('new-spec-btn').disabled`,
     20000, "Nuova spec raggiungibile senza epiche");
-  await page.evaluate(`document.getElementById('new-spec-btn').click()`);
+  await page.evaluate(`document.querySelector('[data-shell-view="board"]').click();document.getElementById('new-spec-btn').click()`);
   await page.waitFor(`!document.getElementById('new-spec-modal').classList.contains('hidden')
     && !document.getElementById('new-spec-no-epics').classList.contains('hidden')
     && !document.getElementById('new-spec-submit').disabled
@@ -1057,6 +1230,9 @@ async function writeSpecsPayload(file) {
 async function seedConversationRecord(sandboxDir) {
   const dir = path.join(sandboxDir, ".archetipo", "conversations");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const reportDir = path.join(sandboxDir, ".archetipo", "environment");
+  await fs.mkdir(reportDir, {recursive:true});
+  await fs.writeFile(path.join(reportDir,"technical-summary.json"), '{"smoke":"report originale <script>inert</script>"}');
   const openedAt = new Date(Date.now() - 3600_000).toISOString();
   const record = {
     id: CONVERSATION_ID,
@@ -1073,7 +1249,7 @@ async function seedConversationRecord(sandboxDir) {
     final_state: "closed",
     events: [
       { id: 1, seq: 1, at: openedAt, kind: "user_message", text: HUMAN_SENTINEL },
-      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}` },
+      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}\n[Apri report tecnico](${path.join(sandboxDir, ".archetipo/environment/technical-summary.json")})\n[Report rimosso](.archetipo/environment/technical-session.md)\n[Configurazione privata](.archetipo/config.yaml)` },
     ],
   };
   await fs.writeFile(path.join(dir, `${CONVERSATION_ID}.json`), `${JSON.stringify(record, null, 2)}\n`, {
@@ -1443,4 +1619,50 @@ if (path.resolve(process.argv[1] || "") === __filename) {
     console.error(`\nFAIL: ${error.message}`);
     process.exit(1);
   });
+}
+
+async function exerciseIncrementStepsAndReleasedPreview(browser, url) {
+ const page=await browser.newPage();
+ const exceptions=[];
+ page.on('Runtime.exceptionThrown',p=>exceptions.push(p.exceptionDetails));
+ await page.send('Runtime.enable');await page.send('Page.enable');
+ await page.send('Page.addScriptToEvaluateOnNewDocument',{source:`
+ const originalFetch=window.fetch.bind(window);
+ window.guidedPosts=[];window.guidedReopens=0;window.guidedMessages=[];
+ let active=false;
+ const increment={id:'guided-work',title:'Lavoro guidato',ready_sha:'displayed-candidate',revisions:[{number:3,intent:'Specifica'}],next_steps_label:'Prossimi passi',result_notice:'Integrazione calendario simulata',next_steps:[{kind:'prompt',label:'Suggerimento',prompt:'Vorrei cambiare: '},{kind:'decision',action:'publish-fixture',label:'Approva candidato',confirm:{title:'Aprire la PR?',text:'Pubblica il candidato mostrato',label:'Conferma candidato'}}]};
+ const view=()=>({available:true,conversation:{id:'guided-fixture',state:active?'ACTIVE':'CLOSED'},session:{work:'IDLE',archive:'OPEN',connection:active?'CONNECTED':'RELEASED',recovery:'RESUMABLE',pending_inputs:[],pending_approvals:[]},increment,events:[{id:1,seq:1,kind:'text',text:'Risultato da provare.'}],last_id:1,runs:[],approvals:[]});
+ window.fetch=async(input,options={})=>{
+  const path=new URL(typeof input==='string'?input:input.url,location.href).pathname;
+  const method=options.method||'GET';const json=body=>new Response(JSON.stringify(body),{headers:{'Content-Type':'application/json'}});
+  if(path==='/api/workspace/conversations'&&method==='GET')return json({available:true,conversations:[{id:'guided-fixture',title:'Lavoro guidato',live:true,message_count:1}],closed_limit:20});
+  if(path==='/api/workspace/conversations/guided-fixture')return json(view());
+  if(path==='/api/workspace/conversations/guided-fixture/reopen'){window.guidedReopens++;active=true;return json(view());}
+  if(path==='/api/workspace/conversations/guided-fixture/messages'){window.guidedMessages.push(JSON.parse(options.body));return json(view());}
+  if(path==='/api/increments/guided-work/publish-fixture'){window.guidedPosts.push(JSON.parse(options.body));return json(increment);}
+  if(path==='/api/workspace/conversations/guided-fixture/model-choice')return json({available:false});
+  if(path==='/api/workspace/activities')return json({items:[]});
+  if(path==='/api/workspace/runs')return json({runs:[]});
+  return originalFetch(input,options);
+ };
+ `});
+ await page.send('Page.navigate',{url});await page.once('Page.loadEventFired',30000,'il lavoro guidato');
+ await page.waitFor(`!!document.querySelector('[data-conversation-id="guided-fixture"]')`,10000,'la conversazione guidata');
+ await page.evaluate(`document.querySelector('[data-conversation-id="guided-fixture"]').click()`);
+ await page.waitFor(`!!document.querySelector('[data-increment-step-prompt]')`,10000,'i prossimi passi nel composer');
+ await page.evaluate(`(()=>{const field=document.querySelector('.conv-composer-input');field.value='Bozza conservata';field.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-increment-step-prompt]').click();})()`);
+ if(!await page.evaluate(`document.querySelector('.conv-composer-input').value.includes('Bozza conservata')&&document.querySelector('.conv-composer-input').value.includes('Vorrei cambiare:')&&window.guidedPosts.length===0`))throw new Error('Il suggerimento ha perso o inviato la bozza');
+ await page.evaluate(`document.querySelector('[data-increment-step-action]').click()`);
+ await page.waitFor(`!!document.querySelector('[data-increment-step-run]')`,10000,'la conferma del candidato');
+ if(!await page.evaluate(`window.guidedPosts.length===0&&document.querySelector('.conv-composer-input').value.includes('Bozza conservata')`))throw new Error('La decisione ha pubblicato prima della conferma');
+ await page.evaluate(`document.querySelector('[data-increment-step-cancel]').click()`);
+ // A released runtime is resumed by feedback from the preview, retaining the same chat.
+ const feedback=await page.evaluate(`new Promise(resolve=>window.dispatchEvent(new CustomEvent('archetipo:preview-send',{detail:{id:'guided-fixture',message:'Commento dalla preview',resolve:()=>resolve('ok'),reject:error=>resolve(error.message)}})))`);
+ if(feedback!=='ok'||!await page.evaluate(`window.guidedReopens===1&&window.guidedMessages.length===1&&window.guidedMessages[0].preview_feedback===true&&window.guidedMessages[0].message==='Commento dalla preview'`))throw new Error('Il feedback non ha ripreso la sessione originale: '+feedback);
+ await page.evaluate(`document.querySelector('[data-increment-step-action]').click();document.querySelector('[data-increment-step-run]').click()`);
+ await page.waitFor(`window.guidedPosts.length===1`,10000,'la pubblicazione esplicita del candidato');
+ if(!await page.evaluate(`window.guidedPosts[0].head_sha==='displayed-candidate'&&window.guidedPosts[0].revision===3`))throw new Error('Pubblicato un candidato diverso da quello mostrato');
+ if(exceptions.length)throw new Error('Eccezioni nei prossimi passi: '+JSON.stringify(exceptions));
+ ok('prossimi passi e preview ripristinabile','suggerimenti e conferma conservano la bozza, la pubblicazione usa il candidato mostrato e il feedback riprende la stessa chat');
+ await page.close();
 }
