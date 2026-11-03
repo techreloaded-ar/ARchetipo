@@ -78,7 +78,7 @@
  }
  window.WorkspacePanels={
   configure(value){
-   if(key!==value.key){remember();key=value.key||"";let state=states.get(key);if(!state){try{state=JSON.parse(sessionStorage.getItem("archetipo.panel:"+key)||"null");}catch{}}selected=state?.selected||"preview";opened=state?.opened ?? value.openPreview===true;expanded=state?.expanded||false;}
+   if(key!==value.key){remember();key=value.key||"";let state=states.get(key);if(!state){try{state=JSON.parse(sessionStorage.getItem("archetipo.panel:"+key)||"null");}catch{}}selected=state?.selected||"preview";opened=state?.opened===true;expanded=state?.expanded||false;}
    hasDetails=value.hasDetails===true;detailsLabel=value.detailsLabel||"Storie";
    if(!hasDetails&&selected==="details")selected="preview";
    if(!key)opened=false;

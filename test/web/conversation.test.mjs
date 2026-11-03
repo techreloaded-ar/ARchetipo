@@ -1016,9 +1016,10 @@ describe("renderConversation — la run dentro il flusso", () => {
 
 		// US: quello che l'agente ha guardato si vede senza aprire il dettaglio
 		// tecnico. Le immagini dei suoi passaggi — gli allegati dei tool_end
-		// dall'ultima frase della persona in poi — escono sotto la risposta come
-		// striscia; è una regola del viewer, l'agente non deve citarle.
-		describe("immagini lette dall'agente sotto la risposta", () => {
+		// dall'ultima frase della persona in poi — escono come striscia in coda
+		// al turno, una volta sola; è una regola del viewer, l'agente non deve
+		// citarle, e se le mostra da sé la striscia tace.
+		describe("immagini lette dall'agente in coda al turno", () => {
 			const seen = (id, url) => ({ id, name: id, media_type: "image/png", url });
 			const turn = [
 				{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "guarda i mockup" },
@@ -1027,23 +1028,58 @@ describe("renderConversation — la run dentro il flusso", () => {
 				{ id: 4, seq: 4, at: "2026-08-21T10:00:04.000Z", kind: "tool_end", tool: "Read", attachments: [seen("aaa.png", "/api/workspace/conversations/conv-1/attachments/aaa.png"), seen("bbb.png", "/api/workspace/conversations/conv-1/attachments/bbb.png")] },
 				{ id: 5, seq: 5, at: "2026-08-21T10:00:05.000Z", kind: "text", text: "Ho aperto due schermate." },
 			];
-			const agentRow = (html) => {
-				const start = html.indexOf('<li class="conv-event cev-agent">');
-				assert.ok(start >= 0, `manca la riga dell'agente: ${html}`);
-				// La striscia ha i suoi <li>: la riga finisce dove inizia la successiva.
-				const candidates = ['<li class="conv-event ', '<li class="conv-tech', '<li class="conv-run-row', "</ol>"]
-					.map((mark) => html.indexOf(mark, start + 1))
-					.filter((i) => i >= 0);
-				const next = candidates.length ? Math.min(...candidates) : -1;
-				return html.slice(start, next < 0 ? html.length : next);
-			};
+			it("la striscia porta ogni immagine letta una volta sola, con il suo URL, dopo la risposta", () => {
+				const html = renderConversation(withConversation({ events: turn, last_id: 5 }), "");
+				assert.strictEqual((html.match(/conv-seen-images"/g) || []).length, 1, `una striscia sola: ${html}`);
+				assert.ok(html.indexOf("conv-seen-images") > html.indexOf("Ho aperto due schermate."), "la striscia segue la risposta, non la precede");
+				assert.strictEqual((html.match(/attachments\/aaa\.png/g) || []).length, 2, "aaa.png: un <a> e un <img>, non di più");
+				assert.ok(html.includes('src="/api/workspace/conversations/conv-1/attachments/bbb.png"'), "manca bbb.png");
+				assert.ok(html.includes("Immagini lette dall&#39;agente"), `la striscia dichiara cosa mostra: ${html}`);
+			});
 
-			it("la striscia porta ogni immagine letta una volta sola, con il suo URL", () => {
-				const row = agentRow(renderConversation(withConversation({ events: turn, last_id: 5 }), ""));
-				assert.ok(row.includes("conv-seen-images"), `manca la striscia: ${row}`);
-				assert.strictEqual((row.match(/attachments\/aaa\.png/g) || []).length, 2, "aaa.png: un <a> e un <img>, non di più");
-				assert.ok(row.includes('src="/api/workspace/conversations/conv-1/attachments/bbb.png"'), "manca bbb.png");
-				assert.ok(row.includes("Immagini lette dall&#39;agente"), `la striscia dichiara cosa mostra: ${row}`);
+			// Il caso reale: l'agente legge i mockup, scrive una frase di
+			// avanzamento, poi li mostra inline nella risposta finale. Prima la
+			// frase di avanzamento riceveva la striscia e le immagini comparivano
+			// due volte.
+			it("una frase di avanzamento tra la lettura e la risposta che mostra l'immagine non anticipa la striscia", () => {
+				const html = renderConversation(
+					withConversation({
+						events: [
+							...turn.slice(0, 4),
+							{ id: 5, seq: 5, at: "2026-08-21T10:00:05.000Z", kind: "text", text: "Correggo due dettagli nei mockup." },
+							{ id: 6, seq: 6, at: "2026-08-21T10:00:06.000Z", kind: "tool_start", tool: "Bash" },
+							{ id: 7, seq: 7, at: "2026-08-21T10:00:07.000Z", kind: "tool_end", tool: "Bash" },
+							{ id: 8, seq: 8, at: "2026-08-21T10:00:08.000Z", kind: "text", text: "Ecco le varianti: ![a](docs/mockups/aaa.png)" },
+						],
+						last_id: 8,
+					}),
+					"",
+					{ markedParse: (md) => (md.includes("![") ? '<p><img src="docs/mockups/aaa.png" alt="a"></p>' : `<p>${md}</p>`) },
+				);
+				assert.ok(!html.includes("conv-seen-images"), `nessuna striscia, l'agente ha mostrato da sé: ${html}`);
+			});
+
+			// La risposta a una domanda strutturata non è un user_message: le
+			// immagini lette prima della domanda escono una volta, non sotto
+			// ogni risposta che segue.
+			it("una domanda strutturata in mezzo non fa ripetere la striscia", () => {
+				const html = renderConversation(
+					withConversation({
+						events: [
+							...turn.slice(0, 4),
+							{ id: 5, seq: 5, at: "2026-08-21T10:00:05.000Z", kind: "tool_start", tool: "AskUserQuestion" },
+							{ id: 6, seq: 6, at: "2026-08-21T10:00:06.000Z", kind: "tool_end", tool: "AskUserQuestion", text: "The user answered: A" },
+							{ id: 7, seq: 7, at: "2026-08-21T10:00:07.000Z", kind: "text", text: "Scelta registrata." },
+							{ id: 8, seq: 8, at: "2026-08-21T10:00:08.000Z", kind: "tool_start", tool: "Bash" },
+							{ id: 9, seq: 9, at: "2026-08-21T10:00:09.000Z", kind: "tool_end", tool: "Bash" },
+							{ id: 10, seq: 10, at: "2026-08-21T10:00:10.000Z", kind: "text", text: "Fatto." },
+						],
+						last_id: 10,
+					}),
+					"",
+				);
+				assert.strictEqual((html.match(/conv-seen-images"/g) || []).length, 1, `una striscia sola: ${html}`);
+				assert.ok(html.indexOf("conv-seen-images") > html.indexOf("Fatto."), "la striscia chiude il turno");
 			});
 
 				it("mostra anche un'immagine generata dopo l'ultima risposta testuale", () => {
@@ -1065,7 +1101,8 @@ describe("renderConversation — la run dentro il flusso", () => {
 					}),
 					"",
 				);
-				assert.strictEqual((html.match(/conv-seen-images"/g) || []).length, 1, `una striscia sola, sotto la prima risposta: ${html}`);
+				assert.strictEqual((html.match(/conv-seen-images"/g) || []).length, 1, `una striscia sola, in coda al primo turno: ${html}`);
+				assert.ok(html.indexOf("conv-seen-images") < html.indexOf("e poi?"), "la striscia precede la frase successiva della persona");
 				assert.strictEqual((html.match(/attachments\/bbb\.png/g) || []).length, 2, "bbb.png non si ripete sotto la seconda risposta");
 			});
 

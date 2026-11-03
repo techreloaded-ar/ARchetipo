@@ -112,7 +112,6 @@
 		pendingMessageMark: "in consegna",
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
 		seenImages: "Immagini lette dall'agente in questo turno",
-		imagesWithoutText: "Immagini prodotte o lette dall'agente",
 		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
 		// detto che il provider le accetta: il pannello non lo sa da sé.
 		attach: "Allega immagine",
@@ -412,15 +411,7 @@
 	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
 	// postura con cui la pagina rende i corpi di spec, piano e PRD.
 	//
-	// Le immagini che l'agente ha letto nel turno — gli allegati dei suoi
-	// passaggi tecnici dall'ultima frase della persona in poi — compaiono
-	// sotto la risposta come striscia di anteprime, così quello che l'agente
-	// ha guardato si vede senza aprire il dettaglio tecnico. È una regola di
-	// presentazione del viewer, non un'istruzione all'agente: vale per ogni
-	// provider che conserva le immagini lette e per le conversazioni libere.
-	// Se la risposta mostra già un'immagine, l'agente ha scelto cosa far
-	// vedere e la striscia non lo raddoppia.
-	function renderAgentText(events, parse, receiptLines, conversationID, seenImages) {
+	function renderAgentText(events, parse, receiptLines, conversationID) {
 		if (!events.length) return "";
 		const last = events[events.length - 1];
 		const head = [
@@ -444,10 +435,6 @@
 					? `<div class="conv-event-text conv-event-markdown markdown-rendered">${resolveWorkspaceImages(parse(text), conversationID)}</div>`
 					: `<p class="conv-event-text">${escapeHtml(text)}</p>`,
 			);
-		}
-		const strip = /<img\b/i.test(lines[0] || "") ? "" : renderEventAttachments(Array.isArray(seenImages) ? seenImages : []);
-		if (strip) {
-			lines.push(`<div class="conv-seen-images"><span class="conv-seen-images-label">${escapeHtml(TEXT.seenImages)}</span>${strip}</div>`);
 		}
 		// La colonnina porta l'intervallo degli id fusi — #2–4 — così il cursore
 		// resta leggibile anche quando tre frammenti sono diventati una riga.
@@ -1079,24 +1066,35 @@
 			// tecnici di worker paralleli e metadati vuoti restano ispezionabili
 			// subito dopo il messaggio completo senza spezzarne i delta.
 			let agentRun = [];
-			// Le immagini lette dall'agente dall'ultima frase della persona in
-			// poi, una volta sola per file: escono sotto la prima risposta che
-			// le segue e non si ripetono sotto la successiva.
+			// Le immagini che l'agente ha letto o prodotto nel turno — gli
+			// allegati dei suoi passaggi tecnici dall'ultima frase della persona
+			// in poi, una volta sola per file — escono come striscia di anteprime
+			// in coda al turno: prima della frase successiva della persona, o in
+			// fondo alla storia viva. Così quello che l'agente ha guardato si vede
+			// senza aprire il dettaglio tecnico, ma una volta sola e non sotto
+			// ogni frase di avanzamento. Se una risposta del turno mostra già
+			// un'immagine, l'agente ha scelto cosa far vedere e la striscia tace.
+			// È una regola di presentazione del viewer, non un'istruzione
+			// all'agente: vale per ogni provider che conserva le immagini lette.
 			let seenImages = [];
 			const seenImageIDs = new Set();
+			let turnShowedImage = false;
 			const flushImages = () => {
-				const attachments = renderEventAttachments(seenImages);
-				if (attachments) rows.push(`<li class="conv-event cev-agent conv-generated-images"><div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span></div><div class="conv-event-body"><div class="conv-seen-images"><span class="conv-seen-images-label">${escapeHtml(TEXT.imagesWithoutText)}</span>${attachments}</div></div></li>`);
+				const attachments = turnShowedImage ? "" : renderEventAttachments(seenImages);
+				if (attachments) rows.push(`<li class="conv-event cev-agent conv-generated-images"><div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span></div><div class="conv-event-body"><div class="conv-seen-images"><span class="conv-seen-images-label">${escapeHtml(TEXT.seenImages)}</span>${attachments}</div></div></li>`);
 				seenImages = [];
+				seenImageIDs.clear();
+				turnShowedImage = false;
 			};
 			let streamMetadata = [];
 			const flushAgent = () => {
 				if (!agentRun.length) return;
-				const answer = renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"), seenImages);
-				if (answer) rows.push(answer);
-				else flushImages();
+				const answer = renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"));
+				if (answer) {
+					rows.push(answer);
+					if (/<img\b/i.test(answer)) turnShowedImage = true;
+				}
 				agentRun = [];
-				seenImages = [];
 				if (streamMetadata.length) {
 					rows.push(renderTechnicalGroup(streamMetadata, local, folded));
 					folded += 1;
@@ -1135,9 +1133,6 @@
 					flushAgent();
 					if (event && event.kind === "user_message") flushImages();
 					rows.push(renderEvent(event));
-					if (event && event.kind === "user_message") {
-						seenImageIDs.clear();
-					}
 				}
 				const id =
 					event && event.id !== null && event.id !== undefined
@@ -1799,12 +1794,15 @@
 	 *                            questo modulo.
 	 * @returns {string} HTML string.
 	 */
+	// La decisione sul risultato — approvare o chiedere modifiche — sta qui,
+	// accanto ad «Apri l'anteprima», e non in un riquadro sopra la storia: lo
+	// spazio è della conversazione. Il server dice se è disponibile e perché
+	// no; qui il passo si spegne e il motivo diventa una nota della riga.
 	function renderIncrementNext(increment, ui) {
 		const decision = objectAt(increment, "decision");
-		const decisionSteps = new Set(arrayAt(decision, "steps").map((step) => textAt(step, "action") || textAt(step, "prompt")));
-		const steps = arrayAt(increment, "next_steps").filter((step) => step && textAt(step, "label") && (!decision || !decisionSteps.has(textAt(step, "action") || textAt(step, "prompt"))));
+		const steps = arrayAt(increment, "next_steps").filter((step) => step && textAt(step, "label"));
 		const label = textAt(increment, "next_steps_label");
-		const note = textAt(increment, "next_steps_note");
+		const note = [textAt(increment, "next_steps_note"), decision && decision.available !== true ? textAt(decision, "reason") : ""].filter(Boolean).join(" · ");
 		if (!steps.length && !note) return "";
 		const locked = ui.busy || increment.busy ? " disabled" : "";
 		const chip = (step) => {
@@ -1815,7 +1813,8 @@
 			if (kind === "decision" || kind === "action") {
 				const confirm = objectAt(step, "confirm") ? ' data-increment-step-confirm="true"' : "";
 				const mark = kind === "decision" ? '<span aria-hidden="true">✓</span>' : "";
-				return `<button type="button" class="conv-step conv-step-${kind}${tone}" data-increment-step-action="${escapeHtml(textAt(step, "action"))}"${confirm}${locked}>${mark}${text}</button>`;
+				const off = locked || (kind === "decision" && decision && decision.available !== true ? " disabled" : "");
+				return `<button type="button" class="conv-step conv-step-${kind}${tone}" data-increment-step-action="${escapeHtml(textAt(step, "action"))}"${confirm}${off}>${mark}${text}</button>`;
 			}
 			if (kind === "prompt") {
 				return `<button type="button" class="conv-step conv-step-prompt" data-increment-step-prompt="${escapeHtml(textAt(step, "prompt"))}"${ui.busy ? " disabled" : ""}><span aria-hidden="true">✎</span>${text}</button>`;
@@ -1828,24 +1827,6 @@
 			return `<button type="button" class="conv-step conv-step-open${tone}" data-increment-step-open="${escapeHtml(open)}" data-increment-step-target="${escapeHtml(target)}">${text}</button>`;
 		};
 		return `<section class="conv-increment conv-next" data-increment-id="${escapeHtml(textAt(increment, "id"))}" aria-label="Prossimi passi dell’incremento">${label ? `<span class="conv-next-label">${escapeHtml(label)}</span>` : ""}${note ? `<span class="conv-next-note">${escapeHtml(note)}</span>` : ""}${steps.map(chip).join("")}${textAt(increment,"result_notice") ? `<span class="conv-next-note">${escapeHtml(increment.result_notice)}</span>` : ""}</section>`;
-	}
-
-	function renderIncrementDecision(increment, ui) {
-		const decision = objectAt(increment, "decision");
-		if (!decision) return "";
-		const disabled = ui.busy || increment.busy || decision.available !== true ? " disabled" : "";
-		const controls = arrayAt(decision, "steps").map((step) => {
-			const label = escapeHtml(textAt(step, "label"));
-			if (textAt(step, "kind") === "decision") {
-				const confirm = objectAt(step, "confirm") ? ' data-increment-step-confirm="true"' : "";
-				return `<button type="button" class="approval-btn allow" data-increment-step-action="${escapeHtml(textAt(step, "action"))}"${confirm}${disabled}>${label}</button>`;
-			}
-			if (textAt(step, "kind") === "prompt") {
-				return `<button type="button" class="approval-btn deny" data-increment-step-prompt="${escapeHtml(textAt(step, "prompt"))}"${ui.busy ? " disabled" : ""}>${label}</button>`;
-			}
-			return "";
-		}).join("");
-		return `<div class="run-approval conv-run-approval conv-review-decision" role="group" aria-label="${escapeHtml(textAt(decision, "title"))}"><p class="run-approval-title">${escapeHtml(textAt(decision, "title"))}</p>${textAt(decision, "reason") ? `<p class="conv-run-notice">${escapeHtml(textAt(decision, "reason"))}</p>` : ""}<div class="run-approval-options">${controls}</div></div>`;
 	}
 
 	// La conferma di un passo che non si annulla prende il posto del campo, alla
@@ -2028,7 +2009,6 @@
 		// while the agent is stopped.
 		blocks.push(renderConversationApprovals(value, local));
 		blocks.push(renderConversationInputs(value, local));
-		blocks.push(renderIncrementDecision(objectAt(value, "increment"), local));
 		// Il compositore chiude il pannello e nient'altro lo segue. Aprire una
 		// conversazione nuova si comanda dall'elenco delle conversazioni e
 		// chiudere quella aperta dalla testata: ripetere qui uno dei due

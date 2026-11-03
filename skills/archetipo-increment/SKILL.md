@@ -86,8 +86,10 @@ only artifact. Write the images under `.archetipo/tmp/mockups/<revision>/` in
 the increment workdir: that directory is excluded from Git by the sandbox, so
 they never reach the increment branch or the PR, and `increment ready` still
 finds a clean tree. Show each image in the conversation as a Markdown image
-with its absolute path, name what differs between variants, and ask the person
-to choose. Record the chosen direction in words in the evolving specification;
+with its absolute path, in the message that precedes any structured question —
+a file the person cannot see is not a mockup — name what differs between
+variants, and ask the person to choose. Record the chosen direction in words in
+the evolving specification;
 the image files are not the record.
 
 Do not deliver HTML, CSS or prototype pages as mockups from this skill unless

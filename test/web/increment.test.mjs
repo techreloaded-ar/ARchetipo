@@ -86,18 +86,23 @@ test("i prossimi passi usano i metadati del server e mantengono la bozza durante
  assert.doesNotMatch(html,/href="javascript:/);
 });
 
-test("la decisione sul risultato appare nella conversazione con approvazione e richiesta di modifiche", () => {
- const decision={title:'Decidi sul risultato',available:true,steps:[{kind:'decision',action:'publish',label:'Approva risultato e apri PR',confirm:{title:'Aprire la pull request?',text:'Commit verificato',label:'Approva e apri PR'}},{kind:'prompt',label:'Vorrei cambiare…',prompt:'Vorrei cambiare: '}]};
- const increment={id:'review',decision,next_steps:decision.steps,revisions:[revision]};
+// La decisione sul risultato sta nella riga dei prossimi passi, accanto ad
+// «Apri l'anteprima», non in un riquadro sopra la storia: lo spazio è della
+// conversazione. Il server dice se è disponibile e perché no.
+test("approvazione e richiesta di modifiche stanno nella riga dei prossimi passi, accanto all'anteprima", () => {
+ const decision={title:'Decidi sul risultato',available:true,steps:[{kind:'decision',action:'publish',label:'Approva e apri PR',confirm:{title:'Aprire la pull request?',text:'Commit verificato',label:'Approva e apri PR'}},{kind:'prompt',label:'Vorrei cambiare…',prompt:'Vorrei cambiare: '}]};
+ const increment={id:'review',decision,next_steps:[{kind:'open',open:'preview',label:'Apri l’anteprima'},...decision.steps],revisions:[revision]};
  const html=renderConversation({...base,increment},'',{});
- assert.match(html,/class="run-approval conv-run-approval conv-review-decision"/);
- assert.match(html,/data-increment-step-action="publish" data-increment-step-confirm="true">Approva risultato e apri PR/);
- assert.match(html,/data-increment-step-prompt="Vorrei cambiare: ">Vorrei cambiare…/);
+ assert.doesNotMatch(html,/conv-review-decision|run-approval/);
+ const row=html.slice(html.indexOf('<section class="conv-increment conv-next"'),html.indexOf('</section>',html.indexOf('<section class="conv-increment conv-next"')));
+ assert.match(row,/data-increment-step-open="preview"/);
+ assert.match(row,/class="conv-step conv-step-decision" data-increment-step-action="publish" data-increment-step-confirm="true">[^<]*<span aria-hidden="true">✓<\/span>Approva e apri PR/);
+ assert.match(row,/data-increment-step-prompt="Vorrei cambiare: ">[^<]*<span aria-hidden="true">✎<\/span>Vorrei cambiare…/);
  assert.equal((html.match(/data-increment-step-action="publish"/g)||[]).length,1);
  const unavailable=renderConversation({...base,increment:{...increment,decision:{...decision,available:false,reason:'Verifiche da completare'}}},'',{});
  assert.match(unavailable,/data-increment-step-action="publish" data-increment-step-confirm="true" disabled/);
- assert.match(unavailable,/Verifiche da completare/);
- assert.match(unavailable,/data-increment-step-prompt="Vorrei cambiare: "/);
+ assert.match(unavailable,/conv-next-note">Verifiche da completare/);
+ assert.match(unavailable,/data-increment-step-prompt="Vorrei cambiare: ">[^<]*<span aria-hidden="true">✎<\/span>Vorrei cambiare…<\/button>/);
 });
 
 test("le azioni della board e del dettaglio non ereditano la chat selezionata", () => {

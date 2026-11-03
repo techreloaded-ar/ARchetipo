@@ -145,7 +145,7 @@ async function main(){
   };
 
   assert.equal(inc.development_mode,"continuous");
-  assert.equal(await page.evaluate(`document.getElementById("workspace-inspector").hidden`),false);
+  assert.equal(await page.evaluate(`document.getElementById("workspace-inspector").hidden`),true,"the panel stays closed until the person opens it: the conversation keeps the room");
   const proposal={intent:"Problema: condividere i clienti selezionati. Comportamento: esportazione CSV con i soli clienti scelti."};
   const proposed=await cliJSON(["increment","propose",inc.id],proposal);
   assert.equal(proposed.status,"DISCOVERY");
@@ -264,7 +264,7 @@ async function main(){
   assert.equal((await read()).increment.learning.length,1);
   assert.equal((await cliJSON(["spec","list"])).items.length,0);
   if(enterprise){
-   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('.conv-review-decision [data-increment-step-action="publish"]:not(:disabled)') && !!document.querySelector('.conv-review-decision [data-increment-step-prompt]')`,timeout,"tested version awaiting business approval or requested changes in the conversation");
+   await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('.conv-next [data-increment-step-open="preview"]') && !!document.querySelector('.conv-next [data-increment-step-action="publish"]:not(:disabled)') && !!document.querySelector('.conv-next [data-increment-step-prompt]') && !document.querySelector('.conv-review-decision')`,timeout,"tested version: approval and change request sit in the next-steps row beside the preview, with no block above the history");
    const approved=(await read()).increment.ready_sha;
    await page.evaluate(`document.querySelector('[data-increment-step-action="publish"]').click()`);
    await page.waitFor(`!!document.querySelector('[data-increment-step-run="publish"]:not(:disabled)')`,timeout,"explicit publication confirmation");

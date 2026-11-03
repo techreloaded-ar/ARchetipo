@@ -235,7 +235,7 @@ func builtin() Template {
 				Confirm: &IncrementConfirm{Title: "Confermi questi requisiti?", Text: "Approverai la versione della specifica mostrata nel pannello. L’agente potrà iniziare lo sviluppo dopo la conferma.", Label: "Approva e avvia"},
 				Prompts: []IncrementPrompt{{Label: "Vorrei cambiare…", Text: "Vorrei cambiare: "}}},
 			{ID: "develop", Label: "Riprendi lo sviluppo", Statuses: []string{"DEVELOPING"}, Prompts: []IncrementPrompt{{Label: "A che punto sei?", Text: "A che punto sei con lo sviluppo?"}}},
-			{ID: "publish", Label: "Approva risultato e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}, Primary: true,
+			{ID: "publish", Label: "Approva e apri PR", Statuses: []string{"REVIEW", "PUBLISHING"}, Primary: true,
 				Confirm: &IncrementConfirm{Title: "Aprire la pull request?", Text: "Pubblicheremo il commit verificato mostrato nel dossier e lo proporremo ai developer. Il merge e la distribuzione restano decisioni successive.", Label: "Approva e apri PR"},
 				Prompts: []IncrementPrompt{{Label: "Vorrei cambiare…", Text: "Vorrei cambiare: "}}},
 			{ID: "refresh", Label: "Aggiorna stato PR", Statuses: []string{"PROPOSED"}},
