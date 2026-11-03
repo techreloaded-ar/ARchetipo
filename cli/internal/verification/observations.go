@@ -24,44 +24,9 @@ func (s *Service) ObserveChecks(ctx context.Context) ([]CheckObservation, error)
 	if err != nil {
 		return nil, err
 	}
-	paths, err := filepath.Glob(filepath.Join(s.dir(), "runs", "*", "report.json"))
+	latest, err := s.latestCheckReports(ctx)
 	if err != nil {
 		return nil, err
-	}
-	// Scoped check reports use the same original report contract.
-	if s.Results != "" {
-		results := s.Results
-		if !filepath.IsAbs(results) {
-			results = filepath.Join(s.Root, results)
-		}
-		scoped, _ := filepath.Glob(filepath.Join(results, "*", "verification-*", "report.json"))
-		paths = append(paths, scoped...)
-	}
-	latest := map[string]Result{}
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		rel, err := filepath.Rel(s.Root, path)
-		if err != nil {
-			continue
-		}
-		safe, err := localPath(s.Root, filepath.ToSlash(rel))
-		if err != nil {
-			continue
-		}
-		raw, err := os.ReadFile(safe)
-		if err != nil {
-			continue
-		}
-		var report Result
-		if json.Unmarshal(raw, &report) != nil || report.EnvironmentID != s.environmentID() || !strings.HasPrefix(report.Operation, "check:") {
-			continue
-		}
-		name := strings.TrimPrefix(report.Operation, "check:")
-		if old, found := latest[name]; !found || report.StartedAt.After(old.StartedAt) {
-			latest[name] = report
-		}
 	}
 	resources, err := s.Resources()
 	if err != nil {
@@ -131,4 +96,49 @@ func (s *Service) ObserveChecks(ctx context.Context) ([]CheckObservation, error)
 		result = append(result, observation)
 	}
 	return result, nil
+}
+
+// latestCheckReports is the most recent original report of every check that
+// ever ran in this checkout, failures included, by check name.
+func (s *Service) latestCheckReports(ctx context.Context) (map[string]Result, error) {
+	paths, err := filepath.Glob(filepath.Join(s.dir(), "runs", "*", "report.json"))
+	if err != nil {
+		return nil, err
+	}
+	// Scoped check reports use the same original report contract.
+	if s.Results != "" {
+		results := s.Results
+		if !filepath.IsAbs(results) {
+			results = filepath.Join(s.Root, results)
+		}
+		scoped, _ := filepath.Glob(filepath.Join(results, "*", "verification-*", "report.json"))
+		paths = append(paths, scoped...)
+	}
+	latest := map[string]Result{}
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rel, err := filepath.Rel(s.Root, path)
+		if err != nil {
+			continue
+		}
+		safe, err := localPath(s.Root, filepath.ToSlash(rel))
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(safe)
+		if err != nil {
+			continue
+		}
+		var report Result
+		if json.Unmarshal(raw, &report) != nil || report.EnvironmentID != s.environmentID() || !strings.HasPrefix(report.Operation, "check:") {
+			continue
+		}
+		name := strings.TrimPrefix(report.Operation, "check:")
+		if old, found := latest[name]; !found || report.StartedAt.After(old.StartedAt) {
+			latest[name] = report
+		}
+	}
+	return latest, nil
 }

@@ -570,3 +570,62 @@ func TestLocalFilesComeFromTheOriginalCheckoutAndInvalidateReuse(t *testing.T) {
 		t.Fatal("copied a file Git would commit")
 	}
 }
+
+func TestRecordedEvidenceSurvivesCleanupAndRepreparationButNotALaterFailure(t *testing.T) {
+	s, runner, _ := fixture(t)
+	ctx := context.Background()
+	execute(t, s, "check")
+	evidence, err := s.Evidence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !execute(t, s, "cleanup").Passed {
+		t.Fatal("cleanup failed")
+	}
+	if err = s.VerifyEvidence(ctx, evidence); err != nil {
+		t.Fatal("cleanup revoked a recorded candidate", err)
+	}
+	if !execute(t, s, "prepare").Passed {
+		t.Fatal("prepare failed")
+	}
+	if err = s.VerifyEvidence(ctx, evidence); err != nil {
+		t.Fatal("a new preparation revoked a recorded candidate", err)
+	}
+	if err = s.VerifyEvidence(ctx, nil); err == nil {
+		t.Fatal("accepted a candidate without frozen evidence")
+	}
+	runner.run = func(_ context.Context, _ string, command Command) error {
+		if command.Name == "test" {
+			return errors.New("a fresh run found a defect")
+		}
+		return nil
+	}
+	if fresh, runErr := s.Execute(ctx, "check", "focused", "US-001", true); runErr != nil || fresh.Passed {
+		t.Fatal("fresh failure lost", runErr)
+	}
+	if err = s.VerifyEvidence(ctx, evidence); err == nil {
+		t.Fatal("a later failed check did not revoke the recorded candidate")
+	}
+}
+
+func TestRecordedEvidenceRequiresUnchangedInputsAndIntactLogs(t *testing.T) {
+	s, _, _ := fixture(t)
+	ctx := context.Background()
+	first := execute(t, s, "check")
+	evidence, err := s.Evidence(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(s.Root, "src", "app.txt"), "changed")
+	if err = s.VerifyEvidence(ctx, evidence); err == nil {
+		t.Fatal("accepted a candidate whose check inputs changed")
+	}
+	mustWrite(t, filepath.Join(s.Root, "src", "app.txt"), "first candidate")
+	if err = s.VerifyEvidence(ctx, evidence); err != nil {
+		t.Fatal("restored inputs were not accepted", err)
+	}
+	mustWrite(t, first.Steps[0].LogPath, "tampered")
+	if err = s.VerifyEvidence(ctx, evidence); err == nil {
+		t.Fatal("accepted a candidate with tampered original logs")
+	}
+}

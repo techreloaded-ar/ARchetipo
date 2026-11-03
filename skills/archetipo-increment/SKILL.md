@@ -176,6 +176,13 @@ use independent assessment for material risk such as permissions, migrations,
 concurrency or data loss. Keep unrelated failures distinct from regressions.
 Do not run a full ceremony per feature or repeat setup/checks without a reason.
 
+Leave the environment up after the checks: never run `execution environment
+cleanup` in the same turn as `increment ready`, nor afterwards while a candidate
+waits for approval. Stopping services is the viewer's decision through its own
+controls. A recorded candidate keeps its evidence across a cleanup, a preview
+Stop/Start and a new preparation; only a changed commit, changed declared inputs
+or a later failed run of the same check invalidate it.
+
 Read `wiki.enabled` from the parent workspace's current `.archetipo/config.yaml`
 before any Wiki operation; the sandbox copy may predate a settings change. When
 it is false, do not create or update Wiki pages or the Wiki index,

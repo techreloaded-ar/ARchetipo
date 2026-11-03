@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -156,7 +157,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 			view.CandidateLabel = "Versione verificata"
 		} else {
 			view.CandidateLabel = "Da verificare"
-			view.VerificationNote = "La versione corrente richiede nuove verifiche prima dell’approvazione."
+			view.VerificationNote = "La versione corrente richiede nuove verifiche prima dell’approvazione. Motivo: " + verificationReason(verifyErr)
 		}
 	}
 	if r.DevelopmentMode != increment.Continuous {
@@ -576,4 +577,14 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 		notes = append(notes, view.ActivityLabel)
 	}
 	view.NextStepsNote = strings.Join(notes, " · ")
+}
+
+// verificationReason names what invalidated the candidate, so that a person
+// and the agent see the same cause instead of guessing at a hidden control.
+func verificationReason(err error) string {
+	var coded *iox.CodedError
+	if errors.As(err, &coded) {
+		return coded.Message
+	}
+	return err.Error()
 }
