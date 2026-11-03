@@ -1227,6 +1227,14 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 	}
 	if snapshot.sessionProvider != nil {
 		ctx := r.Context()
+		if answered, err := s.answerPendingInputWithMessage(ctx, ws, snapshot, body); err != nil {
+			removeConversationAttachments(body.attachments)
+			writeError(w, err)
+			return
+		} else if answered {
+			writeJSON(w, http.StatusAccepted, s.nativeConversationView(ctx, ws, snapshot, afterID))
+			return
+		}
 		if err := s.prepareIncrementMessage(ctx, ws, id, &body); err != nil {
 			removeConversationAttachments(body.attachments)
 			writeError(w, err)

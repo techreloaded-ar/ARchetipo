@@ -87,7 +87,25 @@ func (s *streamSession) respondInput(ctx context.Context, id string, answers map
 	// Claim before writing so concurrent tabs cannot answer the same request.
 	delete(s.inputs, id)
 	s.mu.Unlock()
-	return s.process.Send(payload)
+	if err := s.process.Send(payload); err != nil {
+		return err
+	}
+	// The answer is something the person said, so it enters the history as
+	// their words: the harness echoes only the tool result, which the viewer
+	// folds among the technical rows, and an answer that left no visible line
+	// would read as a question nobody answered.
+	s.appendUserMessage(answerText(input, answers), nil, nil)
+	return nil
+}
+
+// answerText is the person's answer as one text: the values of each question
+// joined, one question per line.
+func answerText(input execution.PendingInput, answers map[string][]string) string {
+	lines := make([]string, 0, len(input.Questions))
+	for _, question := range input.Questions {
+		lines = append(lines, strings.Join(answers[question.ID], ", "))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func inputResponse(input execution.PendingInput, answers map[string][]string) ([]byte, error) {

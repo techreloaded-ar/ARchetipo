@@ -1204,6 +1204,47 @@ func (s *Server) respondNativeConversationInput(ctx context.Context, ws *workspa
 	return nil
 }
 
+// answerPendingInputWithMessage treats a message typed while the agent waits
+// for a structured answer as that answer. The person who ignores the offered
+// choices and writes in the composer has chosen "other" and said what: the
+// words answer every question of the oldest pending request, and no turn is
+// opened beside the one that asked — a steered message would be read only
+// once the request is answered, which is never. Images, which a native answer
+// cannot carry, follow the answer as a steering of their own. A request whose
+// questions do not admit free text, or that carries no projected questions,
+// is left to the ordinary path, as is a skill invocation.
+func (s *Server) answerPendingInputWithMessage(ctx context.Context, ws *workspaceSession, snapshot conversationSnapshot, body sendConversationMessageReq) (bool, error) {
+	message := strings.TrimSpace(body.Message)
+	if message == "" || strings.TrimSpace(body.Skill) != "" {
+		return false, nil
+	}
+	observed, err := snapshot.sessionProvider.ReadSession(ctx, execution.SessionRequest{Session: snapshot.session})
+	if err != nil || len(observed.PendingInputs) == 0 {
+		return false, nil
+	}
+	input := observed.PendingInputs[0]
+	if len(input.Questions) == 0 {
+		return false, nil
+	}
+	answers := make(map[string][]string, len(input.Questions))
+	for _, question := range input.Questions {
+		if !question.AllowText {
+			return false, nil
+		}
+		answers[question.ID] = []string{message}
+	}
+	if err := s.respondNativeConversationInput(ctx, ws, snapshot, input.ID, respondConversationInputRequest{Answers: answers}); err != nil {
+		return true, err
+	}
+	if len(body.attachments) > 0 {
+		body.Message = ""
+		if err := s.sendNativeConversationMessage(ctx, ws, snapshot, body); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
 type nativeNextTurnRequest struct {
 	PermissionProfile *string           `json:"permission_profile"`
 	Model             *string           `json:"model"`

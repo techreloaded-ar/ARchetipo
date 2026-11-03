@@ -684,3 +684,57 @@ func TestSteeringRefusedByAFinishedTurnOpensTheNextOneInstead(t *testing.T) {
 		}
 	}
 }
+
+// A message typed while the agent waits for a structured answer is that
+// answer, as "other": the words reach the pending request, and no turn is
+// opened beside the one that asked. A request whose questions admit no free
+// text keeps the ordinary steering.
+func TestFreeMessageAnswersPendingStructuredInputAsOther(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	srv, _, _ := newRunServer(t, provider, true)
+	id := openConversationOK(t, srv).Conversation.ID
+	if first := doJSON(t, srv, "POST", conversationsRoute+"/"+id+"/messages", map[string]any{"message": "first turn"}); first.Code != 202 {
+		t.Fatalf("first turn: %s", first.Body.String())
+	}
+	provider.store.mu.Lock()
+	var native *persistentFakeNativeSession
+	for _, candidate := range provider.store.sessions {
+		native = candidate
+	}
+	native.snapshot.Work = execution.SessionWaitingInput
+	native.snapshot.PendingInputs = []execution.PendingInput{{ID: "input-1", Questions: []execution.InputQuestion{
+		{ID: "0", Prompt: "A o B?", AllowText: true, Options: []execution.InputOption{{Value: "A", Label: "A"}, {Value: "B", Label: "B"}}},
+	}}}
+	startsBefore := provider.lastStart
+	provider.store.mu.Unlock()
+
+	answered := doJSON(t, srv, "POST", conversationsRoute+"/"+id+"/messages", map[string]any{"message": "Nessuna delle due, voglio C"})
+	if answered.Code != 202 {
+		t.Fatalf("free answer: %d %s", answered.Code, answered.Body.String())
+	}
+	provider.store.mu.Lock()
+	steer, start := provider.lastSteer, provider.lastStart
+	provider.store.mu.Unlock()
+	if steer.InteractionID != "input-1" || len(steer.Answers) != 1 || len(steer.Answers["0"]) != 1 || steer.Answers["0"][0] != "Nessuna delle due, voglio C" || steer.Message != "" {
+		t.Fatalf("the free message did not answer the pending input as other: %+v", steer)
+	}
+	if start.SubmissionID != startsBefore.SubmissionID {
+		t.Fatalf("a turn was opened beside the one that asked: %+v", start)
+	}
+
+	provider.store.mu.Lock()
+	native.snapshot.PendingInputs = []execution.PendingInput{{ID: "input-2", Questions: []execution.InputQuestion{
+		{ID: "0", Prompt: "Solo A o B", Options: []execution.InputOption{{Value: "A", Label: "A"}, {Value: "B", Label: "B"}}},
+	}}}
+	provider.store.mu.Unlock()
+	steered := doJSON(t, srv, "POST", conversationsRoute+"/"+id+"/messages", map[string]any{"message": "parole libere"})
+	if steered.Code != 202 {
+		t.Fatalf("steer beside a closed question: %d %s", steered.Code, steered.Body.String())
+	}
+	provider.store.mu.Lock()
+	steer = provider.lastSteer
+	provider.store.mu.Unlock()
+	if steer.InteractionID != "" || steer.Message != "parole libere" {
+		t.Fatalf("a question without free text must not swallow the message: %+v", steer)
+	}
+}

@@ -10,7 +10,7 @@ const discoveryInputFrame = `{"type":"control_request","request_id":"discovery",
 
 func TestDiscoveryQuestionsRoundTripWithoutBecomingApprovals(t *testing.T) {
 	fake := newFakeClaude()
-	client, _ := openConversation(t, fake)
+	client, session := openConversation(t, fake)
 	fake.emit(discoveryInputFrame)
 	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
 	input := client.pendingInputs()[0]
@@ -45,6 +45,14 @@ func TestDiscoveryQuestionsRoundTripWithoutBecomingApprovals(t *testing.T) {
 	}
 	if err := client.respondInput(context.Background(), "discovery", answers); err == nil {
 		t.Fatal("same question answered twice")
+	}
+	// The answer enters the history as the person's words, so the timeline
+	// shows what was chosen and a free answer typed in the composer finds its
+	// own echo.
+	events := session.Events(0)
+	last := events[len(events)-1]
+	if last.Kind != "user_message" || last.Text != "Un risultato diverso\nClienti, Colleghi" {
+		t.Fatalf("answer did not enter the history as the person's words: %#v", last)
 	}
 }
 

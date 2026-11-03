@@ -68,14 +68,22 @@ with validated business value. Never invent user research or observations.
 
 ### Visual mockups
 
-Decide on your own whether the increment needs mockups; the person does not
-have to ask. It needs them when at least one holds: it introduces a new page,
-screen or route; it introduces a new user-facing component with its own layout
-(form, wizard, dashboard widget, modal flow, not a field or button added to an
-existing form); it restructures the layout of an existing page rather than
-changing copy, colours or styling of what is already there. A small UI change,
-or one whose rendering you are confident about, gets no mockup. When in doubt,
-make none, say so in one line, and let the person ask for them.
+Mockups are part of understanding the problem, not an extra the person must
+ask for. Decide on them yourself, before presenting a specification revision
+for approval: a revision that changes what a person sees on a screen is
+presented together with its mockups, and asking to approve it without them is
+an incomplete request.
+
+The increment needs mockups whenever a person will see something different on
+a screen: a new page, screen or route; a new component with its own layout
+(form, wizard, dashboard widget, modal flow); a restructured layout; and just
+as much a new column in a table, a new field, indicator, badge, counter or
+state shown beside existing ones, or a changed arrangement of existing
+elements. Only these need none: a change of copy or labels alone; colours or
+styling of what is already there, with the same arrangement; behaviour with no
+visible change (logic, API, data, performance); a fix that restores the
+intended rendering. When in doubt, make them: two variants cost minutes and
+spare a revision. When you make none, say so in one line and why.
 
 A mockup here is an image and nothing else: a PNG per variant, two or three
 variants at most, each a static picture of the proposed screen. Produce it
@@ -85,12 +93,21 @@ screenshot tool your harness offers, then delete the draft so the image is the
 only artifact. Write the images under `.archetipo/tmp/mockups/<revision>/` in
 the increment workdir: that directory is excluded from Git by the sandbox, so
 they never reach the increment branch or the PR, and `increment ready` still
-finds a clean tree. Show each image in the conversation as a Markdown image
-with its absolute path, in the message that precedes any structured question —
-a file the person cannot see is not a mockup — name what differs between
-variants, and ask the person to choose. Record the chosen direction in words in
-the evolving specification;
-the image files are not the record.
+finds a clean tree.
+
+Reading an image file with your tools shows it to you, not to the person. The
+only way the person sees a mockup is a Markdown image line in your message,
+with the file's absolute path:
+
+```markdown
+![Variante A — azioni a icona](/abs/path/.archetipo/tmp/mockups/1/form-a.png)
+```
+
+Send that message — one image line per variant, each followed by what differs
+from the others — before any structured question that asks to choose between
+them, and name the variants in the question with the same words. A file the
+person cannot see is not a mockup. Record the chosen direction in words in the
+evolving specification; the image files are not the record.
 
 Do not deliver HTML, CSS or prototype pages as mockups from this skill unless
 the user explicitly asks for them.
