@@ -24,6 +24,7 @@ func (s *streamSession) askInput(id string, payload json.RawMessage) {
 			Options     []struct {
 				Label       string `json:"label"`
 				Description string `json:"description"`
+				Preview     string `json:"preview"`
 			} `json:"options"`
 		} `json:"questions"`
 	}
@@ -42,7 +43,7 @@ func (s *streamSession) askInput(id string, payload json.RawMessage) {
 			if strings.TrimSpace(option.Label) == "" {
 				return
 			}
-			projected.Options = append(projected.Options, execution.InputOption{Value: option.Label, Label: option.Label, Description: option.Description})
+			projected.Options = append(projected.Options, execution.InputOption{Value: option.Label, Label: option.Label, Description: option.Description, Preview: option.Preview})
 		}
 		questions = append(questions, projected)
 	}

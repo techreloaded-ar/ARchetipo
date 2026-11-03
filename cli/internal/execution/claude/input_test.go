@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const discoveryInputFrame = `{"type":"control_request","request_id":"discovery","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"header":"Costanza","question":"Quale risultato conta?","multiSelect":false,"options":[{"label":"Risparmiare tempo","description":"Ridurre il lavoro manuale"},{"label":"Meno errori","description":"Aumentare la precisione"}]},{"header":"Livia","question":"Per chi?","multiSelect":true,"options":[{"label":"Clienti"},{"label":"Colleghi"}]}],"metadata":{"keep":"original"}}}}`
+const discoveryInputFrame = `{"type":"control_request","request_id":"discovery","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"header":"Costanza","question":"Quale risultato conta?","multiSelect":false,"options":[{"label":"Risparmiare tempo","description":"Ridurre il lavoro manuale","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Meno errori","description":"Aumentare la precisione"}]},{"header":"Livia","question":"Per chi?","multiSelect":true,"options":[{"label":"Clienti"},{"label":"Colleghi"}]}],"metadata":{"keep":"original"}}}}`
 
 func TestDiscoveryQuestionsRoundTripWithoutBecomingApprovals(t *testing.T) {
 	fake := newFakeClaude()
@@ -14,7 +14,7 @@ func TestDiscoveryQuestionsRoundTripWithoutBecomingApprovals(t *testing.T) {
 	fake.emit(discoveryInputFrame)
 	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
 	input := client.pendingInputs()[0]
-	if len(client.PendingApprovals()) != 0 || input.Questions[0].Header != "Costanza" || !input.Questions[0].AllowText || !input.Questions[1].Multiple || input.Questions[0].Options[0].Description != "Ridurre il lavoro manuale" {
+	if len(client.PendingApprovals()) != 0 || input.Questions[0].Header != "Costanza" || !input.Questions[0].AllowText || !input.Questions[1].Multiple || input.Questions[0].Options[0].Description != "Ridurre il lavoro manuale" || input.Questions[0].Options[0].Preview != "![Variante A](/abs/mockups/1/a.png)" {
 		t.Fatalf("discovery input = %#v", input)
 	}
 	if err := client.RespondApproval(context.Background(), "discovery", "allow"); err == nil || len(client.pendingInputs()) != 1 {

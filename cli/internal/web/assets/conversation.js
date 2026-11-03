@@ -987,21 +987,29 @@
 	// retained history is emitted at the tail — out of place, but present: a run
 	// that is waiting for an answer must never become invisible because the line
 	// that started it has aged out.
+	// Il parser Markdown arriva iniettato dal chiamante — il pattern di
+	// task-markdown.js — o dalla globale della pagina; la guardia typeof è
+	// ciò che tiene il modulo consumabile in un vm nudo, dove `marked` non
+	// esiste e il testo dell'agente resta escapato.
+	function markdownParser(local) {
+		return typeof local.markedParse === "function"
+			? local.markedParse
+			: typeof marked !== "undefined" && marked && typeof marked.parse === "function"
+				? marked.parse.bind(marked)
+				: null;
+	}
+
+	// Una domanda strutturata ancora aperta, con le sue scelte: è la card che
+	// riceve le immagini lette nel turno, perché una scelta fra varianti si fa
+	// guardandole accanto alle opzioni, non in un riquadro tecnico più su.
+	function hasPendingQuestionnaire(view) {
+		return arrayAt(objectAt(view, "session"), "pending_inputs").some((input) => input && input.id && arrayAt(input, "questions").length);
+	}
+
 	function renderTimeline(view, active, ui) {
 		const events = Array.isArray(view.events) ? view.events : [];
 		const local = ui && typeof ui === "object" ? ui : {};
-		// Il parser Markdown arriva iniettato dal chiamante — il pattern di
-		// task-markdown.js — o dalla globale della pagina; la guardia typeof è
-		// ciò che tiene il modulo consumabile in un vm nudo, dove `marked` non
-		// esiste e il testo dell'agente resta escapato.
-		const markedParse =
-			typeof local.markedParse === "function"
-				? local.markedParse
-				: typeof marked !== "undefined" &&
-						marked &&
-						typeof marked.parse === "function"
-					? marked.parse.bind(marked)
-					: null;
+		const markedParse = markdownParser(local);
 		const anchored = new Map();
 		const pending = [];
 		for (const run of arrayAt(view, "runs")) {
@@ -1153,6 +1161,16 @@
 			}
 			flushTechnical();
 			flushAgent();
+			// Un turno che si chiude su una domanda strutturata: le immagini che
+			// l'agente ha letto e non ha mostrato da sé appartengono alla domanda
+			// — sono le varianti fra cui si sceglie — e le riceve la sua card,
+			// che le disegna sopra le opzioni. La striscia tace; tornerà nella
+			// storia, dopo la risposta, come traccia di ciò che è stato guardato.
+			if (!turnShowedImage && seenImages.length && hasPendingQuestionnaire(view)) {
+				local.questionImages = seenImages.slice();
+				seenImages = [];
+				seenImageIDs.clear();
+			}
 			flushImages();
 		}
 		for (const [anchor, blocks] of anchored) {
@@ -1413,7 +1431,17 @@
 	 * just that field. Nothing here decides what the question means: header, prompt,
 	 * options and flags are the adapter's words.
 	 */
-	function renderInputQuestion(question, index, draft, busy, withTabs) {
+	// The preview an option carries — the harness's own field for mockups and
+	// visual comparisons — is Markdown like an agent answer, images included.
+	function renderInputOptionPreview(option, context) {
+		const source = textAt(option, "preview");
+		if (!source) return "";
+		const parse = context && typeof context.markedParse === "function" ? context.markedParse : null;
+		const body = parse ? resolveWorkspaceImages(parse(source), context.conversationID) : `<p>${escapeHtml(source)}</p>`;
+		return `<div class="conv-input-preview markdown-rendered">${body}</div>`;
+	}
+
+	function renderInputQuestion(question, index, draft, busy, withTabs, context) {
 		const id = escapeHtml(textAt(question, "id"));
 		const answer = inputAnswerOf(draft && draft[question.id]);
 		const disabled = busy ? " disabled" : "";
@@ -1422,7 +1450,7 @@
 		const kind = multi ? "checkbox" : "radio";
 		const options = choices.map((option) => `<label class="conv-input-option">
 			<input type="${kind}" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${answer.options.includes(option.value) ? " checked" : ""}${disabled}>
-			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}</span>
+			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}${renderInputOptionPreview(option, context)}</span>
 		</label>`).join("");
 		const field = (required) => question.secret
 			? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(answer.text)}"${disabled}${required ? " required" : ""}>`
@@ -1451,7 +1479,22 @@
 	 * the one rule the adapter's protocol already imposes. The step shown is
 	 * the page's choice (`ui.inputSteps`), like the drafts.
 	 */
-	function renderInputQuestionnaire(input, questions, draft, ui) {
+	// Le immagini che il turno ha letto per questa domanda, sopra le opzioni:
+	// la didascalia è il nome del file, perché è l'unico nome che hanno. Se
+	// un'opzione mostra già un'immagine nella sua preview, l'agente ha
+	// accoppiato da sé varianti e scelte e la galleria non ripete niente.
+	function renderQuestionImages(images, optionsHtml) {
+		const items = (Array.isArray(images) ? images : []).filter((image) => image && textAt(image, "url"));
+		if (!items.length || /<img\b/i.test(optionsHtml)) return "";
+		return `<div class="conv-input-images">${items.map((image) => {
+			// Un nome che è solo l'impronta del contenuto non dice niente: niente didascalia.
+			const stem = textAt(image, "name").replace(/\.[a-z0-9]+$/i, "");
+			const caption = /^[0-9a-f]{20,}$/i.test(stem) ? "" : stem.replace(/[-_]+/g, " ");
+			return `<figure class="conv-input-image"><a href="${escapeHtml(textAt(image, "url"))}" target="_blank" rel="noopener"><img src="${escapeHtml(textAt(image, "url"))}" alt="${escapeHtml(textAt(image, "name"))}" loading="lazy"></a>${caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ""}</figure>`;
+		}).join("")}</div>`;
+	}
+
+	function renderInputQuestionnaire(input, questions, draft, ui, context) {
 		const id = escapeHtml(input.id);
 		const total = questions.length;
 		const requested = ui.inputSteps && typeof ui.inputSteps[input.id] === "number" ? ui.inputSteps[input.id] : 0;
@@ -1468,16 +1511,19 @@
 		const forward = step < total - 1
 			? `<button type="button" class="primary-btn" data-conversation-input-step="next"${disabled}>${escapeHtml(TEXT.inputNext)}</button>`
 			: `<button type="submit" class="primary-btn"${ui.busy || !complete ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>`;
+		const fields = renderInputQuestion(questions[step], step, draft, ui.busy, total > 1, context);
 		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
 				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${counter}</div>
+				${renderQuestionImages(context && context.images, fields)}
 				${tabs}
-				<div class="conv-input-fields">${renderInputQuestion(questions[step], step, draft, ui.busy, total > 1)}</div>
+				<div class="conv-input-fields">${fields}</div>
 				<div class="conv-input-nav">${previous}${forward}</div>
 			</form>`;
 	}
 
 	function renderConversationInputs(view, ui) {
 		const session = objectAt(view, "session");
+		const context = { markedParse: markdownParser(ui), conversationID: textAt(objectAt(view, "conversation"), "id"), images: arrayAt(ui, "questionImages") };
 		return arrayAt(session, "pending_inputs").map((input) => {
 			if (!input || !input.id) return "";
 			const id = escapeHtml(input.id);
@@ -1485,7 +1531,7 @@
 			const questions = arrayAt(input, "questions");
 			// The adapter supplies presentation fields. Unknown native requests keep
 			// their existing response path, behind an explicit technical detail.
-			if (questions.length) return renderInputQuestionnaire(input, questions, draft, ui);
+			if (questions.length) return renderInputQuestionnaire(input, questions, draft, ui, context);
 			return `<form class="conv-input" data-conversation-input-form="${id}">
 				<strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>
 				<div class="conv-input-fields"><details><summary>Dettaglio della richiesta</summary><pre>${escapeHtml(JSON.stringify(input.payload || {}, null, 2))}</pre></details>
@@ -1886,6 +1932,10 @@
 	function renderConversation(view, draft, ui) {
 		const value = view && typeof view === "object" ? view : {};
 		const local = ui && typeof ui === "object" ? ui : {};
+		// Le immagini che la timeline consegna alla domanda aperta valgono per
+		// questo disegno soltanto: azzerate qui, così un oggetto `ui` riusato
+		// dal chiamante non le trascina nel disegno successivo.
+		local.questionImages = [];
 		const typed = typeof draft === "string" ? draft : "";
 		const blocks = [];
 		const workflow = objectAt(value, "workflow");

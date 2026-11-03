@@ -2239,6 +2239,59 @@ describe('runtime input questions', () => {
  const questionnaireOf = (html) => html.slice(html.indexOf('conv-questionnaire'), html.indexOf('<form class="conv-composer"'));
  const values = (question, entry) => Array.from(inputAnswerValues(question, entry));
  const sections = { id: 'sections', header: 'Sezioni', prompt: 'Quali sezioni includo?', multiple: true, allow_text: true, options: [{ value: 'intro', label: 'Introduzione' }, { value: 'end', label: 'Conclusione' }] };
+ // Il caso osservato dal vero (conv-4bf375…, 3 nov 2026): l'agente legge i
+ // due mockup, narra solo nel thinking e chiude il turno su AskUserQuestion,
+ // senza mai scrivere una riga di testo con le immagini. La persona deve
+ // scegliere fra varianti che non vede. Le immagini lette nel turno sono
+ // quindi disegnate dentro la card della domanda, sopra le opzioni, e la
+ // striscia tecnica tace finché la domanda è aperta.
+ describe('immagini del turno dentro la domanda aperta', () => {
+  const seen = (id) => ({ id, name: id, media_type: 'image/png', url: `/api/workspace/conversations/conv-1/attachments/${id}` });
+  const turn = [
+   { id: 8, seq: 8, at: '2026-11-03T14:25:24.000Z', kind: 'user_message', text: 'Vorrei una vista tabellare.' },
+   { id: 51, seq: 51, at: '2026-11-03T14:28:43.000Z', kind: 'tool_start', tool: 'Read' },
+   { id: 52, seq: 52, at: '2026-11-03T14:28:44.000Z', kind: 'tool_end', tool: 'Read', attachments: [seen('elenco-a-interruttore.png')] },
+   { id: 53, seq: 53, at: '2026-11-03T14:28:44.000Z', kind: 'tool_start', tool: 'Read' },
+   { id: 54, seq: 54, at: '2026-11-03T14:28:44.000Z', kind: 'tool_end', tool: 'Read', attachments: [seen('elenco-b-pagina-dedicata.png')] },
+   { id: 58, seq: 58, at: '2026-11-03T14:28:53.000Z', kind: 'thinking', text: 'Ho preparato due mockup per la vista Elenco.' },
+   { id: 59, seq: 59, at: '2026-11-03T14:28:53.000Z', kind: 'tool_start', tool: 'AskUserQuestion' },
+  ];
+  const variants = { id: '0', header: 'Livia', prompt: 'Quale delle due varianti preferisci?', allow_text: true, options: [{ value: 'Variante A — interruttore', label: 'Variante A — interruttore', description: 'Nella barra del mese' }, { value: 'Variante B — pagina dedicata', label: 'Variante B — pagina dedicata' }] };
+  // `pending` compone la sessione; la storia sta al livello del payload.
+  const openQuestion = (questions, events) => Object.assign(pending(questions), { events, last_id: events[events.length - 1].id });
+  it('la card della domanda mostra le immagini lette, con didascalia dal nome del file, e la striscia tace', () => {
+   const html = renderConversation(openQuestion([variants], turn), '', {});
+   const card = questionnaireOf(html);
+   assert.ok(card.includes('conv-input-images'), `galleria assente nella card: ${card}`);
+   assert.ok(card.indexOf('conv-input-images') < card.indexOf('conv-input-options'), 'le immagini stanno sopra le opzioni');
+   assert.ok(card.includes('src="/api/workspace/conversations/conv-1/attachments/elenco-a-interruttore.png"'), 'manca la variante A');
+   assert.ok(card.includes('src="/api/workspace/conversations/conv-1/attachments/elenco-b-pagina-dedicata.png"'), 'manca la variante B');
+   assert.ok(card.includes('<figcaption>elenco a interruttore</figcaption>'), `didascalia dal nome del file: ${card}`);
+   assert.ok(!html.includes('conv-seen-images'), `la striscia tecnica non raddoppia le immagini: ${html}`);
+   assert.ok(!html.includes('Immagini lette dall'), 'nessuna intestazione tecnica mentre la domanda è aperta');
+  });
+  it('a domanda risposta le immagini restano nella storia come striscia, una volta', () => {
+   const answered = [...turn, { id: 60, seq: 60, at: '2026-11-03T14:30:00.000Z', kind: 'user_message', text: 'Variante A — interruttore' }];
+   const html = renderConversation(withConversation({ events: answered, last_id: 60 }), '', {});
+   assert.strictEqual((html.match(/conv-seen-images"/g) || []).length, 1, `una striscia sola: ${html}`);
+   assert.ok(!html.includes('conv-input-images'), 'nessuna galleria senza domanda aperta');
+  });
+  it('un oggetto ui riusato non trascina le immagini nel disegno successivo', () => {
+   const ui = {};
+   renderConversation(openQuestion([variants], turn), '', ui);
+   const html = renderConversation(openQuestion([variants], [turn[0]]), '', ui);
+   assert.ok(!html.includes('conv-input-images'), `immagini di un disegno precedente: ${html}`);
+  });
+  it('se un’opzione mostra già un’immagine nella preview, la galleria non ripete e le immagini stanno accanto alla scelta', () => {
+   const withPreview = { ...variants, options: [{ ...variants.options[0], preview: '![Variante A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, variants.options[1]] };
+   const html = renderConversation(openQuestion([withPreview], turn), '', { markedParse: (md) => (md.includes('![') ? '<p><img src="/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png" alt="Variante A"></p>' : `<p>${md}</p>`) });
+   const card = questionnaireOf(html);
+   assert.ok(card.includes('conv-input-preview'), `preview assente: ${card}`);
+   assert.ok(card.includes('src="/api/workspace/file?path=%2FUsers%2Fx%2F.archetipo%2Ftmp%2Fmockups%2F1%2Felenco-a-interruttore.png&amp;conversation=conv-1"'), `l'immagine della preview non è risolta sul workspace: ${card}`);
+   assert.ok(card.indexOf('conv-input-preview') > card.indexOf('Variante A — interruttore'), 'la preview sta sotto la sua opzione');
+   assert.ok(!card.includes('conv-input-images'), 'la galleria non ripete ciò che le opzioni già mostrano');
+  });
+ });
  it('renders choices and free text without asking the person for JSON', () => {
   const html = renderConversation(pending([database]), '', { inputDrafts: { 'input-1': { db: { options: ['sqlite'], other: false, text: '' } } } });
   assert.match(html, /Quale database\?/);

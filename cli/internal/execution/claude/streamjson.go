@@ -61,6 +61,13 @@ type frame struct {
 	// a control frame is: the subtype that does live inside Request.
 	RequestID string          `json:"request_id"`
 	Request   json.RawMessage `json:"request"`
+	// ToolUseResult is the harness's own summary of a tool result. For an
+	// image a tool read it names the file, which is the one name the image has.
+	ToolUseResult struct {
+		File struct {
+			FilePath string `json:"filePath"`
+		} `json:"file"`
+	} `json:"tool_use_result"`
 }
 
 // controlResponse is the answer to a control request. The correlation key is

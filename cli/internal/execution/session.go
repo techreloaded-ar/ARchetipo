@@ -230,6 +230,9 @@ type InputOption struct {
 	Value       string `json:"value"`
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+	// Preview is Markdown the harness lets an option carry — a mockup image,
+	// a snippet — rendered beside the choice, images included.
+	Preview string `json:"preview,omitempty"`
 }
 
 // PendingInput preserves the native payload for compatibility and diagnostics.

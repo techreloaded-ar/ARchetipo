@@ -105,9 +105,17 @@ with the file's absolute path:
 
 Send that message — one image line per variant, each followed by what differs
 from the others — before any structured question that asks to choose between
-them, and name the variants in the question with the same words. A file the
-person cannot see is not a mockup. Record the chosen direction in words in the
-evolving specification; the image files are not the record.
+them, and name the variants in the question with the same words. When the
+structured question offers the variants as options, put each variant's image
+line in that option's `preview` field as well, so the picture sits beside the
+choice it illustrates:
+
+```json
+{"label":"Variante A — azioni a icona","description":"…","preview":"![Variante A](/abs/path/.archetipo/tmp/mockups/1/form-a.png)"}
+```
+
+A file the person cannot see is not a mockup. Record the chosen direction in
+words in the evolving specification; the image files are not the record.
 
 Do not deliver HTML, CSS or prototype pages as mockups from this skill unless
 the user explicitly asks for them.

@@ -1028,7 +1028,7 @@ func TestStreamSessionStoresImagesReadByToolsAndKeepsTheBase64OutOfTheHistory(t 
 		t.Fatalf("tool_end = %#v", ended)
 	}
 	attachment := ended.Attachments[0]
-	if attachment.MediaType != "image/png" || !strings.HasSuffix(attachment.ID, ".png") || attachment.Path != "" {
+	if attachment.MediaType != "image/png" || !strings.HasSuffix(attachment.ID, ".png") || attachment.Path != "" || attachment.Name != "shot.png" {
 		t.Fatalf("attachment = %#v", attachment)
 	}
 	if stored, err := os.ReadFile(filepath.Join(dir, attachment.ID)); err != nil || string(stored) != "PNGBYTES" {

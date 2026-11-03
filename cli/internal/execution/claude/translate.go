@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/base64"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
@@ -207,7 +208,7 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 			if block.IsError {
 				kind = localrun.KindToolError
 			}
-			s.appendWith(execution.RunEvent{Kind: kind, Text: toolResultText(block.Content), Tool: s.toolNameOf(block.ToolUseID), Attachments: execution.AttachmentReferences(s.storeToolResultImages(block.Content)), Raw: raw})
+			s.appendWith(execution.RunEvent{Kind: kind, Text: toolResultText(block.Content), Tool: s.toolNameOf(block.ToolUseID), Attachments: execution.AttachmentReferences(s.storeToolResultImages(block.Content, f.ToolUseResult.File.FilePath)), Raw: raw})
 		case "text":
 			// The opening instruction comes back like any other user frame, and
 			// it is the one that is not history: it is what the caller asked
@@ -387,13 +388,17 @@ func toolResultImages(content json.RawMessage) []imageSource {
 // storeToolResultImages writes the images of a tool result under the session's
 // attachments directory and hands back their references. Without a directory
 // nothing is stored; an image that cannot be decoded or written is left out,
-// because the text of the result is still history worth keeping.
-func (s *streamSession) storeToolResultImages(content json.RawMessage) []execution.Attachment {
+// because the text of the result is still history worth keeping. The stored
+// file is named by its content; the attachment keeps the name of the file the
+// tool read, when the harness says it, because that is the name a person
+// recognises a mockup by.
+func (s *streamSession) storeToolResultImages(content json.RawMessage, filePath string) []execution.Attachment {
 	if s.attachmentsDir == "" {
 		return nil
 	}
+	images := toolResultImages(content)
 	var attachments []execution.Attachment
-	for _, image := range toolResultImages(content) {
+	for _, image := range images {
 		data, err := base64.StdEncoding.DecodeString(image.Data)
 		if err != nil {
 			continue
@@ -401,6 +406,9 @@ func (s *streamSession) storeToolResultImages(content json.RawMessage) []executi
 		attachment, err := execution.StoreAttachment(s.attachmentsDir, image.MediaType, data)
 		if err != nil {
 			continue
+		}
+		if len(images) == 1 && strings.TrimSpace(filePath) != "" {
+			attachment.Name = filepath.Base(filePath)
 		}
 		attachments = append(attachments, attachment)
 	}
