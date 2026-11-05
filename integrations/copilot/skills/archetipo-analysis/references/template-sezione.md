@@ -1,6 +1,6 @@
 # Section template — one screen or one sub-process
 
-Use this template for **every** step of the process map, in the order of the map. One step, one section, always with all ten blocks: a block that does not apply says so explicitly ("Nessuna integrazione chiamata in questo step"), it is never omitted. The last section of the document must be as dense as the first.
+Use this template for **every** step of the process map, in the order of the map. One step, one section, always with the opening description and all nine blocks: a block that does not apply says so explicitly ("Nessuna integrazione chiamata in questo step"), it is never omitted. The last section of the document must be as dense as the first.
 
 > **Language:** English scaffolding. Translate every static element (headings, table headers, bold labels) into the detected language, per the **Language policy** in the agent instructions. Keep `{{PLACEHOLDER}}` tokens unchanged. Do not translate the conventions `XX crt` and `[DA CONFERMARE]`: they are markers the reader searches for.
 
@@ -8,16 +8,18 @@ Use this template for **every** step of the process map, in the order of the map
 
 | Convention | Meaning | When to use it |
 |---|---|---|
-| `XX crt` | Length not known | The field length is not in the Knowledge, not in the PRD and not given by the user. Never guess a number. |
-| `[DA CONFERMARE]` | Assumption to be validated | Any value, rule, message or outcome you had to assume. Put the marker right after the assumed value and repeat the item in block 9. |
-| `«…»` | Verbatim text | Messages, popup texts, labels and button captions exactly as they appear or will appear. If the text is not known, write a proposed text followed by `[DA CONFERMARE]`. |
+| `XX crt` | Length not known | The field length is not in the Knowledge, not in the PRD and not given by the user. Never guess a number. It is not an open point. |
+| `[DA CONFERMARE]` | Relevant open point | Only on a value that is an open point of block 8 (see **Which gaps become open points**). Put the marker right after the value. |
+| `«…»` | Verbatim text | Messages, popup texts, labels and button captions exactly as they appear or will appear. A text not found in the Knowledge is a proposal; chapter 1 says so once for the whole document, so no marker is needed. |
 | **Bloccante** / **Forzabile** | Control severity | *Bloccante*: the user cannot continue. *Forzabile*: the user may continue after an explicit action (reason, flag, authorisation); say which one and what it produces. |
-| **Fonte** | Where a value comes from | Name the system or table (Anagrafe, NDG, Rapporti, Tabella `{{TABLE}}`), or "inserimento manuale". |
+| **Fonte** | Where a value comes from | Name the system or table (Anagrafe, NDG, Rapporti, Tabella `{{TABLE}}`), or "inserimento manuale". A table whose name is not known is "tabella da definire" — never an invented name. |
 
 ## Template
 
 ```markdown
 ### {{SECTION_NUMBER}} {{STEP_NAME}}
+
+{{FUNCTIONAL_DESCRIPTION: three to five sentences of plain, readable prose that say what this step is for the business — what the user does here and why, what the system does on its own, where the step starts and what it leads to. No field lists, no codes, no table; written so that someone who reads only this paragraph understands the step.}}
 
 **Tipo:** {{SCREEN | SUB_PROCESS | CONTROL}} · **RF coperti:** {{RF_LIST}} · **Mockup:** {{MOCKUP_REF}}
 
@@ -74,21 +76,15 @@ Every outcome the service can return has a row. "Non disponibile / timeout" is a
 
 Concurrency, resume after suspension, data changed by another operator, cancelled practice, expired data, multiple co-holders, minors, foreign residents — whichever apply. Write "Nessun caso particolare individuato" if none.
 
-#### {{SECTION_NUMBER}}.8 Copertura RF
+#### {{SECTION_NUMBER}}.8 Punti aperti
 
-| RF | Come lo copre questa sezione |
-|---|---|
-| {{RF_ID}} | {{ONE_LINE_EXPLANATION}} |
+| N | Punto | Assunzione adottata | Impatto se diversa | Chi decide |
+|---|---|---|---|---|
+| PA-{{SECTION_NUMBER}}-{{N}} | {{OPEN_POINT}} | {{ASSUMPTION}} | {{IMPACT}} | {{OWNER_OR_UNKNOWN}} |
 
-#### {{SECTION_NUMBER}}.9 Punti aperti e assunzioni
+Only the gaps that pass the triage below, ordered by impact. Every `[DA CONFERMARE]` in this section has its row here, or cites a point of an earlier step ("vedi PA-3.2-1"). Write "Nessun punto aperto" if none.
 
-| N | Punto | Assunzione adottata | Impatto se diversa |
-|---|---|---|---|
-| PA-{{SECTION_NUMBER}}-{{N}} | {{OPEN_POINT}} `[DA CONFERMARE]` | {{ASSUMPTION}} | {{IMPACT}} |
-
-Every `[DA CONFERMARE]` in blocks 1–7 appears here. Write "Nessun punto aperto" if none.
-
-#### {{SECTION_NUMBER}}.10 Screen spec
+#### {{SECTION_NUMBER}}.9 Screen spec
 
 _Only when Tipo = SCREEN. Omit the block otherwise._
 
@@ -102,12 +98,26 @@ _Only when Tipo = SCREEN. Omit the block otherwise._
 - **Stati da renderizzare:** base{{, errore}}{{, caricamento}}{{, vuoto}}{{, modale-<nome>}} — only the states this screen actually has
 ```
 
-For a screen (Tipo = SCREEN) block 2 is a list of image lines, one per state listed in block 10, in that order: base first. `{{SECTION_DASHED}}` is the section number with dashes (`3.4` → `3-4`). The images are produced by `scripts/render_screens.py` from `screens/{{SECTION_DASHED}}.json`, written from block 10 as described in `screen-spec.md`. For a sub-process or a control (no screen) block 2 is one line: "Nessuna videata: {{WHAT_THE_STEP_IS}}".
+For a screen (Tipo = SCREEN) block 2 is a list of image lines, one per state listed in block 9, in that order: base first. `{{SECTION_DASHED}}` is the section number with dashes (`3.4` → `3-4`). The images are produced by `scripts/render_screens.py` from `screens/{{SECTION_DASHED}}.json`, written from block 9 as described in `screen-spec.md`. For a sub-process or a control (no screen) block 2 is one line: "Nessuna videata: {{WHAT_THE_STEP_IS}}".
+
+## Which gaps become open points
+
+A gap is anything the Knowledge, the PRD and the user's answers do not settle. Every gap gets an adopted value; only a few become open points. Rate each gap on two axes:
+
+| Axis | Low | Medium | High |
+|---|---|---|---|
+| **Confidence** in the adopted value | Nothing supports it, and plausible alternatives lead to a different behaviour | The PRD or the Knowledge point that way, or it is the house convention of similar steps | Stated by the PRD, the Knowledge or the user |
+| **Impact** if the value is different | Message texts, labels, field order, lengths, a default changeable by configuration | A control's existence or severity, a mandatory rule, the behaviour on one outcome, who may press a button | The flow or the steps, who performs the step, an integration or its outcomes, a regulatory or accounting effect, data written on other systems |
+
+- **Open point** (row in block 8, `[DA CONFERMARE]` next to the value): confidence **low** and impact **medium or high**.
+- **Everything else** is written in the section as the adopted value, with no marker and no row: a length stays `XX crt`, a message text is a proposal (chapter 1 says so once), an unknown low-impact code or table is "da definire". Nothing is invented to fill the gap.
+- **Merge** gaps that one answer would close (the timeout of every service, the same profile question on several buttons): one point, in the first step where it arises, cited by number in the others.
+- **Keep it short.** A step normally has 0–3 open points. More than five means the step is under-specified: re-rate the impact honestly and merge; what survives is listed — never dropped to make the count look better.
 
 ## How to fill it
 
 1. **Retrieve first, write second.** Before filling a section, search the Knowledge for the as-is documentation of the step ("as-is {{STEP_NAME}} campi", "as-is {{STEP_NAME}} controlli", "as-is {{STEP_NAME}} messaggi"). Fill cells from what comes back and from the PRD and the user's answers. Nothing else.
-2. **Cells, not prose.** A section is mostly tables. Keep prose to one line per bullet. A reader must find "what is the length of the fiscal code" by scanning a column, not by reading a paragraph.
-3. **Unknown is a value.** `XX crt`, `[DA CONFERMARE]`, "Nessun popup", "Nessuna integrazione": every cell is filled, and an honest gap is a legitimate content.
-4. **Verbatim or proposed.** A message is either the text found in the Knowledge, or a proposed text marked `[DA CONFERMARE]`. Never leave the message column empty.
+2. **Prose once, then cells.** The opening description is the only prose of the section: a few readable sentences on what the step is. After it, a section is mostly tables. Keep prose to one line per bullet. A reader must find "what is the length of the fiscal code" by scanning a column, not by reading a paragraph.
+3. **Unknown is a value.** `XX crt`, "da definire", "Nessun popup", "Nessuna integrazione": every cell is filled, and an honest gap is a legitimate content. A gap becomes an open point only through the triage above.
+4. **Verbatim or proposed.** A message is either the text found in the Knowledge, or a proposed text. Never leave the message column empty.
 5. **Same density everywhere.** The section for the last step of the map has the same tables, filled with the same care, as the first. If you are running out of budget, say so in the final response and name the sections to regenerate; do not thin them silently.

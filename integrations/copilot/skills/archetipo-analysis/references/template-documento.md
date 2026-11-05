@@ -36,8 +36,7 @@ The whole functional analysis is one Word document, regenerated in full at every
 3. Descrizione intervento
    {{ONE_LINE_PER_STEP: 3.N Step name}}
 4. Integrazioni
-5. Punti aperti
-6. Matrice di copertura RF
+5. Vista di processo
 
 ---
 
@@ -47,7 +46,7 @@ The whole functional analysis is one Word document, regenerated in full at every
 
 **Perimetro:** {{IN_SCOPE_FROM_PRD_MVP}}
 **Fuori perimetro:** {{OUT_OF_SCOPE_FROM_PRD}}
-**Convenzioni:** `XX crt` = lunghezza da definire; `[DA CONFERMARE]` = assunzione da validare; «testo» = testo verbatim; **Bloccante** / **Forzabile** = severità del controllo.
+**Convenzioni:** `XX crt` = lunghezza da definire; `[DA CONFERMARE]` = punto aperto rilevante, elencato nel blocco «Punti aperti» dello step; «testo» = testo verbatim; **Bloccante** / **Forzabile** = severità del controllo. I testi dei messaggi non presenti nella documentazione as-is sono proposte, da validare in revisione insieme al documento.
 
 ---
 
@@ -61,7 +60,7 @@ The whole functional analysis is one Word document, regenerated in full at every
 
 Every RF of the PRD appears in at least one row. The table is the resume point of the document: a revision starts by re-reading it.
 
-**Stati della pratica:** {{STATE_LIST_WITH_ONE_LINE_EACH — only if the PRD or the Knowledge define states; otherwise "Non definiti nel PRD [DA CONFERMARE]"}}
+**Stati della pratica:** {{STATE_LIST_WITH_ONE_LINE_EACH — only if the PRD or the Knowledge define states; otherwise "Non definiti nel PRD"}}
 
 ---
 
@@ -79,29 +78,25 @@ Riepilogo per servizio di tutte le integrazioni citate nelle sezioni del capitol
 |---|---|---|---|---|---|
 | {{SERVICE}} | {{SYSTEM}} | {{STEP_NUMBERS}} | {{INPUT_SUMMARY}} | {{OUTCOME_LIST}} | {{TIMEOUT_BEHAVIOUR}} |
 
-Every integration named in the PRD (section *Integrations*) has a row here, even when no step calls it yet: in that case the "Chiamato negli step" cell says "Nessuno [DA CONFERMARE]".
+Every integration named in the PRD (section *Integrations*) has a row here, even when no step calls it yet: in that case the "Chiamato negli step" cell says "Nessuno" and the step where it should be called carries an open point.
 
 ---
 
-## 5 Punti aperti
+## 5 Vista di processo
 
-Elenco consolidato dei `[DA CONFERMARE]` di tutto il documento, ordinato per impatto.
+La figura seguente rappresenta il processo {{PROCESS_NAME}} in una vista di tipo swimlane: i blocchi funzionali in colonna, gli utenti coinvolti in riga, gli applicativi su cui si svolgono le principali attività operative e le interazioni tra {{ORCHESTRATOR_OR_FRONT_END}} e gli applicativi impattati, con i trigger e gli identificativi degli eventi.
 
-| N | Sezione | Punto | Assunzione adottata | Impatto se diversa | Chi decide |
+![Swimlane — {{PROCESS_NAME}}](screens/swimlane-processo.png)
+
+{{ONE_TO_THREE_LINES: how to read the figure for this process — where it starts, the main branches, how it ends (completion, cancellation, expiry).}}
+
+### Eventi del processo
+
+| ID evento | Trigger evento | Da → A | Fase di origine → destinazione | Tipo | Passaggio |
 |---|---|---|---|---|---|
-| {{PA_ID}} | {{SECTION_NUMBER}} | {{OPEN_POINT}} | {{ASSUMPTION}} | {{IMPACT}} | {{OWNER_OR_UNKNOWN}} |
+| {{EVENT_ID_OR_DASH}} | {{TRIGGER}} | {{SOURCE_APPLICATION}} → {{TARGET_APPLICATION}} | {{SOURCE_PHASE}} → {{TARGET_PHASE}} | {{Avanzamento | Ritorno a fase precedente | Annullo}} | {{Integrato | Non integrato, a carico dell'utente}} |
 
-Order: first what changes structure or flow, then field rules, then texts. This is the list the user answers at the next revision.
-
----
-
-## 6 Matrice di copertura RF
-
-| RF | Testo del requisito (dal PRD) | Sezioni che lo coprono | Stato |
-|---|---|---|---|
-| {{RF_ID}} | {{RF_TEXT_FROM_PRD}} | {{SECTION_NUMBERS}} | {{Coperto | Coperto con assunzioni | Da approfondire}} |
-
-Every RF of the PRD is a row, in PRD order, with the PRD's own numbering preserved. "Da approfondire" is allowed only if block 9 of the covering sections says why.
+One row per flow of the figure that carries a trigger or an event ID, in the order of the process, with the same texts as the figure. Event IDs appear only when the PRD or the Knowledge name them; otherwise the cell is "—".
 
 ---
 
@@ -112,6 +107,8 @@ _Versione {{VERSION}}, generata a partire da `PRD_v{{PRD_VERSION}}.md`; ogni rev
 ## Rules for the whole document
 
 - **One file, regenerated whole, one version per delivery.** There is no patching. A revision rewrites the document from the first line to the last, starting from the version the user attached, and is delivered as the next version (`Analisi-Funzionale_v1.1.docx` → `Analisi-Funzionale_v1.2.docx`): `Versione` raised by one minor step, `Data ultima modifica` updated, one new row in *Cronistoria*.
-- **The map is the spine.** Chapter 3 follows the order of chapter 2, one section per row, same names, same numbering. Chapters 4, 5 and 6 are derived from chapter 3: nothing appears in them that is not in a section, and nothing in a section is missing from them.
+- **The map is the spine.** Chapter 3 follows the order of chapter 2, one section per row, same names, same numbering. Chapters 4 and 5 are derived from chapter 3: nothing appears in them that is not in a section.
+- **Open points live in their step.** There is no chapter of open points: each one is in block 8 of the step it concerns, and the count per step is in the last column of the map. Only the points that pass the triage of `template-sezione.md` are written.
+- **The swimlane is drawn, not written.** Chapter 5 holds one image, `screens/swimlane-processo.png`, produced by `render_process.py` from `processo.json` (see `process-spec.md`). `build_docx.py` puts chapter 5 on landscape pages because the image name starts with `swimlane`; keep that name.
 - **RF numbering is the PRD's.** Never renumber. If the user attaches a renumbered PRD, rebuild the map and say so.
 - **Header first, always.** The header table, the change history and the index are present from version 1.0: they are what makes the document reviewable by the customer.

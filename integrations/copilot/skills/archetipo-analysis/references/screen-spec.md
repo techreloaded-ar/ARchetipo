@@ -7,7 +7,7 @@ Keywords: screen spec, mockup, videata, stati, JSON, render, immagine, figura.
 ## Rules
 
 - **Same content as the section.** Field labels are the field names of block 3, in the same order; buttons are those of block 4; the error state shows the «…» messages of blocks 3 and 5 verbatim; banners use the texts of the Screen spec. Nothing appears in the image that is not in the section.
-- **Base state always.** Add a state only when block 10 lists it: `errore`, `caricamento`, `vuoto`, `modale-<nome>`. One state, one image.
+- **Base state always.** Add a state only when block 9 lists it: `errore`, `caricamento`, `vuoto`, `modale-<nome>`. One state, one image.
 - **Realistic Italian banking data**, never lorem ipsum: names, NDG, IBAN masked, amounts with thousands separator and comma decimals. Mark them as examples in the subtitle («Dati esemplificativi»).
 - **File names**: the section number with dashes, then the state: `3-4-base.png`, `3-4-errore.png`. These are the names the Markdown references in block 2.
 - **Width**: a widget is `"cols": 6` (half row) or `12` (full row). Fields flow three per row in a 12-column widget, two per row in a 6-column one; `"span"` makes a field wider.
@@ -72,7 +72,7 @@ Keywords: screen spec, mockup, videata, stati, JSON, render, immagine, figura.
 | Key | What it draws | Notes |
 |---|---|---|
 | `section` | nothing; names the files | `"3.4"` → `3-4-*.png` |
-| `title`, `subtitle` | page header | title from block 10 «Titolo pagina» |
+| `title`, `subtitle` | page header | title from block 9 «Titolo pagina» |
 | `app`, `user` | header: application name and user area | defaults: «Scrivania Digitale», «Operatore» |
 | `menu` | the 72 px rail; one item is `"active": true` | icons: `home`, `user`, `doc`, `box`, `list`, `search`, `calendar`, `euro`, `settings`; unknown names draw a dot |
 | `context_tab` | the white process tab on the teal band | omit for pages outside a process |

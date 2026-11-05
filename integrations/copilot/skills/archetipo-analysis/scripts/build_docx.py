@@ -21,6 +21,8 @@ Supported Markdown (the subset used by template-documento.md and template-sezion
     | a | b |  (+ |---|---| row)   -> Word table, header row bold and repeated on every page
     **bold** *italic* _italic_ `code`   inside any paragraph, list item or table cell
     ![caption](images/file.png)   -> inline picture 16 cm wide + "Figura N — caption" (style Caption)
+    ![caption](swimlane-x.png)    -> the chapter holding it (from its "##" heading to the next one) goes
+                                     on landscape pages and the picture fills the page width
     > quote                       -> Normal, italic
     ---                           -> ignored (template separator)
     ``` fenced block ```          -> monospace paragraphs
@@ -41,13 +43,17 @@ import sys
 from dataclasses import dataclass, field
 
 from docx import Document
-from docx.enum.section import WD_ORIENT
+from docx.enum.section import WD_ORIENT, WD_SECTION
+from docx.image.image import Image as DocxImage
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 IMAGE_WIDTH_CM = 16.0
+LANDSCAPE_IMAGE_WIDTH_CM = 25.7  # A4 landscape, 2 cm margins
+LANDSCAPE_IMAGE_MAX_HEIGHT_CM = 14.5  # leaves room for the heading and the caption
+SWIMLANE_PREFIX = "swimlane"
 TABLE_FONT_PT = 9
 BODY_FONT_PT = 10.5
 
@@ -104,6 +110,7 @@ class Report:
     table_rows: int = 0
     images_ok: list = field(default_factory=list)
     images_missing: list = field(default_factory=list)
+    landscape_images: int = 0
     bold_runs: int = 0
     italic_runs: int = 0
     code_runs: int = 0
@@ -219,11 +226,21 @@ def add_table(doc, header: list[str], rows: list[list[str]], report: Report):
     doc.add_paragraph()  # breathing space after a table
 
 
-def add_image(doc, caption: str, path: str, images_dir: str, figure_no: int, report: Report):
+def is_swimlane(path: str) -> bool:
+    return os.path.basename(path).lower().startswith(SWIMLANE_PREFIX)
+
+
+def add_image(doc, caption: str, path: str, images_dir: str, figure_no: int, report: Report, landscape=False):
     candidates = [path, os.path.join(images_dir, path), os.path.join(images_dir, os.path.basename(path))]
     found = next((c for c in candidates if os.path.isfile(c)), None)
     if found:
-        doc.add_picture(found, width=Cm(IMAGE_WIDTH_CM))
+        width_cm = IMAGE_WIDTH_CM
+        if landscape and is_swimlane(path):
+            info = DocxImage.from_file(found)
+            ratio = info.px_height / info.px_width if info.px_width else 1
+            width_cm = min(LANDSCAPE_IMAGE_WIDTH_CM, LANDSCAPE_IMAGE_MAX_HEIGHT_CM / ratio)
+            report.landscape_images += 1
+        doc.add_picture(found, width=Cm(width_cm))
         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
         report.images_ok.append(found)
     else:
@@ -251,6 +268,8 @@ def convert(md_text: str, images_dir: str, out_path: str) -> Report:
     title_done = False
     figure_no = 0
     in_fence = False
+    landscape_chapters = _chapters_with_swimlane(lines)
+    landscape = False
 
     while i < n:
         line = lines[i]
@@ -273,6 +292,11 @@ def convert(md_text: str, images_dir: str, out_path: str) -> Report:
         if m:
             level = len(m.group(1))
             text = m.group(2)
+            if title_done and level <= 2:  # a chapter starts: landscape when it holds a swimlane
+                wanted = i in landscape_chapters
+                if wanted != landscape:
+                    _new_section(doc, wanted)
+                    landscape = wanted
             if level == 1 and not title_done:
                 p = doc.add_paragraph(style="Title")
                 title_done = True
@@ -289,7 +313,7 @@ def convert(md_text: str, images_dir: str, out_path: str) -> Report:
         m = IMAGE_RE.match(line.strip())
         if m:
             figure_no += 1
-            add_image(doc, m.group(1).strip(), m.group(2).strip(), images_dir, figure_no, report)
+            add_image(doc, m.group(1).strip(), m.group(2).strip(), images_dir, figure_no, report, landscape)
             i += 1
             continue
 
@@ -338,13 +362,42 @@ def convert(md_text: str, images_dir: str, out_path: str) -> Report:
     return report
 
 
-def _page_setup(doc):
-    section = doc.sections[0]
-    section.orientation = WD_ORIENT.PORTRAIT
-    section.page_width = Cm(21.0)
-    section.page_height = Cm(29.7)
+def _chapters_with_swimlane(lines) -> set:
+    """Line numbers of the chapter headings ("##", or "#" after the title) whose chapter holds a swimlane image."""
+    out, chapter, title_seen, fence = set(), None, False, False
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        m = HEADING_RE.match(line)
+        if m:
+            level = len(m.group(1))
+            if level == 1 and not title_seen:
+                title_seen = True
+            elif level <= 2:
+                chapter = idx
+            continue
+        im = IMAGE_RE.match(line.strip())
+        if im and chapter is not None and is_swimlane(im.group(2).strip()):
+            out.add(chapter)
+    return out
+
+
+def _orient(section, landscape: bool):
+    section.orientation = WD_ORIENT.LANDSCAPE if landscape else WD_ORIENT.PORTRAIT
+    section.page_width, section.page_height = (Cm(29.7), Cm(21.0)) if landscape else (Cm(21.0), Cm(29.7))
     section.left_margin = section.right_margin = Cm(2.0)
     section.top_margin = section.bottom_margin = Cm(2.0)
+
+
+def _new_section(doc, landscape: bool):
+    _orient(doc.add_section(WD_SECTION.NEW_PAGE), landscape)
+
+
+def _page_setup(doc):
+    _orient(doc.sections[0], False)
     normal = doc.styles["Normal"]
     normal.font.size = Pt(BODY_FONT_PT)
     normal.paragraph_format.space_after = Pt(4)
@@ -377,7 +430,7 @@ def print_report(report: Report, out_path: str, version: str):
     print(f"paragraphs: {report.paragraphs} · list items: {report.list_items}")
     print(f"tables: {report.tables} · table rows: {report.table_rows}")
     print(f"inline runs: bold={report.bold_runs} italic={report.italic_runs} code={report.code_runs}")
-    print(f"images inserted: {len(report.images_ok)}")
+    print(f"images inserted: {len(report.images_ok)} (of which swimlane on landscape pages: {report.landscape_images})")
     print(f"images missing: {len(report.images_missing)}" + ("" if not report.images_missing else " -> " + ", ".join(report.images_missing)))
     print(f"residual markdown markers: {len(report.residual)}")
     for r in report.residual[:10]:

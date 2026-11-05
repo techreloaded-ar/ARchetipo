@@ -22,11 +22,7 @@ This is how a **single field** looks in the target document. Notice: one row, se
 - Omocodia: il controllo C1 accetta i caratteri sostitutivi (L, M, N, P, Q, R, S, T, U, V) nelle posizioni numeriche; C3 resta bloccante.
 - Variazione di COGNOME o DATA DI NASCITA su un NDG esistente: C2 viene rieseguito al salvataggio anche se il campo COD. FISC. non è stato toccato.
 
-**Punti aperti della riga**
-
-| N | Punto | Assunzione adottata | Impatto se diversa |
-|---|---|---|---|
-| PA-3.2-4 | Lunghezza minima della motivazione per forzare C2 `[DA CONFERMARE]` | 10 crt, come nelle altre forzature dell'applicazione | Solo testo di validazione |
+**Nessun punto aperto sulla riga.** La lunghezza minima della motivazione per forzare C2 (10 crt) non è nota con certezza, ma è la convenzione delle altre forzature dell'applicazione e cambierebbe solo un testo di validazione: confidenza media, impatto basso. È scritta come valore adottato, senza marcatore e senza riga nei punti aperti.
 
 ---
 
@@ -46,7 +42,7 @@ This is how an **integration paragraph** looks in the target document. Notice: w
 | Negativo — documento non riscontrato | Numero documento non presente negli archivi del Ministero | Si resta sulla videata; i campi del documento tornano editabili | Flag *Documento verificato SCIPAFI* = N; nessun blocco | **Forzabile** con motivazione obbligatoria e flag *Verifica manuale documento*: «Il documento non risulta negli archivi consultati. Verificare i dati inseriti oppure confermare la verifica manuale indicando la motivazione.» |
 | Negativo — dati incoerenti | Documento riscontrato ma titolare diverso | Si resta sulla videata; campi editabili | Flag *Alert SCIPAFI* = S sull'NDG; notizia automatica alla funzione Antifrode; la pratica non può essere chiusa finché la notizia non è evasa | **Bloccante** «I dati del documento non corrispondono al titolare. Non è possibile proseguire: la posizione è stata segnalata alla funzione competente.» |
 | Documento non verificabile | Tipologia non coperta dal servizio | Si prosegue alla videata "Recapiti" | Flag *Documento verificato SCIPAFI* = X (non verificabile); nessuna notizia | Banner giallo «Tipologia di documento non verificabile automaticamente. Verifica manuale richiesta.» |
-| Non disponibile / timeout | Nessuna risposta entro XX secondi `[DA CONFERMARE]` oppure errore tecnico | Si resta sulla videata con i campi non editabili; pulsante «Riprova» e pulsante «Prosegui senza verifica» | Se l'utente prosegue: flag *Documento verificato SCIPAFI* = D (differita) e la verifica viene rieseguita in batch notturno; esito batch negativo genera notizia | Banner rosso «Servizio di verifica documenti momentaneamente non disponibile. Puoi riprovare oppure proseguire: la verifica sarà completata in differita.» |
+| Non disponibile / timeout | Nessuna risposta entro il timeout del servizio (parametro applicativo, valore da definire) oppure errore tecnico | Si resta sulla videata con i campi non editabili; pulsante «Riprova» e pulsante «Prosegui senza verifica» | Se l'utente prosegue: flag *Documento verificato SCIPAFI* = D (differita) e la verifica viene rieseguita in batch notturno; esito batch negativo genera notizia | Banner rosso «Servizio di verifica documenti momentaneamente non disponibile. Puoi riprovare oppure proseguire: la verifica sarà completata in differita.» |
 
 **Casi particolari**
 
@@ -55,10 +51,11 @@ This is how an **integration paragraph** looks in the target document. Notice: w
 
 **Punti aperti del paragrafo**
 
-| N | Punto | Assunzione adottata | Impatto se diversa |
-|---|---|---|---|
-| PA-3.4-2 | Timeout del servizio `[DA CONFERMARE]` | Parametro applicativo, valore da definire con il gestore del servizio | Solo configurazione |
-| PA-3.4-3 | Ammissibilità di «Prosegui senza verifica» per il profilo Operatore di sportello `[DA CONFERMARE]` | Ammesso per tutti i profili abilitati alla videata | Se riservato a un profilo superiore, serve un controllo di abilitazione sul pulsante |
+| N | Punto | Assunzione adottata | Impatto se diversa | Chi decide |
+|---|---|---|---|---|
+| PA-3.4-1 | Ammissibilità di «Prosegui senza verifica» per il profilo Operatore di sportello | Ammesso per tutti i profili abilitati alla videata `[DA CONFERMARE]` | Se riservato a un profilo superiore, serve un controllo di abilitazione sul pulsante e cambia chi può chiudere la pratica | Funzione Antifrode |
+
+Il timeout del servizio non è un punto aperto: è un parametro di configurazione (impatto basso) e resta scritto come valore da definire nella riga dell'esito.
 
 ---
 
@@ -67,4 +64,5 @@ This is how an **integration paragraph** looks in the target document. Notice: w
 - **Granularity is the row.** The unit of the document is one field, one control, one outcome. If you find yourself writing "i controlli standard dell'anagrafe" or "gestione errori come da linee guida", stop and write the rows.
 - **Severity and trace go together.** A control is never just "bloccante": say what the user sees and what the system records. A forceable control says how it is forced.
 - **Every outcome has a home.** Positive, each negative reason, not verifiable, not available. If the Knowledge does not list the outcomes, list the ones the PRD implies plus "Non disponibile / timeout", and mark the others `[DA CONFERMARE]`.
-- **Honest gaps are content.** `XX crt` and `[DA CONFERMARE]` are part of the house style: the reviewer looks for them. A guessed number is a defect; a marked gap is a question well asked.
+- **Honest gaps are content.** `XX crt` and "da definire" are part of the house style: the reviewer looks for them. A guessed number is a defect.
+- **Few open points, each worth a decision.** Of the gaps in these two extracts only one is an open point: the one with low confidence that changes who can do what. A length, a text or a configuration value is adopted and written, not listed.
