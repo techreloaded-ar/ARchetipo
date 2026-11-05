@@ -1,11 +1,11 @@
 # Functional analysis — self-check checklist (run before delivering the document)
 
-Applies to: every `Analisi-Funzionale.docx` produced by this skill, at first generation and at every revision.
+Applies to: every `Analisi-Funzionale_v<version>.docx` produced by this skill, at first generation and at every revision.
 Keywords: checklist, quality gate, copertura, densità, anti-invenzione, controllo, verifica, consegna.
 
 ## How to use this checklist
 
-Run it in the same turn that generates the document, after writing the draft and before producing the Word file and applying **Deliver an artifact**. Go through every group. Each item is pass, fail or n/a. Fix every fail by regenerating the sections involved, then re-run the group. Report the result as one compact line in the final response, e.g. "A. Copertura 3/3 · B. Campi 3/3 · C. Controlli 2/2 · D. Integrazioni 2/2 · E. Pulsanti 1/1 · F. Anti-invenzione 3/3 · G. Densità 3/3 · H. Lingua 2/2 · I. Word 3/3 · J. Mockup 4/4". A document with any fail is not delivered.
+Run it in the same turn that generates the document, after writing the draft and before producing the Word file and applying **Deliver an artifact**. Go through every group. Each item is pass, fail or n/a. Fix every fail by regenerating the sections involved, then re-run the group. Report the result as one compact line in the final response, e.g. "A. Copertura 3/3 · B. Campi 3/3 · C. Controlli 2/2 · D. Integrazioni 2/2 · E. Pulsanti 1/1 · F. Anti-invenzione 3/3 · G. Densità 3/3 · H. Lingua 2/2 · I. Word 4/4 · J. Mockup 4/4". A document with any fail is not delivered.
 
 ## A. Coverage of the PRD
 
@@ -55,6 +55,7 @@ Run it in the same turn that generates the document, after writing the draft and
 1. The report ends with `RESULT: OK`: `residual markdown markers: 0` and `images missing: 0`. A `CHECK FAILED` is fixed in the Markdown or in the screen specs and the script is run again; the document is never delivered with raw `**`, `` ` `` or `#` in it.
 2. The heading counts of the report match the map: one Heading 2 per step of chapter 2, nine or ten Heading 3 per step, Heading 1 for the six chapters plus «Descrizione intervento».
 3. The table count of the report is at least six per step (blocks 3, 4, 5, 6, 8, 9) plus the header, history, map, integrations, open points and coverage tables — no table of the templates was flattened into prose.
+4. The `version:` line of the report equals the `Versione` row and the last row of *Cronistoria*; in a revision it is higher than the attached version (the script was run with `--previous`). The file attached is exactly the one on the `deliver:` line, and its name was not used before in this conversation.
 
 ## J. Mockup images (from the `render_screens.py` report)
 

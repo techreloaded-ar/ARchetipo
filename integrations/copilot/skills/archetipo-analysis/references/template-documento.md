@@ -1,6 +1,6 @@
-# Document template — `Analisi-Funzionale.docx`
+# Document template — `Analisi-Funzionale_v<version>.docx`
 
-The whole functional analysis is one Word document, regenerated in full at every revision. The template below is written in Markdown because it is the grammar of the content: each `#` level is a Word heading level, each Markdown table is a Word table with the same columns, and the text in between is a Word paragraph. Nothing in the template is delivered as Markdown.
+The whole functional analysis is one Word document, regenerated in full at every revision under a new version. The `Versione` row of the header table is what `build_docx.py` reads to name the file: write it as `MAJOR.MINOR` only (`1.0`, `1.2`), with no prefix or suffix, and keep the row label as `Versione` (or `Version` in an English document). The template below is written in Markdown because it is the grammar of the content: each `#` level is a Word heading level, each Markdown table is a Word table with the same columns, and the text in between is a Word paragraph. Nothing in the template is delivered as Markdown.
 
 > **Language:** English scaffolding. Translate every static element (headings, table headers, bold labels) into the detected language, per the **Language policy** in the agent instructions. Keep `{{PLACEHOLDER}}` tokens unchanged. Keep `XX crt` and `[DA CONFERMARE]` untranslated.
 
@@ -19,13 +19,15 @@ The whole functional analysis is one Word document, regenerated in full at every
 | **Versione** | {{VERSION}} |
 | **Data creazione** | {{CREATION_DATE}} |
 | **Data ultima modifica** | {{LAST_MODIFIED_DATE}} |
-| **Documenti di riferimento** | `PRD.md` v{{PRD_VERSION}} del {{PRD_DATE}}{{OTHER_REFERENCE_DOCUMENTS}} |
+| **Documenti di riferimento** | `PRD_v{{PRD_VERSION}}.md` del {{PRD_DATE}}{{OTHER_REFERENCE_DOCUMENTS}} |
 
 ### Cronistoria
 
 | Versione | Data | Autore | Modifiche |
 |---|---|---|---|
 | {{VERSION}} | {{DATE}} | ARchetipo | {{CHANGE_SUMMARY}} |
+
+{{ONE_ROW_PER_VERSION: the rows of the attached version are kept as they were and the new version is added as the last row.}}
 
 ### Indice
 
@@ -104,12 +106,12 @@ Every RF of the PRD is a row, in PRD order, with the PRD's own numbering preserv
 ---
 
 _Analisi funzionale generata da ARchetipo — {{DATE}}_
-_Generata a partire da `PRD.md` v{{PRD_VERSION}}; ogni revisione rigenera il documento intero._
+_Versione {{VERSION}}, generata a partire da `PRD_v{{PRD_VERSION}}.md`; ogni revisione rigenera il documento intero con una nuova versione._
 ```
 
 ## Rules for the whole document
 
-- **One file, regenerated whole.** There is no patching. A revision rewrites `Analisi-Funzionale.docx` from the first line to the last, starting from the version the user attached.
+- **One file, regenerated whole, one version per delivery.** There is no patching. A revision rewrites the document from the first line to the last, starting from the version the user attached, and is delivered as the next version (`Analisi-Funzionale_v1.1.docx` → `Analisi-Funzionale_v1.2.docx`): `Versione` raised by one minor step, `Data ultima modifica` updated, one new row in *Cronistoria*.
 - **The map is the spine.** Chapter 3 follows the order of chapter 2, one section per row, same names, same numbering. Chapters 4, 5 and 6 are derived from chapter 3: nothing appears in them that is not in a section, and nothing in a section is missing from them.
 - **RF numbering is the PRD's.** Never renumber. If the user attaches a renumbered PRD, rebuild the map and say so.
 - **Header first, always.** The header table, the change history and the index are present from version 1.0: they are what makes the document reviewable by the customer.

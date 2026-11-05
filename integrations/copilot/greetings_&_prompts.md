@@ -24,7 +24,7 @@ Possiamo aiutarti a:
 
 • esplodere il PRD in un'analisi funzionale dettagliata, videata per videata e campo per campo.
 
-Su quale prodotto lavoriamo? Se ne hai già definito uno, allega il suo PRD.md e ripartiamo da lì.
+Su quale prodotto lavoriamo? Se ne hai già definito uno, allega l'ultima versione del suo PRD (ad esempio PRD_v1.2.md) e ripartiamo da lì.
 
 
 ## Suggested prompts

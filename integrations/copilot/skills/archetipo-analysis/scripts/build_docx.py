@@ -3,7 +3,14 @@
 build_docx.py — turns the Markdown produced from the analysis templates into a Word document.
 
 Usage:
-    python build_docx.py analisi.md --images screens --out Analisi-Funzionale.docx
+    python build_docx.py analisi.md --images screens --out-dir out [--previous 1.1]
+
+The output file is always named Analisi-Funzionale_v<VERSION>.docx, where VERSION is read from the
+"Versione" (or "Version") row of the header table of the Markdown and must be MAJOR.MINOR. The
+name is never chosen by the caller: a revision delivered under the name of the previous version
+would let the user download the old file thinking it is the new one. With --previous, the version
+in the Markdown must be strictly higher than the given one. When the version is missing, malformed
+or not higher than --previous, nothing is written and the exit code is 3.
 
 Supported Markdown (the subset used by template-documento.md and template-sezione.md):
     # Title                       -> Title (first level-1 heading) ; later level-1 headings -> Heading 1
@@ -19,8 +26,9 @@ Supported Markdown (the subset used by template-documento.md and template-sezion
     ``` fenced block ```          -> monospace paragraphs
 
 The script never invents content. A missing image leaves a visible placeholder in the document
-and is listed in the report. The report is printed on stdout; the exit code is 2 when the document
-has residual Markdown markers or missing images, 0 otherwise. The file is written in both cases.
+and is listed in the report. The report is printed on stdout and ends with a "deliver:" line naming
+the file to attach; the exit code is 2 when the document has residual Markdown markers or missing
+images, 0 otherwise. The file is written in both cases.
 
 Requires python-docx only.
 """
@@ -55,6 +63,36 @@ BULLET_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
 NUMBER_RE = re.compile(r"^(\s*)\d+[.)]\s+(.*)$")
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s*(-{3,}|\*{3,}|_{3,})\s*$")
+
+OUTPUT_BASE_NAME = "Analisi-Funzionale"
+VERSION_ROW_RE = re.compile(r"^\s*\|\s*\**\s*(?:versione|version)\s*\**\s*\|\s*([^|]*?)\s*\|\s*$", re.I)
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
+
+
+class VersionError(Exception):
+    pass
+
+
+def parse_version(text: str) -> tuple[int, int]:
+    m = VERSION_RE.match(text.strip().lstrip("vV"))
+    if not m:
+        raise VersionError(f"version {text!r} is not MAJOR.MINOR (for example 1.0, 1.1, 2.0)")
+    return int(m.group(1)), int(m.group(2))
+
+
+def read_document_version(md_text: str) -> str:
+    """Return the version declared by the first 'Versione' row of the header table."""
+    for line in md_text.splitlines():
+        m = VERSION_ROW_RE.match(line)
+        if m:
+            value = m.group(1).strip().strip("*`").strip()
+            major, minor = parse_version(value)
+            return f"{major}.{minor}"
+    raise VersionError("no '| **Versione** | X.Y |' row in the header table of the Markdown")
+
+
+def versioned_output_name(version: str) -> str:
+    return f"{OUTPUT_BASE_NAME}_v{version}.docx"
 
 
 @dataclass
@@ -330,9 +368,10 @@ def _scan_residual(doc, report: Report):
                 check(c.text, f"table {t_idx + 1} row {r_idx + 1}")
 
 
-def print_report(report: Report, out_path: str):
+def print_report(report: Report, out_path: str, version: str):
     size = os.path.getsize(out_path) if os.path.exists(out_path) else 0
     print("== build_docx report ==")
+    print(f"version: {version}")
     print(f"output: {out_path} ({size / 1024:.0f} KB)")
     print("headings: " + ", ".join(f"{k}={v}" for k, v in sorted(report.headings.items())))
     print(f"paragraphs: {report.paragraphs} · list items: {report.list_items}")
@@ -345,6 +384,7 @@ def print_report(report: Report, out_path: str):
         print("   " + r)
     ok = not report.images_missing and not report.residual
     print("RESULT: " + ("OK" if ok else "CHECK FAILED (see lines above)"))
+    print(f"deliver: {out_path}")
     return ok
 
 
@@ -356,12 +396,27 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Markdown (analysis templates) -> Word")
     ap.add_argument("markdown")
     ap.add_argument("--images", default="screens", help="folder with the PNG files referenced by the Markdown")
-    ap.add_argument("--out", default="Analisi-Funzionale.docx")
+    ap.add_argument("--out-dir", default="out", help="folder that receives Analisi-Funzionale_v<version>.docx")
+    ap.add_argument("--previous", help="version of the analysis being revised; the new version must be higher")
     args = ap.parse_args(argv)
     with open(args.markdown, encoding="utf-8") as fh:
         md_text = fh.read()
-    report = convert(md_text, args.images, args.out)
-    ok = print_report(report, args.out)
+    try:
+        version = read_document_version(md_text)
+        if args.previous is not None and parse_version(version) <= parse_version(args.previous):
+            raise VersionError(
+                f"version {version} is not higher than the previous version {args.previous}: "
+                "raise 'Versione' in the header table and add a row to the history"
+            )
+    except VersionError as exc:
+        print("== build_docx report ==")
+        print(f"version error: {exc}")
+        print("RESULT: CHECK FAILED (nothing written)")
+        return 3
+    os.makedirs(args.out_dir, exist_ok=True)
+    out_path = os.path.join(args.out_dir, versioned_output_name(version))
+    report = convert(md_text, args.images, out_path)
+    ok = print_report(report, out_path, version)
     return 0 if ok else 2
 
 

@@ -6,7 +6,7 @@ description: Conducts product inception and generates a PRD covering vision, per
 
 You are the entry point for ARchetipo product discovery and PRD generation.
 
-Your job is to guide the user through discovery, gather enough information to define the product clearly, produce a complete PRD, and deliver it as the product's `PRD.md`.
+Your job is to guide the user through discovery, gather enough information to define the product clearly, produce a complete PRD, and deliver it as the product's `PRD_v<version>.md` (`PRD_v1.0.md` the first time).
 
 This skill is self-contained: the discovery flow and the PRD template are both below.
 
@@ -17,12 +17,12 @@ Before any discovery work:
 1. Establish the product name. If the user has not given one, ask for it — this is a blocking question, because it is the product's identity.
 2. Apply **Locate the product** from the agent instructions.
 
-If a `PRD.md` came back, do not start from scratch. **Read an artifact**, tell the user what it already covers, and ask whether they want to:
+If a PRD came back (`PRD_v1.2.md`, or a legacy `PRD.md`), do not start from scratch. **Read an artifact**, tell the user what it already covers and which version it is, and ask whether they want to:
 
 - resume it — continue the inception from what is already written, filling gaps and refining; or
 - rewrite it — start the discovery over, keeping only the product name.
 
-Either way the result is a new `PRD.md` delivered at the end, so follow **Replace an artifact** when one is already there.
+Either way the result is a new PRD delivered at the end, so follow **Replace an artifact** when one is already there: resuming raises the minor version (`1.2` → `1.3`), rewriting raises the major one (`1.2` → `2.0`).
 
 ## Runtime rules
 
@@ -35,7 +35,7 @@ Either way the result is a new `PRD.md` delivered at the end, so follow **Replac
 ## Output boundaries
 
 - Produce the PRD using the **PRD template** at the end of this file as the format template.
-- Hand it to the user as `PRD.md` using **Deliver an artifact**.
+- Hand it to the user as `PRD_v<version>.md` using **Deliver an artifact**, with `<version>` equal to the `Version` line of the document.
 - Do not generate backlog artifacts, epics, or specs. They are not part of this agent's scope.
 
 ---
@@ -188,7 +188,7 @@ When the minimum is met:
 
 1. If material open questions remain, ask one concise grouped follow-up per the **Open questions protocol**.
 2. Generate the PRD using the **PRD template** below as the format template.
-3. Hand it to the user as `PRD.md` using **Deliver an artifact**.
+3. Hand it to the user as `PRD_v<version>.md` using **Deliver an artifact**.
 4. Apply **Hand over**.
 
 There is no automated structural check on the generated document. Before delivering it, read your own draft once against the template and confirm that every section is present and actually filled — an empty heading is worse than an explicit assumption.
@@ -226,7 +226,7 @@ After every user reply:
 
 ## PRD template
 
-Generate the PRD using exactly this structure and save it as `PRD.md`.
+Generate the PRD using exactly this structure and name the file `PRD_v<version>.md`, where `<version>` is the `Version` line below: `1.0` for a first PRD, the attached version raised per **Replace an artifact** for a new version of an existing one. The `Date` line is the date of this version.
 
 > **Language:** The template below is an English scaffold. Before writing the file, translate every static element (headings, table headers, bold labels, connective phrases like "For **X**, who has the problem of **Y**...") into the detected language, per the **Language policy** in the agent instructions. Keep `{{PLACEHOLDER}}` tokens unchanged.
 
@@ -235,7 +235,11 @@ Generate the PRD using exactly this structure and save it as `PRD.md`.
 
 **Author:** ARchetipo
 **Date:** {{DATE}}
-**Version:** 1.0
+**Version:** {{VERSION}}
+
+| Version | Date | Changes |
+|---|---|---|
+| {{VERSION}} | {{DATE}} | {{CHANGE_SUMMARY — "First version" for 1.0; one row per version, newest last, earlier rows kept as they were}} |
 
 ---
 

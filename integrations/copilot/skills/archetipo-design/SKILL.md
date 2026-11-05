@@ -10,7 +10,7 @@ Your goal is to create mockups that someone can open and understand immediately,
 
 This skill is **mockup-only** and **FREE-first**.
 
-- Deliver only mockup files, `<mockup-name>.html`, for the active product. Never touch another product.
+- Deliver only mockup files, `<mockup-name>_v<version>.html`, for the active product. Never touch another product.
 - Produce visual concepts, not production code. If the user mixes "make me a mockup" with "build it", do only the mockup and say clearly that implementation is a separate step outside this agent's scope.
 - The FREE UX Guidelines are not a style suggestion: they are the specification. Your creativity goes into the flow, the content, the information hierarchy and the states, never into inventing a different look.
 
@@ -25,9 +25,9 @@ This skill is **mockup-only** and **FREE-first**.
 
 Ground the design in what the product already is, not in a generic idea of it.
 
-- If a `PRD.md` came back, **Read an artifact** and use its personas, MVP scope, and differentiator as the brief. Name in your final response which parts of the PRD drove the design.
+- If a PRD came back, **Read an artifact** and use its personas, MVP scope, and differentiator as the brief. Name in your final response which parts of the PRD drove the design.
 - If mockups for this product came back too, keep continuity with them: same screens vocabulary, same data, same flows. If an older mockup predates FREE or deviates from it, align to FREE and say what changed: FREE wins over continuity.
-- If an `Analisi-Funzionale.docx` came back, its Screen spec blocks (3.N.10) are the brief for the screens: same page titles, fields in the same order, same buttons, same error messages. Give each screen the id of its section, `#s-3-4` for section 3.4, so the analysis can cite it.
+- If a functional analysis (`Analisi-Funzionale_v<version>.docx`) came back, its Screen spec blocks (3.N.10) are the brief for the screens: same page titles, fields in the same order, same buttons, same error messages. Give each screen the id of its section, `#s-3-4` for section 3.4, so the analysis can cite it.
 - If there is no PRD at all and the user wants to design anyway, ask for a short brief — three questions at most — and record it as an assumption on the **Notes** screen of the mockup. Do not invent a product.
 
 ### 2. FREE UX Guidelines protocol
@@ -109,10 +109,10 @@ Do not choose a tone, a type pairing, a color mood or a "memorable visual elemen
 A mockup is **one file**:
 
 ```text
-<mockup-name>.html
+<mockup-name>_v<version>.html
 ```
 
-Hand it to the user with **Deliver an artifact**. Name it for the flow it shows: `onboarding.html`, `apertura-cassetta.html`, `elenco-pratiche.html`.
+Hand it to the user with **Deliver an artifact**. Name it for the flow it shows, followed by its version: `onboarding_v1.0.html`, `apertura-cassetta_v1.1.html`, `elenco-pratiche_v2.0.html`. Keep `<mockup-name>` identical across versions of the same mockup. The version (`1.0` for a new mockup) is written inside the file too: in the `<title>`, in the switcher bar, and at the top of the **Notes** screen together with the date and a one-line list of what changed in each version.
 
 **Every screen lives inside that single file.** This is **Artifacts are isolated** in the agent instructions, applied: the file has to work alone, opened from a download folder with nothing next to it and no network.
 
@@ -154,7 +154,7 @@ Run the FREE checklist (file `18`, or `references/free-checklist.md`) on the fin
 
 ### 9. Revising a mockup
 
-A change to an existing mockup is a rewrite of that one file. Apply **Replace an artifact**: say what changes, confirm, and hand back the whole file — the user's downloaded copy is the previous version and there is no patching it. Re-run the retrieval for every component the change touches, and the checklist on the result: a revision must not drift away from FREE.
+A change to an existing mockup is a rewrite of that one file. Apply **Replace an artifact**: say what changes, confirm, and hand back the whole file under the next version (`apertura-cassetta_v1.1.html` → `apertura-cassetta_v1.2.html`), with the version updated in the `<title>`, the switcher and the Notes screen — the user's downloaded copy is the previous version and there is no patching it. Re-run the retrieval for every component the change touches, and the checklist on the result: a revision must not drift away from FREE.
 
 ## Aesthetic guidelines
 

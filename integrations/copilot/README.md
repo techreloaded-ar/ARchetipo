@@ -56,22 +56,24 @@ Nothing else knows how artifacts reach the user. The skills call those procedure
 ## How work is delivered today
 
 ```text
-PRD.md                    the product definition
-Analisi-Funzionale.docx   the functional analysis
-onboarding.html           one mockup, every screen inside it
+PRD_v1.0.md                    the product definition
+Analisi-Funzionale_v1.2.docx   the functional analysis
+onboarding_v1.1.html           one mockup, every screen inside it
 ```
 
-Fixed file names, no folders: a created-file card shows a file name, nothing else, and the product name lives in the title or header of each document. When one conversation covers several products the agent says in the reply which product each file belongs to.
+Fixed base names with a version suffix, no folders: a created-file card shows a file name, nothing else, and the product name lives in the title or header of each document. When one conversation covers several products the agent says in the reply which product each file belongs to.
+
+**Every delivery has its own name.** The suffix repeats the version written inside the document (the PRD's `Version` line, the analysis header's `Versione` row, the mockup's Notes screen); it starts at `1.0` and each new delivery of the same artifact raises the minor number. A file is never delivered twice under the same name. The reason is practical: with fixed names, a revised analysis delivered as `Analisi-Funzionale.docx` again downloaded as the *previous* version, while the reply claimed it was the new one — whether the card pointed at the earlier file of that name or the agent re-attached an old file, the same name hid it. With versioned names the new file cannot be confused with the old one, and for the analysis the name is not even typed by the agent: `build_docx.py` derives it from the `Versione` row and refuses a revision whose version is not higher than the attached one. Files without a suffix (from before this rule) are still recognised by their base name and read as the version they declare inside.
 
 A mockup is a single file: every screen lives inside it and the file switches between them, because a link from one download to another does not resolve. How many screens it holds is the user's call at the start — **Minimal**, **Standard** or **Complete**.
 
-A functional analysis is one Word file, `Analisi-Funzionale.docx`: the deliverable the customer reviews in Word and the file the user attaches back for a revision. Every screen of the process map has its FREE mockup inside the document, in the «Mockup» block of its section: one image for the base state and one for each state the Screen spec lists (error, loading, empty, modal), with a numbered caption and example data. The agent writes the content in Markdown and one compact JSON spec per screen; the two scripts of the bundle draw the images and build the Word file, so headings, tables, bold and figures come out the same every time. It is regenerated whole at every revision; there is no patching. The analysis is produced after a question phase — at most three questions per turn, until the open points are exhausted or the user says to proceed — and then generated in a single turn, with its own quality gate built on the reports of the two scripts. If a turn cannot hold the document and the images together, the agent delivers the document first and the images in the next turn, without asking the user to attach anything.
+A functional analysis is one Word file, `Analisi-Funzionale_v<version>.docx`: the deliverable the customer reviews in Word and the file the user attaches back for a revision. Every screen of the process map has its FREE mockup inside the document, in the «Mockup» block of its section: one image for the base state and one for each state the Screen spec lists (error, loading, empty, modal), with a numbered caption and example data. The agent writes the content in Markdown and one compact JSON spec per screen; the two scripts of the bundle draw the images and build the Word file, so headings, tables, bold and figures come out the same every time. It is regenerated whole at every revision, under the next version; there is no patching. The analysis is produced after a question phase — at most three questions per turn, until the open points are exhausted or the user says to proceed — and then generated in a single turn, with its own quality gate built on the reports of the two scripts. If a turn cannot hold the document and the images together, the agent delivers the document first and the images in the next turn as the following version, without asking the user to attach anything.
 
 ## How resuming works
 
-By re-attaching. Created files belong to the conversation that produced them, so "let's do the design of Shopper", said weeks later in a brand-new conversation, needs the `PRD.md` from that inception attached to the message. The agent reads it as its brief and designs from it. The same `PRD.md` is what the analysis starts from.
+By re-attaching. Created files belong to the conversation that produced them, so "let's do the design of Shopper", said weeks later in a brand-new conversation, needs the latest PRD from that inception (`PRD_v1.0.md`) attached to the message. The agent reads it as its brief and designs from it. The same PRD is what the analysis starts from.
 
-To revise an analysis, attach both `PRD.md` and `Analisi-Funzionale.docx`: the harness extracts the text of Word attachments (documented in [Attach files to a conversation](https://learn.microsoft.com/en-us/microsoft-copilot-studio/agents-experience/attachments-overview)), and the agent re-reads the header, the process map and the open points inside the analysis and asks what changes. How faithfully the tables of a long Word file come back through that extraction is not documented: verify it once with a real analysis before relying on revisions.
+To revise an analysis, attach the PRD and the latest analysis (`Analisi-Funzionale_v1.2.docx`); the agent delivers `Analisi-Funzionale_v1.3.docx`, and the previous file can be discarded. If several versions are attached, the agent works from the highest and says so. The harness extracts the text of Word attachments (documented in [Attach files to a conversation](https://learn.microsoft.com/en-us/microsoft-copilot-studio/agents-experience/attachments-overview)), and the agent re-reads the header, the process map and the open points inside the analysis and asks what changes. How faithfully the tables of a long Word file come back through that extraction is not documented: verify it once with a real analysis before relying on revisions.
 
 If the user does not have the PRD any more, the agent offers a short inception rather than inventing the product.
 
@@ -85,7 +87,7 @@ Stated plainly, because they shape what this integration can and cannot do:
 - **No cross-conversation continuity.** No manifest, no index, no lookup of past products. Continuity is the attached PRD (and, for a revision, the attached analysis), and nothing else.
 - **Mockups are downloads, not pages.** Nothing renders HTML here, and links between downloaded files do not resolve, which is why a mockup is one self-contained file with its screens and its own switcher inside, and never a folder with an `index.html` hub.
 - **No browser in the sandbox.** Verified on 2 October 2026: no Playwright, Chromium, wkhtmltoimage, WeasyPrint or `npx`, and no built-in screenshot tool. The images inside the analysis are therefore drawn with Pillow from a spec, not rendered from the HTML mockup: same tokens, same shell, same components, but a drawing, not a browser rendering. The navigable HTML mockup stays a separate deliverable of the design work.
-- **Attachment support is the hard dependency.** Reading an attached `PRD.md` back is what makes Design-after-Inception possible; a channel that strips attachments limits the agent to single-conversation work.
+- **Attachment support is the hard dependency.** Reading an attached PRD back is what makes Design-after-Inception possible; a channel that strips attachments limits the agent to single-conversation work.
 - **There is no PRD validation.** The `archetipo validate prd` gate lives in the CLI and has no equivalent here. The PRD structure is a template the agent follows, not a contract anything enforces.
 
 ## Debugging
@@ -111,7 +113,7 @@ python integrations\copilot\skills\archetipo-analysis\scripts\render_screens.py 
 renders the built-in example (base, error, loading, empty, modal) and prints which fonts were used, and
 
 ```powershell
-python integrations\copilot\skills\archetipo-analysis\scripts\build_docx.py analisi.md --images screens --out Analisi-Funzionale.docx
+python integrations\copilot\skills\archetipo-analysis\scripts\build_docx.py analisi.md --images screens --out-dir out --previous 1.1
 ```
 
-builds a Word file from any Markdown written with the templates. Exit code 2 means the report found residual Markdown markers or missing images. `--example` prints the example spec as JSON, the starting point for a new screen.
+builds `out\Analisi-Funzionale_v<Versione>.docx` from any Markdown written with the templates, naming it from the `Versione` row of the header table and printing the path on the `deliver:` line. Exit code 2 means the report found residual Markdown markers or missing images; exit code 3 means the version is missing, not `MAJOR.MINOR`, or not higher than `--previous`, and nothing was written. `--example` prints the example spec as JSON, the starting point for a new screen.
