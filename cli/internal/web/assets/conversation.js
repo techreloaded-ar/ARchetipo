@@ -111,7 +111,6 @@
 		// suonerebbe come un rifiuto.
 		pendingMessageMark: "in consegna",
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
-		seenImages: "Immagini lette dall'agente in questo turno",
 		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
 		// detto che il provider le accetta: il pannello non lo sa da sé.
 		attach: "Allega immagine",
@@ -1074,22 +1073,16 @@
 			// tecnici di worker paralleli e metadati vuoti restano ispezionabili
 			// subito dopo il messaggio completo senza spezzarne i delta.
 			let agentRun = [];
-			// Le immagini che l'agente ha letto o prodotto nel turno — gli
-			// allegati dei suoi passaggi tecnici dall'ultima frase della persona
-			// in poi, una volta sola per file — escono come striscia di anteprime
-			// in coda al turno: prima della frase successiva della persona, o in
-			// fondo alla storia viva. Così quello che l'agente ha guardato si vede
-			// senza aprire il dettaglio tecnico, ma una volta sola e non sotto
-			// ogni frase di avanzamento. Se una risposta del turno mostra già
-			// un'immagine, l'agente ha scelto cosa far vedere e la striscia tace.
-			// È una regola di presentazione del viewer, non un'istruzione
-			// all'agente: vale per ogni provider che conserva le immagini lette.
+			// Le immagini che l'agente ha letto nel turno — gli allegati dei suoi
+			// passaggi tecnici dall'ultima frase della persona in poi, una volta
+			// sola per file — non hanno una riga propria nella storia: restano
+			// nel dettaglio tecnico. Servono a una cosa sola, scegliere: se il
+			// turno si chiude su una domanda strutturata e nessuna risposta le ha
+			// già mostrate, le riceve la card della domanda.
 			let seenImages = [];
 			const seenImageIDs = new Set();
 			let turnShowedImage = false;
 			const flushImages = () => {
-				const attachments = turnShowedImage ? "" : renderEventAttachments(seenImages);
-				if (attachments) rows.push(`<li class="conv-event cev-agent conv-generated-images"><div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span></div><div class="conv-event-body"><div class="conv-seen-images"><span class="conv-seen-images-label">${escapeHtml(TEXT.seenImages)}</span>${attachments}</div></div></li>`);
 				seenImages = [];
 				seenImageIDs.clear();
 				turnShowedImage = false;
@@ -1162,16 +1155,9 @@
 			flushTechnical();
 			flushAgent();
 			// Un turno che si chiude su una domanda strutturata: le immagini che
-			// l'agente ha letto e non ha mostrato da sé appartengono alla domanda
-			// — sono le varianti fra cui si sceglie — e le riceve la sua card,
-			// che le disegna sopra le opzioni. La striscia tace; tornerà nella
-			// storia, dopo la risposta, come traccia di ciò che è stato guardato.
-			if (!turnShowedImage && seenImages.length && hasPendingQuestionnaire(view)) {
-				local.questionImages = seenImages.slice();
-				seenImages = [];
-				seenImageIDs.clear();
-			}
-			flushImages();
+			// l'agente ha letto e non ha mostrato da sé sono le varianti fra cui
+			// si sceglie, e le riceve la card della domanda, sopra le opzioni.
+			if (!turnShowedImage && seenImages.length && hasPendingQuestionnaire(view)) local.questionImages = seenImages.slice();
 		}
 		for (const [anchor, blocks] of anchored) {
 			if (emitted.has(anchor)) continue;
@@ -1438,7 +1424,10 @@
 		if (!source) return "";
 		const parse = context && typeof context.markedParse === "function" ? context.markedParse : null;
 		const body = parse ? resolveWorkspaceImages(parse(source), context.conversationID) : `<p>${escapeHtml(source)}</p>`;
-		return `<div class="conv-input-preview markdown-rendered">${body}</div>`;
+		// Ogni immagine si apre a grandezza piena in una scheda nuova: un
+		// mockup ridotto a 300 pixel non si giudica.
+		const zoomable = body.replace(/<img\b[^>]*\bsrc=(["'])([^"']*)\1[^>]*>/gi, (img, quote, src) => `<a href="${src}" target="_blank" rel="noopener">${img}</a>`);
+		return `<div class="conv-input-preview markdown-rendered">${zoomable}</div>`;
 	}
 
 	function renderInputQuestion(question, index, draft, busy, withTabs, context) {
@@ -1448,10 +1437,12 @@
 		const choices = arrayAt(question, "options");
 		const multi = question.multiple === true;
 		const kind = multi ? "checkbox" : "radio";
+		// La preview sta accanto all'etichetta, non dentro: dentro un <label>
+		// un click sull'immagine sceglierebbe l'opzione invece di aprirla.
 		const options = choices.map((option) => `<label class="conv-input-option">
 			<input type="${kind}" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${answer.options.includes(option.value) ? " checked" : ""}${disabled}>
-			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}${renderInputOptionPreview(option, context)}</span>
-		</label>`).join("");
+			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}</span>
+		</label>${renderInputOptionPreview(option, context)}`).join("");
 		const field = (required) => question.secret
 			? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(answer.text)}"${disabled}${required ? " required" : ""}>`
 			: `<textarea data-conversation-input-text rows="2" placeholder="${escapeHtml(TEXT.inputOtherPlaceholder)}"${disabled}${required ? " required" : ""}>${escapeHtml(answer.text)}</textarea>`;
