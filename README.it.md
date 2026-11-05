@@ -64,6 +64,10 @@ richiedere codice: osservazione e decisione vengono registrate nel lavoro.
   I commit sono recuperabili tramite un riferimento Git; i dati locali dell’ambiente
   vengono rimossi secondo il contratto di cleanup.
 
+## Uso con Copilot Studio
+
+Per eseguire inception, design e analisi funzionale come un unico agente Copilot Studio basato sull'harness GitHub Copilot, con PRD, mockup e analisi restituiti come download versionati invece che scritti in un repository, vedi [`integrations/copilot/`](integrations/copilot/README.md).
+
 ## Architettura e limiti
 
 La UI orchestra e presenta. La CLI gestisce deterministicamente persistenza,

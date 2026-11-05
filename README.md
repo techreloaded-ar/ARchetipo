@@ -50,6 +50,10 @@ silently change story statuses. The business-approved commit remains distinct
 from later developer commits. Removing an environment retains the business dossier
 and story references, alongside a Git recovery ref for committed work.
 
+## Using with Copilot Studio
+
+To run inception, design and functional analysis as a single Copilot Studio agent powered by the GitHub Copilot harness, with the PRD, the mockups and the analysis handed back as versioned downloads instead of written to a repository, see [`integrations/copilot/`](integrations/copilot/README.md).
+
 ## Architecture and current limits
 
 The CLI owns deterministic persistence, connectors, Git and resource ownership.
