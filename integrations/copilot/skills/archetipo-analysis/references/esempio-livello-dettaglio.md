@@ -1,8 +1,22 @@
-# Level of detail — two calibrated extracts
+# Level of detail — three calibrated extracts
 
-Source: "Anagrafe WEB — Descrizione intervento" (Censimento / Variazione Persona Fisica), the house reference for functional analysis documents. The two extracts below are adapted from it and reduced to what shows the expected granularity. They are **examples of density and form**, not content to reuse: lengths, codes, tables and messages of the product you are analysing come from the Knowledge, the PRD or the user — never from here.
+Source: "Anagrafe WEB — Descrizione intervento" (Censimento / Variazione Persona Fisica), the house reference for functional analysis documents. The extracts below are adapted from it and reduced to what shows the expected granularity. They are **examples of density and form**, not content to reuse: lengths, codes, tables and messages of the product you are analysing come from the Knowledge, the PRD or the user — never from here.
 
 Read this file once, before generating the first section, and compare your last section against it before delivering.
+
+---
+
+## Extract 0 — the functional description that opens a step
+
+This is how the **opening of a step** reads. Notice: three short paragraphs, about 200 words; purpose, context, what the operator does, what the system does, the alternative paths and the result, in that order; plain words instead of service names and codes; no field list, no verbatim message, no marker. A reader who stops here knows what the step is.
+
+### 3.4 Documento di identità
+
+Questo step serve ad acquisire il documento di identità del cliente e a verificarne l'autenticità prima di proseguire con il censimento, così che la banca adempia agli obblighi di identificazione e riduca il rischio di frodi sui documenti.
+
+L'operatore di filiale ci arriva dopo aver completato i dati anagrafici, sia per un nuovo cliente sia quando aggiorna il documento di un cliente già censito. Indica il tipo di documento, il numero, l'ente e le date di rilascio e di scadenza, che vengono subito controllati nella forma. Alla conferma il sistema interroga gli archivi pubblici per verificare che il documento esista e appartenga davvero al cliente.
+
+Se la verifica va a buon fine il documento risulta verificato e si passa ai recapiti. Se il documento non viene trovato, l'operatore può correggere i dati oppure proseguire indicando il motivo, e il documento resta da verificare manualmente. Se i dati appartengono a un'altra persona il censimento si ferma e la posizione viene segnalata alla funzione Antifrode. Quando il servizio non risponde l'operatore può riprovare o proseguire, e la verifica viene completata in un secondo momento. In ogni caso l'esito resta registrato sul cliente.
 
 ---
 
@@ -60,6 +74,8 @@ Il timeout del servizio non è un punto aperto: è un parametro di configurazion
 ---
 
 ## What to take from these extracts
+
+- **The story first, the rows after.** The description of extract 0 and the rows of extracts 1 and 2 tell the same step twice: once for the business reader, once for whoever builds and tests it. Neither replaces the other.
 
 - **Granularity is the row.** The unit of the document is one field, one control, one outcome. If you find yourself writing "i controlli standard dell'anagrafe" or "gestione errori come da linee guida", stop and write the rows.
 - **Severity and trace go together.** A control is never just "bloccante": say what the user sees and what the system records. A forceable control says how it is forced.

@@ -19,9 +19,9 @@ Use this template for **every** step of the process map, in the order of the map
 ```markdown
 ### {{SECTION_NUMBER}} {{STEP_NAME}}
 
-{{FUNCTIONAL_DESCRIPTION: three to five sentences of plain, readable prose that say what this step is for the business — what the user does here and why, what the system does on its own, where the step starts and what it leads to. No field lists, no codes, no table; written so that someone who reads only this paragraph understands the step.}}
+{{FUNCTIONAL_DESCRIPTION: two or three paragraphs of readable prose, about 120–250 words, that describe the step functionally — see «The functional description» below.}}
 
-**Tipo:** {{SCREEN | SUB_PROCESS | CONTROL}} · **RF coperti:** {{RF_LIST}} · **Mockup:** {{MOCKUP_REF}}
+**Tipo:** {{SCREEN | SUB_PROCESS | CONTROL}} · **Mockup:** {{MOCKUP_REF}}
 
 #### {{SECTION_NUMBER}}.1 Innesco e prerequisiti
 
@@ -100,6 +100,24 @@ _Only when Tipo = SCREEN. Omit the block otherwise._
 
 For a screen (Tipo = SCREEN) block 2 is a list of image lines, one per state listed in block 9, in that order: base first. `{{SECTION_DASHED}}` is the section number with dashes (`3.4` → `3-4`). The images are produced by `scripts/render_screens.py` from `screens/{{SECTION_DASHED}}.json`, written from block 9 as described in `screen-spec.md`. For a sub-process or a control (no screen) block 2 is one line: "Nessuna videata: {{WHAT_THE_STEP_IS}}".
 
+## The functional description
+
+The opening of each step is the part a business reader actually reads: after it they must know what the step is for, who works on it, what happens and how it can end, without opening a table. Write it as prose, not bullets, covering in this order:
+
+1. **Purpose.** Why the step exists in the process and which business need it serves.
+2. **Context.** Where the user arrives from, who works on the step and in which application, in which situation (a new practice, a practice resumed later).
+3. **What the user does.** The main sequence of actions and the choices the user makes, in the words the user would use.
+4. **What the system does.** The checks it runs, the information it retrieves or passes to other applications — explained by what they mean («verifica che il cliente sia maggiorenne e correntista»), not by service names or codes.
+5. **Alternatives and outcomes.** The main alternative paths — a check that blocks, an optional sub-process, a negative outcome, a cancellation — and where each one leads.
+6. **Result.** What the step leaves behind (data saved, state of the practice, documents, a reservation) and where the process goes next.
+
+- **Length.** Two or three paragraphs, about 120–250 words. A short control or sub-process sits at the lower end, a complex screen at the upper end; never a single sentence.
+- **Style.** Present tense, active voice, the user and the system as subjects («L'operatore sceglie…», «Il sistema verifica…»); the terms of the PRD and of the Knowledge.
+- **What stays out.** Field-by-field lists, verbatim messages, lengths, technical codes, requirement codes, references to other sections by number, `XX crt` and `[DA CONFERMARE]`: the detail is in the blocks and the uncertainty in block 8.
+- **Consistent with the blocks.** The description tells the same story as blocks 1–7: nothing is described that the tables do not support, and every main path of the tables is named in it.
+
+`esempio-livello-dettaglio.md` holds a calibrated example (extract 0).
+
 ## Which gaps become open points
 
 A gap is anything the Knowledge, the PRD and the user's answers do not settle. Every gap gets an adopted value; only a few become open points. Rate each gap on two axes:
@@ -117,7 +135,7 @@ A gap is anything the Knowledge, the PRD and the user's answers do not settle. E
 ## How to fill it
 
 1. **Retrieve first, write second.** Before filling a section, search the Knowledge for the as-is documentation of the step ("as-is {{STEP_NAME}} campi", "as-is {{STEP_NAME}} controlli", "as-is {{STEP_NAME}} messaggi"). Fill cells from what comes back and from the PRD and the user's answers. Nothing else.
-2. **Prose once, then cells.** The opening description is the only prose of the section: a few readable sentences on what the step is. After it, a section is mostly tables. Keep prose to one line per bullet. A reader must find "what is the length of the fiscal code" by scanning a column, not by reading a paragraph.
+2. **Prose once, then cells.** The opening description is the only prose of the section: two or three paragraphs that describe the step as a story. After it, a section is mostly tables. Keep prose to one line per bullet. A reader must find "what is the length of the fiscal code" by scanning a column, not by reading a paragraph.
 3. **Unknown is a value.** `XX crt`, "da definire", "Nessun popup", "Nessuna integrazione": every cell is filled, and an honest gap is a legitimate content. A gap becomes an open point only through the triage above.
 4. **Verbatim or proposed.** A message is either the text found in the Knowledge, or a proposed text. Never leave the message column empty.
 5. **Same density everywhere.** The section for the last step of the map has the same tables, filled with the same care, as the first. If you are running out of budget, say so in the final response and name the sections to regenerate; do not thin them silently.

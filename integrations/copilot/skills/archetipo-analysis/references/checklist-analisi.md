@@ -9,8 +9,8 @@ Run it in the same turn that generates the document, after writing the draft and
 
 ## A. Coverage of the PRD
 
-1. Every RF of the PRD appears in the process map (chapter 2) in at least one row, and in the **RF coperti** line of at least one section of chapter 3 with the same numbers.
-2. The RF numbering is the PRD's own; no RF was renumbered, merged or dropped.
+1. Every functional requirement of the PRD is handled by at least one step of the map and described in its section (an internal check: the document does not show it).
+2. The document cites no requirement code: no «RF» column in the map, no «RF coperti» line in the sections, no «RF-…» anywhere in the text.
 
 ## B. Fields
 
@@ -39,7 +39,7 @@ Run it in the same turn that generates the document, after writing the draft and
 
 ## G. Uniform density
 
-1. Every section opens with a functional description of three to five readable sentences that says what the step is — not a list of fields, not a copy of the PRD's RF text.
+1. Every section opens with a functional description of two or three paragraphs (about 120–250 words) that covers purpose, context, what the user does, what the system does, the main alternatives and the result, as described in `template-sezione.md` — prose, not a list of fields, not a copy of the PRD text, with no codes, messages or markers. The last section's description is as full as the first's.
 2. The **last** section of chapter 3 has the description and all nine blocks (eight if it is not a screen), with the field table, the controls table and the integrations table filled — compare it with the first section: same structure, same care.
 3. No section replaced a table with a summary sentence ("i campi sono quelli dell'anagrafe", "controlli standard"). Every step has its own rows.
 4. Every section that is a screen has a **Screen spec** block with fields, buttons, error states, banners and navigation.

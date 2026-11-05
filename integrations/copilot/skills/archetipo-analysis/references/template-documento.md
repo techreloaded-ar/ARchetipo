@@ -54,11 +54,11 @@ The whole functional analysis is one Word document, regenerated in full at every
 
 {{ONE_LINE_PER_MACRO_PROCESS: the macro-processes in order, as a numbered list.}}
 
-| N | Step | Tipo | Macro-processo | RF coperti | Punti aperti |
-|---|---|---|---|---|---|
-| {{N}} | {{STEP_NAME}} | {{Videata | Sotto-processo | Controllo}} | {{MACRO_PROCESS}} | {{RF_LIST}} | {{OPEN_POINTS_COUNT}} |
+| N | Step | Tipo | Macro-processo | Punti aperti |
+|---|---|---|---|---|
+| {{N}} | {{STEP_NAME}} | {{Videata | Sotto-processo | Controllo}} | {{MACRO_PROCESS}} | {{OPEN_POINTS_COUNT}} |
 
-Every RF of the PRD appears in at least one row. The table is the resume point of the document: a revision starts by re-reading it.
+The table is the resume point of the document: a revision starts by re-reading it.
 
 **Stati della pratica:** {{STATE_LIST_WITH_ONE_LINE_EACH — only if the PRD or the Knowledge define states; otherwise "Non definiti nel PRD"}}
 
@@ -110,5 +110,5 @@ _Versione {{VERSION}}, generata a partire da `PRD_v{{PRD_VERSION}}.md`; ogni rev
 - **The map is the spine.** Chapter 3 follows the order of chapter 2, one section per row, same names, same numbering. Chapters 4 and 5 are derived from chapter 3: nothing appears in them that is not in a section.
 - **Open points live in their step.** There is no chapter of open points: each one is in block 8 of the step it concerns, and the count per step is in the last column of the map. Only the points that pass the triage of `template-sezione.md` are written.
 - **The swimlane is drawn, not written.** Chapter 5 holds one image, `screens/swimlane-processo.png`, produced by `render_process.py` from `processo.json` (see `process-spec.md`). `build_docx.py` puts chapter 5 on landscape pages because the image name starts with `swimlane`; keep that name.
-- **RF numbering is the PRD's.** Never renumber. If the user attaches a renumbered PRD, rebuild the map and say so.
+- **No requirement codes.** The customer does not use the PRD's functional requirement codes (RF): the document never cites them — no coverage column, no coverage line, no matrix, no «RF-…» in the text. The steps are named and described in business terms.
 - **Header first, always.** The header table, the change history and the index are present from version 1.0: they are what makes the document reviewable by the customer.

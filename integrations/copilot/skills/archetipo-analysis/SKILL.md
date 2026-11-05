@@ -14,7 +14,9 @@ This skill is **PRD-in, analysis-out** and **never invents**.
 
 - It needs the product's PRD (`PRD_v<version>.md`, or a legacy `PRD.md`). Without one, offer an inception; do not analyse a product that has not been defined.
 - Lengths, codes, table names, message texts and integration outcomes come from the Knowledge, the PRD or the user. Anything else is `XX crt`, "da definire", a proposed message text, or — when it matters — an open point marked `[DA CONFERMARE]`. A guessed number is a defect.
-- Open points are few and worth a decision: only gaps with low confidence **and** medium or high impact, per the triage of `template-sezione.md`. They live in the step they concern; there is no chapter of open points and no RF coverage matrix.
+- Open points are few and worth a decision: only gaps with low confidence **and** medium or high impact, per the triage of `template-sezione.md`. They live in the step they concern; there is no chapter of open points.
+- The customer does not use requirement codes: the document never cites the PRD's RF — no coverage column, line or matrix. You still use the RF list internally, so that no requirement of the PRD is left without a step.
+- Every step opens with a full functional description — two or three readable paragraphs on what the step is, who does what, what the system does, how it can end — before the tables.
 - Deliver one file only: `Analisi-Funzionale_v<version>.docx`, whose name `build_docx.py` derives from the `Versione` row of the header — never type the name yourself. No Markdown copy, no second file, no preview of the document in chat. Never touch another product.
 - Questions first, document after. The document is generated once, complete, when the questions are exhausted or the user says to proceed.
 - The Word file, the mockup images and the swimlane are produced by the three scripts of this skill, never by hand: you write Markdown, screen specs and the process spec, the scripts write the `.docx` and the `.png` files. Do not build the Word document with your own python-docx code and do not draw images with your own code.
@@ -49,14 +51,14 @@ All three print a report and end with `RESULT: OK` or `RESULT: CHECK FAILED`. Re
 1. Establish which product. If the user has not said, ask — an analysis does not exist outside a product.
 2. Apply **Locate the product** from the agent instructions.
 3. If no PRD came back, say so and offer an inception. Do not proceed.
-4. If a PRD came back, **Read an artifact** and note: its version and date (they go in the header row *Documenti di riferimento*), the RF list with its numbering, the MVP scope, the integrations section, the personas' language.
+4. If a PRD came back, **Read an artifact** and note: its version and date (they go in the header row *Documenti di riferimento*), the functional requirements (for your own coverage check), the MVP scope, the integrations section, the personas' language.
 5. If a functional analysis came back too (`Analisi-Funzionale_v<version>.docx`, or a legacy `Analisi-Funzionale.docx`), this is a **revision**: read its header table (version, dates, the PRD version it was built on), its chapter 2 (process map, with the count of open points per step) and block 8 of the steps that have open points, tell the user what it covers, and ask what changes. Then follow phase 6.
 
 ### 1. Process map (first turn)
 
-From the PRD, derive the process: macro-processes, steps, and for each step its type (screen, sub-process, control). Assign every RF to at least one step. **No RF may remain uncovered**: this is the first gate, check it before showing anything.
+From the PRD, derive the process: macro-processes, steps, and for each step its type (screen, sub-process, control). Check, for yourself, that every functional requirement of the PRD lands in at least one step: **no requirement may remain without a step**. This is the first gate, check it before showing anything; it is not written in the document.
 
-Present the map as the table of chapter 2 (`N · Step · Tipo · Macro-processo · RF coperti`), then ask at most 3 questions, grouped, skippable, only about structure: missing steps, order, screens to merge or split. If the user skips, keep the map and say so.
+Present the map as the table of chapter 2 (`N · Step · Tipo · Macro-processo`), then ask at most 3 questions, grouped, skippable, only about structure: missing steps, order, screens to merge or split. If the user skips, keep the map and say so.
 
 The map, once confirmed or assumed, is the spine of everything that follows. Its order is the order of the document.
 
@@ -95,7 +97,7 @@ When phase 2 ends, generate the whole document in a single turn. Work in the san
 1. Read `template-sezione.md`, `template-documento.md`, `esempio-livello-dettaglio.md`, `screen-spec.md` and `process-spec.md`.
 2. For every step of the map, in order:
    - search the Knowledge scoped to the step ("as-is {{step name}} campi", "… controlli", "… messaggi"); for a screen add one search per FREE component it uses ("FREE form", "FREE table", "FREE banner"), so the Screen spec uses FREE vocabulary;
-   - write the section in Markdown with `template-sezione.md`: the opening functional description (three to five readable sentences on what the step is), then all nine blocks (eight if not a screen), cells not prose, the conventions applied, block 8 holding only the open points that pass the triage. Block 2 lists the image lines of the screen, one per state named in block 9, base first; block 9 ends with the states to render.
+   - write the section in Markdown with `template-sezione.md`: the opening functional description (two or three paragraphs, as «The functional description» of the template asks, written after the blocks are clear and checked against them), then all nine blocks (eight if not a screen), cells not prose, the conventions applied, block 8 holding only the open points that pass the triage. Block 2 lists the image lines of the screen, one per state named in block 9, base first; block 9 ends with the states to render.
 3. For every step that is a screen, write `screens/<section>.json` (`screens/3-4.json` for section 3.4) following `screen-spec.md`, from blocks 3, 4, 5 and 9 of that section: same field labels in the same order, same buttons, the «…» messages of blocks 3 and 5 in the `errore` state, and only the states block 9 lists.
 4. Write `processo.json` following `process-spec.md`, in the customer's swimlane notation, from chapter 2 and from your own sections: phases from the macro-processes, lanes from the users, applications (with the activity of the step) from the sections, flows with their trigger and event ID from the transitions the sections describe. For the technology of each application, the integration of each passage and the event IDs, search the Knowledge ("{{application}} web 3270", "eventi {{process}}"); what it does not say is `da-definire`, integrated, no ID.
 5. Assemble `analisi.md` with `template-documento.md`: header table, history, index, chapters 1 to 5. `Versione` is `1.0` for a first analysis. Chapters 4 and 5 are derived from chapter 3 — build them by reading your own sections and `processo.json`, not from memory.
@@ -128,9 +130,9 @@ Chapter 5 shows the whole process on one landscape page, in the notation the cus
 
 ### 7. Revision
 
-A change is a rewrite of the whole document. Apply **Replace an artifact**: say what changes (which steps, which RF, which open points close), confirm, then rebuild `analisi.md` in full from the attached version plus the changes, rewrite the screen specs (all of them: the ones of untouched screens are rewritten identical) and `processo.json`, and run steps 6 to 9 of phase 3 again, including phase 4. Open points that the user's answers close leave block 8 and their value is written in the section; new gaps go through the same triage. The images of the attached document are not reused; they are drawn again. Update the header table — `Versione` raised by one minor step from the attached one (`1.1` → `1.2`), last modified date, the PRD version in *Documenti di riferimento* if a newer PRD came with it — and add a row to the history, keeping the earlier rows. Work in a new folder for the new version and pass `--previous` to `build_docx.py`, so the new file can never carry the old name.
+A change is a rewrite of the whole document. Apply **Replace an artifact**: say what changes (which steps, which open points close), confirm, then rebuild `analisi.md` in full from the attached version plus the changes, rewrite the screen specs (all of them: the ones of untouched screens are rewritten identical) and `processo.json`, and run steps 6 to 9 of phase 3 again, including phase 4. Open points that the user's answers close leave block 8 and their value is written in the section; new gaps go through the same triage. The images of the attached document are not reused; they are drawn again. Update the header table — `Versione` raised by one minor step from the attached one (`1.1` → `1.2`), last modified date, the PRD version in *Documenti di riferimento* if a newer PRD came with it — and add a row to the history, keeping the earlier rows. Work in a new folder for the new version and pass `--previous` to `build_docx.py`, so the new file can never carry the old name.
 
-If the user attaches a renumbered PRD, rebuild the map first and say which RF moved.
+If the user attaches a new PRD, rebuild the map first and say which steps it adds, removes or changes.
 
 ## Output contract
 
@@ -151,7 +153,7 @@ The `.docx` is delivered with **Deliver an artifact**. It is both the file the c
 At the end of phase 3 (and of every revision), speaking as Emanuele in the detected language:
 
 - state the map in one line: how many steps, how many screens, how many sub-processes
-- state the coverage in one line: RF of the PRD and RF covered by the map
+- say in one line that every functional requirement of the PRD has its step, or name the ones that do not and why
 - list the open points by count and name the three with the highest impact; say in the same line how many other gaps were settled with an adopted value (a count, not a list)
 - state the mockups in one line: how many screens, how many images (base plus states), the size of the Word file from the report
 - state the swimlane in one line: phases, lanes, nodes, flows, and the smallest text size from the report
