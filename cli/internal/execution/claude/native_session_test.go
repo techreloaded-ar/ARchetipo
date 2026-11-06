@@ -122,10 +122,8 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 	dir := t.TempDir()
 	command := fakeCommand(t)
 	process := newFakeClaude()
-	nextProcess := newFakeClaude()
 	process.silent = true
-	nextProcess.silent = true
-	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process, nextProcess}}, Now: time.Now})
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process}}, Now: time.Now})
 	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "approval-conversation", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": command}, Location: "local"}})
 	if err != nil {
 		t.Fatal(err)
@@ -171,24 +169,29 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 	if err != nil || snapshot.Recovery != execution.RecoveryResumable || snapshot.CurrentTurn.State != execution.TurnInterrupted || len(snapshot.PendingInputs) != 0 {
 		t.Fatalf("snapshot after interrupt = %#v, %v", snapshot, err)
 	}
-	announceSessionOnFirstMessage(nextProcess, created.Session.Native.ID, "opus")
+	// An interrupt ends the turn, not the connection: the next turn is
+	// written to the same process.
 	_, err = provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "turn-after-interrupt", SubmissionID: "submission-after-interrupt", Message: "continuiamo"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertArgumentsContainInOrder(t, nextProcess, "--resume", created.Session.Native.ID)
-	nextProcess.emit(userFrame("continuiamo", true))
-	nextProcess.emit(resultFrame("Continuiamo.", false))
+	if starts, _, _ := process.spawned(); starts != 1 || !process.alive() {
+		t.Fatalf("the turn after the interrupt did not reuse the process: starts=%d alive=%t", starts, process.alive())
+	}
+	process.emit(userFrame("continuiamo", true))
+	process.emit(resultFrame("Continuiamo.", false))
 	waitForNativeIdle(t, provider, created.Session)
+	snapshot, err = provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+	if err != nil || snapshot.CurrentTurn.ID != "turn-after-interrupt" || snapshot.CurrentTurn.State != execution.TurnCompleted {
+		t.Fatalf("snapshot after the second turn = %#v, %v", snapshot, err)
+	}
 }
 
 func TestNativeClaudeUsesTheCatalogReportedBySystemInitInTheSameSession(t *testing.T) {
 	dir := t.TempDir()
 	process := newFakeClaude()
-	secondProcess := newFakeClaude()
 	process.silent = true
-	secondProcess.silent = true
-	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process, newFakeClaude(), secondProcess}}, Now: time.Now})
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process}}, Now: time.Now})
 	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "skill-conversation", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t)}, Location: "local"}})
 	if err != nil {
 		t.Fatal(err)
@@ -209,14 +212,13 @@ func TestNativeClaudeUsesTheCatalogReportedBySystemInitInTheSameSession(t *testi
 	if err != nil || !discovery.SkillsKnown || len(discovery.Skills) != 3 || discovery.Skills[0].Name != "claude-only" || discovery.Skills[2].Name != "shared" || discovery.Skills[1].Name != "plugin:fixture" || discovery.Skills[1].Namespace != "plugin" || discovery.Skills[1].Invocation != "/plugin:fixture" {
 		t.Fatalf("runtime skill discovery = %#v, %v", discovery, err)
 	}
-	announceSessionOnFirstMessage(secondProcess, created.Session.Native.ID, "opus")
 	_, err = provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "skill-turn", SubmissionID: "skill-submission", Message: "esegui", Skills: []execution.SessionSkill{discovery.Skills[2]}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondProcess.mu.Lock()
-	last := string(secondProcess.sent[len(secondProcess.sent)-1])
-	secondProcess.mu.Unlock()
+	process.mu.Lock()
+	last := string(process.sent[len(process.sent)-1])
+	process.mu.Unlock()
 	if !strings.Contains(last, "/shared\\n\\nesegui") {
 		t.Fatalf("native skill invocation missing from %s", last)
 	}
@@ -301,4 +303,143 @@ func TestNativeClaudeModelCatalogUsesTheConnectedRuntime(t *testing.T) {
 	if err != nil || snapshot.CurrentTurn != nil {
 		t.Fatalf("discovery started a turn: %#v, %v", snapshot, err)
 	}
+}
+
+// The end of a turn is not the end of the connection. The process stays
+// attached to the session, so an agent started in the background during the
+// turn keeps running: what it produces between two turns enters the
+// conversation's history, and the next turn with the same settings is written
+// to the same process without starting another. What the process emits on its
+// own in between — the turn it runs by itself on a task notification, and the
+// results that close it — is history too, filed under the turn that ended last,
+// and ends no turn of the person: the session stays idle through it.
+func TestNativeClaudeKeepsTheProcessBetweenTurnsAndRecordsWhatArrivesInBetween(t *testing.T) {
+	dir := t.TempDir()
+	process := newFakeClaude()
+	process.silent = true
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process}}, Now: time.Now})
+	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "background-conversation", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t)}, Location: "local"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announceSessionOnFirstMessage(process, created.Session.Native.ID, "opus")
+	if _, err := provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "turn-1", SubmissionID: "submission-1", Message: "lancia un agente in background"}); err != nil {
+		t.Fatal(err)
+	}
+	process.emit(userFrame("lancia un agente in background", true))
+	process.emit(resultFrame("Lanciato.", false))
+	waitForNativeIdle(t, provider, created.Session)
+	if !process.alive() {
+		t.Fatal("the end of the turn ended the process")
+	}
+	session := provider.nativeSession(created.Session.Native.ID)
+	eventsBefore := len(session.snapshotEvents())
+
+	// Between the two turns: the notification of the background agent, the
+	// turn the harness runs by itself on it, and its own result.
+	process.emit(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification>agent finished</task-notification>"}]}}`)
+	process.emit(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"L'agente ha finito."}]}}`)
+	process.emit(`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"L'agente ha finito.","origin":{"kind":"task-notification"}}`)
+	process.emit(`{"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"","origin":{"kind":"task-notification"}}`)
+	waitFor(t, func() bool { return len(session.snapshotEvents()) == eventsBefore+4 })
+	between := session.snapshotEvents()[eventsBefore:]
+	for _, event := range between {
+		if event.TurnID != "turn-1" || event.SubmissionID != "submission-1" {
+			t.Fatalf("an event between two turns lost its turn: %#v", event)
+		}
+	}
+	if between[0].Kind != localrun.KindUserMessage || between[1].Kind != localrun.KindText || between[2].Kind != localrun.KindTurnEnd || between[3].Kind != "result/task-notification" {
+		t.Fatalf("the events between two turns = %q, %q, %q, %q", between[0].Kind, between[1].Kind, between[2].Kind, between[3].Kind)
+	}
+	snapshot, err := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+	if err != nil || snapshot.Work != execution.SessionIdle || snapshot.CurrentTurn.State != execution.TurnCompleted {
+		t.Fatalf("snapshot between two turns = %#v, %v", snapshot, err)
+	}
+
+	second, err := provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "turn-2", SubmissionID: "submission-2", Message: "che cosa ha trovato?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("second turn = %#v", second)
+	}
+	if starts, _, _ := process.spawned(); starts != 1 {
+		t.Fatalf("the second turn started another process: starts=%d", starts)
+	}
+	if messages := process.messagesReceived(); len(messages) != 2 || messages[1] != "che cosa ha trovato?" {
+		t.Fatalf("messages written to the process = %q", messages)
+	}
+	process.emit(userFrame("che cosa ha trovato?", true))
+	process.emit(resultFrame("Tre bug.", false))
+	waitForNativeIdle(t, provider, created.Session)
+	snapshot, err = provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+	if err != nil || snapshot.CurrentTurn.ID != "turn-2" || snapshot.CurrentTurn.State != execution.TurnCompleted {
+		t.Fatalf("snapshot after the second turn = %#v, %v", snapshot, err)
+	}
+	events := session.snapshotEvents()
+	last := events[len(events)-1]
+	if last.Kind != localrun.KindTurnEnd || last.TurnID != "turn-2" || last.FinalMessage != "Tre bug." {
+		t.Fatalf("the end of the second turn = %#v", last)
+	}
+	if !process.alive() {
+		t.Fatal("the end of the second turn ended the process")
+	}
+
+	// Releasing the session is what ends the process.
+	if err := provider.ReleaseSession(context.Background(), execution.SessionRequest{Session: created.Session}); err != nil {
+		t.Fatal(err)
+	}
+	if process.alive() {
+		t.Fatal("releasing the session left the process running")
+	}
+}
+
+// A process that left while the session was idle — it crashed, or somebody
+// killed it — is not written to: the next turn resumes the native session on a
+// fresh one, and a turn the process leaves in the middle of ends as
+// interrupted, not as completed on the strength of the result before it.
+func TestNativeClaudeReplacesAProcessThatLeftBetweenTurns(t *testing.T) {
+	dir := t.TempDir()
+	process := newFakeClaude()
+	nextProcess := newFakeClaude()
+	process.silent = true
+	nextProcess.silent = true
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: &claudeProcessSequence{processes: []*fakeClaude{process, nextProcess}}, Now: time.Now})
+	created, err := provider.CreateSession(context.Background(), execution.CreateSessionRequest{ConversationID: "crash-conversation", Environment: execution.SessionEnvironment{WorkingDir: dir, ProviderConfig: map[string]any{"command": fakeCommand(t)}, Location: "local"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	announceSessionOnFirstMessage(process, created.Session.Native.ID, "opus")
+	if _, err := provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "turn-1", SubmissionID: "submission-1", Message: "ciao"}); err != nil {
+		t.Fatal(err)
+	}
+	process.emit(userFrame("ciao", true))
+	process.emit(resultFrame("Ciao.", false))
+	waitForNativeIdle(t, provider, created.Session)
+	process.end()
+	session := provider.nativeSession(created.Session.Native.ID)
+	waitFor(t, func() bool {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		return session.client.sessionOver()
+	})
+
+	announceSessionOnFirstMessage(nextProcess, created.Session.Native.ID, "opus")
+	if _, err := provider.StartTurn(context.Background(), execution.StartTurnRequest{Session: created.Session, TurnID: "turn-2", SubmissionID: "submission-2", Message: "ci sei?"}); err != nil {
+		t.Fatal(err)
+	}
+	assertArgumentsContainInOrder(t, nextProcess, "--resume", created.Session.Native.ID)
+	nextProcess.emit(userFrame("ci sei?", true))
+	nextProcess.end()
+	waitForNativeIdle(t, provider, created.Session)
+	snapshot, err := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
+	if err != nil || snapshot.CurrentTurn.ID != "turn-2" || snapshot.CurrentTurn.State != execution.TurnInterrupted {
+		t.Fatalf("snapshot after the process left = %#v, %v", snapshot, err)
+	}
+}
+
+func (s *nativeSession) snapshotEvents() []execution.RunEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]execution.RunEvent(nil), s.events...)
 }

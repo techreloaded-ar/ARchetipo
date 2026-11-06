@@ -477,6 +477,10 @@ func (s *streamSession) start(ctx context.Context, prompt string) error {
 // adapter instruction and therefore remains in the native conversation
 // timeline when Claude replays it.
 func (s *streamSession) startNative(ctx context.Context, message string, attachments []execution.Attachment) error {
+	// The process outlives the turn, so the next message finds the previous
+	// turn's wait already closed: re-armed before the write, for the reason
+	// SendWith gives, so that a caller waiting on TurnDone waits for this turn.
+	s.armTurn()
 	s.expectAttachments(message, attachments)
 	if err := s.writeUserContent(attachments, message); err != nil {
 		return fmt.Errorf("the claude session could not be given its message: %w", err)
@@ -828,6 +832,12 @@ func (s *streamSession) armTurn() {
 	}
 	s.turnDone = make(chan struct{})
 	s.turnClosed = false
+	// What the previous turn ended with is not what this one ends with: a
+	// turn cut short by the process leaving would otherwise read as completed
+	// on the strength of the result before it.
+	s.completed = false
+	s.finalMessage = ""
+	s.lastAssistantText = ""
 }
 
 // sessionOver reports whether the process's output has already ended.
