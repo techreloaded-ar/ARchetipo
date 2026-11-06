@@ -83,6 +83,15 @@ func (s *streamSession) project(f frame, raw json.RawMessage) {
 	case frameUser:
 		s.projectUser(f, raw)
 	case frameResult:
+		if f.NumTurns == 0 && f.Origin.Kind != "" {
+			// A result the harness emitted for a queued item of its own — a
+			// task notification about a background agent the previous process
+			// did not finish — closes no turn of the agent: zero turns ran. The
+			// turn the person started is still ahead, and taking this result
+			// for its end would shut the process down mid-work.
+			s.append(f.Type+"/"+f.Origin.Kind, "", "", raw)
+			return
+		}
 		// A result frame is the process's own statement that the turn is over.
 		// Only a result that reports no error can carry a plan: an interrupted
 		// turn also ends with a result, and reports `error_during_execution`.

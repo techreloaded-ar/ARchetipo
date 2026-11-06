@@ -1127,3 +1127,33 @@ func TestStreamSessionDoesNotShowSyntheticUserFramesAsThePersonsWords(t *testing
 		t.Fatalf("the synthetic frame = %#v", got)
 	}
 }
+
+// On resume, Claude reports a background agent the previous process did not
+// finish through a queued notification, and closes that queue item with a
+// result of zero turns whose origin names it. That result ends no turn: the
+// one the person just started is still ahead, and the process must stay up.
+func TestStreamSessionIgnoresTheZeroTurnResultOfATaskNotification(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openStreamSession(t, fake)
+	after := lastEventID(session)
+
+	fake.emit(`{"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"","origin":{"kind":"task-notification"}}`)
+	waitFor(t, func() bool { return len(session.Events(after)) == 1 })
+	if kind := session.Events(after)[0].Kind; kind != "result/task-notification" {
+		t.Fatalf("the notification result was recorded as %q; want result/task-notification", kind)
+	}
+	select {
+	case <-client.TurnDone():
+		t.Fatal("a zero-turn result of a task notification ended the turn")
+	default:
+	}
+	if !session.Active() {
+		t.Fatal("a zero-turn result of a task notification closed the session")
+	}
+
+	fake.emit(`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"finito"}`)
+	<-client.TurnDone()
+	if !client.Completed() {
+		t.Fatal("the result of the agent's own turn did not complete it")
+	}
+}
