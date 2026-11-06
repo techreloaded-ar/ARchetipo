@@ -6083,6 +6083,7 @@ body.no-workspace [data-workspace-scoped] {
 .conv-attachment-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-attachment-file-link { text-decoration: none; }
 .conv-attachment-file-link:hover .conv-attachment-file { border-color: var(--text-dim); }
+.conv-composer.is-dragover .conv-composer-surface { outline: 2px dashed var(--accent, var(--text-dim)); outline-offset: -2px; }
 .conv-attachment-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font-size: 13px; line-height: 1; cursor: pointer; padding: 0; }
 .conv-attach-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 6px; border: 1px solid var(--border-strong); background: transparent; color: var(--text-dim); cursor: pointer; }
 .conv-attach-btn:hover:not(:disabled) { color: var(--text); }

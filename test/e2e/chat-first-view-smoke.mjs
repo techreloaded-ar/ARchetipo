@@ -230,6 +230,12 @@ async function main(){
   await page.waitFor(`!!document.querySelector('.conv-attach-input')`,timeout,"image attachment capability in the new product flow");
   await page.evaluate(`(()=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(${JSON.stringify(imageBase64)}),c=>c.charCodeAt(0))],"excel-mockup.png",{type:"image/png"}));const upload=document.querySelector('.conv-attach-input');upload.files=transfer.files;upload.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await page.waitFor(`!!document.querySelector('[data-conversation-attachment-remove="0"]')`,timeout,"image draft is visible");
+  // A file dropped on the composer is attached like a chosen one: a text file
+  // becomes a named chip beside the image preview, and reaches the agent as a
+  // path to read.
+  await page.evaluate(`(()=>{const transfer=new DataTransfer();transfer.items.add(new File(["note di prova"],"appunti.txt",{type:"text/plain"}));const composer=document.querySelector('.conv-composer');composer.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer}));window.__dragover=composer.classList.contains('is-dragover');composer.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));})()`);
+  await page.waitFor(`!!document.querySelector('[data-conversation-attachment-remove="1"]') && document.querySelector('.conv-composer-surface')?.innerText.includes('appunti.txt') && !document.querySelector('.conv-composer.is-dragover')`,timeout,"dropped text file is a draft chip beside the image");
+  assert.equal(await page.evaluate(`window.__dragover`),true,"dragover did not mark the composer as a drop target");
   await page.evaluate(`(()=>{const original=window.fetch;let refused=false;window.fetch=(url,options)=>{if(!refused&&String(url).includes('/messages')&&options?.method==='POST'){refused=true;return Promise.resolve(new Response(JSON.stringify({error:'Prova di consegna fallita'}),{status:503,headers:{'Content-Type':'application/json'}}));}return original(url,options);};const input=document.querySelector(".conv-composer-input");input.value="Aggiungi anche il formato Excel";input.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector(".conv-composer").requestSubmit();})()`);
   await page.waitFor(`document.querySelector('.conv-composer-input:not(:disabled)')?.value==='Aggiungi anche il formato Excel' && !!document.querySelector('[data-conversation-attachment-remove="0"]') && document.body.innerText.includes('Prova di consegna fallita')`,timeout,"failed delivery retains both image and draft");
   assert.equal(control.received.filter(e=>e.kind==="turn/start").length,feedbackTurnsBefore,"failed delivery started a turn");
@@ -238,6 +244,9 @@ async function main(){
   const feedbackInput=control.received.filter(e=>e.kind==="turn/start").at(-1).params.input;
   const sentImage=feedbackInput.find(item=>item.type==="localImage");
   assert.ok(sentImage,"native turn lost the attached image");
+  const sentText=feedbackInput.find(item=>item.type==="text")?.text||"";
+  assert.match(sentText,/appunti\.txt \(text\/plain\): (.+appunti.+|.+\.txt)/,"native turn was not told where to read the dropped file");
+  assert.equal(feedbackInput.filter(item=>item.type==="localImage").length,1,"the dropped text file became an image item");
   assert.equal((await fs.readFile(sentImage.path)).toString('base64'),imageBase64);
   assert.equal((await read()).session.session.native.id,native);
   ok("Immagine e bozza sopravvivono a un invio fallito; il retry le consegna alla stessa sessione nativa.");

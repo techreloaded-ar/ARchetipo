@@ -6096,6 +6096,27 @@
 			e.preventDefault();
 			addConversationAttachments(files);
 		});
+		// Un file trascinato sul compositore è un allegato: il browser lo
+		// aprirebbe come pagina, e chi lo lascia qui vuole mandarlo. Il bordo
+		// si evidenzia finché il trascinamento sta sopra al compositore.
+		const dropTarget = (e) => conversationCapabilities.includes("turn.attachments") && Array.from(e.dataTransfer?.types || []).includes("Files") ? e.target.closest(".conv-composer") : null;
+		container.addEventListener("dragover", (e) => {
+			const composer = dropTarget(e);
+			if (!composer) return;
+			e.preventDefault();
+			composer.classList.add("is-dragover");
+		});
+		container.addEventListener("dragleave", (e) => {
+			const composer = e.target.closest(".conv-composer");
+			if (composer && !composer.contains(e.relatedTarget)) composer.classList.remove("is-dragover");
+		});
+		container.addEventListener("drop", (e) => {
+			const composer = dropTarget(e);
+			if (!composer) return;
+			e.preventDefault();
+			composer.classList.remove("is-dragover");
+			addConversationAttachments(e.dataTransfer.files);
+		});
 		container.addEventListener("toggle", (e) => {
 			if (e.target.matches("[data-increment-section]")) conversationIncrementSections[e.target.getAttribute("data-increment-section")] = e.target.open;
 			if (e.target.matches("[data-proposal-previous]")) conversationProposalPreviousOpen[e.target.getAttribute("data-proposal-previous")] = e.target.open;
