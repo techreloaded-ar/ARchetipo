@@ -1458,16 +1458,19 @@
 	 * options and flags are the adapter's words.
 	 */
 	// The preview an option carries — the harness's own field for mockups and
-	// visual comparisons — is Markdown like an agent answer, images included.
+	// visual comparisons — is Markdown like an agent answer, but its images
+	// are not drawn here: the agent shows them in its own answer, right above
+	// the card, and the choice reads as text alone — variant A, variant B.
+	// What is left of the preview once the images are gone, if anything, is
+	// drawn beside the option.
 	function renderInputOptionPreview(option, context) {
 		const source = textAt(option, "preview");
 		if (!source) return "";
 		const parse = context && typeof context.markedParse === "function" ? context.markedParse : null;
-		const body = parse ? resolveWorkspaceImages(parse(source), context.conversationID) : `<p>${escapeHtml(source)}</p>`;
-		// Ogni immagine si apre a grandezza piena in una scheda nuova: un
-		// mockup ridotto a 300 pixel non si giudica.
-		const zoomable = body.replace(/<img\b[^>]*\bsrc=(["'])([^"']*)\1[^>]*>/gi, (img, quote, src) => `<a href="${src}" target="_blank" rel="noopener">${img}</a>`);
-		return `<div class="conv-input-preview markdown-rendered">${zoomable}</div>`;
+		const body = parse ? parse(source) : `<p>${escapeHtml(source)}</p>`;
+		const textOnly = body.replace(/<img\b[^>]*>/gi, "").replace(/<p>\s*<\/p>/gi, "");
+		if (!textOnly.replace(/<[^>]+>/g, "").trim()) return "";
+		return `<div class="conv-input-preview markdown-rendered">${textOnly}</div>`;
 	}
 
 	function renderInputQuestion(question, index, draft, busy, withTabs, context) {
@@ -1511,12 +1514,12 @@
 	 * the page's choice (`ui.inputSteps`), like the drafts.
 	 */
 	// Le immagini che il turno ha letto per questa domanda, sopra le opzioni:
-	// la didascalia è il nome del file, perché è l'unico nome che hanno. Se
-	// un'opzione mostra già un'immagine nella sua preview, l'agente ha
-	// accoppiato da sé varianti e scelte e la galleria non ripete niente.
-	function renderQuestionImages(images, optionsHtml) {
+	// la didascalia è il nome del file, perché è l'unico nome che hanno. La
+	// galleria c'è solo quando l'agente non le ha mostrate da sé nella
+	// risposta: altrimenti la card è testo e basta.
+	function renderQuestionImages(images) {
 		const items = (Array.isArray(images) ? images : []).filter((image) => image && textAt(image, "url"));
-		if (!items.length || /<img\b/i.test(optionsHtml)) return "";
+		if (!items.length) return "";
 		return `<div class="conv-input-images">${items.map((image) => {
 			// Un nome che è solo l'impronta del contenuto non dice niente: niente didascalia.
 			const stem = textAt(image, "name").replace(/\.[a-z0-9]+$/i, "");
@@ -1545,7 +1548,7 @@
 		const fields = renderInputQuestion(questions[step], step, draft, ui.busy, total > 1, context);
 		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
 				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${counter}</div>
-				${renderQuestionImages(context && context.images, fields)}
+				${renderQuestionImages(context && context.images)}
 				${tabs}
 				<div class="conv-input-fields">${fields}</div>
 				<div class="conv-input-nav">${previous}${forward}</div>

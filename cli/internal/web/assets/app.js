@@ -5846,6 +5846,15 @@
 				renderConversationPanel();
 				return;
 			}
+			// Un'immagine della storia — nella risposta dell'agente, fra gli
+			// allegati, nella galleria di una domanda — si apre a grandezza
+			// piena qui, senza cambiare scheda.
+			const image = e.target.closest(".conv-timeline img, .conv-input-images img");
+			if (image && image.getAttribute("src")) {
+				e.preventDefault();
+				openImageLightbox(image.getAttribute("src"), image.getAttribute("alt") || "");
+				return;
+			}
 			if (e.target.closest("[data-conversation-attach]")) {
 				container.querySelector(".conv-attach-input")?.click();
 				return;
@@ -7941,6 +7950,27 @@
 			conversationBusy = false;
 			renderConversationPanel();
 		}
+	}
+
+	// openImageLightbox mostra un'immagine a tutto schermo in un dialog
+	// nativo: un click sull'immagine passa alla grandezza naturale e viceversa,
+	// un click fuori o Escape chiude. Un mockup ridotto a 300 pixel non si
+	// giudica, e una scheda nuova fa perdere il filo della conversazione.
+	function openImageLightbox(src, alt) {
+		const dialog = document.createElement("dialog");
+		dialog.className = "conv-lightbox";
+		dialog.setAttribute("aria-label", alt || "Immagine a grandezza piena");
+		const image = document.createElement("img");
+		image.src = src;
+		image.alt = alt;
+		dialog.append(image);
+		document.body.append(dialog);
+		dialog.addEventListener("click", (e) => {
+			if (e.target === image) dialog.classList.toggle("is-zoomed");
+			else dialog.close();
+		});
+		dialog.addEventListener("close", () => dialog.remove(), { once: true });
+		dialog.showModal();
 	}
 
 	// addConversationAttachments legge i file scelti o incollati e li mette in

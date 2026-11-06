@@ -1044,6 +1044,17 @@ async function exerciseDocumentation(browser, url, runDir) {
   await page.waitFor(`document.querySelector('[data-shell-view="documentation"]') && document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]')`,20000,'terza vista e conversazione');
   await page.evaluate(`document.querySelector('[data-conversation-id="${CONVERSATION_ID}"]').click()`);
   await page.waitFor(`document.getElementById('workspace-conversation').textContent.includes('${AGENT_SENTINEL}')`,10000,'cronologia della conversazione');
+  // An image in the agent's answer opens in place, at full size, in a native
+  // dialog: a second click on it switches to natural size, Escape closes it.
+  await page.waitFor(`!!document.querySelector('#workspace-conversation .conv-timeline .markdown-rendered img[src*="smoke-mockup.png"]')`,10000,'il mockup nella risposta dell\'agente');
+  await page.evaluate(`document.querySelector('#workspace-conversation .conv-timeline .markdown-rendered img[src*="smoke-mockup.png"]').click()`);
+  await page.waitFor(`!!document.querySelector('dialog.conv-lightbox[open] img[src*="smoke-mockup.png"]')`,10000,'il mockup aperto a grandezza piena nel dialog');
+  await page.evaluate(`document.querySelector('dialog.conv-lightbox img').click()`);
+  if (!await page.evaluate(`document.querySelector('dialog.conv-lightbox').classList.contains('is-zoomed')`)) throw new Error('Il secondo click non porta il mockup a grandezza naturale');
+  await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});
+  await page.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});
+  await page.waitFor(`!document.querySelector('dialog.conv-lightbox')`,10000,'il dialog chiuso da Escape');
+  if (!await page.evaluate(`document.getElementById('workspace-conversation').textContent.includes('${AGENT_SENTINEL}')`)) throw new Error('Il lightbox ha perso la cronologia');
   await page.evaluate(`document.querySelector('[data-shell-view="documentation"]').click()`);
   await page.waitFor(`document.querySelector('#docs-content h1')?.textContent === 'Panoramica Wiki'`,10000,'lettura della Wiki');
   await page.waitFor(`document.querySelector('[data-doc-action="wiki-refresh"]') && document.querySelector('[data-doc-action="wiki-lint"]') && document.querySelector('[data-doc-action="wiki-query"][data-doc-action-page="overview"]')`,10000,'azioni Wiki dal server e contesto della pagina');
@@ -1233,6 +1244,11 @@ async function seedConversationRecord(sandboxDir) {
   const reportDir = path.join(sandboxDir, ".archetipo", "environment");
   await fs.mkdir(reportDir, {recursive:true});
   await fs.writeFile(path.join(reportDir,"technical-summary.json"), '{"smoke":"report originale <script>inert</script>"}');
+  // A mockup the agent shows in its answer, as Markdown: the one kind of image
+  // a person judges in the chat, and the one the lightbox must open in place.
+  const mockupDir = path.join(sandboxDir, "docs", "mock");
+  await fs.mkdir(mockupDir, {recursive:true});
+  await fs.writeFile(path.join(mockupDir, "smoke-mockup.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=", "base64"));
   const openedAt = new Date(Date.now() - 3600_000).toISOString();
   const record = {
     id: CONVERSATION_ID,
@@ -1249,7 +1265,7 @@ async function seedConversationRecord(sandboxDir) {
     final_state: "closed",
     events: [
       { id: 1, seq: 1, at: openedAt, kind: "user_message", text: HUMAN_SENTINEL },
-      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}\n[Apri report tecnico](${path.join(sandboxDir, ".archetipo/environment/technical-summary.json")})\n[Report rimosso](.archetipo/environment/technical-session.md)\n[Configurazione privata](.archetipo/config.yaml)` },
+      { id: 2, seq: 2, at: openedAt, kind: "text", text: `${AGENT_SENTINEL}\n${DRAFT_RECEIPT}\n[Apri report tecnico](${path.join(sandboxDir, ".archetipo/environment/technical-summary.json")})\n[Report rimosso](.archetipo/environment/technical-session.md)\n[Configurazione privata](.archetipo/config.yaml)\n\n![Mockup di prova](docs/mock/smoke-mockup.png)` },
     ],
   };
   await fs.writeFile(path.join(dir, `${CONVERSATION_ID}.json`), `${JSON.stringify(record, null, 2)}\n`, {

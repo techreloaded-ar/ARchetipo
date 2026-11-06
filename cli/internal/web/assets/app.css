@@ -5044,8 +5044,12 @@ body.no-workspace [data-workspace-scoped] {
 .conv-input-option span { display: grid; gap: 3px; min-width: 0; }
 .conv-input-option small { color: var(--text-dim); }
 .conv-input-preview { margin: -2px 0 6px 28px; }
-.conv-input-preview a { display: inline-block; cursor: zoom-in; }
-.conv-input-preview img { max-width: 100%; max-height: 260px; width: auto; border: 1px solid var(--border); border-radius: 6px; display: block; }
+.conv-timeline .markdown-rendered img, .conv-timeline .conv-attachment-img, .conv-input-images img { cursor: zoom-in; }
+.conv-lightbox { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; margin: 0; padding: 0; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; overflow: auto; cursor: zoom-out; }
+.conv-lightbox::backdrop { background: rgba(0, 0, 0, 0.82); }
+.conv-lightbox img { display: block; max-width: 96vw; max-height: 96vh; border-radius: 6px; cursor: zoom-in; }
+.conv-lightbox.is-zoomed { display: block; }
+.conv-lightbox.is-zoomed img { max-width: none; max-height: none; margin: 16px auto; cursor: zoom-out; }
 .conv-input-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0; }
 .conv-input-image { margin: 0; flex: 1 1 280px; max-width: 420px; }
 .conv-input-image img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }

@@ -2206,16 +2206,30 @@ describe('runtime input questions', () => {
    const html = renderConversation(openQuestion([variants], [turn[0]]), '', ui);
    assert.ok(!html.includes('conv-input-images'), `immagini di un disegno precedente: ${html}`);
   });
-  it('se un’opzione mostra già un’immagine nella preview, la galleria non ripete e le immagini stanno accanto alla scelta', () => {
+  it('la preview di un’opzione non disegna immagini: le opzioni sono testo, resta solo ciò che della preview non è immagine', () => {
+   const parse = (md) => `<p>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</p>`;
+   const onlyImage = { ...variants, options: [{ ...variants.options[0], preview: '![Variante A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, variants.options[1]] };
+   const card = questionnaireOf(renderConversation(openQuestion([onlyImage], turn), '', { markedParse: parse }));
+   assert.ok(!card.includes('conv-input-preview'), `una preview fatta solo di immagine non lascia niente: ${card}`);
+   const options = card.slice(card.indexOf('conv-input-options'));
+   assert.ok(!options.includes('<img'), `l'immagine della preview è disegnata nelle opzioni: ${options}`);
+   assert.ok(card.includes('conv-input-images'), 'la galleria resta come ripiego quando la risposta non ha mostrato le immagini');
+   assert.ok(card.includes('Variante A — interruttore') && card.includes('Variante B — pagina dedicata'), 'le opzioni restano testo');
+   const withText = { ...variants, options: [{ ...variants.options[0], preview: 'Un interruttore nella barra ![A](/x/a.png)' }, variants.options[1]] };
+   const textCard = questionnaireOf(renderConversation(openQuestion([withText], turn), '', { markedParse: parse }));
+   assert.ok(textCard.includes('conv-input-preview') && textCard.includes('Un interruttore nella barra'), `il testo della preview resta: ${textCard}`);
+   assert.ok(!textCard.slice(textCard.indexOf('conv-input-options')).includes('<img'), `l'immagine della preview resta: ${textCard}`);
+   assert.ok(textCard.indexOf('conv-input-preview') > textCard.indexOf('</label>'), 'la preview sta fuori dal label');
+  });
+  it('se la risposta dell’agente mostra già le immagini, la card è solo testo: nessuna galleria e nessuna immagine nelle opzioni', () => {
+   const parse = (md) => `<p>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</p>`;
+   const shown = [...turn.slice(0, -1), { id: 58.5, seq: 58, at: '2026-11-03T14:28:53.000Z', kind: 'text', message_id: 'm1', text: 'Due varianti:\n\n![A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, turn[turn.length - 1]];
    const withPreview = { ...variants, options: [{ ...variants.options[0], preview: '![Variante A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, variants.options[1]] };
-   const html = renderConversation(openQuestion([withPreview], turn), '', { markedParse: (md) => (md.includes('![') ? '<p><img src="/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png" alt="Variante A"></p>' : `<p>${md}</p>`) });
+   const html = renderConversation(openQuestion([withPreview], shown), '', { markedParse: parse });
    const card = questionnaireOf(html);
-   assert.ok(card.includes('conv-input-preview'), `preview assente: ${card}`);
-   assert.ok(card.includes('src="/api/workspace/file?path=%2FUsers%2Fx%2F.archetipo%2Ftmp%2Fmockups%2F1%2Felenco-a-interruttore.png&amp;conversation=conv-1"'), `l'immagine della preview non è risolta sul workspace: ${card}`);
-   assert.ok(card.indexOf('conv-input-preview') > card.indexOf('Variante A — interruttore'), 'la preview sta sotto la sua opzione');
-   assert.ok(card.indexOf('conv-input-preview') > card.indexOf('</label>'), 'la preview sta fuori dal label: un click sull’immagine non sceglie l’opzione');
-   assert.match(card, /<a href="\/api\/workspace\/file\?path=[^"]+" target="_blank" rel="noopener"><img /, `l'immagine della preview non si apre a grandezza piena: ${card}`);
-   assert.ok(!card.includes('conv-input-images'), 'la galleria non ripete ciò che le opzioni già mostrano');
+   assert.ok(!card.includes('<img'), `la card porta un'immagine: ${card}`);
+   assert.ok(!card.includes('conv-input-images'), 'nessuna galleria quando la risposta mostra già le immagini');
+   assert.ok(html.includes('elenco-a-interruttore.png&amp;conversation=conv-1" alt="A"') || html.includes('alt="A" src="/api/workspace/file?path='), `l'immagine sta nella risposta dell'agente: ${html}`);
   });
  });
  // La domanda strutturata è una cosa detta alla persona (evento `question`,
