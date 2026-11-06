@@ -357,9 +357,10 @@ func (s *streamSession) writeUserBlocks(texts ...string) error {
 }
 
 // writeUserContent writes one `user` frame of text blocks followed by one
-// image block per attachment. An empty text writes no block: the API refuses
-// an empty text block, and a message that is only an image has nothing to say
-// in words.
+// image block per image attachment. An empty text writes no block: the API
+// refuses an empty text block, and a message that is only an image has nothing
+// to say in words. Any other attachment is not a block: the agent reads it
+// from the path the text names.
 func (s *streamSession) writeUserContent(attachments []execution.Attachment, texts ...string) error {
 	blocks := make([]any, 0, len(texts)+len(attachments))
 	for _, text := range texts {
@@ -369,6 +370,9 @@ func (s *streamSession) writeUserContent(attachments []execution.Attachment, tex
 		blocks = append(blocks, map[string]any{"type": "text", "text": text})
 	}
 	for _, attachment := range attachments {
+		if !attachment.IsImage() {
+			continue
+		}
 		block, err := imageBlock(attachment)
 		if err != nil {
 			return err

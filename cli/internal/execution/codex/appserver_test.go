@@ -822,6 +822,19 @@ func TestAppServerStoresImagesOfCompletedItemsAndKeepsTheirBytesOutOfTheHistory(
 	}
 }
 
+// A file that is not an image is no item of the turn: the app server has
+// none for it, and the agent reads it from the path the text names.
+func TestTurnInputCarriesOnlyImagesAsItems(t *testing.T) {
+	input := turnInput("leggi", []execution.Attachment{
+		{ID: "a.txt", MediaType: "text/plain", Path: "/conv/a.txt"},
+		{ID: "b.png", MediaType: "image/png", Path: "/conv/b.png"},
+	})
+	encoded, _ := json.Marshal(input)
+	if string(encoded) != `[{"text":"leggi","type":"text"},{"path":"/conv/b.png","type":"localImage"}]` {
+		t.Fatalf("input = %s", encoded)
+	}
+}
+
 func TestStripItemImageDataDropsAGeneratedImageAndKeepsItsPath(t *testing.T) {
 	out := stripItemImageData(json.RawMessage(`{"item":{"type":"imageGeneration","id":"g1","result":"AAAA","savedPath":"/tmp/out.png","status":"completed"}}`))
 	if strings.Contains(string(out), `"result"`) || !strings.Contains(string(out), `"savedPath":"/tmp/out.png"`) {

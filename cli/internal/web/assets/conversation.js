@@ -113,8 +113,8 @@
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
 		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
 		// detto che il provider le accetta: il pannello non lo sa da sé.
-		attach: "Allega immagine",
-		attachRemove: "Rimuovi l'immagine",
+		attach: "Allega file",
+		attachRemove: "Rimuovi l'allegato",
 		// Blocco run
 		markRun: "Attività",
 		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
@@ -1214,23 +1214,38 @@
 		return `<ol class="conv-timeline${frozen}">${rows.join("")}</ol>`;
 	}
 
-	// Le immagini di un evento della storia, servite dall'indirizzo che
-	// l'evento stesso porta: il pannello non costruisce indirizzi.
+	// Un allegato è un'immagine quando il server lo dichiara tale: solo quella
+	// si mostra come anteprima, ogni altro file come scheda con il suo nome.
+	function attachmentIsImage(attachment) {
+		return textAt(attachment, "media_type").toLowerCase().startsWith("image/");
+	}
+	function renderAttachmentFileChip(name) {
+		return `<span class="conv-attachment-file"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/></svg><span class="conv-attachment-file-name">${escapeHtml(name)}</span></span>`;
+	}
+
+	// Gli allegati di un evento della storia, serviti dall'indirizzo che
+	// l'evento stesso porta: il pannello non costruisce indirizzi. Un'immagine
+	// si apre a grandezza piena, un file si scarica con il suo nome.
 	function renderEventAttachments(attachments) {
 		const items = attachments.filter((a) => a && textAt(a, "url"));
 		if (!items.length) return "";
 		return `<ul class="conv-attachments">${items
-			.map((a) => `<li class="conv-attachment"><a href="${escapeHtml(textAt(a, "url"))}" target="_blank" rel="noopener"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "url"))}" alt="${escapeHtml(textAt(a, "name"))}" loading="lazy"></a></li>`)
+			.map((a) => attachmentIsImage(a)
+				? `<li class="conv-attachment"><a href="${escapeHtml(textAt(a, "url"))}" target="_blank" rel="noopener"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "url"))}" alt="${escapeHtml(textAt(a, "name"))}" loading="lazy"></a></li>`
+				: `<li class="conv-attachment"><a class="conv-attachment-file-link" href="${escapeHtml(textAt(a, "url"))}" download="${escapeHtml(textAt(a, "name"))}">${renderAttachmentFileChip(textAt(a, "name"))}</a></li>`)
 			.join("")}</ul>`;
 	}
 
-	// Le immagini ancora nel compositore o in consegna: anteprime locali, con
-	// il comando per toglierle finché non sono partite.
+	// Gli allegati ancora nel compositore o in consegna: anteprime locali per
+	// le immagini, il nome per gli altri file, con il comando per toglierli
+	// finché non sono partiti.
 	function renderDraftAttachments(attachments, removable) {
-		const items = arrayAt({ a: attachments }, "a").filter((a) => a && textAt(a, "data_url"));
+		const items = arrayAt({ a: attachments }, "a").filter((a) => a && (textAt(a, "data_url") || textAt(a, "name")));
 		if (!items.length) return "";
 		return `<ul class="conv-attachments${removable ? " conv-attachments-draft" : ""}">${items
-			.map((a, i) => `<li class="conv-attachment"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "data_url"))}" alt="${escapeHtml(textAt(a, "name"))}">${
+			.map((a, i) => `<li class="conv-attachment">${attachmentIsImage(a) && textAt(a, "data_url")
+				? `<img class="conv-attachment-img" src="${escapeHtml(textAt(a, "data_url"))}" alt="${escapeHtml(textAt(a, "name"))}">`
+				: renderAttachmentFileChip(textAt(a, "name"))}${
 				removable ? `<button type="button" class="conv-attachment-remove" data-conversation-attachment-remove="${i}" title="${escapeHtml(TEXT.attachRemove)}" aria-label="${escapeHtml(TEXT.attachRemove)}">×</button>` : ""
 			}</li>`)
 			.join("")}</ul>`;
@@ -1347,10 +1362,11 @@
 			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
 		// Il comando per allegare c'è solo quando il server lo ha offerto; le
-		// anteprime delle immagini scelte stanno sopra al campo, dove si legge
-		// quello che partirà.
+		// anteprime dei file scelti stanno sopra al campo, dove si legge quello
+		// che partirà. Qualsiasi file: le immagini le vede l'agente, gli altri
+		// li legge dal disco.
 		const attachControl = ui.attachmentsOffered === true && writable
-			? `<button type="button" class="conv-attach-btn" data-conversation-attach title="${escapeHtml(TEXT.attach)}" aria-label="${escapeHtml(TEXT.attach)}"${disabled}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10.5 4.5 5.8 9.2a1.7 1.7 0 0 0 2.4 2.4l5-5a3.2 3.2 0 0 0-4.5-4.5l-5.3 5.3a4.6 4.6 0 0 0 6.5 6.5l3.6-3.6"/></svg></button><input type="file" class="conv-attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>`
+			? `<button type="button" class="conv-attach-btn" data-conversation-attach title="${escapeHtml(TEXT.attach)}" aria-label="${escapeHtml(TEXT.attach)}"${disabled}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10.5 4.5 5.8 9.2a1.7 1.7 0 0 0 2.4 2.4l5-5a3.2 3.2 0 0 0-4.5-4.5l-5.3 5.3a4.6 4.6 0 0 0 6.5 6.5l3.6-3.6"/></svg></button><input type="file" class="conv-attach-input" multiple hidden>`
 			: "";
 		// Una riga sola: il campo cresce mentre si scrive, modello e Invia gli
 		// restano accanto. I prossimi passi dell'incremento stanno sopra.

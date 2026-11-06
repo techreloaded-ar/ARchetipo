@@ -394,7 +394,7 @@ func (a *appServer) itemImages(item threadItem) []execution.Attachment {
 		if err != nil {
 			continue
 		}
-		if attachment, err := execution.StoreAttachment(a.attachmentsDir, execution.MediaTypeOfPath(path), data); err == nil {
+		if attachment, err := execution.StoreAttachment(a.attachmentsDir, "", execution.MediaTypeOfPath(path), data); err == nil {
 			images = append(images, attachment)
 		}
 	}
@@ -403,7 +403,7 @@ func (a *appServer) itemImages(item threadItem) []execution.Attachment {
 		if err != nil {
 			continue
 		}
-		if attachment, err := execution.StoreAttachment(a.attachmentsDir, block.MimeType, data); err == nil {
+		if attachment, err := execution.StoreAttachment(a.attachmentsDir, "", block.MimeType, data); err == nil {
 			images = append(images, attachment)
 		}
 	}

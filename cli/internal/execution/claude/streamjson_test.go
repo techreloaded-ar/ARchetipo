@@ -972,6 +972,35 @@ func TestSkillPreambleOf(t *testing.T) {
 	}
 }
 
+// A file that is not an image is no block of the user frame: the message
+// format has none for it, and the agent reads it from the path the text names.
+// It still comes back onto the user_message event by reference, like an image.
+func TestStreamSessionWritesNoBlockForAFileThatIsNotAnImage(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+	path := filepath.Join(t.TempDir(), "note.txt")
+	if err := os.WriteFile(path, []byte("TXTBYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment := execution.Attachment{ID: "note.txt", Name: "note.txt", MediaType: "text/plain", URL: "/api/x/note.txt", Path: path}
+
+	if err := client.SendWith(context.Background(), "leggi "+path, []execution.Attachment{attachment}); err != nil {
+		t.Fatalf("SendWith failed: %v", err)
+	}
+	frames := fake.framesReceived()
+	last := string(frames[len(frames)-1])
+	if strings.Contains(last, `"type":"image"`) || strings.Contains(last, "TXTBYTES") || strings.Contains(last, base64.StdEncoding.EncodeToString([]byte("TXTBYTES"))) {
+		t.Fatalf("the user frame carries the file as a block: %s", last)
+	}
+	fake.emit(last)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+	for _, event := range session.Events(0) {
+		if event.Kind == localrun.KindUserMessage && (len(event.Attachments) != 1 || event.Attachments[0].URL != attachment.URL || event.Attachments[0].Path != "") {
+			t.Fatalf("user_message = %#v", event)
+		}
+	}
+}
+
 // An image attached to a message travels in the same user frame as its text, as
 // the base64 block the message format defines, and comes back onto the
 // user_message event by reference only: the journal never holds the bytes.

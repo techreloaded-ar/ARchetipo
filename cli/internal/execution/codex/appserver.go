@@ -476,14 +476,18 @@ func (a *appServer) Send(ctx context.Context, text string) error {
 }
 
 // turnInput renders the items of a turn: the text, when there is one, and one
-// localImage per attachment, read by the app server from the file the viewer
-// stored. An empty text sends no text item.
+// localImage per image attachment, read by the app server from the file the
+// viewer stored. An empty text sends no text item; any other attachment is no
+// item either, the agent reads it from the path the text names.
 func turnInput(text string, attachments []execution.Attachment) []any {
 	input := make([]any, 0, 1+len(attachments))
 	if text != "" {
 		input = append(input, map[string]any{"type": "text", "text": text})
 	}
 	for _, attachment := range attachments {
+		if !attachment.IsImage() {
+			continue
+		}
 		input = append(input, map[string]any{"type": "localImage", "path": attachment.Path})
 	}
 	return input

@@ -1139,7 +1139,7 @@ type sendConversationMessageReq struct {
 	Message             string `json:"message"`
 	Skill               string `json:"skill,omitempty"`
 	PreviewFeedback     bool   `json:"preview_feedback,omitempty"`
-	// Attachments are the images sent with the message, inline. They are
+	// Attachments are the files sent with the message, inline. They are
 	// stored on disk before the turn is opened and reach the adapter through
 	// attachments, as references.
 	Attachments []attachmentUpload `json:"attachments,omitempty"`
@@ -1180,7 +1180,7 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBodyBytes)
 	if err := decodeJSON(r, &body); err != nil {
 		if bodyTooLarge(err) {
-			err = iox.NewInvalidInput(fmt.Sprintf("the message and its attachments may weigh at most %d MB", maxMessageBodyBytes>>20), "attach fewer or smaller images", err)
+			err = iox.NewInvalidInput(fmt.Sprintf("the message and its attachments may weigh at most %d MB", maxMessageBodyBytes>>20), "attach fewer or smaller files", err)
 		}
 		writeError(w, err)
 		return

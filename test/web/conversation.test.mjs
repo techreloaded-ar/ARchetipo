@@ -2379,7 +2379,7 @@ describe("allegati immagine", () => {
 
 		const offered = renderConversation(LIVE, "", { writable: true, attachmentsOffered: true });
 		assert.ok(offered.includes("data-conversation-attach"));
-		assert.ok(offered.includes('accept="image/png,image/jpeg,image/gif,image/webp"'));
+		assert.ok(offered.includes('<input type="file" class="conv-attach-input" multiple hidden>'));
 	});
 
 	it("mostra le anteprime scelte con il comando per toglierle, e quelle in consegna senza", () => {
@@ -2402,5 +2402,22 @@ describe("allegati immagine", () => {
 		// Un allegato senza indirizzo non ha niente da mostrare e non inventa un percorso.
 		const bare = renderConversation(withConversation({ events: [{ id: 1, seq: 1, kind: "user_message", text: "x", attachments: [{ id: "abc.png", name: "n" }] }] }), "", {});
 		assert.ok(!bare.includes("conv-attachment-img"));
+	});
+
+	it("un file che non è un'immagine è una scheda con il nome: da scaricare nella storia, da togliere nel compositore", () => {
+		const view = withConversation({
+			events: [{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "leggi", attachments: [{ id: "abc.md", name: "Requisiti.md", media_type: "text/markdown", url: "/INDIRIZZO-DEL-SERVER/abc.md" }] }],
+		});
+		const html = renderConversation(view, "", {});
+		assert.ok(html.includes('href="/INDIRIZZO-DEL-SERVER/abc.md" download="Requisiti.md"'));
+		assert.ok(html.includes("conv-attachment-file"));
+		assert.ok(!html.includes("conv-attachment-img"));
+		assert.ok(visibleText(html).includes("Requisiti.md"));
+		const draft = [{ name: "dati.csv", media_type: "text/csv", data_url: "data:text/csv;base64,QUJD" }];
+		const composer = renderConversation(LIVE, "", { writable: true, attachmentsOffered: true, attachments: draft, pendingMessage: "", pendingAttachments: draft });
+		assert.ok(!composer.includes('src="data:text/csv;base64,QUJD"'));
+		assert.equal((composer.match(/data-conversation-attachment-remove="0"/g) || []).length, 1);
+		assert.ok(visibleText(composer).includes("dati.csv"));
+		assert.ok(composer.includes('<input type="file" class="conv-attach-input" multiple hidden>'));
 	});
 });

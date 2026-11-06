@@ -6086,11 +6086,12 @@
 			addConversationAttachments(e.target.files);
 			e.target.value = "";
 		});
-		// Un'immagine incollata nel campo è un allegato, non testo: il browser
-		// non saprebbe che farne, e chi incolla una schermata vuole mandarla.
+		// Un file incollato nel campo è un allegato, non testo: il browser non
+		// saprebbe che farne, e chi incolla una schermata o un documento vuole
+		// mandarlo.
 		container.addEventListener("paste", (e) => {
 			if (!e.target.closest(".conv-composer-input") || !conversationCapabilities.includes("turn.attachments")) return;
-			const files = Array.from(e.clipboardData?.files || []).filter((f) => f.type.startsWith("image/"));
+			const files = Array.from(e.clipboardData?.files || []);
 			if (!files.length) return;
 			e.preventDefault();
 			addConversationAttachments(files);
@@ -7921,22 +7922,22 @@
 		}
 	}
 
-	// addConversationAttachments legge le immagini scelte o incollate e le mette
-	// in coda al prossimo messaggio, come anteprima e come base64. I formati
-	// sono quelli che il server accetta; tutto il resto viene ignorato.
-	const CONVERSATION_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+	// addConversationAttachments legge i file scelti o incollati e li mette in
+	// coda al prossimo messaggio, come anteprima e come base64. Qualsiasi
+	// formato: un tipo che il browser non conosce parte come binario e il
+	// server lo tiene com'è.
 	// attachmentUploads è la forma in cui ogni route che apre un turno riceve
-	// le immagini: nome, tipo e base64, senza l'anteprima locale.
+	// i file: nome, tipo e base64, senza l'anteprima locale.
 	function attachmentUploads(attachments) {
 		return attachments.map((a) => ({ name: a.name, media_type: a.media_type, data_base64: a.data_base64 }));
 	}
 	function addConversationAttachments(files) {
-		const accepted = Array.from(files || []).filter((f) => CONVERSATION_IMAGE_TYPES.includes(f.type));
+		const accepted = Array.from(files || []).filter((f) => f && f.size > 0);
 		if (!accepted.length) return;
 		const id = conversationsCurrentId;
 		Promise.all(accepted.map((file) => new Promise((resolve) => {
 			const reader = new FileReader();
-			reader.onload = () => resolve({ name: file.name || "immagine", media_type: file.type, data_url: String(reader.result), data_base64: String(reader.result).split(",")[1] || "" });
+			reader.onload = () => resolve({ name: file.name || "allegato", media_type: file.type || "application/octet-stream", data_url: String(reader.result), data_base64: String(reader.result).split(",")[1] || "" });
 			reader.onerror = () => resolve(null);
 			reader.readAsDataURL(file);
 		}))).then((read) => {

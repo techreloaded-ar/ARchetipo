@@ -411,7 +411,7 @@ func (s *streamSession) storeToolResultImages(content json.RawMessage, filePath 
 		if err != nil {
 			continue
 		}
-		attachment, err := execution.StoreAttachment(s.attachmentsDir, image.MediaType, data)
+		attachment, err := execution.StoreAttachment(s.attachmentsDir, "", image.MediaType, data)
 		if err != nil {
 			continue
 		}
