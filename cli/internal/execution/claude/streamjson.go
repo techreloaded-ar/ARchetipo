@@ -48,6 +48,16 @@ type frame struct {
 	Message json.RawMessage `json:"message"`
 	Result  string          `json:"result"`
 	IsError bool            `json:"is_error"`
+	// NumTurns and Origin tell a result that ended a turn of the agent apart
+	// from one the harness emits for its own bookkeeping: on resume, Claude
+	// reports a background task orphaned by the previous process through a
+	// queued notification, and closes that queue item with a result of zero
+	// turns whose origin names it. That result is not the end of the turn the
+	// person just started.
+	NumTurns int `json:"num_turns"`
+	Origin   struct {
+		Kind string `json:"kind"`
+	} `json:"origin"`
 	// IsSynthetic marks a user frame the harness composed by itself — the
 	// note it adds beside an image it resized — which is not a person's words.
 	IsSynthetic   bool     `json:"isSynthetic"`
