@@ -5543,6 +5543,12 @@ body.no-workspace [data-workspace-scoped] {
 	color: var(--accent);
 }
 
+/* La domanda strutturata, a risposta data: una riga dell'agente con il bordo
+   d'accento, perché è il punto in cui la conversazione ha chiesto una scelta. */
+.cev-question .conv-event-body {
+	border-left: 3px solid var(--accent);
+}
+
 .cev-thinking .conv-event-glyph {
 	background: none;
 	border: 1px solid var(--text-dim);

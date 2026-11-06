@@ -16,6 +16,24 @@ import (
 // preserves the original input and adds answers keyed by the question text.
 // https://code.claude.com/docs/en/agent-sdk/user-input
 func (s *streamSession) askInput(id string, payload json.RawMessage) {
+	questions, ok := parseAskUserQuestion("AskUserQuestion", payload)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.inputs[id]; !exists {
+		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
+	}
+}
+
+// parseAskUserQuestion projects the native AskUserQuestion input into neutral
+// questions. It is the one reading of that schema, shared by the pending
+// input and by the history row, so the card and the row never disagree.
+func parseAskUserQuestion(toolName string, payload json.RawMessage) ([]execution.InputQuestion, bool) {
+	if toolName != "AskUserQuestion" {
+		return nil, false
+	}
 	var native struct {
 		Questions []struct {
 			Question    string `json:"question"`
@@ -29,29 +47,25 @@ func (s *streamSession) askInput(id string, payload json.RawMessage) {
 		} `json:"questions"`
 	}
 	if json.Unmarshal(payload, &native) != nil || len(native.Questions) == 0 {
-		return
+		return nil, false
 	}
 	questions := make([]execution.InputQuestion, 0, len(native.Questions))
 	seen := map[string]bool{}
 	for index, question := range native.Questions {
 		if strings.TrimSpace(question.Question) == "" || seen[question.Question] {
-			return
+			return nil, false
 		}
 		seen[question.Question] = true
 		projected := execution.InputQuestion{ID: strconv.Itoa(index), Header: question.Header, Prompt: question.Question, AllowText: true, Multiple: question.MultiSelect}
 		for _, option := range question.Options {
 			if strings.TrimSpace(option.Label) == "" {
-				return
+				return nil, false
 			}
 			projected.Options = append(projected.Options, execution.InputOption{Value: option.Label, Label: option.Label, Description: option.Description, Preview: option.Preview})
 		}
 		questions = append(questions, projected)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.inputs[id]; !exists {
-		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
-	}
+	return questions, true
 }
 
 func (s *streamSession) pendingInputs() []execution.PendingInput {

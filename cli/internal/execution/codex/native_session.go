@@ -627,6 +627,16 @@ func (p *Provider) attachNativeClient(s *nativeSession, cfg settings, process lo
 }
 
 func (s *nativeSession) handleRequest(request rpcMessage) {
+	if questions := s.registerRequest(request); len(questions) > 0 && s.client != nil {
+		// The question the agent asked, as readable history correlated to
+		// its turn: it stays above the answer once the pending card is gone.
+		s.client.append(localrun.KindQuestion, execution.QuestionText(questions), "", request.Params)
+	}
+}
+
+// registerRequest records a server request and answers the unsupported ones;
+// it returns the projected questions of an input request, for the history.
+func (s *nativeSession) registerRequest(request rpcMessage) []execution.InputQuestion {
 	id := strings.Trim(string(request.ID), `"`)
 	now := time.Now().UTC()
 	s.mu.Lock()
@@ -645,12 +655,15 @@ func (s *nativeSession) handleRequest(request rpcMessage) {
 		}
 		s.approvals[id] = execution.PendingApproval{ID: id, ToolName: request.Method, Title: title, Args: request.Params, Options: approvalOptions(request), CreatedAt: now}
 	case "item/tool/requestUserInput":
-		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: request.Params, Questions: inputQuestions(request.Params), CreatedAt: now}
+		questions := inputQuestions(request.Params)
+		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: request.Params, Questions: questions, CreatedAt: now}
+		return questions
 	default:
 		delete(s.requests, id)
 		payload, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "error": map[string]any{"code": -32601, "message": "unsupported Codex server request"}})
 		_ = s.client.process.Send(payload)
 	}
+	return nil
 }
 
 func (s *nativeSession) handleNotification(method string, params json.RawMessage) {

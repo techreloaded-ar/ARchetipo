@@ -410,6 +410,30 @@ func TestStreamSessionTranslatesAWholeConversation(t *testing.T) {
 	}
 }
 
+// A structured question is something the agent said to the person: it enters
+// the history as readable text — header, prompt, options with descriptions and
+// previews — and not as a folded tool row that would vanish once answered. The
+// tool result still names the tool it came from.
+func TestStreamSessionProjectsAStructuredQuestionAsReadableHistory(t *testing.T) {
+	fake := newFakeClaude()
+	_, session := openStreamSession(t, fake)
+	after := lastEventID(session)
+
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"Quale variante?","header":"🧭 Costanza","multiSelect":false,"options":[{"label":"Variante A","description":"Una chip sola","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Variante B"}]}]}}]}}`)
+	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_q","content":"User selected: Variante A","is_error":false}]}}`)
+	waitFor(t, func() bool { return len(session.Events(after)) == 2 })
+
+	events := session.Events(after)
+	question := events[0]
+	wantText := "**🧭 Costanza** — Quale variante?\n- **Variante A** — Una chip sola\n\n![Variante A](/abs/mockups/1/a.png)\n\n- **Variante B**"
+	if question.Kind != localrun.KindQuestion || question.Tool != "" || question.Text != wantText || len(question.Raw) == 0 {
+		t.Fatalf("question event = %#v; want text %q", question, wantText)
+	}
+	if events[1].Kind != localrun.KindToolEnd || events[1].Tool != "AskUserQuestion" {
+		t.Fatalf("tool result = %#v", events[1])
+	}
+}
+
 // A tool that failed is a different moment from a tool that succeeded, and the
 // history has to keep them apart.
 func TestStreamSessionReportsAFailedToolResultAsAnError(t *testing.T) {

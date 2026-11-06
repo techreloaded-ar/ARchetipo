@@ -2218,6 +2218,42 @@ describe('runtime input questions', () => {
    assert.ok(!card.includes('conv-input-images'), 'la galleria non ripete ciò che le opzioni già mostrano');
   });
  });
+ // La domanda strutturata è una cosa detta alla persona (evento `question`,
+ // proiettato dall'adapter): finché è aperta la dice la card del
+ // questionario, a risposta data resta in storia come riga dell'agente,
+ // sopra la risposta, con il Markdown interpretato — immagini comprese.
+ describe('la domanda resta in storia sopra la risposta', () => {
+  const asked = [
+   { id: 8, seq: 8, at: '2026-11-05T10:00:00.000Z', kind: 'user_message', text: 'Vorrei alleggerire il riepilogo.' },
+   { id: 52, seq: 52, at: '2026-11-05T10:01:00.000Z', kind: 'thinking', text: 'RAGIONAMENTO-NASCOSTO' },
+   { id: 53, seq: 53, at: '2026-11-05T10:01:01.000Z', kind: 'question', text: '**🧭 Costanza** — Come vuoi la chip?\n- **Variante A** — Una chip sola\n\n![Variante A](/Users/x/.archetipo/tmp/mockups/1/offerta-a.png)\n\n- **Variante B** — Solo il codice' },
+  ];
+  const costanza = { id: '0', header: '🧭 Costanza', prompt: 'Come vuoi la chip?', allow_text: true, options: [{ value: 'Variante A', label: 'Variante A', description: 'Una chip sola' }, { value: 'Variante B', label: 'Variante B' }] };
+  const parse = (md) => `<md>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</md>`;
+  it('mentre è aperta la dice solo la card: nessuna riga che la ripeta', () => {
+   const html = renderConversation(Object.assign(pending([costanza]), { events: asked, last_id: 53 }), '', { markedParse: parse });
+   assert.ok(html.includes('conv-questionnaire'), 'la card è aperta');
+   assert.ok(!html.includes('cev-question'), `la riga della domanda raddoppia la card: ${html}`);
+  });
+  it('a risposta data è una riga dell’agente etichettata «domanda», in Markdown, subito sopra la risposta', () => {
+   const answered = [...asked, { id: 54, seq: 54, at: '2026-11-05T10:02:00.000Z', kind: 'user_message', text: 'Variante A' }, { id: 55, seq: 55, at: '2026-11-05T10:02:01.000Z', kind: 'tool_end', tool: 'AskUserQuestion', text: 'User selected: Variante A' }];
+   const html = renderConversation(withConversation({ events: answered, last_id: 55 }), '', { markedParse: parse });
+   const row = html.indexOf('cev-question');
+   assert.ok(row > 0, `riga della domanda assente: ${html}`);
+   assert.ok(html.slice(row).includes('<span class="conv-event-kind">domanda</span>'), 'etichetta «domanda»');
+   assert.ok(html.slice(row).includes('<md>'), 'il testo della domanda è Markdown interpretato');
+   assert.ok(html.slice(row).includes('src="/api/workspace/file?path=%2FUsers%2Fx%2F.archetipo%2Ftmp%2Fmockups%2F1%2Fofferta-a.png&amp;conversation=conv-1"'), `la preview della variante è risolta sul workspace: ${html.slice(row, row + 600)}`);
+   const answer = html.indexOf('cev-you', row);
+   assert.ok(answer > row, 'la risposta sta sotto la domanda');
+   assert.ok(!html.slice(row, answer).includes('conv-tech'), 'niente piega tecnica fra la domanda e la risposta');
+   assert.ok(!html.includes('conv-questionnaire'), 'nessuna card a domanda risposta');
+  });
+  it('senza parser Markdown resta testo escapato', () => {
+   const html = renderConversation(withConversation({ events: [...asked, { id: 54, seq: 54, at: '2026-11-05T10:02:00.000Z', kind: 'user_message', text: 'Variante A' }], last_id: 54 }), '', {});
+   assert.match(html, /\*\*🧭 Costanza\*\* — Come vuoi la chip\?/);
+   assert.doesNotMatch(html, /<img/);
+  });
+ });
  it('renders choices and free text without asking the person for JSON', () => {
   const html = renderConversation(pending([database]), '', { inputDrafts: { 'input-1': { db: { options: ['sqlite'], other: false, text: '' } } } });
   assert.match(html, /Quale database\?/);

@@ -7,7 +7,7 @@ import (
 
 // questionGuidance prefers native input when offered without making a runtime
 // feature a prerequisite for any action or ordinary conversation.
-const questionGuidance = "When exploring intent or clarifying a choice, ask one focused question at a time. Offer 2-4 concise, distinct suggested answers with their implications using the runtime's blocking structured user-input tool (request_user_input or AskUserQuestion) when available, allowing a free-text alternative when supported. Name the speaking ARchetipo personality in the question header. Otherwise ask in ordinary conversation and wait for the answer. Never treat a suggestion or silence as the person's decision."
+const questionGuidance = "When exploring intent or clarifying a choice, ask one focused question at a time. Offer 2-4 concise, distinct suggested answers with their implications using the runtime's blocking structured user-input tool (request_user_input or AskUserQuestion) when available, allowing a free-text alternative when supported. Name the speaking ARchetipo personality in the question header." + " Before a structured question, say in an ordinary message what each perspective proposes and why — with the mockup image lines where variants have one — and let the question only name the choices: text written while reasoning is never shown to the person, and option descriptions are not the place for a proposal." + " Otherwise ask in ordinary conversation and wait for the answer. Never treat a suggestion or silence as the person's decision."
 
 // PlanPrompt renders the common planning request after a provider-specific opening.
 func PlanPrompt(opening string, req Request) string {

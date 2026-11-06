@@ -34,6 +34,7 @@ type contentBlock struct {
 	Text      string          `json:"text"`
 	Thinking  string          `json:"thinking"`
 	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
 	ID        string          `json:"id"`
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
@@ -149,6 +150,13 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 				s.mu.Lock()
 				s.tools[block.ID] = block.Name
 				s.mu.Unlock()
+			}
+			// A structured question is something the agent said to the
+			// person, not a tool it ran: it enters the history as readable
+			// text, where it stays above the answer once the card is gone.
+			if questions, ok := parseAskUserQuestion(block.Name, block.Input); ok {
+				s.append(localrun.KindQuestion, execution.QuestionText(questions), "", raw)
+				continue
 			}
 			s.append(localrun.KindToolStart, "", block.Name, raw)
 		default:

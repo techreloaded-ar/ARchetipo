@@ -259,6 +259,10 @@
 	// portano, e si apre.
 	const EVENT_KINDS = {
 		text: { label: "agente", variant: "cev-agent" },
+		// Una domanda strutturata che l'agente ha posto: è una cosa detta
+		// alla persona, e resta in storia sopra la risposta anche quando la
+		// card del questionario non c'è più.
+		question: { label: "domanda", variant: "cev-agent cev-question" },
 		thinking: { label: "ragionamento", variant: "cev-thinking", technical: true },
 		worker_message: { label: "agente delegato", variant: "cev-thinking", technical: true },
 		user_message: { label: "tu", variant: "cev-you" },
@@ -410,11 +414,12 @@
 	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
 	// postura con cui la pagina rende i corpi di spec, piano e PRD.
 	//
-	function renderAgentText(events, parse, receiptLines, conversationID) {
+	function renderAgentText(events, parse, receiptLines, conversationID, entry) {
 		if (!events.length) return "";
+		const kindEntry = entry || EVENT_KINDS.text;
 		const last = events[events.length - 1];
 		const head = [
-			`<span class="conv-event-kind">${escapeHtml(EVENT_KINDS.text.label)}</span>`,
+			`<span class="conv-event-kind">${escapeHtml(kindEntry.label)}</span>`,
 		];
 		const stamp = formatTime(last.at);
 		if (stamp) {
@@ -443,7 +448,7 @@
 				: String(events[0].id);
 		const lastID = last.id === null || last.id === undefined ? "" : String(last.id);
 		const railID = firstID === lastID ? firstID : `${firstID}–${lastID}`;
-		return `<li class="conv-event cev-agent">
+		return `<li class="conv-event ${kindEntry.variant}">
 			<div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#${escapeHtml(railID)}</div>
 			<div class="conv-event-body">
 				<div class="conv-event-head">${head.join("")}</div>
@@ -1088,6 +1093,21 @@
 				turnShowedImage = false;
 			};
 			let streamMetadata = [];
+			// La domanda ancora aperta è la card del questionario, con le sue
+			// scelte da premere, non una riga della storia: finché nessuna
+			// risposta l'ha seguita, la riga tace per non dirla due volte.
+			let openQuestionID = "";
+			if (hasPendingQuestionnaire(view)) {
+				for (let i = events.length - 1; i >= 0; i--) {
+					const kind = eventKind(events[i]);
+					if (kind === "user_message") break;
+					if (kind === "question") {
+						openQuestionID = String(events[i].id);
+						break;
+					}
+				}
+			}
+			const conversationID = textAt(objectAt(view, "conversation"), "id");
 			const flushAgent = () => {
 				if (!agentRun.length) return;
 				const answer = renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"));
@@ -1129,6 +1149,10 @@
 					const previous = agentRun[agentRun.length - 1];
 					if (previous && event.message_id && previous.message_id && event.message_id !== previous.message_id) flushAgent();
 					agentRun.push(event);
+				} else if (eventKind(event) === "question") {
+					flushTechnical();
+					flushAgent();
+					if (String(event.id) !== openQuestionID) rows.push(renderAgentText([event], markedParse, [], conversationID, EVENT_KINDS.question));
 				} else {
 					flushTechnical();
 					flushAgent();

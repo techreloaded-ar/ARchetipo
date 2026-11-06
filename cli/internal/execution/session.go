@@ -235,6 +235,37 @@ type InputOption struct {
 	Preview string `json:"preview,omitempty"`
 }
 
+// QuestionText renders structured questions as the Markdown a person reads
+// in the history: the speaking header, the prompt, then one line per option
+// with its description and, when the option carries one, its preview. Both
+// adapters feed it, so the two local providers write the same row for the
+// same question.
+func QuestionText(questions []InputQuestion) string {
+	var out []string
+	for _, question := range questions {
+		prompt := strings.TrimSpace(question.Prompt)
+		if prompt == "" {
+			continue
+		}
+		if header := strings.TrimSpace(question.Header); header != "" {
+			prompt = "**" + header + "** — " + prompt
+		}
+		out = append(out, prompt)
+		for _, option := range question.Options {
+			line := "- **" + strings.TrimSpace(option.Label) + "**"
+			if description := strings.TrimSpace(option.Description); description != "" {
+				line += " — " + description
+			}
+			out = append(out, line)
+			if preview := strings.TrimSpace(option.Preview); preview != "" {
+				out = append(out, "", preview, "")
+			}
+		}
+		out = append(out, "")
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
 // PendingInput preserves the native payload for compatibility and diagnostics.
 // Questions, when provided by the adapter, let any viewer present a normal form.
 type PendingInput struct {

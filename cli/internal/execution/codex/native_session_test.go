@@ -167,7 +167,7 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	go func() {
 		done <- provider.StreamSessionEvents(eventCtx, execution.SessionRequest{Session: created.Session}, 0, func(event execution.RunEvent) error {
 			events = append(events, event)
-			if len(events) == 3 {
+			if len(events) == 4 {
 				stopEvents()
 			}
 			return nil
@@ -176,8 +176,13 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream cancellation: %v", err)
 	}
-	if len(events) != 3 || events[0].TurnID != "turn-core-1" || events[0].SubmissionID != "submission-1" || events[1].TurnID != "turn-core-1" || events[2].TurnID != "turn-core-2" {
+	if len(events) != 4 || events[0].TurnID != "turn-core-1" || events[0].SubmissionID != "submission-1" || events[1].TurnID != "turn-core-1" || events[2].TurnID != "turn-core-2" || events[3].TurnID != "turn-core-2" {
 		t.Fatalf("correlated events = %#v", events)
+	}
+	// The question the agent asked is readable history of its own turn, not
+	// only a pending card: once answered it stays above the answer.
+	if events[2].Kind != localrun.KindQuestion || events[2].Text != "A o B?" || events[2].SubmissionID != "submission-2" {
+		t.Fatalf("question event = %#v", events[2])
 	}
 }
 
