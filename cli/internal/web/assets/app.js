@@ -5008,7 +5008,7 @@
 			// of typing can reach the parser.
 			input.value = runDraft;
 			if (composerHadFocus && !input.disabled) {
-				input.focus();
+				input.focus({ preventScroll: true });
 				const at = Math.min(caret, input.value.length);
 				input.setSelectionRange(at, at);
 			}
@@ -5538,6 +5538,9 @@
 	// inside the payload. A second holder for the past ones would be a second
 	// place claiming to hold a conversation.
 	let conversationsIndex = null; // last read of GET /api/workspace/conversations
+	// La vista (eventi esclusi) dell'ultimo ridisegno fatto dal poll: un tick
+	// che la ritrova identica e senza eventi nuovi non ridisegna.
+	let conversationRenderedSignature = "";
 	let conversationsCurrentId = ""; // which thread the panel is showing
 	// L'ultima conversazione eliminata, col suo record intero: è quello che il
 	// bottone «Annulla» rimette sul disco. Vive qui e da nessun'altra parte —
@@ -6572,6 +6575,9 @@
 			if (token === conversationsIndexLoadToken) conversationsIndexBusy = false;
 		}
 		if (token !== conversationsIndexLoadToken) return;
+		// Stesso indice, stessa rail: ridisegnarla a ogni tick del poll non
+		// porta nulla e toglie lo scroll e il focus a chi la sta usando.
+		if (JSON.stringify(view) === JSON.stringify(conversationsIndex)) return;
 		conversationsIndex = view;
 		renderConversationsRail();
 	}
@@ -7667,9 +7673,18 @@
 			// started, and nothing of it may reach the one that is on screen now.
 			if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 			conversationPollFailures = 0;
+			const hadLink = conversationLink !== "";
 			conversationLink = "";
 			const appended = applyConversationView(view);
-			renderConversationPanel();
+			// Il pannello è ricostruito per intero da innerHTML: farlo a ogni
+			// tick, anche quando il server non ha detto nulla di nuovo, costa
+			// focus e scroll a chi sta leggendo. Si ridisegna solo se sono
+			// arrivati eventi o se il resto della vista è cambiato.
+			const signature = JSON.stringify(Object.assign({}, view, { events: undefined }));
+			if (appended > 0 || hadLink || signature !== conversationRenderedSignature) {
+				conversationRenderedSignature = signature;
+				renderConversationPanel();
+			}
 			// One loop, two things kept true: the conversation on screen and the
 			// index beside it. The rail's "in corso" mark and its last moment are
 			// facts about the very conversation this tick just read, so they
@@ -8252,6 +8267,15 @@
 		}
 		if (!conversationEl) return;
 		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
+		// Il questionario scorre dentro il proprio corpo — `.conv-input-body`
+		// ha un tetto in CSS — ed è un contenitore in più da riportare dov'era,
+		// per form, altrimenti ogni ridisegno lo riporta in cima mentre si
+		// leggono le opzioni.
+		const inputBodyScroll = {};
+		conversationEl.querySelectorAll("[data-conversation-input-form]").forEach((form) => {
+			const body = form.querySelector(".conv-input-body");
+			if (body && body.scrollTop) inputBodyScroll[form.getAttribute("data-conversation-input-form")] = body.scrollTop;
+		});
 		const proposalScroll = conversationEl.parentElement.querySelector(".conv-story-proposals")?.scrollTop || 0;
 		const increment = conversationEl.parentElement.querySelector(".conv-increment-body");
 		const incrementScroll = increment && { id: conversationView?.increment?.id, top: increment.scrollTop, focused: increment === document.activeElement };
@@ -8411,7 +8435,7 @@
 			input.value = conversationDraft;
 			adattaAltezzaCompositore(input);
 			if (composerHadFocus && !input.disabled) {
-				input.focus();
+				input.focus({ preventScroll: true });
 				const at = Math.min(caret, input.value.length);
 				input.setSelectionRange(at, at);
 			}
@@ -8420,12 +8444,19 @@
 			const form = Array.from(conversationEl.querySelectorAll("[data-conversation-input-form]")).find((candidate) => candidate.getAttribute("data-conversation-input-form") === answerFocus.id);
 			const field = form && form.elements[answerFocus.index];
 			if (field && !field.disabled) {
-				field.focus();
+				// Senza preventScroll il browser riporterebbe in vista il campo a
+				// ogni ridisegno, e con esso lo scroll del questionario.
+				field.focus({ preventScroll: true });
 				if (typeof answerFocus.start === "number" && typeof field.setSelectionRange === "function") field.setSelectionRange(answerFocus.start, answerFocus.end);
 			}
 		}
 		const nextDiscussion = conversationEl.querySelector(".conv-discussion");
 		if (nextDiscussion) nextDiscussion.scrollTop = discussionScroll;
+		Object.keys(inputBodyScroll).forEach((id) => {
+			const form = Array.from(conversationEl.querySelectorAll("[data-conversation-input-form]")).find((candidate) => candidate.getAttribute("data-conversation-input-form") === id);
+			const body = form && form.querySelector(".conv-input-body");
+			if (body) body.scrollTop = inputBodyScroll[id];
+		});
 		placeChoicePopover(conversationEl, "conversation");
 		placeFloatingMenu(conversationEl.querySelector(".conv-activities.is-menu"),
 			conversationEl.querySelector("[data-conversation-activities-toggle]"));

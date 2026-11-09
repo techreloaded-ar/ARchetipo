@@ -653,6 +653,11 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
     window.setTimeout = (callback, ms, ...args) => originalTimeout(callback, ms === 15000 ? 50 : ms, ...args);
     window.hangNextHistoryRead = true;
     window.historyReadAborted = false;
+    // Il pannello si ridisegna solo quando la lettura porta qualcosa di nuovo:
+    // i passi che provano la conservazione di focus e posizione *attraverso un
+    // ridisegno* mettono qui un testo, e la lettura successiva lo consegna
+    // come evento vero in coda alla storia.
+    window.queuedUpdates = [];
     window.fetch = async (input, options = {}) => {
       const parsed = new URL(typeof input === 'string' ? input : input.url, location.href);
       const path = parsed.pathname;
@@ -676,6 +681,10 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
               reject(new DOMException('Read aborted', 'AbortError'));
             }, {once:true});
           });
+        }
+        if (after >= 1002 && window.queuedUpdates.length) {
+          const next = events.length + 1;
+          events.push({id:next,seq:next,at,kind:'text',message_id:'update-'+next,text:window.queuedUpdates.shift()});
         }
         const pending = events.filter(event => event.id > after && (after < 1001 ? event.id <= 1001 : true));
         const batch = pending.slice(0,500);
@@ -709,6 +718,7 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.waitFor(`document.querySelector('[data-increment-section="intent"]')?.open`,10000,'il dettaglio della storia attiva nel laterale');
   const drawer = await page.evaluate(`(() => {const body=document.querySelector('.conv-increment-body');body.scrollTop=120;return {reads:window.historyCursors.length,top:body.scrollTop,width:document.querySelector('.conv-increment-panel').getBoundingClientRect().width};})()`);
   if (drawer.width > 390 || drawer.width < 250) throw new Error('Laterale mobile fuori schermo: '+JSON.stringify(drawer));
+  await page.evaluate(`window.queuedUpdates.push('AGGIORNAMENTO MENTRE SI LEGGE IL LATERALE')`);
   await page.waitFor(`document.querySelector('[data-increment-section="intent"]>summary') !== window.incrementFocusedSummary && document.activeElement === document.querySelector('[data-increment-section="intent"]>summary')`,10000,'un aggiornamento DOM con il focus conservato sul riepilogo del laterale');
   const drawerAfter = await page.evaluate(`({open:document.querySelector('[data-increment-section="intent"]')?.open,top:document.querySelector('.conv-increment-body')?.scrollTop})`);
   if (!drawerAfter.open || Math.abs(drawerAfter.top-drawer.top)>2) throw new Error('Il polling perde il laterale: '+JSON.stringify({drawer,drawerAfter}));
@@ -732,8 +742,8 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.evaluate(`document.querySelector('[data-inspector-tab="preview"]').click()`);
   if(!await page.evaluate(`document.getElementById('workspace-primary').classList.contains('inspector-expanded') && !document.getElementById('browser-preview').hidden`)) throw new Error('Cambiare scheda perde l’espansione');
   await page.evaluate(`document.querySelector('[data-inspector-tab="details"]').click()`);
-  const expandedReads = await page.evaluate('window.historyCursors.length');
-  await page.waitFor(`window.historyCursors.length > ${expandedReads}`,10000,'polling con il pannello espanso');
+  const expandedReads = await page.evaluate(`(window.queuedUpdates.push('AGGIORNAMENTO CON IL PANNELLO ESPANSO'), window.historyCursors.length)`);
+  await page.waitFor(`window.historyCursors.length > ${expandedReads} && document.querySelector('.conv-timeline')?.textContent.includes('AGGIORNAMENTO CON IL PANNELLO ESPANSO')`,10000,'un ridisegno con il pannello espanso');
   if(!await page.evaluate(`document.getElementById('workspace-primary').classList.contains('inspector-expanded') && document.querySelector('[data-work-panel-toggle]').getAttribute('aria-expanded')==='true'`)) throw new Error('Il polling perde espansione o stato del pulsante');
   await page.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
   if(!await page.evaluate(`!document.getElementById('workspace-primary').classList.contains('inspector-expanded') && !document.getElementById('workspace-inspector').hidden && !document.getElementById('workspace-conversation').inert`)) throw new Error('Il primo Escape deve ripristinare il pannello');
@@ -750,14 +760,15 @@ async function exerciseLiveConversationPagination(browser, url, runDir) {
   await page.evaluate(`document.querySelector('[data-run-option-id="once"]').scrollIntoView({block:'center'})`);
   const positioned = await page.evaluate(`(() => {const panel=document.querySelector('.conv-discussion');const button=document.querySelector('[data-run-option-id="once"]');const rect=button.getBoundingClientRect();const bounds=panel.getBoundingClientRect();return {top:panel.scrollTop,reads:window.historyCursors.length,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom&&button.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)),timeline:document.querySelector('.conv-timeline').clientHeight};})()`);
   if (!positioned.reachable || positioned.timeline < 150) throw new Error('Decisione tagliata o chat illeggibile: ' + JSON.stringify(positioned));
-  await page.waitFor(`window.historyCursors.length > ${positioned.reads}`, 10000, 'un aggiornamento mentre la persona legge la decisione');
+  await page.evaluate(`window.queuedUpdates.push('AGGIORNAMENTO MENTRE SI LEGGE LA DECISIONE')`);
+  await page.waitFor(`window.historyCursors.length > ${positioned.reads} && document.querySelector('.conv-timeline')?.textContent.includes('AGGIORNAMENTO MENTRE SI LEGGE LA DECISIONE')`, 10000, 'un ridisegno mentre la persona legge la decisione');
   const restored = await page.evaluate(`document.querySelector('.conv-discussion').scrollTop`);
   if (Math.abs(restored-positioned.top)>2) throw new Error('Il polling ha perso la posizione della decisione: ' + JSON.stringify({positioned,restored}));
   await page.evaluate(`document.querySelector('[data-run-option-id="once"]').click()`);
   await page.waitFor(`window.approvalResponse?.option_id === 'once' && !document.querySelector('[data-run-approval-id="scroll-approval"]')`,10000,'la decisione inviata dal controllo raggiungibile');
   await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');input.scrollIntoView({block:'center'});input.focus();input.value='Risposta dalla vista stretta';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  const reads = await page.evaluate('window.historyCursors.length');
-  await page.waitFor(`window.historyCursors.length > ${reads}`,10000,'un aggiornamento durante la scrittura');
+  const reads = await page.evaluate(`(window.queuedUpdates.push('AGGIORNAMENTO DURANTE LA SCRITTURA'), window.historyCursors.length)`);
+  await page.waitFor(`window.historyCursors.length > ${reads} && document.querySelector('.conv-timeline')?.textContent.includes('AGGIORNAMENTO DURANTE LA SCRITTURA')`,10000,'un ridisegno durante la scrittura');
   const composer = await page.evaluate(`(() => {const input=document.querySelector('.conv-composer-input');const rect=input.getBoundingClientRect();const bounds=document.querySelector('.conv-discussion').getBoundingClientRect();return {draft:input.value,reachable:rect.top>=bounds.top&&rect.bottom<=bounds.bottom};})()`);
   if (composer.draft !== 'Risposta dalla vista stretta' || !composer.reachable) throw new Error('Compositore tagliato o bozza persa: ' + JSON.stringify(composer));
   if (exceptions.length) throw new Error('Eccezioni nel layout dell’incremento: ' + JSON.stringify(exceptions));

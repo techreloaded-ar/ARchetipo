@@ -582,11 +582,41 @@ func (s *Server) conversationModelChoiceOf(ctx context.Context, providerID strin
 	if err != nil {
 		return "", nil
 	}
-	resolution := execution.ResolveModelChoice(ctx, provider, config)
-	if !resolution.Declared || resolution.Reason != "" {
-		return "", nil
+	key := providerID
+	if encoded, encodeErr := json.Marshal(config); encodeErr == nil {
+		key += "\x00" + string(encoded)
 	}
-	return resolution.Choice.Model, resolution.Choice.Options
+	s.modelChoiceMu.Lock()
+	cached, hit := s.modelChoices[key]
+	s.modelChoiceMu.Unlock()
+	if hit && time.Since(cached.at) < modelChoiceTTL {
+		return cached.model, cloneModelOptions(cached.options)
+	}
+	resolution := execution.ResolveModelChoice(ctx, provider, config)
+	entry := cachedModelChoice{at: time.Now()}
+	if resolution.Declared && resolution.Reason == "" {
+		entry.model, entry.options = resolution.Choice.Model, cloneModelOptions(resolution.Choice.Options)
+	}
+	s.modelChoiceMu.Lock()
+	if s.modelChoices == nil {
+		s.modelChoices = map[string]cachedModelChoice{}
+	}
+	s.modelChoices[key] = entry
+	s.modelChoiceMu.Unlock()
+	return entry.model, cloneModelOptions(entry.options)
+}
+
+// modelChoiceTTL is how long conversationModelChoiceOf keeps a resolved model
+// choice. The catalog changes when the runtime is upgraded or the provider
+// configuration changes; the configuration is part of the key, so only the
+// upgrade waits for the TTL. A failed resolution is kept for the same time,
+// so a missing runtime costs one probe per TTL and not one per poll tick.
+const modelChoiceTTL = 2 * time.Minute
+
+type cachedModelChoice struct {
+	model   string
+	options map[string]string
+	at      time.Time
 }
 
 func cloneModelOptions(options map[string]string) map[string]string {
