@@ -1546,11 +1546,13 @@
 			? `<button type="button" class="primary-btn" data-conversation-input-step="next"${disabled}>${escapeHtml(TEXT.inputNext)}</button>`
 			: `<button type="submit" class="primary-btn"${ui.busy || !complete ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>`;
 		const fields = renderInputQuestion(questions[step], step, draft, ui.busy, total > 1, context);
+		// Head, tabs and nav stay put; images and fields scroll inside the
+		// body, so the card never grows past its ceiling and the conversation
+		// that led to the question stays readable above it.
 		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
 				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${counter}</div>
-				${renderQuestionImages(context && context.images)}
 				${tabs}
-				<div class="conv-input-fields">${fields}</div>
+				<div class="conv-input-body">${renderQuestionImages(context && context.images)}<div class="conv-input-fields">${fields}</div></div>
 				<div class="conv-input-nav">${previous}${forward}</div>
 			</form>`;
 	}

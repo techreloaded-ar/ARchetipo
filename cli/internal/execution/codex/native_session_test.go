@@ -128,6 +128,7 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	}
 	assertFakeResponse(t, firstFake, "41", `{"decision":"accept"}`)
 
+	firstFake.emit("item/agentMessage/delta", `{"threadId":"thread-1","turnId":"turn-2","itemId":"preface","delta":"Costanza propone A, Livia propone B."}`)
 	firstFake.request(42, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-2","questions":[{"id":"choice","question":"A o B?"}]}`)
 	waitForCodexSession(t, provider, created.Session, func(snapshot execution.SessionSnapshot) bool { return snapshot.Work == execution.SessionWaitingInput })
 	inputPayload := json.RawMessage(`{"answers":{"choice":{"answers":["B"]}}}`)
@@ -167,7 +168,7 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	go func() {
 		done <- provider.StreamSessionEvents(eventCtx, execution.SessionRequest{Session: created.Session}, 0, func(event execution.RunEvent) error {
 			events = append(events, event)
-			if len(events) == 4 {
+			if len(events) == 5 {
 				stopEvents()
 			}
 			return nil
@@ -176,13 +177,14 @@ func TestNativeCodexSessionUsesPersistentThreadAcrossTurnsAndResume(t *testing.T
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("stream cancellation: %v", err)
 	}
-	if len(events) != 4 || events[0].TurnID != "turn-core-1" || events[0].SubmissionID != "submission-1" || events[1].TurnID != "turn-core-1" || events[2].TurnID != "turn-core-2" || events[3].TurnID != "turn-core-2" {
+	if len(events) != 5 || events[0].TurnID != "turn-core-1" || events[0].SubmissionID != "submission-1" || events[1].TurnID != "turn-core-1" || events[2].TurnID != "turn-core-2" || events[3].TurnID != "turn-core-2" || events[4].TurnID != "turn-core-2" {
 		t.Fatalf("correlated events = %#v", events)
 	}
 	// The question the agent asked is readable history of its own turn, not
-	// only a pending card: once answered it stays above the answer.
-	if events[2].Kind != localrun.KindQuestion || events[2].Text != "A o B?" || events[2].SubmissionID != "submission-2" {
-		t.Fatalf("question event = %#v", events[2])
+	// only a pending card: once answered it stays above the answer — and
+	// below the message that prefaced it.
+	if events[2].Kind != localrun.KindText || events[3].Kind != localrun.KindQuestion || events[3].Text != "A o B?" || events[3].SubmissionID != "submission-2" {
+		t.Fatalf("question event = %#v", events[3])
 	}
 }
 
@@ -570,4 +572,75 @@ func TestNativeCodexSessionCarriesTheAttachmentsDirectoryToItsClient(t *testing.
 	if session == nil || session.client == nil || session.client.attachmentsDir != attachmentsDir || session.client.workingDir != dir {
 		t.Fatalf("the client was not given the directories: %#v", session)
 	}
+}
+
+// The same rule the claude adapter applies: a structured question of the
+// agent's own thread that nothing readable preceded since the person's last
+// message is sent back once with the reason and never enters the history; the
+// one asked after writing is the one the person reads. A child thread's
+// question is never sent back.
+func TestNativeCodexSendsBackAStructuredQuestionWithoutAVisibleMessageOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fake := newFakeCodex()
+	provider := New(Options{Runner: &fakeRunner{outcomes: []runOutcome{probeOK}}, Starter: fake})
+	created, err := provider.CreateSession(ctx, execution.CreateSessionRequest{ConversationID: "preface", Environment: execution.SessionEnvironment{WorkingDir: t.TempDir(), ProviderConfig: map[string]any{"command": fakeCommand(t)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.ReleaseSession(ctx, execution.SessionRequest{Session: created.Session}) }()
+	startNativeCodexTurn(t, ctx, provider, created.Session, fake, "turn-core-1", "submission-1", "sviluppa", "low", nil)
+	fake.emit("item/reasoning/summaryTextDelta", `{"threadId":"thread-1","turnId":"turn-1","itemId":"r1","delta":"Andrea e Costanza hanno preferenze diverse."}`)
+	fake.request(80, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"choice","question":"A o B?"}]}`)
+	waitForFakeError(t, fake, "80", execution.QuestionPrefaceMessage)
+	if snapshot, _ := provider.ReadSession(ctx, execution.SessionRequest{Session: created.Session}); len(snapshot.PendingInputs) != 0 {
+		t.Fatalf("a question sent back is still pending: %#v", snapshot.PendingInputs)
+	}
+	// A child thread's question is the worker's business, let through as it is.
+	fake.request(81, "item/tool/requestUserInput", `{"threadId":"child-setup","turnId":"setup-turn","questions":[{"id":"db","question":"Quale database?"}]}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingInputs) == 1 })
+	fake.emit("item/agentMessage/delta", `{"threadId":"thread-1","turnId":"turn-1","itemId":"m1","delta":"Andrea propone A perché è più semplice; Costanza propone B perché è più completa."}`)
+	fake.request(82, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"choice","question":"A o B?"}]}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingInputs) == 2 })
+	questions := 0
+	native := provider.nativeSession(created.Session.Native.ID)
+	native.mu.Lock()
+	history := append([]execution.RunEvent(nil), native.events...)
+	native.mu.Unlock()
+	for _, event := range history {
+		if event.Kind == localrun.KindQuestion && event.Text == "A o B?" {
+			questions++
+		}
+	}
+	if questions != 1 {
+		t.Fatalf("question rows for the own thread = %d; want exactly the one the person reads", questions)
+	}
+	// The person's answer opens a new exchange: the next bare question is sent back again.
+	if delivery, err := provider.RespondSessionInput(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: "turn-core-1", SubmissionID: "input-1", InteractionID: "82", Answers: map[string][]string{"choice": {"B"}}}); err != nil || delivery.State != execution.DeliveryConfirmed {
+		t.Fatalf("input = %#v, %v", delivery, err)
+	}
+	fake.request(83, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"when","question":"Quando?"}]}`)
+	waitForFakeError(t, fake, "83", execution.QuestionPrefaceMessage)
+	// Sent back once per exchange and no more.
+	fake.request(84, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"when","question":"Quando?"}]}`)
+	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingInputs) == 2 })
+}
+
+// waitForFakeError waits for the fake to receive a JSON-RPC error response to
+// the given request id carrying the given message.
+func waitForFakeError(t *testing.T, fake *fakeCodex, id, message string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		fake.mu.Lock()
+		for _, received := range fake.requests {
+			if string(received.ID) == id && received.Method == "" && received.Error != nil && strings.Contains(received.Error.Message, message) {
+				fake.mu.Unlock()
+				return
+			}
+		}
+		fake.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("fake did not receive an error response id=%s with %q", id, message)
 }

@@ -138,6 +138,7 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 		snapshot, _ := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
 		return len(snapshot.PendingApprovals) == 1
 	})
+	process.emit(prefaceTextFrame)
 	process.emit(discoveryInputFrame)
 	waitFor(t, func() bool {
 		snapshot, _ := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})
@@ -154,6 +155,7 @@ func TestNativeClaudeSessionBridgesApprovalAndInterruptWithoutDestroyingTheSessi
 	if err != nil || delivery.State != execution.DeliveryConfirmed {
 		t.Fatalf("approval delivery = %#v, %v", delivery, err)
 	}
+	process.emit(prefaceTextFrame)
 	process.emit(discoveryInputFrame)
 	waitFor(t, func() bool {
 		snapshot, _ := provider.ReadSession(context.Background(), execution.SessionRequest{Session: created.Session})

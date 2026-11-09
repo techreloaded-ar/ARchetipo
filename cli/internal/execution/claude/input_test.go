@@ -4,13 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 )
+
+// prefaceTextFrame is the message a person can read before a structured
+// question: without one the question is sent back (see
+// TestStructuredQuestionWithoutAVisibleMessageIsSentBackOnce).
+const prefaceTextFrame = `{"type":"assistant","message":{"content":[{"type":"text","text":"Costanza propone di risparmiare tempo, Livia di ridurre gli errori."}]}}`
 
 const discoveryInputFrame = `{"type":"control_request","request_id":"discovery","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"header":"Costanza","question":"Quale risultato conta?","multiSelect":false,"options":[{"label":"Risparmiare tempo","description":"Ridurre il lavoro manuale","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Meno errori","description":"Aumentare la precisione"}]},{"header":"Livia","question":"Per chi?","multiSelect":true,"options":[{"label":"Clienti"},{"label":"Colleghi"}]}],"metadata":{"keep":"original"}}}}`
 
 func TestDiscoveryQuestionsRoundTripWithoutBecomingApprovals(t *testing.T) {
 	fake := newFakeClaude()
 	client, session := openConversation(t, fake)
+	fake.emit(prefaceTextFrame)
 	fake.emit(discoveryInputFrame)
 	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
 	input := client.pendingInputs()[0]
@@ -65,6 +73,7 @@ func TestDiscoveryQuestionWithdrawAndUnknownPayload(t *testing.T) {
 			t.Fatal("invented questions for an unknown payload")
 		}
 	}
+	fake.emit(prefaceTextFrame)
 	fake.emit(discoveryInputFrame)
 	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
 	fake.emit(`{"type":"control_cancel_request","request_id":"discovery"}`)
@@ -74,5 +83,69 @@ func TestDiscoveryQuestionWithdrawAndUnknownPayload(t *testing.T) {
 	client.withdrawAll()
 	if len(client.pendingInputs()) != 0 {
 		t.Fatal("question survived process cleanup")
+	}
+}
+
+// The guidance asks for a readable message before every structured question;
+// the agent keeps the explanation in its reasoning instead, which the person
+// never sees, and the question lands bare. So a question that nothing visible
+// preceded since the person's last message is sent back with the reason, and
+// never enters the history: the one the agent asks after writing is the one the
+// person reads, and the row stays above the answer once the card is gone.
+func TestStructuredQuestionWithoutAVisibleMessageIsSentBackOnce(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+	before := lastEventID(session)
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Andrea e Costanza hanno preferenze diverse."}]}}`)
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Quale risultato conta?","header":"Costanza","options":[{"label":"Risparmiare tempo"},{"label":"Meno errori"}]}]}}]}}`)
+	fake.emit(discoveryInputFrame)
+	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 1 })
+	refusal := decisionsWritten(fake)[0]
+	if refusal["request_id"] != "discovery" || refusal["behavior"] != "deny" || refusal["message"] != execution.QuestionPrefaceMessage {
+		t.Fatalf("refusal = %#v", refusal)
+	}
+	if len(client.pendingInputs()) != 0 {
+		t.Fatal("a question sent back is still pending")
+	}
+	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_q1","content":"Permission denied","is_error":true}]}}`)
+	fake.emit(prefaceTextFrame)
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_q2","name":"AskUserQuestion","input":{"questions":[{"question":"Quale risultato conta?","header":"Costanza","options":[{"label":"Risparmiare tempo"},{"label":"Meno errori"}]}]}}]}}`)
+	fake.emit(`{"type":"control_request","request_id":"discovery-2","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Quale risultato conta?","header":"Costanza","options":[{"label":"Risparmiare tempo"},{"label":"Meno errori"}]}]}}}`)
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
+	if len(decisionsWritten(fake)) != 1 {
+		t.Fatalf("the second question was answered by this layer: %#v", decisionsWritten(fake))
+	}
+	questions := 0
+	for _, event := range session.Events(before) {
+		if event.Kind == "question" {
+			questions++
+		}
+	}
+	if questions != 1 {
+		t.Fatalf("question rows = %d; want exactly the one the person reads: %#v", questions, session.Events(before))
+	}
+}
+
+// Sent back once per exchange and no more: an agent that asks again without
+// writing anything is let through, because a question refused forever would
+// leave the person with no question at all.
+func TestStructuredQuestionIsNotSentBackTwiceInOneExchange(t *testing.T) {
+	fake := newFakeClaude()
+	client, _ := openConversation(t, fake)
+	fake.emit(discoveryInputFrame)
+	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 1 })
+	fake.emit(`{"type":"control_request","request_id":"discovery-2","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Per chi?","header":"Livia","options":[{"label":"Clienti"},{"label":"Colleghi"}]}]}}}`)
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
+	if len(decisionsWritten(fake)) != 1 {
+		t.Fatalf("decisions = %#v", decisionsWritten(fake))
+	}
+	// The person's answer opens a new exchange: the next bare question is sent back again.
+	if err := client.respondInput(context.Background(), "discovery-2", map[string][]string{"0": {"Clienti"}}); err != nil {
+		t.Fatal(err)
+	}
+	fake.emit(`{"type":"control_request","request_id":"discovery-3","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Quando?","header":"Ugo","options":[{"label":"Ora"},{"label":"Dopo"}]}]}}}`)
+	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 3 })
+	if last := decisionsWritten(fake)[2]; last["request_id"] != "discovery-3" || last["behavior"] != "deny" {
+		t.Fatalf("third decision = %#v", last)
 	}
 }

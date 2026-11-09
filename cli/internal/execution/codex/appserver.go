@@ -76,24 +76,31 @@ type appServer struct {
 	process localrun.Process
 	session *localrun.Session
 
-	mu            sync.Mutex
-	nextID        int64
-	pending       map[int64]chan rpcMessage
-	threadID      string
-	turnID        string
-	seq           int
-	completed     bool
-	turnEnded     bool
-	agent         strings.Builder
-	messageText   map[string]string
-	lastFull      string
-	turnStatus    string
-	turnError     string
-	turnCoreID    string
-	submissionID  string
-	appendEvent   func(execution.RunEvent)
-	serverRequest func(rpcMessage)
-	notification  func(string, json.RawMessage)
+	mu          sync.Mutex
+	nextID      int64
+	pending     map[int64]chan rpcMessage
+	threadID    string
+	turnID      string
+	seq         int
+	completed   bool
+	turnEnded   bool
+	agent       strings.Builder
+	messageText map[string]string
+	lastFull    string
+	// saidSinceUser reports whether the agent's own thread has written
+	// anything the person can read since their last message — a message
+	// delta or a completed message, never reasoning. questionRefused
+	// remembers that one structured question of this exchange was already
+	// sent back for lack of such a message, so a second attempt goes through.
+	saidSinceUser   bool
+	questionRefused bool
+	turnStatus      string
+	turnError       string
+	turnCoreID      string
+	submissionID    string
+	appendEvent     func(execution.RunEvent)
+	serverRequest   func(rpcMessage)
+	notification    func(string, json.RawMessage)
 
 	// instructions are the messages a caller composed rather than the person,
 	// each with the text the history shows in its place, kept until the
@@ -416,6 +423,7 @@ func (a *appServer) startTurnWithPermissions(ctx context.Context, prompt, model,
 	a.agent.Reset()
 	a.messageText = make(map[string]string)
 	a.lastFull = ""
+	a.saidSinceUser, a.questionRefused = false, false
 	a.mu.Unlock()
 	result, err := a.call(ctx, methodTurnStart, params)
 	if err != nil {
@@ -613,4 +621,26 @@ func (a *appServer) FinalMessage() string {
 		return a.lastFull
 	}
 	return a.agent.String()
+}
+
+// noteUserSpoke opens a new exchange: what the agent said before the person's
+// last word no longer counts as a preface to the next question.
+func (a *appServer) noteUserSpoke() {
+	a.mu.Lock()
+	a.saidSinceUser, a.questionRefused = false, false
+	a.mu.Unlock()
+}
+
+// refuseUnprefacedQuestion reports whether a structured question must be sent
+// back because the agent has said nothing readable since the person's last
+// message — once per exchange, so a stubborn agent is slowed down and never
+// locked out. See execution.QuestionPrefaceMessage.
+func (a *appServer) refuseUnprefacedQuestion() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.saidSinceUser || a.questionRefused {
+		return false
+	}
+	a.questionRefused = true
+	return true
 }

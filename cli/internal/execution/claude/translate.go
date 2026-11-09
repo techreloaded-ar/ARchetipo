@@ -150,6 +150,9 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 		case "text":
 			s.mu.Lock()
 			s.lastAssistantText = block.Text
+			if strings.TrimSpace(block.Text) != "" {
+				s.saidSinceUser = true
+			}
 			s.mu.Unlock()
 			s.append(localrun.KindText, block.Text, "", raw)
 		case "thinking":
@@ -162,9 +165,11 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 			}
 			// A structured question is something the agent said to the
 			// person, not a tool it ran: it enters the history as readable
-			// text, where it stays above the answer once the card is gone.
-			if questions, ok := parseAskUserQuestion(block.Name, block.Input); ok {
-				s.append(localrun.KindQuestion, execution.QuestionText(questions), "", raw)
+			// text — but only once it is really put to them, in askInput.
+			// A question sent back for lack of a preface never reaches the
+			// person, and a row for it would read as a question nobody
+			// answered.
+			if _, ok := parseAskUserQuestion(block.Name, block.Input); ok {
 				continue
 			}
 			s.append(localrun.KindToolStart, "", block.Name, raw)
@@ -272,6 +277,10 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 // appendUserMessage appends what the person said, with the images they
 // attached to it.
 func (s *streamSession) appendUserMessage(text string, attachments []execution.Attachment, raw json.RawMessage) {
+	s.mu.Lock()
+	s.saidSinceUser = false
+	s.questionRefused = false
+	s.mu.Unlock()
 	s.appendWith(execution.RunEvent{Kind: localrun.KindUserMessage, Text: text, Attachments: execution.AttachmentReferences(attachments), Raw: raw})
 }
 

@@ -4987,6 +4987,23 @@ body.no-workspace [data-workspace-scoped] {
 	border-radius: 8px;
 }
 
+/* The questionnaire has a ceiling: a question is one message of the
+   conversation, not the conversation. What exceeds it scrolls inside the
+   body; head, tabs and the send control stay in sight. */
+.conv-questionnaire {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 10px 12px;
+	max-height: min(40vh, 26rem);
+}
+.conv-input-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 2px;
+}
+
 .conv-input pre,
 .conv-input textarea {
 	margin: 0;
@@ -4996,19 +5013,16 @@ body.no-workspace [data-workspace-scoped] {
 .conv-input-fields {
 	display: grid;
 	gap: 12px;
-	max-height: min(50vh, 28rem);
-	overflow-y: auto;
 	padding: 2px;
 }
 
 .conv-input fieldset {
 	min-width: 0;
 	display: grid;
-	gap: 10px;
+	gap: 8px;
 	margin: 0;
-	padding: 12px;
-	border: 1px solid var(--line);
-	border-radius: 8px;
+	padding: 0;
+	border: 0;
 }
 
 .conv-input fieldset p { margin: 0 0 4px; }
@@ -5050,9 +5064,12 @@ body.no-workspace [data-workspace-scoped] {
 .conv-lightbox img { display: block; max-width: 96vw; max-height: 96vh; border-radius: 6px; cursor: zoom-in; }
 .conv-lightbox.is-zoomed { display: block; }
 .conv-lightbox.is-zoomed img { max-width: none; max-height: none; margin: 16px auto; cursor: zoom-out; }
-.conv-input-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-2) 0; }
-.conv-input-image { margin: 0; flex: 1 1 280px; max-width: 420px; }
-.conv-input-image img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+/* The variants to choose between are thumbnails here: the lightbox has the
+   full size, and a gallery at full width was most of what pushed the
+   conversation out of view. */
+.conv-input-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-2); }
+.conv-input-image { margin: 0; flex: 0 1 auto; max-width: 100%; }
+.conv-input-image img { display: block; max-height: 140px; width: auto; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
 .conv-input-image figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .conv-input-other + .conv-input-text { margin-left: 28px; }
 .conv-input-text { display: grid; gap: 6px; }

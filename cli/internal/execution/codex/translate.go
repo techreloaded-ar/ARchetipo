@@ -144,6 +144,9 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		a.mu.Lock()
 		if owned {
 			a.agent.WriteString(delta)
+			if strings.TrimSpace(delta) != "" {
+				a.saidSinceUser = true
+			}
 		}
 		if a.messageText == nil {
 			a.messageText = make(map[string]string)
@@ -159,6 +162,9 @@ func (a *appServer) project(method string, params json.RawMessage) {
 		kind, text, tool, carries := startedItem(params)
 		if carries {
 			if kind == localrun.KindUserMessage {
+				if a.ownsNotification(params, false) {
+					a.noteUserSpoke()
+				}
 				attachments := a.attachmentsOf(text)
 				if display, echo := a.instructionEchoOf(text); echo {
 					text = display
@@ -311,6 +317,9 @@ func completedItem(a *appServer, params json.RawMessage) (kind, text, tool strin
 		a.mu.Lock()
 		if owned {
 			a.lastFull = item.Text
+			if strings.TrimSpace(item.Text) != "" {
+				a.saidSinceUser = true
+			}
 		}
 		seen := a.messageText[item.ID]
 		if a.messageText == nil {

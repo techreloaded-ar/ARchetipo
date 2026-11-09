@@ -2301,6 +2301,21 @@ describe('runtime input questions', () => {
   assert.match(html, /Scegli una o più opzioni/);
   assert.doesNotMatch(html, /type="radio"/);
  });
+ // La card ha un tetto: testata, schede e comandi restano fermi, immagini e
+ // campi scorrono nel corpo. La regola di altezza sta nel CSS, letto qui per
+ // nome, perché il renderer non misura niente.
+ it('keeps head, tabs and nav outside the scrolling body that holds images and fields', () => {
+  const card = questionnaireOf(renderConversation(pending([database, sections]), '', {}));
+  const body = card.indexOf('<div class="conv-input-body">');
+  assert.ok(body > 0, `corpo scorrevole assente: ${card}`);
+  assert.ok(card.indexOf('conv-input-head') < body && card.indexOf('conv-input-tabs') < body, 'testata e schede stanno sopra il corpo');
+  assert.ok(card.indexOf('conv-input-fields') > body, 'i campi stanno nel corpo');
+  assert.ok(card.indexOf('conv-input-nav') > card.indexOf('conv-input-fields'), 'i comandi chiudono la card');
+  const css = readFileSync(new URL('../../cli/internal/web/assets/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.conv-questionnaire\s*\{[^}]*max-height:/, 'la card dichiara un tetto di altezza');
+  assert.match(css, /\.conv-input-body\s*\{[^}]*overflow-y:\s*auto/, 'il corpo scorre');
+ });
+
  it('asks several questions one at a time, with a tab per question and the send control on the last', () => {
   const first = questionnaireOf(renderConversation(pending([database, sections]), '', {}));
   assert.match(first, /Quale database\?/);

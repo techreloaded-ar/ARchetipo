@@ -484,6 +484,7 @@ async function main(){
    await page.evaluate('document.querySelector("[data-environment-approval][data-option=allow]").click()');
    await page.send('Emulation.clearDeviceMetricsOverride');
    await until(()=>received.some(e=>e.kind==='response'&&e.id===971&&e.result?.decision==='accept'),'approval reaches same native session');
+   queue.push({targetPid:technicalStart.pid,kind:'emit',method:'item/agentMessage/delta',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'preface-home',delta:'Ugo propone dati sintetici locali; Mina chiede quali.'}});
    queue.push({targetPid:technicalStart.pid,kind:'request',id:972,method:'item/tool/requestUserInput',params:{threadId:technical.session.session.native.id,turnId:'turn-1',itemId:'input-home',questions:[{id:'fixture',header:'Dati',question:'Quali dati locali?',isOther:true,options:[{label:'Sintetici',description:'Nessun dato reale'}]}]}});
    await page.waitFor('!!document.querySelector("[data-environment-input]")',timeout,'structured question directly in Preview');
    await page.evaluate('(()=>{const form=document.querySelector("[data-environment-input]");form.querySelector("input[type=radio]").click();form.requestSubmit();})()');

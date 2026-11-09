@@ -419,7 +419,11 @@ func TestStreamSessionProjectsAStructuredQuestionAsReadableHistory(t *testing.T)
 	_, session := openStreamSession(t, fake)
 	after := lastEventID(session)
 
+	fake.emit(prefaceTextFrame)
+	waitFor(t, func() bool { return len(session.Events(after)) == 1 })
+	after = lastEventID(session)
 	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"Quale variante?","header":"🧭 Costanza","multiSelect":false,"options":[{"label":"Variante A","description":"Una chip sola","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Variante B"}]}]}}]}}`)
+	fake.emit(`{"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[{"question":"Quale variante?","header":"🧭 Costanza","multiSelect":false,"options":[{"label":"Variante A","description":"Una chip sola","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Variante B"}]}]}}}`)
 	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_q","content":"User selected: Variante A","is_error":false}]}}`)
 	waitFor(t, func() bool { return len(session.Events(after)) == 2 })
 

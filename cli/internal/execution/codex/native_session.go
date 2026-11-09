@@ -401,7 +401,20 @@ func (p *Provider) RespondSessionInput(_ context.Context, request execution.Sess
 	if len(request.Payload) == 0 {
 		return execution.SessionDelivery{SubmissionID: request.SubmissionID, TurnID: request.TurnID, State: execution.DeliveryUnsent}, fmt.Errorf("codex input response is empty")
 	}
-	return p.respondCodexServerRequest(request, request.Payload)
+	delivery, err := p.respondCodexServerRequest(request, request.Payload)
+	if err == nil && delivery.State == execution.DeliveryConfirmed {
+		// The answer is the person's word: the next question needs a preface
+		// of its own.
+		if session := p.nativeSession(request.Session.Native.ID); session != nil {
+			session.mu.Lock()
+			client := session.client
+			session.mu.Unlock()
+			if client != nil {
+				client.noteUserSpoke()
+			}
+		}
+	}
+	return delivery, err
 }
 
 func (p *Provider) respondCodexServerRequest(request execution.SessionCommandRequest, result any) (execution.SessionDelivery, error) {
@@ -655,6 +668,19 @@ func (s *nativeSession) registerRequest(request rpcMessage) []execution.InputQue
 		}
 		s.approvals[id] = execution.PendingApproval{ID: id, ToolName: request.Method, Title: title, Args: request.Params, Options: approvalOptions(request), CreatedAt: now}
 	case "item/tool/requestUserInput":
+		// A question of the agent's own thread that nothing readable preceded
+		// is sent back with the reason, once per exchange, and never enters
+		// the history: the one asked after writing is the one the person
+		// reads. A child thread's question is let through — its words are the
+		// worker's, folded elsewhere, and this layer cannot judge them.
+		scope := codexRequestScopeOf(request)
+		own := scope.ThreadID == "" || scope.ThreadID == s.metadata.Native.ID
+		if own && s.client != nil && s.client.refuseUnprefacedQuestion() {
+			delete(s.requests, id)
+			payload, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "error": map[string]any{"code": -32000, "message": execution.QuestionPrefaceMessage}})
+			_ = s.client.process.Send(payload)
+			return nil
+		}
 		questions := inputQuestions(request.Params)
 		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: request.Params, Questions: questions, CreatedAt: now}
 		return questions

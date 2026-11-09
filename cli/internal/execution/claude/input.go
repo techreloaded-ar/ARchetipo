@@ -9,7 +9,27 @@ import (
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
+
+// refuseUnprefacedQuestion sends a structured question back when the agent
+// has said nothing the person can read since their last message, once per
+// exchange: the second attempt goes through whatever preceded it, so a
+// stubborn agent is slowed down and never locked out. It reports whether the
+// question was refused.
+func (s *streamSession) refuseUnprefacedQuestion(id string) bool {
+	s.mu.Lock()
+	if s.saidSinceUser || s.questionRefused {
+		s.mu.Unlock()
+		return false
+	}
+	s.questionRefused = true
+	s.mu.Unlock()
+	// A write that fails means the process is gone, and a process that is
+	// gone has no question left to refuse.
+	_ = s.sendDecision(id, map[string]any{"behavior": "deny", "message": execution.QuestionPrefaceMessage})
+	return true
+}
 
 // AskUserQuestion uses the same can_use_tool transport as permissions, but
 // answers are product choices, never permission decisions. The native response
@@ -21,10 +41,18 @@ func (s *streamSession) askInput(id string, payload json.RawMessage) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.inputs[id]; !exists {
-		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
+	_, exists := s.inputs[id]
+	s.mu.Unlock()
+	if exists {
+		// The same request id twice is a replay, not a second question.
+		return
 	}
+	// The question enters the history here, as something the agent said to
+	// the person, where it stays above the answer once the card is gone.
+	s.append(localrun.KindQuestion, execution.QuestionText(questions), "", payload)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
 }
 
 // parseAskUserQuestion projects the native AskUserQuestion input into neutral
