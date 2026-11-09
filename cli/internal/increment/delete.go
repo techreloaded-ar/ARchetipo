@@ -98,7 +98,13 @@ func (s *Service) DeletionPlan(ctx context.Context, id string) (DeletionPlan, er
 		return plan, err
 	}
 	plan.Dirty = status != ""
-	count, err := git(ctx, s.Config.ProjectRoot, "rev-list", "--count", plan.HeadSHA, "^refs/heads/"+r.BaseBranch)
+	// Commits already on the fork base (possibly fetched from origin ahead of
+	// the local base branch) are not the increment's own work.
+	countArgs := []string{"rev-list", "--count", plan.HeadSHA, "^refs/heads/" + r.BaseBranch}
+	if r.BaseSHA != "" {
+		countArgs = append(countArgs, "^"+r.BaseSHA)
+	}
+	count, err := git(ctx, s.Config.ProjectRoot, countArgs...)
 	if err != nil {
 		return plan, err
 	}
