@@ -263,6 +263,7 @@ func builtin() Template {
 			{WorkspaceAction: WorkspaceAction{ID: "wiki-query", Label: "Chiedi su questa pagina", Skill: "archetipo-wiki"}, Placement: "page", RequiresWiki: true},
 		},
 		Skills: []string{
+			"archetipo-implement",
 			"archetipo-inception",
 			"archetipo-plan",
 			"archetipo-spec",
@@ -276,6 +277,12 @@ func builtin() Template {
 				Label:    "Pianifica",
 				Skill:    "archetipo-plan",
 				Statuses: []domain.Status{domain.StatusTodo},
+			},
+			{
+				ID:       "implement",
+				Label:    "Implementa",
+				Skill:    "archetipo-implement",
+				Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
 			},
 		},
 		WorkspaceActions: []WorkspaceAction{
@@ -316,6 +323,13 @@ func builtin() Template {
 				Summary: "Ci sono spec in TODO: il passo successivo è pianificarne una.",
 				Scope:   ScopeSpec,
 				Action:  "plan",
+			},
+			{
+				ID:      "da-implementare",
+				Label:   "Da implementare",
+				Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
+				Scope:   ScopeSpec,
+				Action:  "implement",
 			},
 			{
 				ID:      "completo",

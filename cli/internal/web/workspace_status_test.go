@@ -456,9 +456,18 @@ func TestWorkspaceStatusScopedToASpecRecommendsImplementingThatSpec(t *testing.T
 
 	view := readScopedWorkspaceStatus(t, srv, "US-902")
 
-	assertStageMatchesArchetype(t, view, "completo")
-	if view.NextStep != nil {
-		t.Fatal("retired implementation ceremony is recommended", view.NextStep)
+	assertStageMatchesArchetype(t, view, "da-implementare")
+	if view.NextStep == nil {
+		t.Fatal("a PLANNED spec has a next step, but next_step is null")
+	}
+	if view.NextStep.Action != "implement" {
+		t.Fatalf("next_step.action = %q, want implement", view.NextStep.Action)
+	}
+	if view.NextStep.Spec == nil || view.NextStep.Spec.Code != "US-902" {
+		t.Fatalf("next_step.spec = %+v, want US-902", view.NextStep.Spec)
+	}
+	if !view.NextStep.Runnable || view.NextStep.UnavailableReason != "" {
+		t.Fatalf("the implement step is not runnable: %+v", view.NextStep)
 	}
 }
 

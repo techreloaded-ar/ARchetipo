@@ -171,7 +171,8 @@ func TestAConversationIdleForDaysIsResumedByTheNextViewer(t *testing.T) {
 func TestARestartWhileAnActionWasRunningClosesItInsteadOfLeavingItRunning(t *testing.T) {
 	srv, provider, conn := newActionSessionServer(t)
 	cfg := srv.session().cfg
-	status, started := startSpecActionIn(t, srv, "US-901", "plan", "")
+	persistPlanFor(t, conn, "US-901")
+	status, started := startSpecActionIn(t, srv, "US-901", "implement", "")
 	if status != http.StatusCreated {
 		t.Fatalf("starting the action = %d: %v", status, started)
 	}
@@ -206,7 +207,8 @@ func TestARestartWhileAnActionWasRunningClosesItInsteadOfLeavingItRunning(t *tes
 func TestARestartWithoutTheOriginalProviderStillClosesTheAction(t *testing.T) {
 	srv, provider, conn := newActionSessionServer(t)
 	cfg := srv.session().cfg
-	status, started := startSpecActionIn(t, srv, "US-901", "plan", "")
+	persistPlanFor(t, conn, "US-901")
+	status, started := startSpecActionIn(t, srv, "US-901", "implement", "")
 	if status != http.StatusCreated {
 		t.Fatalf("starting the action = %d: %v", status, started)
 	}

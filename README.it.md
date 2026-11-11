@@ -86,10 +86,17 @@ richiede report reali e integri per tutti i check, legati al codice corrente;
 la pubblicazione li ricontrolla prima di aprire la PR.
 L’esecuzione remota richiede ancora un ulteriore livello runtime.
 
-Questo branch rimuove le skill `archetipo-autopilot`, `archetipo-design`,
-`archetipo-implement` e `archetipo-review`, insieme al vecchio percorso degli
+Il percorso classico del backlog resta disponibile e non passa da un incremento:
+una storia in TODO si pianifica con **Pianifica** (`archetipo-plan`), una storia
+pianificata si realizza con **Implementa** (`archetipo-implement`) direttamente nel
+checkout del progetto e finisce in REVIEW. Il worktree per storia viene creato solo
+con `worktree.enabled: true`; nessuna PR viene aperta e il passaggio a DONE resta
+una decisione manuale di chi prova il risultato.
+
+Questo branch rimuove le skill `archetipo-autopilot`, `archetipo-design` e
+`archetipo-review`, insieme al vecchio percorso degli
 incrementi con backlog interno, approvazione dell’intento e review che integra branch
-nel viewer. `init` elimina quelle quattro skill gestite durante l’aggiornamento;
+nel viewer. `init` elimina quelle tre skill gestite durante l’aggiornamento;
 conserva le skill personali. I lavori storici restano leggibili: il loro workflow
 non viene ricreato. I comandi CLI per gestire gli artefatti aziendali restano disponibili.
 

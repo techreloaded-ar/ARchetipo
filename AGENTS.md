@@ -19,10 +19,14 @@ The three layers have distinct responsibilities:
 
 Product work uses `archetipo-increment`, `archetipo-environment` and optionally
 `archetipo-wiki`. Optional enterprise artifact work retains the simplified
-`archetipo-inception`, `archetipo-spec` and `archetipo-plan` methods. The costly
-`autopilot`, `design`, `implement` and `review` skills and the increment's internal
-story delivery state machine have been removed. Do not reintroduce them as a hidden
-fallback. Historical records remain inspectable; only explicit user requests may
+`archetipo-inception`, `archetipo-spec` and `archetipo-plan` methods, and the
+classic backlog path `plan` → `implement` → REVIEW: `archetipo-implement` carries
+out a persisted plan in the project checkout and hands the story to the person,
+who alone moves it to DONE. That path never creates an increment, never asks for a
+specification approval and never opens a PR; a per-story worktree exists only with
+`worktree.enabled: true`. The costly `autopilot`, `design` and `review` skills and
+the increment's internal story delivery state machine have been removed. Do not
+reintroduce them as a hidden fallback. Historical records remain inspectable; only explicit user requests may
 remove their data.
 
 ## Product and enterprise contract
@@ -64,7 +68,8 @@ remove their data.
 ## Process Template
 
 The built-in `fabbrica-del-software` Template is revision `2.0.0`. It declares
-business labels, optional artifact operations and installed skills. Its optional
+business labels, optional artifact operations and installed skills. Its spec
+actions are `plan` (TODO) and `implement` (PLANNED, IN PROGRESS). Its optional
 planning/documentation offers are not prerequisites for creating product work.
 The selected identity is recorded in `.archetipo/config.yaml`. Keep this identity
 stable for existing workspace configuration; no delivery skill should be installed

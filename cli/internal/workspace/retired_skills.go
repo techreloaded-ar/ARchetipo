@@ -7,7 +7,7 @@ import (
 
 // Retired managed methods are removed on upgrade. Personal skills and project
 // artifacts are untouched. The names are owned by this product's distribution.
-var retiredSkills = []string{"archetipo-autopilot", "archetipo-design", "archetipo-implement", "archetipo-review"}
+var retiredSkills = []string{"archetipo-autopilot", "archetipo-design", "archetipo-review"}
 
 func IsRetiredSkill(name string) bool {
 	for _, retired := range retiredSkills {

@@ -70,10 +70,17 @@ explicitly declared safe beside the app. Setup, incompatible builds and cleanup
 remain exclusive. Readiness and publication require intact machine reports for
 every declared check, matching the current candidate.
 
-This branch retires the `autopilot`, `design`, `implement` and `review` skills,
+The classic backlog path remains available and never goes through an increment:
+a TODO story is planned with **Pianifica** (`archetipo-plan`), a planned story is
+carried out with **Implementa** (`archetipo-implement`) directly in the project
+checkout and ends in REVIEW. A per-story worktree is created only with
+`worktree.enabled: true`; no PR is opened, and moving the story to DONE stays a
+manual decision of the person who tries the result.
+
+This branch retires the `autopilot`, `design` and `review` skills,
 internal increment delivery backlogs and viewer branch integration. Product
-development starts after the person approves the current specification revision.
-`init` removes those four managed skills when updating, preserving personal skills.
+increments start after the person approves the current specification revision.
+`init` removes those three managed skills when updating, preserving personal skills.
 Historical work remains inspectable. Optional PRD, story planning and Wiki tools
 remain available, alongside the artifact-management CLI.
 
