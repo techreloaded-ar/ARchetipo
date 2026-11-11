@@ -1032,7 +1032,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 			NextTurn: execution.TurnConfiguration{Model: model, Options: modelOptions, PermissionProfile: discovery.PermissionProfile},
 		}
 		if title := strings.TrimSpace(spec.title); title != "" {
-			record.Title = truncateRunes(title, conversationTitleLimit)
+			record.Title = plainTitle(title, conversationTitleLimit)
 		}
 		if err := ws.conversationStore().Save(ctx, record); err != nil {
 			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})

@@ -273,7 +273,7 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 	for _, record := range records {
 		for _, link := range record.LinkedStories {
 			if link.Code == spec.Code {
-				work := specWorkView{ID: record.ID, Title: record.Title, StatusLabel: tpl.IncrementStatusLabel(record.Status), ConversationID: record.ConversationID}
+				work := specWorkView{ID: record.ID, Title: inlineMarkdownMarkers.Replace(record.Title), StatusLabel: tpl.IncrementStatusLabel(record.Status), ConversationID: record.ConversationID}
 				if _, readErr := ws.conversationStore().GetMetadata(ctx, record.ConversationID); readErr != nil {
 					work.ConversationID = ""
 				}

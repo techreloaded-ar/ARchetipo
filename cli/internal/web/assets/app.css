@@ -4339,6 +4339,12 @@ body.no-workspace [data-workspace-scoped] {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	/* Tronca dall'inizio: la home di chi guarda è la parte che può mancare. */
+	direction: rtl;
+	text-align: left;
+	/* È il percorso a cedere spazio, prima che i comandi vadano a capo. */
+	flex: 100 1 0;
+	min-width: 8ch;
 }
 
 .conv-head-spacer {
@@ -7740,6 +7746,22 @@ body.no-workspace [data-workspace-scoped] {
 .conv-activity-selection { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); background: var(--accent-soft); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); font-size: 13px; }
 .card-actions { display: flex; gap: var(--space-1); flex-wrap: wrap; padding-top: var(--space-2); margin-top: var(--space-3); border-top: 1px solid var(--border); }
 .card-actions > .ghost-btn { font-size: 12px; min-height: 30px; }
+/* I comandi di una card restano scritti ma senza cornice finché la card non è
+   sotto il puntatore o non ha il fuoco: con cento card erano duecento riquadri
+   che pesavano quanto i titoli. Lo spazio non cambia, quindi niente si sposta. */
+.card-actions { border-top: 0; padding-top: 0; margin-left: calc(-1 * var(--space-2)); }
+.card-actions > .ghost-btn { padding: 0 var(--space-2); border-color: transparent; background: transparent; color: var(--text-dim); }
+.card:hover .card-actions > .ghost-btn,
+.card:focus-within .card-actions > .ghost-btn { border-color: var(--border); background: var(--surface); color: var(--text); }
+.card .card-actions > .ghost-btn:hover { border-color: var(--accent); background: var(--surface-3); color: var(--accent); }
+.card-actions > .card-action-choices { margin-left: var(--space-2); }
+/* La priorità chiede attenzione solo finché c'è lavoro da fare: su una storia
+   conclusa resta scritta nella targa, senza colore. */
+.column[data-id="done"] .card { --card-accent: transparent; }
+.column[data-id="done"] .priority-badge { color: var(--text-dim); background: transparent; border-color: var(--border); }
+/* Una colonna vuota resta un bersaglio per il trascinamento ma cede larghezza
+   a quelle che hanno card da mostrare. */
+.column:has(> .column-body > .empty-column) { flex-basis: 180px; }
 .card-action-choices { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: var(--space-2); color: var(--text-muted); font-size: 12px; }
 .card-action-choices .primary-btn { min-height: 32px; font-size: 12px; }
 .card-action-reason { flex-basis: 100%; font-size: 12px; line-height: 1.5; }
@@ -8049,6 +8071,10 @@ body.no-workspace [data-workspace-scoped] {
 .workspace-primary.has-inspector.inspector-expanded { grid-template-columns:minmax(0,1fr); }
 .workspace-primary.inspector-expanded > #workspace-conversation { visibility:hidden; }
 .workspace-primary.inspector-expanded > .workspace-inspector { position:absolute; inset:0; grid-area:1 / 1; width:100%; z-index:35; border:0; }
+/* A pannello aperto i suoi tab nominano già Preview e Specifica: ripeterli
+   nella testata la mandava su tre righe. Resta il solo comando che lo chiude. */
+.workspace-primary.has-inspector [data-conversation-preview],
+.workspace-primary.has-inspector [data-increment-panel="open"] { display:none; }
 .conv-panel-toggle[aria-expanded="true"] { color:var(--accent); background:var(--surface-3); }
 .conv-panel-toggle:hover:not(:disabled) { color:var(--accent); background:var(--surface-3); border-color:transparent; }
 .conv-panel-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }

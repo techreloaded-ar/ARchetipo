@@ -1621,7 +1621,9 @@
 				const state = textAt(phase, "state");
 				return `<li class="conv-phase is-${escapeHtml(state || "todo")}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHtml(textAt(phase, "label"))}${renderPhaseStories(phase)}</li>`;
 			}).join("")}</ol>`
-			: dir ? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>` : "";
+			// Il segno &lrm; tiene la barra iniziale a sinistra: .conv-dir tronca
+			// dall'inizio, perché la coda del percorso è il nome della cartella.
+			: dir ? `<code class="conv-dir" title="${escapeHtml(dir)}">&lrm;${escapeHtml(dir)}</code>` : "";
 		const providerHtml = agent
 			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";

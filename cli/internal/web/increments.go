@@ -88,6 +88,9 @@ func (s *Server) incrementService(ws *workspaceSession) *increment.Service {
 	return service
 }
 func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r increment.Record) incrementView {
+	// I record scritti prima di plainTitle portano ancora i marcatori Markdown:
+	// la vista li toglie, il record resta com'è.
+	r.Title = inlineMarkdownMarkers.Replace(r.Title)
 	view := incrementView{Record: r, Actions: []incrementControl{}, QuickActions: []incrementControl{}, DeleteLabel: "Elimina incremento"}
 	tpl, err := s.resolveTemplate(ws)
 	if err != nil {
@@ -222,6 +225,7 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	r, err := s.incrementService(ws).Read(record.IncrementID)
 	if err != nil {
 		if receipt, receiptErr := s.incrementService(ws).DeletionReceipt(record.IncrementID); receiptErr == nil && receipt.Deleted {
+			receipt.Record.Title = inlineMarkdownMarkers.Replace(receipt.Record.Title)
 			view.Increment = &incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
 			return
 		}
@@ -285,7 +289,7 @@ func (s *Server) handleCreateIncrement(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if strings.TrimSpace(body.Title) == "" {
-		body.Title = truncateRunes(strings.TrimSpace(body.Request), 72)
+		body.Title = plainTitle(strings.TrimSpace(body.Request), 72)
 	}
 	service := s.incrementService(ws)
 	created, err := service.CreateWithMode(ctx, body.Title, body.Request, body.OriginConversationID, body.DevelopmentMode)

@@ -8253,7 +8253,7 @@
   window.WorkspacePanels?.configure({
 			key: previewTarget ? previewTarget.root + ":" + previewTarget.id : "",
 			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
-			detailsLabel: conversationView?.increment ? "Specifica e verifiche" : "Storie",
+			detailsLabel: conversationView?.increment ? "Specifica e decisioni" : "Storie",
 		});
 		if (window.WorkspacePanels?.detailsSelected()) {
 			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
