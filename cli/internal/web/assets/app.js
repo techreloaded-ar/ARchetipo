@@ -552,6 +552,13 @@
 	const topbarMoreMenu = document.getElementById("topbar-more-menu");
 	const topbarMoreDropdown = document.getElementById("topbar-more");
 	const themeToggle = document.getElementById("theme-toggle");
+	const reviewTab = document.getElementById("review-tab");
+	const reviewBranch = document.getElementById("review-branch");
+	const reviewDiff = document.getElementById("review-diff");
+	const reviewStatus = document.getElementById("review-status");
+	const reviewRequestBtn = document.getElementById("review-request-btn");
+	const reviewApproveBtn = document.getElementById("review-approve-btn");
+	const reviewDossier = document.getElementById("review-dossier");
 	const densityToggle = document.getElementById("density-toggle");
 
 	const THEME_KEY = "archetipo.theme";
@@ -668,12 +675,17 @@
 	});
 
 	let currentSpecCode = null;
+	let reviewComments = []; // inline comments for the spec currently under review
+	let reviewLoaded = false; // whether the review tab has been loaded for this spec
+	let currentReview = null; // ultima review letta: serve a contare i rilievi del dossier
+	let reviewBranchName = ""; // ramo della spec in revisione, "" quando non ne ha
 	// I file grandi del diff nascono ripiegati: costruire una riga DOM per ogni
 	// riga di un file generato blocca il thread, e quasi mai è quello che si sta
 	// rivedendo. La mappa tiene, per ogni percorso del file, la funzione che lo
 	// apre — sotto tutti e due i suoi nomi, perché un commento sul lato «old» è
 	// ancorato al vecchio percorso.
 	const DIFF_FILE_COLLAPSE_LINES = 400;
+	let diffFileExpanders = new Map();
 	let currentSpecSnapshot = null; // last loaded spec (for cancel + re-render after save)
 	let currentPlanSnapshot = null; // last loaded plan (for cancel + re-render after save)
 	let boardSnapshot = null; // last loaded board (for undo on failed drag)
@@ -846,6 +858,9 @@
 	addTaskBtn.addEventListener("click", () => addTaskRow());
 	// Un solo listener per tutto il diff invece di uno per riga: su un diff di
 	// migliaia di righe la differenza è tutta nel costo di costruzione.
+	reviewDiff.addEventListener("click", onDiffClick);
+	reviewRequestBtn.addEventListener("click", onRequestChanges);
+	reviewApproveBtn.addEventListener("click", onApprove);
 	// The action chips are re-rendered on every open, so the handler lives on
 	// their container instead of on buttons that no longer exist. Every
 	// container the panel can be mounted on is bound once, here: which of them
@@ -2587,12 +2602,20 @@
 	}
 
 	function askTransition(code, columnLabel, preview) {
-        if (!(preview.impacts || []).length) return Promise.resolve(true);
+		// Uno spostamento senza effetti non chiede conferma; un'approvazione o
+		// una richiesta di modifiche sì, perché registrano un verdetto.
+		if (!(preview.impacts || []).length && !preview.recommended_action)
+			return Promise.resolve(true);
 		transitionConfirmTitle.textContent = TEXT.transitionConfirmTitle(
 			code,
 			columnLabel,
 		);
-		transitionConfirmIntro.textContent = TEXT.transitionRaw;
+		transitionConfirmIntro.textContent =
+			preview.recommended_action === "approve"
+				? TEXT.transitionViaApprove
+				: preview.recommended_action === "request_changes"
+					? TEXT.transitionViaRequestChanges
+					: TEXT.transitionRaw;
 		const impacts = preview.impacts || [];
 		transitionImpactList.innerHTML = "";
 		const lines = impacts.length
@@ -2636,7 +2659,23 @@
 			return;
 		}
 		try {
-            await apiPost("/api/board/move", {code, to, ...(options.anchor || {})});
+			if (preview.recommended_action === "approve") {
+				await apiPost(`/api/spec/${encodeURIComponent(code)}/approve`, {});
+			} else if (preview.recommended_action === "request_changes") {
+				await apiPost(
+					`/api/spec/${encodeURIComponent(code)}/request-changes`,
+					{},
+				);
+			} else {
+				// L'ancora vale solo sullo spostamento grezzo: i due flussi
+				// corretti portano la spec dove decidono loro, e l'ordine della
+				// colonna d'arrivo non è quello che la persona stava curando.
+				await apiPost("/api/board/move", {
+					code,
+					to,
+					...(options.anchor || {}),
+				});
+			}
 			showToast(TEXT.transitionDone(code, columnLabel), "ok");
 			await loadBoard();
 			await loadWorkspaceStatus();
@@ -2685,6 +2724,8 @@
 		planStatus.textContent = "";
 		showSpecView();
 		showPlanView();
+		reviewLoaded = false;
+		reviewComments = [];
 		try {
 			const detail = await apiGet(`/api/spec/${encodeURIComponent(code)}`);
 			currentSpecSnapshot = detail.spec || {};
@@ -2704,6 +2745,7 @@
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
+			updateReviewTabVisibility(currentSpecSnapshot);
 			specStatus.textContent = "";
 		} catch (err) {
 			specStatus.textContent = TEXT.loadFailed(err.message || err);
@@ -3032,6 +3074,9 @@
 		if (name === "story" && !specForm.classList.contains("hidden")) {
 			setTimeout(() => specEditor.codemirror.refresh(), 0);
 		}
+		if (name === "review" && !reviewLoaded) {
+			loadReview();
+		}
 	}
 
 	function closeModal() {
@@ -3053,9 +3098,18 @@
 		currentSpecCode = null;
 		currentSpecSnapshot = null;
 		currentPlanSnapshot = null;
+		reviewComments = [];
+		reviewLoaded = false;
+		currentReview = null;
 		// Il pannello di revisione è unico e riusato: il DOM del diff lasciato
 		// dentro un pannello nascosto continua a pesare su ogni ridisegno della
 		// board, ed è quello che costringeva a ricaricare la pagina.
+		diffFileExpanders = new Map();
+		reviewDiff.innerHTML = "";
+		reviewDossier.innerHTML = "";
+		reviewBranch.innerHTML = "";
+		reviewBranchName = "";
+		reviewTab.classList.add("hidden");
 	}
 
 	// ---- Toast ---------------------------------------------------------------
@@ -3307,6 +3361,418 @@
 		return parts.join("\u0000");
 	}
 
+	// ---- Review (diff + inline comments) -----------------------------------
+
+	function updateReviewTabVisibility(spec) {
+		const inReview = spec && spec.status === "REVIEW";
+		reviewTab.classList.toggle("hidden", !inReview);
+		if (!inReview && reviewTab.classList.contains("active")) {
+			activateTab("story");
+		}
+	}
+
+	// Il dossier e il verdetto sono quello che serve per decidere, il diff è
+	// quello che serve per capire: le due richieste partono insieme ma si
+	// aspettano separatamente, così «Approva» è premibile prima che il diff
+	// abbia finito di arrivare.
+	async function loadReview() {
+		reviewLoaded = true;
+		reviewStatus.textContent = "";
+		reviewStatus.className = "status-msg";
+		reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffLoading)}</div>`;
+		const code = currentSpecCode;
+		const pendingDiff = apiGet(`/api/spec/${encodeURIComponent(code)}/diff`);
+		// Se è la review a fallire, il diff non viene mai atteso: il catch vuoto
+		// evita la unhandled rejection, l'errore vero lo riporta l'await.
+		pendingDiff.catch(() => {});
+		try {
+			const review = await apiGet(
+				`/api/spec/${encodeURIComponent(code)}/review`,
+			);
+			currentReview = review || null;
+			reviewComments = (review && review.comments) || [];
+			renderDossier(review || {});
+			const diff = await pendingDiff;
+			renderReviewBranch(diff);
+			renderDiff(diff);
+		} catch (err) {
+			reviewLoaded = false;
+			reviewDiff.innerHTML = `<div class="review-empty">${escapeHtml(TEXT.diffError(err.message || err))}</div>`;
+		}
+	}
+
+	function renderReviewBranch(diff) {
+		const parts = [];
+		if (diff.branch)
+			parts.push(
+				`<span class="review-chip">⎇ ${escapeHtml(diff.branch)}</span>`,
+			);
+		parts.push(
+			diff.base_fallback
+				? `<span class="review-chip" title="${escapeHtml(TEXT.baseFallbackHint)}">base ${escapeHtml(diff.base || "")} ⚠</span>`
+				: `<span class="review-chip">base ${escapeHtml(diff.base || "")}</span>`,
+		);
+		if (diff.branch)
+			parts.push(
+				`<span class="review-chip">+${diff.ahead || 0} / −${diff.behind || 0}</span>`,
+			);
+		reviewBranch.innerHTML = parts.join("");
+		// Integrare vuol dire fondere un ramo: senza ramo — worktree spento, o
+		// spec mai partita in un worktree — il server rifiuta e basta, e il
+		// bottone prometteva una chiusura che non poteva dare. Chi vuole chiudere
+		// lo stesso una spec respinta passa da Approva, che di rami non ne ha
+		// bisogno.
+		reviewBranchName = diff.branch || "";
+		updateCloseButton();
+	}
+
+	// updateCloseButton dà al bottone di chiusura la faccia del caso in cui si
+	// trova. La spec si chiude sempre — è la persona a decidere, non il dossier —
+	// ma le due cose che può fare non sono la stessa: approvare un incremento che
+	// il dossier ha promosso, o chiuderne uno che dichiara bloccato. L'etichetta
+	// e lo stile dicono quale delle due, e il ramo dice se l'integrazione viaggia
+	// con la chiusura: è la stessa condizione che il server usa per decidere se
+	// integrare, cioè un ramo registrato sulla spec.
+	//
+	// Dossier e diff arrivano da due richieste separate e in ordine non garantito,
+	// quindi ognuna delle due aggiorna quello che sa e richiama questa: il
+	// bottone si compone da sé, invece di dipendere da chi è arrivato prima.
+	function updateCloseButton() {
+		const blockers =
+			((currentReview && currentReview.dossier) || {}).blockers || [];
+		const forced = blockers.length > 0;
+		const integrates = reviewBranchName !== "";
+		reviewApproveBtn.textContent = forced
+			? integrates
+				? TEXT.closeForceIntegrate
+				: TEXT.closeForce
+			: integrates
+				? TEXT.closeApproveIntegrate
+				: TEXT.closeApprove;
+		reviewApproveBtn.title = forced
+			? TEXT.approveBlocked(blockers.length)
+			: integrates
+				? TEXT.approveHintIntegrate
+				: TEXT.approveHint;
+		// Chiudere sopra i rilievi resta premibile, ma non si veste da azione
+		// consigliata: chi passa di lì per abitudine deve accorgersi che questa
+		// volta sta scavalcando qualcosa.
+		reviewApproveBtn.classList.toggle("primary-btn", !forced);
+		reviewApproveBtn.classList.toggle("danger-ghost-btn", forced);
+	}
+
+	function findingsBlock(className, heading, findings) {
+		const items = findings
+			.map((f) => `<li>${marked.parseInline(f)}</li>`)
+			.join("");
+		return `<div class="${className}"><strong>${escapeHtml(heading)}</strong><ul>${items}</ul></div>`;
+	}
+
+	// renderDossier shows the evidence a provider prepared for this spec, and the
+	// verdict already taken on it. Its three states are rendered explicitly, and
+	// the empty one says what to do about it: an absent panel would read as a
+	// broken page rather than as work not yet done.
+	function renderDossier(review) {
+		const dossier = review && review.dossier;
+		const verdict = review && review.verdict;
+		const parts = [];
+		if (verdict) {
+			const decided =
+				verdict.decision === "approved"
+					? TEXT.verdictApproved
+					: verdict.decision === "closed_over_blockers"
+						? TEXT.verdictClosedOverBlockers
+						: TEXT.verdictChangesRequested;
+			const when = verdict.decided_at
+				? escapeHtml(TEXT.verdictWhen(verdict.decided_at))
+				: "";
+			const from = verdict.execution_id
+				? escapeHtml(TEXT.verdictFrom(verdict.execution_id))
+				: "";
+			parts.push(
+				`<div class="review-verdict">${decided}${when}${from}</div>`,
+			);
+		}
+		if (!dossier) {
+			parts.push(
+				`<div class="review-empty">${TEXT.noDossier}</div>`,
+			);
+			reviewDossier.innerHTML = parts.join("");
+			updateCloseButton();
+			return;
+		}
+		const head = [];
+		if (dossier.execution_id)
+			head.push(
+				`<span class="review-chip">execution ${escapeHtml(dossier.execution_id)}</span>`,
+			);
+		if (dossier.prepared_at)
+			head.push(
+				`<span class="review-chip">${escapeHtml(dossier.prepared_at)}</span>`,
+			);
+		parts.push(`<div class="review-dossier-head">${head.join("")}</div>`);
+		if (dossier.summary)
+			parts.push(
+				`<div class="review-dossier-summary markdown-rendered">${marked.parse(dossier.summary)}</div>`,
+			);
+		const criteria = dossier.criteria || [];
+		if (criteria.length > 0) {
+			const rows = criteria
+				.map((c) => {
+					const verdictClass = `criterion-${escapeHtml(c.verdict || "unclear")}`;
+					const note = c.note
+						? `<span class="criterion-note">${marked.parseInline(c.note)}</span>`
+						: "";
+					return `<li><span class="criterion-badge ${verdictClass}">${escapeHtml(c.verdict || "")}</span><span class="criterion-id">${escapeHtml(c.id || "")}</span>${note}</li>`;
+				})
+				.join("");
+			parts.push(`<ul class="review-criteria">${rows}</ul>`);
+		}
+		// I due secchi si leggono uguale e pesano diverso: quello bloccante si
+		// veste di rosso perché la chiusura dovrà scavalcarlo, l'altro no perché
+		// non c'è niente da scavalcare — resta però scritto, che è tutto il
+		// motivo per cui il provider lo ha riportato.
+		const blockers = dossier.blockers || [];
+		if (blockers.length > 0) {
+			parts.push(
+				findingsBlock("review-blockers", TEXT.blockersHeading, blockers),
+			);
+		}
+		const minorFindings = dossier.minor_findings || [];
+		if (minorFindings.length > 0) {
+			parts.push(
+				findingsBlock(
+					"review-minor",
+					TEXT.minorFindingsHeading,
+					minorFindings,
+				),
+			);
+		}
+		reviewDossier.innerHTML = parts.join("");
+		updateCloseButton();
+	}
+
+	function renderDiff(diff) {
+		reviewDiff.innerHTML = "";
+		diffFileExpanders = new Map();
+		const files = diff.files || [];
+		if (files.length === 0) {
+			reviewDiff.innerHTML =
+				`<div class="review-empty">${escapeHtml(TEXT.diffEmpty)}</div>`;
+			return;
+		}
+		files.forEach((file) => reviewDiff.appendChild(renderFileDiff(file)));
+		renderAllComments();
+	}
+
+	function renderFileDiff(file) {
+		const path = file.new_path || file.old_path || TEXT.unknownPath;
+		const wrap = document.createElement("div");
+		wrap.className = "diff-file";
+		const header = document.createElement("div");
+		header.className = "diff-file-header";
+		header.innerHTML = `<span class="diff-file-status diff-${escapeHtml(file.status || "modified")}">${escapeHtml(file.status || "modified")}</span><span class="diff-file-path">${escapeHtml(path)}</span>`;
+		wrap.appendChild(header);
+		const hunks = file.hunks || [];
+		const lineCount = hunks.reduce((n, h) => n + (h.lines || []).length, 0);
+		const buildLines = () => {
+			const body = document.createDocumentFragment();
+			hunks.forEach((hunk) => {
+				const hh = document.createElement("div");
+				hh.className = "diff-hunk-header";
+				hh.textContent = hunk.header;
+				body.appendChild(hh);
+				(hunk.lines || []).forEach((line) =>
+					body.appendChild(renderDiffLine(path, file, line)),
+				);
+			});
+			wrap.appendChild(body);
+		};
+		if (lineCount <= DIFF_FILE_COLLAPSE_LINES) {
+			buildLines();
+			return wrap;
+		}
+		const toggle = document.createElement("button");
+		toggle.type = "button";
+		toggle.className = "diff-file-expand";
+		toggle.textContent = TEXT.diffFileCollapsed(lineCount);
+		wrap.appendChild(toggle);
+		const expand = () => {
+			if (!toggle.isConnected) return;
+			toggle.remove();
+			buildLines();
+		};
+		toggle.addEventListener("click", expand);
+		[file.new_path, file.old_path, path].forEach((p) => {
+			if (p) diffFileExpanders.set(p, expand);
+		});
+		return wrap;
+	}
+
+	function renderDiffLine(path, file, line) {
+		const row = document.createElement("div");
+		row.className = `diff-line diff-${line.kind}`;
+		const side = line.new_line > 0 ? "new" : "old";
+		const lineNo = side === "new" ? line.new_line : line.old_line;
+		const anchorFile = side === "old" ? file.old_path || path : path;
+		row.dataset.file = anchorFile;
+		row.dataset.side = side;
+		row.dataset.line = String(lineNo);
+		const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
+		row.innerHTML = `
+            <span class="diff-gutter old">${line.old_line > 0 ? line.old_line : ""}</span>
+            <span class="diff-gutter new">${line.new_line > 0 ? line.new_line : ""}</span>
+            <span class="diff-comment-add" title="${escapeHtml(TEXT.addComment)}">+</span>
+            <span class="diff-sign">${sign}</span>
+            <span class="diff-code">${escapeHtml(line.text)}</span>
+        `;
+		return row;
+	}
+
+	function onDiffClick(e) {
+		const add = e.target.closest(".diff-comment-add");
+		if (!add) return;
+		const row = add.closest(".diff-line");
+		if (!row) return;
+		e.stopPropagation();
+		openComposer(
+			row,
+			row.dataset.file,
+			row.dataset.side,
+			Number(row.dataset.line),
+		);
+	}
+
+	function expandDiffFile(path) {
+		const expand = diffFileExpanders.get(path);
+		if (expand) expand();
+	}
+
+	function renderAllComments() {
+		// Remove existing comment blocks then re-attach from state.
+		reviewDiff
+			.querySelectorAll(".diff-comment-block")
+			.forEach((n) => n.remove());
+		reviewComments.forEach((c) => {
+			// Un commento salvato su un file ripiegato lo apre: tenerlo chiuso
+			// nasconderebbe anche il rilievo che qualcuno ci ha lasciato.
+			expandDiffFile(c.file);
+			const row = findLineRow(c.file, c.side, c.line);
+			if (row) insertCommentBlock(row, c);
+		});
+	}
+
+	function findLineRow(file, side, line) {
+		return reviewDiff.querySelector(
+			`.diff-line[data-file="${cssEscape(file)}"][data-side="${side}"][data-line="${line}"]`,
+		);
+	}
+
+	function insertCommentBlock(row, comment) {
+		const block = document.createElement("div");
+		block.className = "diff-comment-block";
+		block.innerHTML = `
+            <div class="diff-comment-body">${escapeHtml(comment.body)}</div>
+            <button type="button" class="diff-comment-del" aria-label="${escapeHtml(TEXT.deleteComment)}">&times;</button>
+        `;
+		block
+			.querySelector(".diff-comment-del")
+			.addEventListener("click", () => deleteComment(comment));
+		insertAfterTrailing(row, block);
+	}
+
+	function openComposer(row, file, side, line) {
+		// Avoid duplicate composers on the same row.
+		const existing = nextComposer(row);
+		if (existing) {
+			existing.querySelector("textarea").focus();
+			return;
+		}
+		const box = document.createElement("div");
+		box.className = "diff-comment-block diff-composer";
+		box.innerHTML = `
+            <textarea class="diff-comment-input" rows="3" placeholder="${escapeHtml(TEXT.commentPlaceholder)}"></textarea>
+            <div class="diff-composer-actions">
+                <button type="button" class="primary-btn diff-comment-save">${escapeHtml(TEXT.commentSave)}</button>
+                <button type="button" class="ghost-btn diff-comment-cancel">${escapeHtml(TEXT.commentCancel)}</button>
+            </div>
+        `;
+		box
+			.querySelector(".diff-comment-cancel")
+			.addEventListener("click", () => box.remove());
+		box
+			.querySelector(".diff-comment-save")
+			.addEventListener("click", async () => {
+				const body = box.querySelector("textarea").value.trim();
+				if (!body) return;
+				box.remove();
+				await addComment({
+					file,
+					side,
+					line,
+					body,
+					created_at: new Date().toISOString(),
+				});
+			});
+		insertAfterTrailing(row, box);
+		box.querySelector("textarea").focus();
+	}
+
+	// insertAfterTrailing inserts node after row and any comment blocks already
+	// attached to it, so comments and composer stack in order under the line.
+	function insertAfterTrailing(row, node) {
+		let ref = row;
+		while (
+			ref.nextSibling &&
+			ref.nextSibling.classList &&
+			ref.nextSibling.classList.contains("diff-comment-block")
+		) {
+			ref = ref.nextSibling;
+		}
+		ref.parentNode.insertBefore(node, ref.nextSibling);
+	}
+
+	function nextComposer(row) {
+		let ref = row.nextSibling;
+		while (
+			ref &&
+			ref.classList &&
+			ref.classList.contains("diff-comment-block")
+		) {
+			if (ref.classList.contains("diff-composer")) return ref;
+			ref = ref.nextSibling;
+		}
+		return null;
+	}
+
+	async function addComment(comment) {
+		reviewComments.push(comment);
+		await persistReview();
+		renderAllComments();
+	}
+
+	async function deleteComment(comment) {
+		reviewComments = reviewComments.filter((c) => c !== comment);
+		await persistReview();
+		renderAllComments();
+	}
+
+	// La PUT salva la review intera, non i soli commenti: mandare solo quelli
+	// cancellava dal file il dossier e il verdetto: lasciare un commento inline
+	// buttava via le evidenze su cui lo si stava lasciando, e con loro i rilievi
+	// che «Chiedi modifiche» avrebbe riportato nella spec.
+	async function persistReview() {
+		const review = { ...(currentReview || {}), comments: reviewComments };
+		currentReview = review;
+		try {
+			await apiPut(
+				`/api/spec/${encodeURIComponent(currentSpecCode)}/review`,
+				review,
+			);
+		} catch (err) {
+			showToast(TEXT.saveFailed(err.message || err), "err");
+		}
+	}
 
 	async function confirmAndDeleteSpec(code, title) {
 		if (!code) return false;
@@ -3328,6 +3794,139 @@
 			showToast(TEXT.deleteFailed(err.message || err), "err");
 			return false;
 		}
+	}
+
+	// withBusyButton tiene il bottone occupato per la durata dell'azione e lo
+	// rimette com'era in ogni caso. Il ripristino sta nel `finally` perché la
+	// strada del successo chiude la scheda ma non distrugge il pannello: è unico
+	// e riusato, e una label lasciata a «Approvazione in corso…» accoglierebbe la
+	// prossima spec che si apre. Serve anche a impedire il doppio invio, che su
+	// azioni irreversibili manderebbe due POST.
+	async function withBusyButton(btn, busyLabel, action) {
+		const label = btn.textContent;
+		btn.disabled = true;
+		btn.textContent = busyLabel;
+		try {
+			return await action();
+		} finally {
+			btn.disabled = false;
+			btn.textContent = label;
+		}
+	}
+
+	// countReworkItems conta quello che il server riporterà nella spec, con la
+	// stessa regola di domain.ReworkFeedbackItems: serve solo a far dire alla
+	// domanda quanti rilievi partiranno. Il conteggio che vale resta quello del
+	// server, che è l'unico a vedere la review salvata.
+	function countReworkItems(freeText) {
+		const dossier = (currentReview && currentReview.dossier) || {};
+		const unmet = (dossier.criteria || []).filter((c) => c.verdict !== "met");
+		return (
+			reviewComments.length +
+			(dossier.blockers || []).length +
+			(dossier.minor_findings || []).length +
+			unmet.length +
+			(freeText.trim() ? 1 : 0)
+		);
+	}
+
+	// Un'azione di revisione che fallisce lo dice in due posti: la riga di
+	// stato del pannello e un toast. La riga di stato da sola non basta —
+	// sta in fondo, sotto il diff, e su un incremento lungo cade fuori dallo
+	// schermo: il rifiuto del server sembrava un click andato nel vuoto.
+	function reviewFailed(err) {
+		const msg = TEXT.failed(err.message || err);
+		reviewStatus.textContent = msg;
+		reviewStatus.className = "status-msg err";
+		showToast(msg, "err");
+	}
+
+	async function onRequestChanges() {
+		if (!currentSpecCode) return;
+		const freeText = window.prompt(TEXT.requestChangesFeedback, "");
+		if (freeText === null) return;
+		if (countReworkItems(freeText) === 0) {
+			showToast(TEXT.requestChangesEmpty, "err");
+			return;
+		}
+		if (
+			!window.confirm(
+				TEXT.requestChangesConfirm(
+					countReworkItems(freeText),
+					currentSpecCode,
+				),
+			)
+		)
+			return;
+		reviewStatus.textContent = TEXT.requestingChanges;
+		reviewStatus.className = "status-msg";
+		await withBusyButton(
+			reviewRequestBtn,
+			TEXT.requestingChanges,
+			async () => {
+				try {
+					const res = await apiPost(
+						`/api/spec/${encodeURIComponent(currentSpecCode)}/request-changes`,
+						{ feedback: freeText },
+					);
+					showToast(TEXT.changesRequested(currentSpecCode, res.items), "ok");
+					closeModal();
+					await loadBoard();
+				} catch (err) {
+					reviewFailed(err);
+				}
+			},
+		);
+	}
+
+	// L'approvazione si può chiedere da due strade — il bottone Approva e il
+	// trascinamento di una card da Review a Done — ma è la stessa azione
+	// irreversibile, quindi deve fare la stessa domanda. La domanda sta scritta
+	// qui una volta sola: due formulazioni diverse sarebbero due promesse
+	// diverse sullo stesso effetto.
+	function confirmApproval(code) {
+		const blockers =
+			((currentReview && currentReview.dossier) || {}).blockers || [];
+		return window.confirm(
+			blockers.length > 0
+				? TEXT.approveConfirmBlocked(blockers.length, code)
+				: TEXT.approveConfirm(code),
+		);
+	}
+
+	async function onApprove() {
+		if (!currentSpecCode) return;
+		const code = currentSpecCode;
+		if (!confirmApproval(code)) return;
+		reviewStatus.textContent = TEXT.approving;
+		reviewStatus.className = "status-msg";
+		await withBusyButton(reviewApproveBtn, TEXT.approving, async () => {
+			try {
+				const res = await apiPost(
+					`/api/spec/${encodeURIComponent(code)}/approve`,
+					{},
+				);
+				showToast(
+					res.decision === "closed_over_blockers"
+						? TEXT.closedOverBlockers(code)
+						: res.integrated
+							? TEXT.approvedIntegrated(code)
+							: TEXT.approved(code),
+					"ok",
+				);
+				closeModal();
+				await loadBoard();
+			} catch (err) {
+				reviewFailed(err);
+			}
+		});
+	}
+
+	// cssEscape escapes a string for use in a CSS attribute selector. Falls back
+	// to a manual escape when CSS.escape is unavailable.
+	function cssEscape(s) {
+		if (window.CSS && CSS.escape) return CSS.escape(s);
+		return String(s).replace(/["\\]/g, "\\$&");
 	}
 
 	// ---- Config ------------------------------------------------------------

@@ -1,7 +1,11 @@
 package gitwt
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -52,7 +56,45 @@ func DiffWorkingTree(ctx context.Context, repoRoot, base string) ([]FileDiff, er
 	if err != nil {
 		return nil, err
 	}
-	return parseUnifiedDiff(out), nil
+	// `git diff` is silent about files git does not track yet, and without a
+	// worktree or an automatic commit that is every file the work created.
+	untracked, err := untrackedFilesDiff(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	return parseUnifiedDiff(out + "\n" + untracked), nil
+}
+
+// untrackedFileDiffMaxBytes keeps a generated or vendored file from being read
+// into the review whole; such a file is listed by `git status`, not reviewed.
+const untrackedFileDiffMaxBytes = 1 << 20
+
+// untrackedFilesDiff renders the untracked, non-ignored text files of the
+// working tree as the unified diff of a new file, without touching the index.
+// ARchetipo's own directory is left out: an untracked backlog or record is the
+// tool's bookkeeping, never the work under review.
+func untrackedFilesDiff(ctx context.Context, repoRoot string) (string, error) {
+	args := []string{"ls-files", "--others", "--exclude-standard", "-z", "--", ".", ":(exclude).archetipo"}
+	out, err := runGit(ctx, repoRoot, args...)
+	if err != nil {
+		return "", err
+	}
+	var diff strings.Builder
+	for _, path := range strings.Split(out, "\x00") {
+		if path == "" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(path)))
+		if err != nil || len(content) == 0 || len(content) > untrackedFileDiffMaxBytes || bytes.IndexByte(content, 0) >= 0 {
+			continue
+		}
+		lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
+		fmt.Fprintf(&diff, "diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n", path, path, path, len(lines))
+		for _, line := range lines {
+			diff.WriteString("+" + line + "\n")
+		}
+	}
+	return diff.String(), nil
 }
 
 // parseUnifiedDiff converts the textual unified diff produced by `git diff`

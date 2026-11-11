@@ -534,3 +534,26 @@ func TestHeadSHAIsTheCurrentCommit(t *testing.T) {
 		t.Fatal("IsRepo ha detto sì fuori da un repository git")
 	}
 }
+
+// Without a worktree or an automatic commit, the files a story created are
+// untracked: the review diff must show them, or the reviewer sees nothing.
+func TestDiffWorkingTreeIncludesUntrackedTextFiles(t *testing.T) {
+	root := initRepo(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "blob.bin"), []byte{0, 1, 2}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := DiffWorkingTree(ctx, root, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].NewPath != "new.txt" || files[0].Status != "added" {
+		t.Fatalf("expected only the untracked text file as added, got %+v", files)
+	}
+	if lines := files[0].Hunks[0].Lines; len(lines) != 2 || lines[1].Kind != "add" || lines[1].NewLine != 2 || lines[1].Text != "two" {
+		t.Fatalf("unexpected lines: %+v", files[0].Hunks)
+	}
+}

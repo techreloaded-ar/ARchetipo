@@ -328,14 +328,12 @@ func statusActionOf(t *testing.T, view workspaceStatusResponse, id string) struc
 // two templates, so the recommendation can only come from the Archetipo.
 func TestResolveStageFollowsTheArchetypeOrder(t *testing.T) {
 	real := template.Default()
-	real.Actions = append(real.Actions, template.Action{ID: "assess", Statuses: []domain.Status{domain.StatusReview}})
-	reviewStageDefinition := template.Stage{ID: "da-rivedere", Scope: template.ScopeSpec, Action: "assess"}
 	planFirst := template.Template{
 		ID:      real.ID,
 		Actions: real.Actions,
 		Stages: []template.Stage{
 			stageOfArchetype(t, "da-pianificare"),
-			reviewStageDefinition,
+			stageOfArchetype(t, "da-rivedere"),
 			stageOfArchetype(t, "completo"),
 		},
 	}
@@ -343,7 +341,7 @@ func TestResolveStageFollowsTheArchetypeOrder(t *testing.T) {
 		ID:      real.ID,
 		Actions: real.Actions,
 		Stages: []template.Stage{
-			reviewStageDefinition,
+			stageOfArchetype(t, "da-rivedere"),
 			stageOfArchetype(t, "da-pianificare"),
 			stageOfArchetype(t, "completo"),
 		},

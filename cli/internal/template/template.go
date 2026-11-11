@@ -266,6 +266,7 @@ func builtin() Template {
 			"archetipo-implement",
 			"archetipo-inception",
 			"archetipo-plan",
+			"archetipo-review",
 			"archetipo-spec",
 			"archetipo-wiki",
 			"archetipo-increment",
@@ -283,6 +284,12 @@ func builtin() Template {
 				Label:    "Implementa",
 				Skill:    "archetipo-implement",
 				Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
+			},
+			{
+				ID:       "review",
+				Label:    "Rivedi",
+				Skill:    "archetipo-review",
+				Statuses: []domain.Status{domain.StatusReview},
 			},
 		},
 		WorkspaceActions: []WorkspaceAction{
@@ -330,6 +337,13 @@ func builtin() Template {
 				Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
 				Scope:   ScopeSpec,
 				Action:  "implement",
+			},
+			{
+				ID:      "da-rivedere",
+				Label:   "Da rivedere",
+				Summary: "Ci sono spec in review: il passo successivo è rivederne una.",
+				Scope:   ScopeSpec,
+				Action:  "review",
 			},
 			{
 				ID:      "completo",

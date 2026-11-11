@@ -556,8 +556,8 @@ func TestSpecActionsFollowTheSpecStatus(t *testing.T) {
 	if res := runCLI(t, "", "spec", "review", "US-001"); res.exit != 0 {
 		t.Fatalf("review failed: %s", res.stderr.String())
 	}
-	if got := readActionIDs(t); len(got) != 0 {
-		t.Fatalf("expected no action in REVIEW, got %v", got)
+	if got := readActionIDs(t); len(got) != 1 || got[0] != "review" {
+		t.Fatalf("expected [review] in REVIEW, got %v", got)
 	}
 
 	// AC-4: DONE admits no action — an empty list in a success envelope.
@@ -2171,7 +2171,7 @@ func TestInit_Cursor(t *testing.T) {
 	if !strings.Contains(out, "Cursor") || !strings.Contains(out, ".cursor/skills") {
 		t.Fatalf("expected Cursor install path in output, got:\n%s", out)
 	}
-	for _, sk := range []string{"archetipo-spec", "archetipo-plan", "archetipo-implement", "archetipo-increment"} {
+	for _, sk := range []string{"archetipo-spec", "archetipo-plan", "archetipo-implement", "archetipo-review", "archetipo-increment"} {
 		path := filepath.Join(".cursor", "skills", sk, "SKILL.md")
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected skill at %s: %v", path, err)

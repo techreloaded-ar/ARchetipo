@@ -741,6 +741,7 @@ func supportedActions() string {
 	known := []execution.ActionID{
 		execution.ActionPlan,
 		execution.ActionImplement,
+		execution.ActionReview,
 		execution.ActionInception,
 		execution.ActionBacklog,
 		execution.ActionSpecDraft,

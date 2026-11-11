@@ -20,11 +20,14 @@ The three layers have distinct responsibilities:
 Product work uses `archetipo-increment`, `archetipo-environment` and optionally
 `archetipo-wiki`. Optional enterprise artifact work retains the simplified
 `archetipo-inception`, `archetipo-spec` and `archetipo-plan` methods, and the
-classic backlog path `plan` → `implement` → REVIEW: `archetipo-implement` carries
-out a persisted plan in the project checkout and hands the story to the person,
-who alone moves it to DONE. That path never creates an increment, never asks for a
-specification approval and never opens a PR; a per-story worktree exists only with
-`worktree.enabled: true`. The costly `autopilot`, `design` and `review` skills and
+classic backlog path `plan` → `implement` → `review`: `archetipo-implement` carries
+out a persisted plan in the project checkout and leaves the story in REVIEW;
+`archetipo-review` prepares the acceptance dossier and the person alone gives the
+verdict, from the viewer's Revisione panel or in chat: approve (DONE) or request
+changes (back to TODO in rework). That path never creates an increment, never asks
+for a specification approval and never opens a PR; a per-story worktree exists only
+with `worktree.enabled: true`, and only then does an approval integrate its branch.
+The costly `autopilot` and `design` skills and
 the increment's internal story delivery state machine have been removed. Do not
 reintroduce them as a hidden fallback. Historical records remain inspectable; only explicit user requests may
 remove their data.
@@ -43,7 +46,10 @@ remove their data.
   removal retains this record and its story references through the deletion receipt.
 - Only an explicit approval of the displayed commit publishes a PR. Preserve the
   approved SHA/time separately from later developer commits. The viewer never merges
-  branches or deploys; moving backlog cards is project management only.
+  an increment's branch and never deploys. On the classic backlog path only, the
+  person's explicit approval in the Revisione panel (or a REVIEW → DONE move routed
+  through it) closes the story and, with `worktree.enabled: true`, integrates its
+  per-story branch; any other card move is project management only.
 - `increment ready` attributes the candidate to the person before freezing it:
   author and committer of the commits the increment adds on its own first-parent
   line become the GitHub account `gh` is signed in with for the `origin` host
@@ -69,7 +75,7 @@ remove their data.
 
 The built-in `fabbrica-del-software` Template is revision `2.0.0`. It declares
 business labels, optional artifact operations and installed skills. Its spec
-actions are `plan` (TODO) and `implement` (PLANNED, IN PROGRESS). Its optional
+actions are `plan` (TODO), `implement` (PLANNED, IN PROGRESS) and `review` (REVIEW). Its optional
 planning/documentation offers are not prerequisites for creating product work.
 The selected identity is recorded in `.archetipo/config.yaml`. Keep this identity
 stable for existing workspace configuration; no delivery skill should be installed

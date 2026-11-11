@@ -15,6 +15,7 @@ var processSkills = []string{
 	"archetipo-implement",
 	"archetipo-inception",
 	"archetipo-plan",
+	"archetipo-review",
 	"archetipo-spec",
 	"archetipo-wiki",
 	"archetipo-increment",
@@ -37,6 +38,12 @@ var processActions = []Action{
 		Label:    "Implementa",
 		Skill:    "archetipo-implement",
 		Statuses: []domain.Status{domain.StatusPlanned, domain.StatusInProgress},
+	},
+	{
+		ID:       "review",
+		Label:    "Rivedi",
+		Skill:    "archetipo-review",
+		Statuses: []domain.Status{domain.StatusReview},
 	},
 }
 
@@ -94,6 +101,13 @@ var processStages = []Stage{
 		Summary: "Ci sono spec pianificate o in corso: il passo successivo è implementarne una.",
 		Scope:   ScopeSpec,
 		Action:  "implement",
+	},
+	{
+		ID:      "da-rivedere",
+		Label:   "Da rivedere",
+		Summary: "Ci sono spec in review: il passo successivo è rivederne una.",
+		Scope:   ScopeSpec,
+		Action:  "review",
 	},
 	{
 		ID:      "completo",
@@ -201,7 +215,7 @@ func TestActionsForReturnsOnlyTheActionsAdmittedInTheStatus(t *testing.T) {
 		{status: domain.StatusTodo, want: []string{"plan"}},
 		{status: domain.StatusPlanned, want: []string{"implement"}},
 		{status: domain.StatusInProgress, want: []string{"implement"}},
-		{status: domain.StatusReview, want: []string{}},
+		{status: domain.StatusReview, want: []string{"review"}},
 		{status: domain.StatusDone, want: []string{}},
 	}
 	for _, tc := range cases {

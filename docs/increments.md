@@ -149,11 +149,12 @@ quando i file dell’ambiente non esistono più. La conservazione della conversa
 Il contratto del vecchio incremento — copie delle storie, classificazioni
 correzione/refinement/scope e approvazione preventiva dell’intento — è rimosso.
 I record storici sono leggibili senza ripristinare quella macchina a stati.
-Le skill di review, autopilot e mockup non sono distribuite;
+Le skill di autopilot e mockup non sono distribuite;
 `init` elimina soltanto quelle directory gestite, conservando skill personali.
-`archetipo-implement` è distribuita per il percorso classico del backlog
-(Pianifica → Implementa → REVIEW), che non crea incrementi, non apre PR e usa un
-worktree solo con `worktree.enabled: true`.
+`archetipo-implement` e `archetipo-review` sono distribuite per il percorso classico
+del backlog (Pianifica → Implementa → Rivedi), che non crea incrementi, non apre PR e
+usa un worktree solo con `worktree.enabled: true`: la storia si chiude solo con il
+verdetto della persona, dal tab Revisione o in chat.
 
 ## Verifiche
 

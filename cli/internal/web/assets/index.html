@@ -247,6 +247,7 @@
             <nav class="modal-tabs" role="tablist">
                 <button type="button" class="tab active" data-tab="story" role="tab" aria-selected="true">Storia</button>
                 <button type="button" class="tab" data-tab="plan" role="tab" aria-selected="false">Piano</button>
+                <button type="button" class="tab hidden" data-tab="review" id="review-tab" role="tab" aria-selected="false">Revisione</button>
             </nav>
             <section class="tab-panel active" data-panel="story">
                 <div id="story-view" class="story-view">
@@ -361,6 +362,18 @@
                         <span class="status-msg" id="plan-status"></span>
                     </div>
                 </form>
+            </section>
+            <section class="tab-panel" data-panel="review">
+                <div class="review-toolbar">
+                    <div class="review-branch" id="review-branch"></div>
+                    <div class="review-actions">
+                        <button type="button" id="review-request-btn" class="ghost-btn" title="Riporta la storia a TODO con i rilievi della revisione da pianificare">Chiedi modifiche</button>
+                        <button type="button" id="review-approve-btn" class="primary-btn" title="Accetta il lavoro e chiude la storia">Approva e chiudi</button>
+                    </div>
+                </div>
+                <div class="review-dossier" id="review-dossier"></div>
+                <div class="review-diff" id="review-diff"></div>
+                <span class="status-msg" id="review-status"></span>
             </section>
                 </div>
             </div>

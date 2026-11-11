@@ -73,14 +73,17 @@ every declared check, matching the current candidate.
 The classic backlog path remains available and never goes through an increment:
 a TODO story is planned with **Pianifica** (`archetipo-plan`), a planned story is
 carried out with **Implementa** (`archetipo-implement`) directly in the project
-checkout and ends in REVIEW. A per-story worktree is created only with
-`worktree.enabled: true`; no PR is opened, and moving the story to DONE stays a
-manual decision of the person who tries the result.
+checkout and ends in REVIEW. There **Rivedi** (`archetipo-review`) prepares the
+acceptance dossier, and the person decides in the story's Revisione tab: approve
+and close, or request changes and send it back to TODO with the feedback. A
+per-story worktree is created only with `worktree.enabled: true`, and only then
+does an approval integrate its branch; no PR is opened, and DONE is always the
+person's decision.
 
-This branch retires the `autopilot`, `design` and `review` skills,
-internal increment delivery backlogs and viewer branch integration. Product
+This branch retires the `autopilot` and `design` skills and
+internal increment delivery backlogs. Product
 increments start after the person approves the current specification revision.
-`init` removes those three managed skills when updating, preserving personal skills.
+`init` removes those two managed skills when updating, preserving personal skills.
 Historical work remains inspectable. Optional PRD, story planning and Wiki tools
 remain available, alongside the artifact-management CLI.
 

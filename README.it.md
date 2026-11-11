@@ -89,14 +89,17 @@ L’esecuzione remota richiede ancora un ulteriore livello runtime.
 Il percorso classico del backlog resta disponibile e non passa da un incremento:
 una storia in TODO si pianifica con **Pianifica** (`archetipo-plan`), una storia
 pianificata si realizza con **Implementa** (`archetipo-implement`) direttamente nel
-checkout del progetto e finisce in REVIEW. Il worktree per storia viene creato solo
-con `worktree.enabled: true`; nessuna PR viene aperta e il passaggio a DONE resta
-una decisione manuale di chi prova il risultato.
+checkout del progetto e finisce in REVIEW. Lì **Rivedi** (`archetipo-review`) prepara
+il dossier di accettazione e la persona decide nel tab Revisione della storia:
+approva e chiude, oppure chiede modifiche e la rimanda in TODO con i rilievi. Il
+worktree per storia viene creato solo con `worktree.enabled: true`, e solo in quel
+caso l'approvazione integra il suo branch; nessuna PR viene aperta e DONE resta
+sempre una decisione della persona.
 
-Questo branch rimuove le skill `archetipo-autopilot`, `archetipo-design` e
-`archetipo-review`, insieme al vecchio percorso degli
-incrementi con backlog interno, approvazione dell’intento e review che integra branch
-nel viewer. `init` elimina quelle tre skill gestite durante l’aggiornamento;
+Questo branch rimuove le skill `archetipo-autopilot` e `archetipo-design`,
+insieme al vecchio percorso degli
+incrementi con backlog interno e approvazione dell’intento. `init` elimina quelle
+due skill gestite durante l’aggiornamento;
 conserva le skill personali. I lavori storici restano leggibili: il loro workflow
 non viene ricreato. I comandi CLI per gestire gli artefatti aziendali restano disponibili.
 
