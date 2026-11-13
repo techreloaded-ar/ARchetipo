@@ -410,6 +410,34 @@ func TestStreamSessionTranslatesAWholeConversation(t *testing.T) {
 	}
 }
 
+// A structured question is something the agent said to the person: it enters
+// the history as readable text — header, prompt, options with descriptions and
+// previews — and not as a folded tool row that would vanish once answered. The
+// tool result still names the tool it came from.
+func TestStreamSessionProjectsAStructuredQuestionAsReadableHistory(t *testing.T) {
+	fake := newFakeClaude()
+	_, session := openStreamSession(t, fake)
+	after := lastEventID(session)
+
+	fake.emit(prefaceTextFrame)
+	waitFor(t, func() bool { return len(session.Events(after)) == 1 })
+	after = lastEventID(session)
+	fake.emit(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_q","name":"AskUserQuestion","input":{"questions":[{"question":"Quale variante?","header":"🧭 Costanza","multiSelect":false,"options":[{"label":"Variante A","description":"Una chip sola","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Variante B"}]}]}}]}}`)
+	fake.emit(`{"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","input":{"questions":[{"question":"Quale variante?","header":"🧭 Costanza","multiSelect":false,"options":[{"label":"Variante A","description":"Una chip sola","preview":"![Variante A](/abs/mockups/1/a.png)"},{"label":"Variante B"}]}]}}}`)
+	fake.emit(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_q","content":"User selected: Variante A","is_error":false}]}}`)
+	waitFor(t, func() bool { return len(session.Events(after)) == 2 })
+
+	events := session.Events(after)
+	question := events[0]
+	wantText := "**🧭 Costanza** — Quale variante?\n- **Variante A** — Una chip sola\n\n![Variante A](/abs/mockups/1/a.png)\n\n- **Variante B**"
+	if question.Kind != localrun.KindQuestion || question.Tool != "" || question.Text != wantText || len(question.Raw) == 0 {
+		t.Fatalf("question event = %#v; want text %q", question, wantText)
+	}
+	if events[1].Kind != localrun.KindToolEnd || events[1].Tool != "AskUserQuestion" {
+		t.Fatalf("tool result = %#v", events[1])
+	}
+}
+
 // A tool that failed is a different moment from a tool that succeeded, and the
 // history has to keep them apart.
 func TestStreamSessionReportsAFailedToolResultAsAnError(t *testing.T) {
@@ -948,6 +976,35 @@ func TestSkillPreambleOf(t *testing.T) {
 	}
 }
 
+// A file that is not an image is no block of the user frame: the message
+// format has none for it, and the agent reads it from the path the text names.
+// It still comes back onto the user_message event by reference, like an image.
+func TestStreamSessionWritesNoBlockForAFileThatIsNotAnImage(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openConversation(t, fake)
+	path := filepath.Join(t.TempDir(), "note.txt")
+	if err := os.WriteFile(path, []byte("TXTBYTES"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment := execution.Attachment{ID: "note.txt", Name: "note.txt", MediaType: "text/plain", URL: "/api/x/note.txt", Path: path}
+
+	if err := client.SendWith(context.Background(), "leggi "+path, []execution.Attachment{attachment}); err != nil {
+		t.Fatalf("SendWith failed: %v", err)
+	}
+	frames := fake.framesReceived()
+	last := string(frames[len(frames)-1])
+	if strings.Contains(last, `"type":"image"`) || strings.Contains(last, "TXTBYTES") || strings.Contains(last, base64.StdEncoding.EncodeToString([]byte("TXTBYTES"))) {
+		t.Fatalf("the user frame carries the file as a block: %s", last)
+	}
+	fake.emit(last)
+	waitFor(t, func() bool { return countEvents(session.Events(0), localrun.KindUserMessage) == 1 })
+	for _, event := range session.Events(0) {
+		if event.Kind == localrun.KindUserMessage && (len(event.Attachments) != 1 || event.Attachments[0].URL != attachment.URL || event.Attachments[0].Path != "") {
+			t.Fatalf("user_message = %#v", event)
+		}
+	}
+}
+
 // An image attached to a message travels in the same user frame as its text, as
 // the base64 block the message format defines, and comes back onto the
 // user_message event by reference only: the journal never holds the bytes.
@@ -1072,5 +1129,35 @@ func TestStreamSessionDoesNotShowSyntheticUserFramesAsThePersonsWords(t *testing
 	}
 	if got := events[len(events)-2]; got.Kind != "user/synthetic" || got.Text != "" {
 		t.Fatalf("the synthetic frame = %#v", got)
+	}
+}
+
+// On resume, Claude reports a background agent the previous process did not
+// finish through a queued notification, and closes that queue item with a
+// result of zero turns whose origin names it. That result ends no turn: the
+// one the person just started is still ahead, and the process must stay up.
+func TestStreamSessionIgnoresTheZeroTurnResultOfATaskNotification(t *testing.T) {
+	fake := newFakeClaude()
+	client, session := openStreamSession(t, fake)
+	after := lastEventID(session)
+
+	fake.emit(`{"type":"result","subtype":"success","is_error":false,"num_turns":0,"result":"","origin":{"kind":"task-notification"}}`)
+	waitFor(t, func() bool { return len(session.Events(after)) == 1 })
+	if kind := session.Events(after)[0].Kind; kind != "result/task-notification" {
+		t.Fatalf("the notification result was recorded as %q; want result/task-notification", kind)
+	}
+	select {
+	case <-client.TurnDone():
+		t.Fatal("a zero-turn result of a task notification ended the turn")
+	default:
+	}
+	if !session.Active() {
+		t.Fatal("a zero-turn result of a task notification closed the session")
+	}
+
+	fake.emit(`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"finito"}`)
+	<-client.TurnDone()
+	if !client.Completed() {
+		t.Fatal("the result of the agent's own turn did not complete it")
 	}
 }

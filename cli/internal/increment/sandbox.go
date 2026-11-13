@@ -33,6 +33,45 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Base sources recorded on an increment: where its fork SHA came from.
+const (
+	BaseSourceOrigin = "origin"
+	BaseSourceLocal  = "local"
+)
+
+const baseFetchTimeout = 60 * time.Second
+
+// resolveBaseSHA returns the commit a new increment forks from. When the
+// repository has an origin remote, the base branch is fetched first so that
+// work merged upstream (a published PR) reaches the next increment even if
+// nobody pulled the local checkout. The remote tip is used only when it is
+// ahead of or equal to the local branch; a local branch that is ahead or has
+// diverged keeps its own tip, so unpushed commits are never dropped. Any
+// remote failure (no remote, offline, timeout) falls back to the local branch.
+func (s *Service) resolveBaseSHA(ctx context.Context, base string) (sha, source string, err error) {
+	root := s.Config.ProjectRoot
+	local, err := git(ctx, root, "rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return "", "", iox.NewPrecondition("increment base branch "+base+" is unavailable", "create or fetch the local "+base+" branch before starting an increment", err)
+	}
+	if _, remoteErr := git(ctx, root, "remote", "get-url", "origin"); remoteErr != nil {
+		return local, BaseSourceLocal, nil
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, baseFetchTimeout)
+	defer cancel()
+	if _, fetchErr := git(fetchCtx, root, "fetch", "--quiet", "origin", base); fetchErr != nil {
+		return local, BaseSourceLocal, nil
+	}
+	remote, remoteErr := git(ctx, root, "rev-parse", "--verify", "refs/remotes/origin/"+base+"^{commit}")
+	if remoteErr != nil {
+		return local, BaseSourceLocal, nil
+	}
+	if _, ancestorErr := git(ctx, root, "merge-base", "--is-ancestor", local, remote); ancestorErr != nil {
+		return local, BaseSourceLocal, nil
+	}
+	return remote, BaseSourceOrigin, nil
+}
+
 func (s *Service) Create(ctx context.Context, title, request, origin string) (Record, error) {
 	return s.CreateWithMode(ctx, title, request, origin, Continuous)
 }
@@ -62,16 +101,16 @@ func (s *Service) CreateWithMode(ctx context.Context, title, request, origin, mo
 				}
 			}
 		}
-		sha, err := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+		sha, baseSource, err := s.resolveBaseSHA(ctx, base)
 		if err != nil {
-			return record, iox.NewPrecondition("increment base branch main is unavailable", "create or fetch the local main branch before starting an increment", err)
+			return record, err
 		}
 		var entropy [8]byte
 		if _, err = rand.Read(entropy[:]); err != nil {
 			return record, err
 		}
 		id := "inc-" + hex.EncodeToString(entropy[:])
-		record = Record{DevelopmentMode: mode, ID: id, Title: title, Request: request, OriginConversationID: origin, Status: Discovery, CreatedAt: time.Now().UTC(), BaseBranch: base, BaseSHA: sha, Branch: "archetipo/increments/" + id, Workdir: filepath.Join(s.dir(), "worktrees", id), Revisions: []Revision{}, Feedback: []string{}}
+		record = Record{DevelopmentMode: mode, ID: id, Title: title, Request: request, OriginConversationID: origin, Status: Discovery, CreatedAt: time.Now().UTC(), BaseBranch: base, BaseSHA: sha, BaseSource: baseSource, Branch: "archetipo/increments/" + id, Workdir: filepath.Join(s.dir(), "worktrees", id), Revisions: []Revision{}, Feedback: []string{}}
 		if err = os.MkdirAll(filepath.Dir(record.Workdir), 0o700); err != nil {
 			return Record{}, err
 		}

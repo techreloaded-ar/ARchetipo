@@ -527,3 +527,70 @@ func verifyProduct(t *testing.T, r Record) {
 		t.Fatalf("fixture verification: %+v %v", result, err)
 	}
 }
+
+// upstreamCommit commits a file on origin/main through a second clone, as a
+// merged PR would, without touching the workspace checkout.
+func upstreamCommit(t *testing.T, s *Service, name string) string {
+	t.Helper()
+	bare := runGit(t, s.Config.ProjectRoot, "remote", "get-url", "origin")
+	clone := filepath.Join(t.TempDir(), "clone")
+	runGit(t, filepath.Dir(clone), "clone", "--quiet", bare, clone)
+	runGit(t, clone, "config", "user.email", "dev@example.test")
+	runGit(t, clone, "config", "user.name", "Dev")
+	if err := os.WriteFile(filepath.Join(clone, name), []byte("merged upstream\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, clone, "add", name)
+	runGit(t, clone, "commit", "-m", "feat: "+name)
+	runGit(t, clone, "push", "--quiet", "origin", "main")
+	return runGit(t, clone, "rev-parse", "HEAD")
+}
+
+func TestNewIncrementForksFromOriginWhenUpstreamIsAhead(t *testing.T) {
+	s := fixture(t)
+	remote(t, s)
+	root := s.Config.ProjectRoot
+	localMain := runGit(t, root, "rev-parse", "main")
+	upstream := upstreamCommit(t, s, "merged.txt")
+	r := create(t, s)
+	if r.BaseSHA != upstream || r.BaseSource != BaseSourceOrigin {
+		t.Fatalf("increment did not fork the fetched origin/main: %+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(r.Workdir, "merged.txt")); err != nil {
+		t.Fatalf("upstream work missing from increment: %v", err)
+	}
+	if runGit(t, root, "rev-parse", "main") != localMain || runGit(t, root, "branch", "--show-current") != "main" {
+		t.Fatal("local main was moved by the increment")
+	}
+	plan, err := s.DeletionPlan(context.Background(), r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.UnmergedCommits != 0 {
+		t.Fatalf("fetched upstream commits counted as increment work: %d", plan.UnmergedCommits)
+	}
+}
+
+func TestNewIncrementKeepsLocalMainWhenItIsAheadOfOrigin(t *testing.T) {
+	s := fixture(t)
+	remote(t, s)
+	root := s.Config.ProjectRoot
+	if err := os.WriteFile(filepath.Join(root, "local.txt"), []byte("not pushed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "local.txt")
+	runGit(t, root, "commit", "-m", "local work")
+	localMain := runGit(t, root, "rev-parse", "main")
+	r := create(t, s)
+	if r.BaseSHA != localMain || r.BaseSource != BaseSourceLocal {
+		t.Fatalf("unpushed local commits dropped: %+v", r)
+	}
+}
+
+func TestNewIncrementWithoutRemoteUsesLocalMain(t *testing.T) {
+	s := fixture(t)
+	r := create(t, s)
+	if r.BaseSHA != runGit(t, s.Config.ProjectRoot, "rev-parse", "main") || r.BaseSource != BaseSourceLocal {
+		t.Fatalf("unexpected base without remote: %+v", r)
+	}
+}

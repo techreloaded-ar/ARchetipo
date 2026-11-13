@@ -582,11 +582,41 @@ func (s *Server) conversationModelChoiceOf(ctx context.Context, providerID strin
 	if err != nil {
 		return "", nil
 	}
-	resolution := execution.ResolveModelChoice(ctx, provider, config)
-	if !resolution.Declared || resolution.Reason != "" {
-		return "", nil
+	key := providerID
+	if encoded, encodeErr := json.Marshal(config); encodeErr == nil {
+		key += "\x00" + string(encoded)
 	}
-	return resolution.Choice.Model, resolution.Choice.Options
+	s.modelChoiceMu.Lock()
+	cached, hit := s.modelChoices[key]
+	s.modelChoiceMu.Unlock()
+	if hit && time.Since(cached.at) < modelChoiceTTL {
+		return cached.model, cloneModelOptions(cached.options)
+	}
+	resolution := execution.ResolveModelChoice(ctx, provider, config)
+	entry := cachedModelChoice{at: time.Now()}
+	if resolution.Declared && resolution.Reason == "" {
+		entry.model, entry.options = resolution.Choice.Model, cloneModelOptions(resolution.Choice.Options)
+	}
+	s.modelChoiceMu.Lock()
+	if s.modelChoices == nil {
+		s.modelChoices = map[string]cachedModelChoice{}
+	}
+	s.modelChoices[key] = entry
+	s.modelChoiceMu.Unlock()
+	return entry.model, cloneModelOptions(entry.options)
+}
+
+// modelChoiceTTL is how long conversationModelChoiceOf keeps a resolved model
+// choice. The catalog changes when the runtime is upgraded or the provider
+// configuration changes; the configuration is part of the key, so only the
+// upgrade waits for the TTL. A failed resolution is kept for the same time,
+// so a missing runtime costs one probe per TTL and not one per poll tick.
+const modelChoiceTTL = 2 * time.Minute
+
+type cachedModelChoice struct {
+	model   string
+	options map[string]string
+	at      time.Time
 }
 
 func cloneModelOptions(options map[string]string) map[string]string {
@@ -1002,7 +1032,7 @@ func (s *Server) openConversationOn(ctx context.Context, ws *workspaceSession, s
 			NextTurn: execution.TurnConfiguration{Model: model, Options: modelOptions, PermissionProfile: discovery.PermissionProfile},
 		}
 		if title := strings.TrimSpace(spec.title); title != "" {
-			record.Title = truncateRunes(title, conversationTitleLimit)
+			record.Title = plainTitle(title, conversationTitleLimit)
 		}
 		if err := ws.conversationStore().Save(ctx, record); err != nil {
 			_ = target.sessions.ReleaseSession(context.WithoutCancel(ctx), execution.SessionRequest{Session: created.Session})
@@ -1139,7 +1169,7 @@ type sendConversationMessageReq struct {
 	Message             string `json:"message"`
 	Skill               string `json:"skill,omitempty"`
 	PreviewFeedback     bool   `json:"preview_feedback,omitempty"`
-	// Attachments are the images sent with the message, inline. They are
+	// Attachments are the files sent with the message, inline. They are
 	// stored on disk before the turn is opened and reach the adapter through
 	// attachments, as references.
 	Attachments []attachmentUpload `json:"attachments,omitempty"`
@@ -1180,7 +1210,7 @@ func (s *Server) handleSendWorkspaceConversationMessage(w http.ResponseWriter, r
 	r.Body = http.MaxBytesReader(w, r.Body, maxMessageBodyBytes)
 	if err := decodeJSON(r, &body); err != nil {
 		if bodyTooLarge(err) {
-			err = iox.NewInvalidInput(fmt.Sprintf("the message and its attachments may weigh at most %d MB", maxMessageBodyBytes>>20), "attach fewer or smaller images", err)
+			err = iox.NewInvalidInput(fmt.Sprintf("the message and its attachments may weigh at most %d MB", maxMessageBodyBytes>>20), "attach fewer or smaller files", err)
 		}
 		writeError(w, err)
 		return

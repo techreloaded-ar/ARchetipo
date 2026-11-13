@@ -572,6 +572,18 @@ func (ws *workspaceSession) sendNativeConversationMessage(ctx context.Context, s
 	if record.Archive == execution.ArchiveArchived {
 		return iox.NewConflict("the conversation "+snapshot.id+" is archived", "reopen it before sending another turn", nil)
 	}
+	// A file that is not an image reaches the agent as a path to read, named
+	// in the words that are sent; the words the history shows stay the
+	// person's own, or the file names where there were none.
+	if note := attachedFilesNote(body.attachments); note != "" {
+		if body.display == "" {
+			body.display = body.Message
+		}
+		if strings.TrimSpace(body.display) == "" {
+			body.display = attachmentNames(body.attachments)
+		}
+		body.Message = strings.TrimSpace(body.Message + "\n\n" + note)
+	}
 	if body.recoveryForTurnID != "" {
 		state, known := recordedTurnState(record, body.recoveryForTurnID)
 		if record.StopRequestedTurnID == body.recoveryForTurnID || !known || state != execution.TurnFailed || (record.CurrentTurn != nil && record.CurrentTurn.ID != body.recoveryForTurnID) {

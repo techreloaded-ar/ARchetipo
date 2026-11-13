@@ -143,7 +143,7 @@ func conversationEntryOf(record conversationlog.Record, live bool, running map[s
 	}
 	view := conversationEntryView{
 		ID:            record.ID,
-		Title:         record.Title,
+		Title:         inlineMarkdownMarkers.Replace(record.Title), // record scritti prima di plainTitle
 		SpecCode:      record.SpecCode,
 		OpenedAt:      record.OpenedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		LastMessageAt: record.LastMessageAt.UTC().Format("2006-01-02T15:04:05.000Z"),

@@ -2206,16 +2206,66 @@ describe('runtime input questions', () => {
    const html = renderConversation(openQuestion([variants], [turn[0]]), '', ui);
    assert.ok(!html.includes('conv-input-images'), `immagini di un disegno precedente: ${html}`);
   });
-  it('se un’opzione mostra già un’immagine nella preview, la galleria non ripete e le immagini stanno accanto alla scelta', () => {
+  it('la preview di un’opzione non disegna immagini: le opzioni sono testo, resta solo ciò che della preview non è immagine', () => {
+   const parse = (md) => `<p>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</p>`;
+   const onlyImage = { ...variants, options: [{ ...variants.options[0], preview: '![Variante A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, variants.options[1]] };
+   const card = questionnaireOf(renderConversation(openQuestion([onlyImage], turn), '', { markedParse: parse }));
+   assert.ok(!card.includes('conv-input-preview'), `una preview fatta solo di immagine non lascia niente: ${card}`);
+   const options = card.slice(card.indexOf('conv-input-options'));
+   assert.ok(!options.includes('<img'), `l'immagine della preview è disegnata nelle opzioni: ${options}`);
+   assert.ok(card.includes('conv-input-images'), 'la galleria resta come ripiego quando la risposta non ha mostrato le immagini');
+   assert.ok(card.includes('Variante A — interruttore') && card.includes('Variante B — pagina dedicata'), 'le opzioni restano testo');
+   const withText = { ...variants, options: [{ ...variants.options[0], preview: 'Un interruttore nella barra ![A](/x/a.png)' }, variants.options[1]] };
+   const textCard = questionnaireOf(renderConversation(openQuestion([withText], turn), '', { markedParse: parse }));
+   assert.ok(textCard.includes('conv-input-preview') && textCard.includes('Un interruttore nella barra'), `il testo della preview resta: ${textCard}`);
+   assert.ok(!textCard.slice(textCard.indexOf('conv-input-options')).includes('<img'), `l'immagine della preview resta: ${textCard}`);
+   assert.ok(textCard.indexOf('conv-input-preview') > textCard.indexOf('</label>'), 'la preview sta fuori dal label');
+  });
+  it('se la risposta dell’agente mostra già le immagini, la card è solo testo: nessuna galleria e nessuna immagine nelle opzioni', () => {
+   const parse = (md) => `<p>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</p>`;
+   const shown = [...turn.slice(0, -1), { id: 58.5, seq: 58, at: '2026-11-03T14:28:53.000Z', kind: 'text', message_id: 'm1', text: 'Due varianti:\n\n![A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, turn[turn.length - 1]];
    const withPreview = { ...variants, options: [{ ...variants.options[0], preview: '![Variante A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, variants.options[1]] };
-   const html = renderConversation(openQuestion([withPreview], turn), '', { markedParse: (md) => (md.includes('![') ? '<p><img src="/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png" alt="Variante A"></p>' : `<p>${md}</p>`) });
+   const html = renderConversation(openQuestion([withPreview], shown), '', { markedParse: parse });
    const card = questionnaireOf(html);
-   assert.ok(card.includes('conv-input-preview'), `preview assente: ${card}`);
-   assert.ok(card.includes('src="/api/workspace/file?path=%2FUsers%2Fx%2F.archetipo%2Ftmp%2Fmockups%2F1%2Felenco-a-interruttore.png&amp;conversation=conv-1"'), `l'immagine della preview non è risolta sul workspace: ${card}`);
-   assert.ok(card.indexOf('conv-input-preview') > card.indexOf('Variante A — interruttore'), 'la preview sta sotto la sua opzione');
-   assert.ok(card.indexOf('conv-input-preview') > card.indexOf('</label>'), 'la preview sta fuori dal label: un click sull’immagine non sceglie l’opzione');
-   assert.match(card, /<a href="\/api\/workspace\/file\?path=[^"]+" target="_blank" rel="noopener"><img /, `l'immagine della preview non si apre a grandezza piena: ${card}`);
-   assert.ok(!card.includes('conv-input-images'), 'la galleria non ripete ciò che le opzioni già mostrano');
+   assert.ok(!card.includes('<img'), `la card porta un'immagine: ${card}`);
+   assert.ok(!card.includes('conv-input-images'), 'nessuna galleria quando la risposta mostra già le immagini');
+   assert.ok(html.includes('elenco-a-interruttore.png&amp;conversation=conv-1" alt="A"') || html.includes('alt="A" src="/api/workspace/file?path='), `l'immagine sta nella risposta dell'agente: ${html}`);
+  });
+ });
+ // La domanda strutturata è una cosa detta alla persona (evento `question`,
+ // proiettato dall'adapter): finché è aperta la dice la card del
+ // questionario, a risposta data resta in storia come riga dell'agente,
+ // sopra la risposta, con il Markdown interpretato — immagini comprese.
+ describe('la domanda resta in storia sopra la risposta', () => {
+  const asked = [
+   { id: 8, seq: 8, at: '2026-11-05T10:00:00.000Z', kind: 'user_message', text: 'Vorrei alleggerire il riepilogo.' },
+   { id: 52, seq: 52, at: '2026-11-05T10:01:00.000Z', kind: 'thinking', text: 'RAGIONAMENTO-NASCOSTO' },
+   { id: 53, seq: 53, at: '2026-11-05T10:01:01.000Z', kind: 'question', text: '**🧭 Costanza** — Come vuoi la chip?\n- **Variante A** — Una chip sola\n\n![Variante A](/Users/x/.archetipo/tmp/mockups/1/offerta-a.png)\n\n- **Variante B** — Solo il codice' },
+  ];
+  const costanza = { id: '0', header: '🧭 Costanza', prompt: 'Come vuoi la chip?', allow_text: true, options: [{ value: 'Variante A', label: 'Variante A', description: 'Una chip sola' }, { value: 'Variante B', label: 'Variante B' }] };
+  const parse = (md) => `<md>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</md>`;
+  it('mentre è aperta la dice solo la card: nessuna riga che la ripeta', () => {
+   const html = renderConversation(Object.assign(pending([costanza]), { events: asked, last_id: 53 }), '', { markedParse: parse });
+   assert.ok(html.includes('conv-questionnaire'), 'la card è aperta');
+   assert.ok(!html.includes('cev-question'), `la riga della domanda raddoppia la card: ${html}`);
+  });
+  it('a risposta data è una riga dell’agente etichettata «domanda», in Markdown, subito sopra la risposta', () => {
+   const answered = [...asked, { id: 54, seq: 54, at: '2026-11-05T10:02:00.000Z', kind: 'user_message', text: 'Variante A' }, { id: 55, seq: 55, at: '2026-11-05T10:02:01.000Z', kind: 'tool_end', tool: 'AskUserQuestion', text: 'User selected: Variante A' }];
+   const html = renderConversation(withConversation({ events: answered, last_id: 55 }), '', { markedParse: parse });
+   const row = html.indexOf('cev-question');
+   assert.ok(row > 0, `riga della domanda assente: ${html}`);
+   assert.ok(html.slice(row).includes('<span class="conv-event-kind">domanda</span>'), 'etichetta «domanda»');
+   assert.ok(html.slice(row).includes('<md>'), 'il testo della domanda è Markdown interpretato');
+   assert.ok(html.slice(row).includes('src="/api/workspace/file?path=%2FUsers%2Fx%2F.archetipo%2Ftmp%2Fmockups%2F1%2Fofferta-a.png&amp;conversation=conv-1"'), `la preview della variante è risolta sul workspace: ${html.slice(row, row + 600)}`);
+   const answer = html.indexOf('cev-you', row);
+   assert.ok(answer > row, 'la risposta sta sotto la domanda');
+   assert.ok(!html.slice(row, answer).includes('conv-tech'), 'niente piega tecnica fra la domanda e la risposta');
+   assert.ok(!html.includes('conv-questionnaire'), 'nessuna card a domanda risposta');
+  });
+  it('senza parser Markdown resta testo escapato', () => {
+   const html = renderConversation(withConversation({ events: [...asked, { id: 54, seq: 54, at: '2026-11-05T10:02:00.000Z', kind: 'user_message', text: 'Variante A' }], last_id: 54 }), '', {});
+   assert.match(html, /\*\*🧭 Costanza\*\* — Come vuoi la chip\?/);
+   assert.doesNotMatch(html, /<img/);
   });
  });
  it('renders choices and free text without asking the person for JSON', () => {
@@ -2251,6 +2301,21 @@ describe('runtime input questions', () => {
   assert.match(html, /Scegli una o più opzioni/);
   assert.doesNotMatch(html, /type="radio"/);
  });
+ // La card ha un tetto: testata, schede e comandi restano fermi, immagini e
+ // campi scorrono nel corpo. La regola di altezza sta nel CSS, letto qui per
+ // nome, perché il renderer non misura niente.
+ it('keeps head, tabs and nav outside the scrolling body that holds images and fields', () => {
+  const card = questionnaireOf(renderConversation(pending([database, sections]), '', {}));
+  const body = card.indexOf('<div class="conv-input-body">');
+  assert.ok(body > 0, `corpo scorrevole assente: ${card}`);
+  assert.ok(card.indexOf('conv-input-head') < body && card.indexOf('conv-input-tabs') < body, 'testata e schede stanno sopra il corpo');
+  assert.ok(card.indexOf('conv-input-fields') > body, 'i campi stanno nel corpo');
+  assert.ok(card.indexOf('conv-input-nav') > card.indexOf('conv-input-fields'), 'i comandi chiudono la card');
+  const css = readFileSync(new URL('../../cli/internal/web/assets/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.conv-questionnaire\s*\{[^}]*max-height:/, 'la card dichiara un tetto di altezza');
+  assert.match(css, /\.conv-input-body\s*\{[^}]*overflow-y:\s*auto/, 'il corpo scorre');
+ });
+
  it('asks several questions one at a time, with a tab per question and the send control on the last', () => {
   const first = questionnaireOf(renderConversation(pending([database, sections]), '', {}));
   assert.match(first, /Quale database\?/);
@@ -2343,7 +2408,7 @@ describe("allegati immagine", () => {
 
 		const offered = renderConversation(LIVE, "", { writable: true, attachmentsOffered: true });
 		assert.ok(offered.includes("data-conversation-attach"));
-		assert.ok(offered.includes('accept="image/png,image/jpeg,image/gif,image/webp"'));
+		assert.ok(offered.includes('<input type="file" class="conv-attach-input" multiple hidden>'));
 	});
 
 	it("mostra le anteprime scelte con il comando per toglierle, e quelle in consegna senza", () => {
@@ -2366,5 +2431,22 @@ describe("allegati immagine", () => {
 		// Un allegato senza indirizzo non ha niente da mostrare e non inventa un percorso.
 		const bare = renderConversation(withConversation({ events: [{ id: 1, seq: 1, kind: "user_message", text: "x", attachments: [{ id: "abc.png", name: "n" }] }] }), "", {});
 		assert.ok(!bare.includes("conv-attachment-img"));
+	});
+
+	it("un file che non è un'immagine è una scheda con il nome: da scaricare nella storia, da togliere nel compositore", () => {
+		const view = withConversation({
+			events: [{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "user_message", text: "leggi", attachments: [{ id: "abc.md", name: "Requisiti.md", media_type: "text/markdown", url: "/INDIRIZZO-DEL-SERVER/abc.md" }] }],
+		});
+		const html = renderConversation(view, "", {});
+		assert.ok(html.includes('href="/INDIRIZZO-DEL-SERVER/abc.md" download="Requisiti.md"'));
+		assert.ok(html.includes("conv-attachment-file"));
+		assert.ok(!html.includes("conv-attachment-img"));
+		assert.ok(visibleText(html).includes("Requisiti.md"));
+		const draft = [{ name: "dati.csv", media_type: "text/csv", data_url: "data:text/csv;base64,QUJD" }];
+		const composer = renderConversation(LIVE, "", { writable: true, attachmentsOffered: true, attachments: draft, pendingMessage: "", pendingAttachments: draft });
+		assert.ok(!composer.includes('src="data:text/csv;base64,QUJD"'));
+		assert.equal((composer.match(/data-conversation-attachment-remove="0"/g) || []).length, 1);
+		assert.ok(visibleText(composer).includes("dati.csv"));
+		assert.ok(composer.includes('<input type="file" class="conv-attach-input" multiple hidden>'));
 	});
 });

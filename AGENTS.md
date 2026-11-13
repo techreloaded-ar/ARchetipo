@@ -40,6 +40,11 @@ remove their data.
 - Only an explicit approval of the displayed commit publishes a PR. Preserve the
   approved SHA/time separately from later developer commits. The viewer never merges
   branches or deploys; moving backlog cards is project management only.
+- A new increment forks from the fetched `origin/<base>` when the repository has
+  an `origin` remote and that tip is ahead of or equal to the local base branch,
+  so merged PRs reach the next increment without a manual pull; a local base that
+  is ahead or diverged, or an unreachable remote, keeps the local tip. The record
+  states `base_source` (`origin`/`local`). The local base branch is never moved.
 - Worktrees provide local working separation, not OS security isolation. Managed
   project recipes own services, ports and test data. Remote/security runtimes are
   future layers; do not claim them as implemented.

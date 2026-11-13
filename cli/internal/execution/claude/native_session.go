@@ -46,7 +46,7 @@ func (p *Provider) DiscoverSession(ctx context.Context, request execution.Sessio
 			session.mu.Unlock()
 		}
 	}
-	if client != nil {
+	if client != nil && !client.sessionOver() {
 		models, err = client.modelCatalog(ctx)
 	} else {
 		models, err = p.listModels(ctx, cfg, dir)
@@ -187,7 +187,11 @@ func (p *Provider) StartTurn(ctx context.Context, request execution.StartTurnReq
 	resume := session.started
 	process := session.process
 	client := session.client
-	if process == nil || cfg.Model != session.cfg.Model || cfg.Effort != session.cfg.Effort || cfg.PermissionMode != session.cfg.PermissionMode {
+	// The process of the previous turn is reused when it is still there and
+	// the turn asks for what it was started with. A process that left while
+	// idle, or one started for another model, effort or permission mode, is
+	// replaced: those are flags of the command line, not of a message.
+	if process == nil || client.sessionOver() || cfg.Model != session.cfg.Model || cfg.Effort != session.cfg.Effort || cfg.PermissionMode != session.cfg.PermissionMode {
 		if process != nil {
 			_, _, _ = p.shutdown(process)
 			session.process, session.client = nil, nil
@@ -256,10 +260,25 @@ func (p *Provider) connectNativeProcess(session *nativeSession, resume bool) err
 	return nil
 }
 
+// finishNativeTurn marks the turn over once the process declares it so, and
+// leaves the process attached to the session.
+//
+// The end of a turn is not the end of the connection: the process stays, and
+// the next turn with the same settings is written to it, so an agent started in
+// the background during the turn keeps running and its notification reaches
+// the conversation on the same process, and no turn pays the start-up of the
+// harness again. What releases the process is a change of settings at the next
+// turn, ReleaseSession — the idle releaser of the viewer included — and the end
+// of the conversation. A process that ended the turn by leaving is the one
+// exception: there is nothing left to keep, and it is reaped here so that the
+// next turn starts a fresh one.
 func (p *Provider) finishNativeTurn(session *nativeSession, client *streamSession, process localrun.Process) {
 	<-client.TurnDone()
 	completed := client.Completed()
-	_, _, _ = p.shutdown(process)
+	gone := client.sessionOver()
+	if gone {
+		_, _, _ = p.shutdown(process)
+	}
 	now := p.now().UTC()
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -274,7 +293,9 @@ func (p *Provider) finishNativeTurn(session *nativeSession, client *streamSessio
 		session.current.State = state
 		session.current.CompletedAt = &now
 	}
-	session.process, session.client = nil, nil
+	if gone {
+		session.process, session.client = nil, nil
+	}
 }
 
 func (p *Provider) StreamSessionEvents(ctx context.Context, request execution.SessionRequest, afterID int64, sink func(execution.RunEvent) error) error {

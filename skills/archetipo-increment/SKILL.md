@@ -105,7 +105,12 @@ with the file's absolute path:
 
 Send that message — one image line per variant, each followed by what differs
 from the others — before any structured question that asks to choose between
-them, and name the variants in the question with the same words. When the
+them, and name the variants in the question with the same words. It must be a
+message of the conversation: what you write while reasoning is never shown to
+the person, and a proposal that exists only in the option descriptions of the
+question is a proposal nobody has read. The same holds for every structured
+question: first the message where each personality says what it proposes and
+why, then the question that only names the choices. When the
 structured question offers the variants as options, put each variant's image
 line in that option's `preview` field as well, so the picture sits beside the
 choice it illustrates:

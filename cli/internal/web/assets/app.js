@@ -5008,7 +5008,7 @@
 			// of typing can reach the parser.
 			input.value = runDraft;
 			if (composerHadFocus && !input.disabled) {
-				input.focus();
+				input.focus({ preventScroll: true });
 				const at = Math.min(caret, input.value.length);
 				input.setSelectionRange(at, at);
 			}
@@ -5538,6 +5538,9 @@
 	// inside the payload. A second holder for the past ones would be a second
 	// place claiming to hold a conversation.
 	let conversationsIndex = null; // last read of GET /api/workspace/conversations
+	// La vista (eventi esclusi) dell'ultimo ridisegno fatto dal poll: un tick
+	// che la ritrova identica e senza eventi nuovi non ridisegna.
+	let conversationRenderedSignature = "";
 	let conversationsCurrentId = ""; // which thread the panel is showing
 	// L'ultima conversazione eliminata, col suo record intero: è quello che il
 	// bottone «Annulla» rimette sul disco. Vive qui e da nessun'altra parte —
@@ -5846,6 +5849,15 @@
 				renderConversationPanel();
 				return;
 			}
+			// Un'immagine della storia — nella risposta dell'agente, fra gli
+			// allegati, nella galleria di una domanda — si apre a grandezza
+			// piena qui, senza cambiare scheda.
+			const image = e.target.closest(".conv-timeline img, .conv-input-images img");
+			if (image && image.getAttribute("src")) {
+				e.preventDefault();
+				openImageLightbox(image.getAttribute("src"), image.getAttribute("alt") || "");
+				return;
+			}
 			if (e.target.closest("[data-conversation-attach]")) {
 				container.querySelector(".conv-attach-input")?.click();
 				return;
@@ -6086,14 +6098,36 @@
 			addConversationAttachments(e.target.files);
 			e.target.value = "";
 		});
-		// Un'immagine incollata nel campo è un allegato, non testo: il browser
-		// non saprebbe che farne, e chi incolla una schermata vuole mandarla.
+		// Un file incollato nel campo è un allegato, non testo: il browser non
+		// saprebbe che farne, e chi incolla una schermata o un documento vuole
+		// mandarlo.
 		container.addEventListener("paste", (e) => {
 			if (!e.target.closest(".conv-composer-input") || !conversationCapabilities.includes("turn.attachments")) return;
-			const files = Array.from(e.clipboardData?.files || []).filter((f) => f.type.startsWith("image/"));
+			const files = Array.from(e.clipboardData?.files || []);
 			if (!files.length) return;
 			e.preventDefault();
 			addConversationAttachments(files);
+		});
+		// Un file trascinato sul compositore è un allegato: il browser lo
+		// aprirebbe come pagina, e chi lo lascia qui vuole mandarlo. Il bordo
+		// si evidenzia finché il trascinamento sta sopra al compositore.
+		const dropTarget = (e) => conversationCapabilities.includes("turn.attachments") && Array.from(e.dataTransfer?.types || []).includes("Files") ? e.target.closest(".conv-composer") : null;
+		container.addEventListener("dragover", (e) => {
+			const composer = dropTarget(e);
+			if (!composer) return;
+			e.preventDefault();
+			composer.classList.add("is-dragover");
+		});
+		container.addEventListener("dragleave", (e) => {
+			const composer = e.target.closest(".conv-composer");
+			if (composer && !composer.contains(e.relatedTarget)) composer.classList.remove("is-dragover");
+		});
+		container.addEventListener("drop", (e) => {
+			const composer = dropTarget(e);
+			if (!composer) return;
+			e.preventDefault();
+			composer.classList.remove("is-dragover");
+			addConversationAttachments(e.dataTransfer.files);
 		});
 		container.addEventListener("toggle", (e) => {
 			if (e.target.matches("[data-increment-section]")) conversationIncrementSections[e.target.getAttribute("data-increment-section")] = e.target.open;
@@ -6541,6 +6575,9 @@
 			if (token === conversationsIndexLoadToken) conversationsIndexBusy = false;
 		}
 		if (token !== conversationsIndexLoadToken) return;
+		// Stesso indice, stessa rail: ridisegnarla a ogni tick del poll non
+		// porta nulla e toglie lo scroll e il focus a chi la sta usando.
+		if (JSON.stringify(view) === JSON.stringify(conversationsIndex)) return;
 		conversationsIndex = view;
 		renderConversationsRail();
 	}
@@ -7636,9 +7673,18 @@
 			// started, and nothing of it may reach the one that is on screen now.
 			if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 			conversationPollFailures = 0;
+			const hadLink = conversationLink !== "";
 			conversationLink = "";
 			const appended = applyConversationView(view);
-			renderConversationPanel();
+			// Il pannello è ricostruito per intero da innerHTML: farlo a ogni
+			// tick, anche quando il server non ha detto nulla di nuovo, costa
+			// focus e scroll a chi sta leggendo. Si ridisegna solo se sono
+			// arrivati eventi o se il resto della vista è cambiato.
+			const signature = JSON.stringify(Object.assign({}, view, { events: undefined }));
+			if (appended > 0 || hadLink || signature !== conversationRenderedSignature) {
+				conversationRenderedSignature = signature;
+				renderConversationPanel();
+			}
 			// One loop, two things kept true: the conversation on screen and the
 			// index beside it. The rail's "in corso" mark and its last moment are
 			// facts about the very conversation this tick just read, so they
@@ -7921,22 +7967,43 @@
 		}
 	}
 
-	// addConversationAttachments legge le immagini scelte o incollate e le mette
-	// in coda al prossimo messaggio, come anteprima e come base64. I formati
-	// sono quelli che il server accetta; tutto il resto viene ignorato.
-	const CONVERSATION_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+	// openImageLightbox mostra un'immagine a tutto schermo in un dialog
+	// nativo: un click sull'immagine passa alla grandezza naturale e viceversa,
+	// un click fuori o Escape chiude. Un mockup ridotto a 300 pixel non si
+	// giudica, e una scheda nuova fa perdere il filo della conversazione.
+	function openImageLightbox(src, alt) {
+		const dialog = document.createElement("dialog");
+		dialog.className = "conv-lightbox";
+		dialog.setAttribute("aria-label", alt || "Immagine a grandezza piena");
+		const image = document.createElement("img");
+		image.src = src;
+		image.alt = alt;
+		dialog.append(image);
+		document.body.append(dialog);
+		dialog.addEventListener("click", (e) => {
+			if (e.target === image) dialog.classList.toggle("is-zoomed");
+			else dialog.close();
+		});
+		dialog.addEventListener("close", () => dialog.remove(), { once: true });
+		dialog.showModal();
+	}
+
+	// addConversationAttachments legge i file scelti o incollati e li mette in
+	// coda al prossimo messaggio, come anteprima e come base64. Qualsiasi
+	// formato: un tipo che il browser non conosce parte come binario e il
+	// server lo tiene com'è.
 	// attachmentUploads è la forma in cui ogni route che apre un turno riceve
-	// le immagini: nome, tipo e base64, senza l'anteprima locale.
+	// i file: nome, tipo e base64, senza l'anteprima locale.
 	function attachmentUploads(attachments) {
 		return attachments.map((a) => ({ name: a.name, media_type: a.media_type, data_base64: a.data_base64 }));
 	}
 	function addConversationAttachments(files) {
-		const accepted = Array.from(files || []).filter((f) => CONVERSATION_IMAGE_TYPES.includes(f.type));
+		const accepted = Array.from(files || []).filter((f) => f && f.size > 0);
 		if (!accepted.length) return;
 		const id = conversationsCurrentId;
 		Promise.all(accepted.map((file) => new Promise((resolve) => {
 			const reader = new FileReader();
-			reader.onload = () => resolve({ name: file.name || "immagine", media_type: file.type, data_url: String(reader.result), data_base64: String(reader.result).split(",")[1] || "" });
+			reader.onload = () => resolve({ name: file.name || "allegato", media_type: file.type || "application/octet-stream", data_url: String(reader.result), data_base64: String(reader.result).split(",")[1] || "" });
 			reader.onerror = () => resolve(null);
 			reader.readAsDataURL(file);
 		}))).then((read) => {
@@ -8186,7 +8253,7 @@
   window.WorkspacePanels?.configure({
 			key: previewTarget ? previewTarget.root + ":" + previewTarget.id : "",
 			hasDetails: !!(conversationView?.increment || conversationView?.spec_drafts),
-			detailsLabel: conversationView?.increment ? "Specifica e verifiche" : "Storie",
+			detailsLabel: conversationView?.increment ? "Specifica e decisioni" : "Storie",
 		});
 		if (window.WorkspacePanels?.detailsSelected()) {
 			if (conversationView?.increment) conversationIncrementSections["panel-" + conversationView.increment.id] = true;
@@ -8200,6 +8267,15 @@
 		}
 		if (!conversationEl) return;
 		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
+		// Il questionario scorre dentro il proprio corpo — `.conv-input-body`
+		// ha un tetto in CSS — ed è un contenitore in più da riportare dov'era,
+		// per form, altrimenti ogni ridisegno lo riporta in cima mentre si
+		// leggono le opzioni.
+		const inputBodyScroll = {};
+		conversationEl.querySelectorAll("[data-conversation-input-form]").forEach((form) => {
+			const body = form.querySelector(".conv-input-body");
+			if (body && body.scrollTop) inputBodyScroll[form.getAttribute("data-conversation-input-form")] = body.scrollTop;
+		});
 		const proposalScroll = conversationEl.parentElement.querySelector(".conv-story-proposals")?.scrollTop || 0;
 		const increment = conversationEl.parentElement.querySelector(".conv-increment-body");
 		const incrementScroll = increment && { id: conversationView?.increment?.id, top: increment.scrollTop, focused: increment === document.activeElement };
@@ -8359,7 +8435,7 @@
 			input.value = conversationDraft;
 			adattaAltezzaCompositore(input);
 			if (composerHadFocus && !input.disabled) {
-				input.focus();
+				input.focus({ preventScroll: true });
 				const at = Math.min(caret, input.value.length);
 				input.setSelectionRange(at, at);
 			}
@@ -8368,12 +8444,19 @@
 			const form = Array.from(conversationEl.querySelectorAll("[data-conversation-input-form]")).find((candidate) => candidate.getAttribute("data-conversation-input-form") === answerFocus.id);
 			const field = form && form.elements[answerFocus.index];
 			if (field && !field.disabled) {
-				field.focus();
+				// Senza preventScroll il browser riporterebbe in vista il campo a
+				// ogni ridisegno, e con esso lo scroll del questionario.
+				field.focus({ preventScroll: true });
 				if (typeof answerFocus.start === "number" && typeof field.setSelectionRange === "function") field.setSelectionRange(answerFocus.start, answerFocus.end);
 			}
 		}
 		const nextDiscussion = conversationEl.querySelector(".conv-discussion");
 		if (nextDiscussion) nextDiscussion.scrollTop = discussionScroll;
+		Object.keys(inputBodyScroll).forEach((id) => {
+			const form = Array.from(conversationEl.querySelectorAll("[data-conversation-input-form]")).find((candidate) => candidate.getAttribute("data-conversation-input-form") === id);
+			const body = form && form.querySelector(".conv-input-body");
+			if (body) body.scrollTop = inputBodyScroll[id];
+		});
 		placeChoicePopover(conversationEl, "conversation");
 		placeFloatingMenu(conversationEl.querySelector(".conv-activities.is-menu"),
 			conversationEl.querySelector("[data-conversation-activities-toggle]"));

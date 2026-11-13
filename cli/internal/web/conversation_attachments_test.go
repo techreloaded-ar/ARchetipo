@@ -73,9 +73,9 @@ func TestConversationAttachmentsAreStoredHandedToTheTurnAndServedBack(t *testing
 		}
 	}
 
-	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "x", "attachments": []any{map[string]any{"name": "a.svg", "media_type": "image/svg+xml", "data_base64": "QUJD"}}})
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "x", "attachments": []any{map[string]any{"name": "a.txt", "media_type": "not a media type", "data_base64": "QUJD"}}})
 	if status != http.StatusBadRequest || !strings.Contains(string(body), "media_type") {
-		t.Fatalf("unknown media type = %d: %s", status, body)
+		t.Fatalf("malformed media type = %d: %s", status, body)
 	}
 	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "x", "attachments": []any{map[string]any{"name": "a.png", "media_type": "image/png", "data_base64": "not base64!"}}})
 	if status != http.StatusBadRequest || !strings.Contains(string(body), "data_base64") {
@@ -129,6 +129,72 @@ func TestAttachmentsTravelWithTheWordsThatStartAnAction(t *testing.T) {
 	dir, _ = srv.session().conversationStore().AttachmentsDir(thread)
 	if len(start.Attachments) != 1 || filepath.Dir(start.Attachments[0].Path) != dir || !strings.Contains(start.Message, "una storia") {
 		t.Fatalf("the workspace start lost the attachment or the words: %#v (dir %s) %q", start.Attachments, dir, start.Message)
+	}
+}
+
+// A file that is not an image is stored like an image and shown back like
+// one, but reaches the agent differently: no harness takes a document as a
+// block, so the words that are sent name its path, while the words the
+// history shows stay the person's own. The route serves it as a download, so
+// a stored page is never rendered under the viewer's origin.
+func TestAFileThatIsNotAnImageReachesTheTurnAsAPathToRead(t *testing.T) {
+	provider := newPersistentFakeNativeProvider("native-fake", nil)
+	provider.acceptsAttachments = true
+	srv, _, _ := newRunServer(t, provider, true)
+	httpServer := httptest.NewServer(srv.mux)
+	defer httpServer.Close()
+
+	status, body := nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute, map[string]any{})
+	if status != http.StatusCreated {
+		t.Fatalf("open = %d: %s", status, body)
+	}
+	id := decodeConversation(t, string(body)).Conversation.ID
+	document := map[string]any{"name": "../Requisiti.MD", "media_type": "text/markdown", "data_base64": base64.StdEncoding.EncodeToString([]byte("# Requisiti"))}
+	image := map[string]any{"name": "schermata.png", "media_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("PNGBYTES"))}
+
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"message": "leggi qui", "attachments": []any{document, image}})
+	if status != http.StatusAccepted {
+		t.Fatalf("message with a document = %d: %s", status, body)
+	}
+	start := provider.lastStart
+	if len(start.Attachments) != 2 {
+		t.Fatalf("turn = %#v", start)
+	}
+	stored := start.Attachments[0]
+	if stored.Name != "Requisiti.MD" || stored.MediaType != "text/markdown" || !strings.HasSuffix(stored.ID, ".md") || stored.IsImage() {
+		t.Fatalf("document = %#v", stored)
+	}
+	if !strings.HasPrefix(start.Message, "leggi qui\n\n") || !strings.Contains(start.Message, "Requisiti.MD (text/markdown): "+stored.Path) || strings.Contains(start.Message, "schermata.png") {
+		t.Fatalf("the sent words do not name the document's path, or name the image: %q", start.Message)
+	}
+	if start.Display != "leggi qui" {
+		t.Fatalf("the history would show %q", start.Display)
+	}
+
+	response, err := http.Get(httpServer.URL + stored.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make([]byte, 32)
+	n, _ := response.Body.Read(served)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/octet-stream" || response.Header.Get("Content-Disposition") != "attachment" || string(served[:n]) != "# Requisiti" {
+		t.Fatalf("served = %d %s %s %q", response.StatusCode, response.Header.Get("Content-Type"), response.Header.Get("Content-Disposition"), served[:n])
+	}
+
+	// Files without words, steered into the open turn: the history shows
+	// their names, and a type the browser did not know is kept as binary.
+	unknown := map[string]any{"name": "dati", "media_type": "", "data_base64": base64.StdEncoding.EncodeToString([]byte{0, 1, 2})}
+	status, body = nativeHTTPRequest(t, httpServer.URL, http.MethodPost, conversationsRoute+"/"+id+"/messages", map[string]any{"attachments": []any{unknown}})
+	if status != http.StatusAccepted {
+		t.Fatalf("file without words = %d: %s", status, body)
+	}
+	steer := provider.lastSteer
+	if len(steer.Attachments) != 1 || steer.Attachments[0].MediaType != "application/octet-stream" || !strings.HasSuffix(steer.Attachments[0].ID, ".bin") {
+		t.Fatalf("unknown type = %#v", steer.Attachments)
+	}
+	if steer.Display != "dati" || !strings.Contains(steer.Message, "dati (application/octet-stream): "+steer.Attachments[0].Path) {
+		t.Fatalf("display %q, message %q", steer.Display, steer.Message)
 	}
 }
 

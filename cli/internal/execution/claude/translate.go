@@ -34,6 +34,7 @@ type contentBlock struct {
 	Text      string          `json:"text"`
 	Thinking  string          `json:"thinking"`
 	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
 	ID        string          `json:"id"`
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
@@ -82,6 +83,15 @@ func (s *streamSession) project(f frame, raw json.RawMessage) {
 	case frameUser:
 		s.projectUser(f, raw)
 	case frameResult:
+		if f.NumTurns == 0 && f.Origin.Kind != "" {
+			// A result the harness emitted for a queued item of its own — a
+			// task notification about a background agent the previous process
+			// did not finish — closes no turn of the agent: zero turns ran. The
+			// turn the person started is still ahead, and taking this result
+			// for its end would shut the process down mid-work.
+			s.append(f.Type+"/"+f.Origin.Kind, "", "", raw)
+			return
+		}
 		// A result frame is the process's own statement that the turn is over.
 		// Only a result that reports no error can carry a plan: an interrupted
 		// turn also ends with a result, and reports `error_during_execution`.
@@ -140,6 +150,9 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 		case "text":
 			s.mu.Lock()
 			s.lastAssistantText = block.Text
+			if strings.TrimSpace(block.Text) != "" {
+				s.saidSinceUser = true
+			}
 			s.mu.Unlock()
 			s.append(localrun.KindText, block.Text, "", raw)
 		case "thinking":
@@ -149,6 +162,15 @@ func (s *streamSession) projectAssistant(f frame, raw json.RawMessage) {
 				s.mu.Lock()
 				s.tools[block.ID] = block.Name
 				s.mu.Unlock()
+			}
+			// A structured question is something the agent said to the
+			// person, not a tool it ran: it enters the history as readable
+			// text — but only once it is really put to them, in askInput.
+			// A question sent back for lack of a preface never reaches the
+			// person, and a row for it would read as a question nobody
+			// answered.
+			if _, ok := parseAskUserQuestion(block.Name, block.Input); ok {
+				continue
 			}
 			s.append(localrun.KindToolStart, "", block.Name, raw)
 		default:
@@ -255,6 +277,10 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 // appendUserMessage appends what the person said, with the images they
 // attached to it.
 func (s *streamSession) appendUserMessage(text string, attachments []execution.Attachment, raw json.RawMessage) {
+	s.mu.Lock()
+	s.saidSinceUser = false
+	s.questionRefused = false
+	s.mu.Unlock()
 	s.appendWith(execution.RunEvent{Kind: localrun.KindUserMessage, Text: text, Attachments: execution.AttachmentReferences(attachments), Raw: raw})
 }
 
@@ -403,7 +429,7 @@ func (s *streamSession) storeToolResultImages(content json.RawMessage, filePath 
 		if err != nil {
 			continue
 		}
-		attachment, err := execution.StoreAttachment(s.attachmentsDir, image.MediaType, data)
+		attachment, err := execution.StoreAttachment(s.attachmentsDir, "", image.MediaType, data)
 		if err != nil {
 			continue
 		}

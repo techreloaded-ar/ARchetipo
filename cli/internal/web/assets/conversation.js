@@ -113,8 +113,8 @@
 		pendingMessageTitle: "Consegnato all'agente: comparirà nella storia quando l'agente lo riporta",
 		// Immagini allegate al messaggio. Il comando c'è solo se il server ha
 		// detto che il provider le accetta: il pannello non lo sa da sé.
-		attach: "Allega immagine",
-		attachRemove: "Rimuovi l'immagine",
+		attach: "Allega file",
+		attachRemove: "Rimuovi l'allegato",
 		// Blocco run
 		markRun: "Attività",
 		runLogEmpty: "Questa run non ha ancora pubblicato niente.",
@@ -259,6 +259,10 @@
 	// portano, e si apre.
 	const EVENT_KINDS = {
 		text: { label: "agente", variant: "cev-agent" },
+		// Una domanda strutturata che l'agente ha posto: è una cosa detta
+		// alla persona, e resta in storia sopra la risposta anche quando la
+		// card del questionario non c'è più.
+		question: { label: "domanda", variant: "cev-agent cev-question" },
 		thinking: { label: "ragionamento", variant: "cev-thinking", technical: true },
 		worker_message: { label: "agente delegato", variant: "cev-thinking", technical: true },
 		user_message: { label: "tu", variant: "cev-you" },
@@ -410,11 +414,12 @@
 	// sempre. Il parser inserisce il proprio HTML non escapato: è la stessa
 	// postura con cui la pagina rende i corpi di spec, piano e PRD.
 	//
-	function renderAgentText(events, parse, receiptLines, conversationID) {
+	function renderAgentText(events, parse, receiptLines, conversationID, entry) {
 		if (!events.length) return "";
+		const kindEntry = entry || EVENT_KINDS.text;
 		const last = events[events.length - 1];
 		const head = [
-			`<span class="conv-event-kind">${escapeHtml(EVENT_KINDS.text.label)}</span>`,
+			`<span class="conv-event-kind">${escapeHtml(kindEntry.label)}</span>`,
 		];
 		const stamp = formatTime(last.at);
 		if (stamp) {
@@ -443,7 +448,7 @@
 				: String(events[0].id);
 		const lastID = last.id === null || last.id === undefined ? "" : String(last.id);
 		const railID = firstID === lastID ? firstID : `${firstID}–${lastID}`;
-		return `<li class="conv-event cev-agent">
+		return `<li class="conv-event ${kindEntry.variant}">
 			<div class="conv-event-rail"><span class="conv-event-glyph" aria-hidden="true"></span>#${escapeHtml(railID)}</div>
 			<div class="conv-event-body">
 				<div class="conv-event-head">${head.join("")}</div>
@@ -1088,6 +1093,21 @@
 				turnShowedImage = false;
 			};
 			let streamMetadata = [];
+			// La domanda ancora aperta è la card del questionario, con le sue
+			// scelte da premere, non una riga della storia: finché nessuna
+			// risposta l'ha seguita, la riga tace per non dirla due volte.
+			let openQuestionID = "";
+			if (hasPendingQuestionnaire(view)) {
+				for (let i = events.length - 1; i >= 0; i--) {
+					const kind = eventKind(events[i]);
+					if (kind === "user_message") break;
+					if (kind === "question") {
+						openQuestionID = String(events[i].id);
+						break;
+					}
+				}
+			}
+			const conversationID = textAt(objectAt(view, "conversation"), "id");
 			const flushAgent = () => {
 				if (!agentRun.length) return;
 				const answer = renderAgentText(agentRun, markedParse, [...arrayAt(objectAt(view, "spec_drafts"), "receipt_lines"), ...arrayAt(view, "runs").flatMap(run => arrayAt(run, "receipt_lines"))], textAt(objectAt(view, "conversation"), "id"));
@@ -1129,6 +1149,10 @@
 					const previous = agentRun[agentRun.length - 1];
 					if (previous && event.message_id && previous.message_id && event.message_id !== previous.message_id) flushAgent();
 					agentRun.push(event);
+				} else if (eventKind(event) === "question") {
+					flushTechnical();
+					flushAgent();
+					if (String(event.id) !== openQuestionID) rows.push(renderAgentText([event], markedParse, [], conversationID, EVENT_KINDS.question));
 				} else {
 					flushTechnical();
 					flushAgent();
@@ -1190,23 +1214,38 @@
 		return `<ol class="conv-timeline${frozen}">${rows.join("")}</ol>`;
 	}
 
-	// Le immagini di un evento della storia, servite dall'indirizzo che
-	// l'evento stesso porta: il pannello non costruisce indirizzi.
+	// Un allegato è un'immagine quando il server lo dichiara tale: solo quella
+	// si mostra come anteprima, ogni altro file come scheda con il suo nome.
+	function attachmentIsImage(attachment) {
+		return textAt(attachment, "media_type").toLowerCase().startsWith("image/");
+	}
+	function renderAttachmentFileChip(name) {
+		return `<span class="conv-attachment-file"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/></svg><span class="conv-attachment-file-name">${escapeHtml(name)}</span></span>`;
+	}
+
+	// Gli allegati di un evento della storia, serviti dall'indirizzo che
+	// l'evento stesso porta: il pannello non costruisce indirizzi. Un'immagine
+	// si apre a grandezza piena, un file si scarica con il suo nome.
 	function renderEventAttachments(attachments) {
 		const items = attachments.filter((a) => a && textAt(a, "url"));
 		if (!items.length) return "";
 		return `<ul class="conv-attachments">${items
-			.map((a) => `<li class="conv-attachment"><a href="${escapeHtml(textAt(a, "url"))}" target="_blank" rel="noopener"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "url"))}" alt="${escapeHtml(textAt(a, "name"))}" loading="lazy"></a></li>`)
+			.map((a) => attachmentIsImage(a)
+				? `<li class="conv-attachment"><a href="${escapeHtml(textAt(a, "url"))}" target="_blank" rel="noopener"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "url"))}" alt="${escapeHtml(textAt(a, "name"))}" loading="lazy"></a></li>`
+				: `<li class="conv-attachment"><a class="conv-attachment-file-link" href="${escapeHtml(textAt(a, "url"))}" download="${escapeHtml(textAt(a, "name"))}">${renderAttachmentFileChip(textAt(a, "name"))}</a></li>`)
 			.join("")}</ul>`;
 	}
 
-	// Le immagini ancora nel compositore o in consegna: anteprime locali, con
-	// il comando per toglierle finché non sono partite.
+	// Gli allegati ancora nel compositore o in consegna: anteprime locali per
+	// le immagini, il nome per gli altri file, con il comando per toglierli
+	// finché non sono partiti.
 	function renderDraftAttachments(attachments, removable) {
-		const items = arrayAt({ a: attachments }, "a").filter((a) => a && textAt(a, "data_url"));
+		const items = arrayAt({ a: attachments }, "a").filter((a) => a && (textAt(a, "data_url") || textAt(a, "name")));
 		if (!items.length) return "";
 		return `<ul class="conv-attachments${removable ? " conv-attachments-draft" : ""}">${items
-			.map((a, i) => `<li class="conv-attachment"><img class="conv-attachment-img" src="${escapeHtml(textAt(a, "data_url"))}" alt="${escapeHtml(textAt(a, "name"))}">${
+			.map((a, i) => `<li class="conv-attachment">${attachmentIsImage(a) && textAt(a, "data_url")
+				? `<img class="conv-attachment-img" src="${escapeHtml(textAt(a, "data_url"))}" alt="${escapeHtml(textAt(a, "name"))}">`
+				: renderAttachmentFileChip(textAt(a, "name"))}${
 				removable ? `<button type="button" class="conv-attachment-remove" data-conversation-attachment-remove="${i}" title="${escapeHtml(TEXT.attachRemove)}" aria-label="${escapeHtml(TEXT.attachRemove)}">×</button>` : ""
 			}</li>`)
 			.join("")}</ul>`;
@@ -1323,10 +1362,11 @@
 			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
 			: "";
 		// Il comando per allegare c'è solo quando il server lo ha offerto; le
-		// anteprime delle immagini scelte stanno sopra al campo, dove si legge
-		// quello che partirà.
+		// anteprime dei file scelti stanno sopra al campo, dove si legge quello
+		// che partirà. Qualsiasi file: le immagini le vede l'agente, gli altri
+		// li legge dal disco.
 		const attachControl = ui.attachmentsOffered === true && writable
-			? `<button type="button" class="conv-attach-btn" data-conversation-attach title="${escapeHtml(TEXT.attach)}" aria-label="${escapeHtml(TEXT.attach)}"${disabled}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10.5 4.5 5.8 9.2a1.7 1.7 0 0 0 2.4 2.4l5-5a3.2 3.2 0 0 0-4.5-4.5l-5.3 5.3a4.6 4.6 0 0 0 6.5 6.5l3.6-3.6"/></svg></button><input type="file" class="conv-attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>`
+			? `<button type="button" class="conv-attach-btn" data-conversation-attach title="${escapeHtml(TEXT.attach)}" aria-label="${escapeHtml(TEXT.attach)}"${disabled}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10.5 4.5 5.8 9.2a1.7 1.7 0 0 0 2.4 2.4l5-5a3.2 3.2 0 0 0-4.5-4.5l-5.3 5.3a4.6 4.6 0 0 0 6.5 6.5l3.6-3.6"/></svg></button><input type="file" class="conv-attach-input" multiple hidden>`
 			: "";
 		// Una riga sola: il campo cresce mentre si scrive, modello e Invia gli
 		// restano accanto. I prossimi passi dell'incremento stanno sopra.
@@ -1418,16 +1458,19 @@
 	 * options and flags are the adapter's words.
 	 */
 	// The preview an option carries — the harness's own field for mockups and
-	// visual comparisons — is Markdown like an agent answer, images included.
+	// visual comparisons — is Markdown like an agent answer, but its images
+	// are not drawn here: the agent shows them in its own answer, right above
+	// the card, and the choice reads as text alone — variant A, variant B.
+	// What is left of the preview once the images are gone, if anything, is
+	// drawn beside the option.
 	function renderInputOptionPreview(option, context) {
 		const source = textAt(option, "preview");
 		if (!source) return "";
 		const parse = context && typeof context.markedParse === "function" ? context.markedParse : null;
-		const body = parse ? resolveWorkspaceImages(parse(source), context.conversationID) : `<p>${escapeHtml(source)}</p>`;
-		// Ogni immagine si apre a grandezza piena in una scheda nuova: un
-		// mockup ridotto a 300 pixel non si giudica.
-		const zoomable = body.replace(/<img\b[^>]*\bsrc=(["'])([^"']*)\1[^>]*>/gi, (img, quote, src) => `<a href="${src}" target="_blank" rel="noopener">${img}</a>`);
-		return `<div class="conv-input-preview markdown-rendered">${zoomable}</div>`;
+		const body = parse ? parse(source) : `<p>${escapeHtml(source)}</p>`;
+		const textOnly = body.replace(/<img\b[^>]*>/gi, "").replace(/<p>\s*<\/p>/gi, "");
+		if (!textOnly.replace(/<[^>]+>/g, "").trim()) return "";
+		return `<div class="conv-input-preview markdown-rendered">${textOnly}</div>`;
 	}
 
 	function renderInputQuestion(question, index, draft, busy, withTabs, context) {
@@ -1471,12 +1514,12 @@
 	 * the page's choice (`ui.inputSteps`), like the drafts.
 	 */
 	// Le immagini che il turno ha letto per questa domanda, sopra le opzioni:
-	// la didascalia è il nome del file, perché è l'unico nome che hanno. Se
-	// un'opzione mostra già un'immagine nella sua preview, l'agente ha
-	// accoppiato da sé varianti e scelte e la galleria non ripete niente.
-	function renderQuestionImages(images, optionsHtml) {
+	// la didascalia è il nome del file, perché è l'unico nome che hanno. La
+	// galleria c'è solo quando l'agente non le ha mostrate da sé nella
+	// risposta: altrimenti la card è testo e basta.
+	function renderQuestionImages(images) {
 		const items = (Array.isArray(images) ? images : []).filter((image) => image && textAt(image, "url"));
-		if (!items.length || /<img\b/i.test(optionsHtml)) return "";
+		if (!items.length) return "";
 		return `<div class="conv-input-images">${items.map((image) => {
 			// Un nome che è solo l'impronta del contenuto non dice niente: niente didascalia.
 			const stem = textAt(image, "name").replace(/\.[a-z0-9]+$/i, "");
@@ -1503,11 +1546,13 @@
 			? `<button type="button" class="primary-btn" data-conversation-input-step="next"${disabled}>${escapeHtml(TEXT.inputNext)}</button>`
 			: `<button type="submit" class="primary-btn"${ui.busy || !complete ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>`;
 		const fields = renderInputQuestion(questions[step], step, draft, ui.busy, total > 1, context);
+		// Head, tabs and nav stay put; images and fields scroll inside the
+		// body, so the card never grows past its ceiling and the conversation
+		// that led to the question stays readable above it.
 		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
 				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${counter}</div>
-				${renderQuestionImages(context && context.images, fields)}
 				${tabs}
-				<div class="conv-input-fields">${fields}</div>
+				<div class="conv-input-body">${renderQuestionImages(context && context.images)}<div class="conv-input-fields">${fields}</div></div>
 				<div class="conv-input-nav">${previous}${forward}</div>
 			</form>`;
 	}
@@ -1576,7 +1621,9 @@
 				const state = textAt(phase, "state");
 				return `<li class="conv-phase is-${escapeHtml(state || "todo")}"${state === "current" ? ' aria-current="step"' : ""}>${escapeHtml(textAt(phase, "label"))}${renderPhaseStories(phase)}</li>`;
 			}).join("")}</ol>`
-			: dir ? `<code class="conv-dir" title="${escapeHtml(dir)}">${escapeHtml(dir)}</code>` : "";
+			// Il segno &lrm; tiene la barra iniziale a sinistra: .conv-dir tronca
+			// dall'inizio, perché la coda del percorso è il nome della cartella.
+			: dir ? `<code class="conv-dir" title="${escapeHtml(dir)}">&lrm;${escapeHtml(dir)}</code>` : "";
 		const providerHtml = agent
 			? `<span class="conv-provider" title="${escapeHtml(agent)}">${escapeHtml(agent)}</span>`
 			: "";

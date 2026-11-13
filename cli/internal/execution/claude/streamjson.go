@@ -48,6 +48,16 @@ type frame struct {
 	Message json.RawMessage `json:"message"`
 	Result  string          `json:"result"`
 	IsError bool            `json:"is_error"`
+	// NumTurns and Origin tell a result that ended a turn of the agent apart
+	// from one the harness emits for its own bookkeeping: on resume, Claude
+	// reports a background task orphaned by the previous process through a
+	// queued notification, and closes that queue item with a result of zero
+	// turns whose origin names it. That result is not the end of the turn the
+	// person just started.
+	NumTurns int `json:"num_turns"`
+	Origin   struct {
+		Kind string `json:"kind"`
+	} `json:"origin"`
 	// IsSynthetic marks a user frame the harness composed by itself — the
 	// note it adds beside an image it resized — which is not a person's words.
 	IsSynthetic   bool     `json:"isSynthetic"`
@@ -151,8 +161,15 @@ type streamSession struct {
 	completed         bool
 	finalMessage      string
 	lastAssistantText string
-	nextControl       int
-	pending           map[string]chan controlOutcome
+	// saidSinceUser reports whether the agent has written anything the
+	// person can read since their last message: a text block, never a
+	// thinking block. questionRefused remembers that one structured question
+	// of this exchange was already sent back for lack of such a message, so a
+	// second attempt is let through rather than refused forever.
+	saidSinceUser   bool
+	questionRefused bool
+	nextControl     int
+	pending         map[string]chan controlOutcome
 	// tools maps a tool_use_id to the name of the tool that opened it, so the
 	// result frame can name the tool it belongs to. It is cleared at the end of
 	// every turn: a map that lived for the whole session would grow with the
@@ -357,9 +374,10 @@ func (s *streamSession) writeUserBlocks(texts ...string) error {
 }
 
 // writeUserContent writes one `user` frame of text blocks followed by one
-// image block per attachment. An empty text writes no block: the API refuses
-// an empty text block, and a message that is only an image has nothing to say
-// in words.
+// image block per image attachment. An empty text writes no block: the API
+// refuses an empty text block, and a message that is only an image has nothing
+// to say in words. Any other attachment is not a block: the agent reads it
+// from the path the text names.
 func (s *streamSession) writeUserContent(attachments []execution.Attachment, texts ...string) error {
 	blocks := make([]any, 0, len(texts)+len(attachments))
 	for _, text := range texts {
@@ -369,6 +387,9 @@ func (s *streamSession) writeUserContent(attachments []execution.Attachment, tex
 		blocks = append(blocks, map[string]any{"type": "text", "text": text})
 	}
 	for _, attachment := range attachments {
+		if !attachment.IsImage() {
+			continue
+		}
 		block, err := imageBlock(attachment)
 		if err != nil {
 			return err
@@ -463,6 +484,10 @@ func (s *streamSession) start(ctx context.Context, prompt string) error {
 // adapter instruction and therefore remains in the native conversation
 // timeline when Claude replays it.
 func (s *streamSession) startNative(ctx context.Context, message string, attachments []execution.Attachment) error {
+	// The process outlives the turn, so the next message finds the previous
+	// turn's wait already closed: re-armed before the write, for the reason
+	// SendWith gives, so that a caller waiting on TurnDone waits for this turn.
+	s.armTurn()
 	s.expectAttachments(message, attachments)
 	if err := s.writeUserContent(attachments, message); err != nil {
 		return fmt.Errorf("the claude session could not be given its message: %w", err)
@@ -814,6 +839,12 @@ func (s *streamSession) armTurn() {
 	}
 	s.turnDone = make(chan struct{})
 	s.turnClosed = false
+	// What the previous turn ended with is not what this one ends with: a
+	// turn cut short by the process leaving would otherwise read as completed
+	// on the strength of the result before it.
+	s.completed = false
+	s.finalMessage = ""
+	s.lastAssistantText = ""
 }
 
 // sessionOver reports whether the process's output has already ended.

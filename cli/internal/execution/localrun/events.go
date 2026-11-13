@@ -23,9 +23,15 @@ const (
 	// answer or the person's messages. Their original protocol remains in Raw.
 	KindWorkerMessage = "worker_message"
 	KindThinking      = "thinking"
-	KindToolStart     = "tool_start"
-	KindToolEnd       = "tool_end"
-	KindToolError     = "tool_error"
-	KindTurnEnd       = "turn_end"
-	KindError         = "error"
+	// KindQuestion is a structured question the agent asked the person —
+	// AskUserQuestion, request_user_input — as readable text: header,
+	// prompt and options. It is part of the exchange, not of the working:
+	// a question that lived only in a folded tool row would vanish from
+	// the history the moment it was answered, leaving the answer orphaned.
+	KindQuestion  = "question"
+	KindToolStart = "tool_start"
+	KindToolEnd   = "tool_end"
+	KindToolError = "tool_error"
+	KindTurnEnd   = "turn_end"
+	KindError     = "error"
 )

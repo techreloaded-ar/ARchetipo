@@ -228,7 +228,7 @@ func (j *conversationJournal) name(ctx context.Context, id, title string) error 
 		j.mu.Unlock()
 		return nil
 	}
-	entry.record.Title = truncateRunes(named, conversationTitleLimit)
+	entry.record.Title = plainTitle(named, conversationTitleLimit)
 	entry.titleFromMessage = true
 	saved := entry.record
 	j.mu.Unlock()
@@ -296,7 +296,7 @@ func (j *conversationJournal) settle(ctx context.Context, id string, status exec
 // 22/08/2026 10:14" tells them which one, "Conversazione" tells them nothing.
 func conversationTitleOf(events []execution.RunEvent, openedAt time.Time) string {
 	if text, spoken := firstHumanMessage(events); spoken {
-		return truncateRunes(text, conversationTitleLimit)
+		return plainTitle(text, conversationTitleLimit)
 	}
 	return "Conversazione del " + openedAt.Format("02/01/2006 15:04")
 }
@@ -315,12 +315,17 @@ func firstHumanMessage(events []execution.RunEvent) (string, bool) {
 	return "", false
 }
 
-// truncateRunes cuts text to limit runes, marking the cut. Shorter text is
-// returned untouched, so a title that fits carries no ellipsis to explain.
-func truncateRunes(text string, limit int) string {
-	runes := []rune(text)
+// inlineMarkdownMarkers removes the emphasis and code markers a person types in
+// a message. A title is shown as plain text in the rail, in the header and in
+// the PR, where "**Fatturazione**" would be read as four stray asterisks.
+var inlineMarkdownMarkers = strings.NewReplacer("**", "", "__", "", "`", "")
+
+// plainTitle turns text into a title: inline Markdown markers removed, then cut
+// to limit runes with the cut marked. Shorter text carries no ellipsis.
+func plainTitle(text string, limit int) string {
+	runes := []rune(inlineMarkdownMarkers.Replace(text))
 	if len(runes) <= limit {
-		return text
+		return string(runes)
 	}
 	return string(runes[:limit]) + conversationTitleEllipsis
 }

@@ -235,6 +235,46 @@ type InputOption struct {
 	Preview string `json:"preview,omitempty"`
 }
 
+// QuestionPrefaceMessage is what the agent reads when a structured question
+// is sent back because nothing visible preceded it since the person's last
+// message. The guidance already asks for the preface; the refusal is what
+// makes it happen when the agent keeps the explanation in its reasoning —
+// which the person never sees — and the proposals in option descriptions,
+// which nobody reads as a proposal. Both local adapters refuse with it, once
+// per exchange, so a second attempt goes through.
+const QuestionPrefaceMessage = "Not yet: the person has read nothing from you since their last message — what you write while reasoning is never shown to them. First send an ordinary message where each perspective says what it proposes and why (with the mockup image lines where variants have one), then ask this question again, naming only the choices. Option descriptions are not where a proposal is read."
+
+// QuestionText renders structured questions as the Markdown a person reads
+// in the history: the speaking header, the prompt, then one line per option
+// with its description and, when the option carries one, its preview. Both
+// adapters feed it, so the two local providers write the same row for the
+// same question.
+func QuestionText(questions []InputQuestion) string {
+	var out []string
+	for _, question := range questions {
+		prompt := strings.TrimSpace(question.Prompt)
+		if prompt == "" {
+			continue
+		}
+		if header := strings.TrimSpace(question.Header); header != "" {
+			prompt = "**" + header + "** — " + prompt
+		}
+		out = append(out, prompt)
+		for _, option := range question.Options {
+			line := "- **" + strings.TrimSpace(option.Label) + "**"
+			if description := strings.TrimSpace(option.Description); description != "" {
+				line += " — " + description
+			}
+			out = append(out, line)
+			if preview := strings.TrimSpace(option.Preview); preview != "" {
+				out = append(out, "", preview, "")
+			}
+		}
+		out = append(out, "")
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
 // PendingInput preserves the native payload for compatibility and diagnostics.
 // Questions, when provided by the adapter, let any viewer present a normal form.
 type PendingInput struct {

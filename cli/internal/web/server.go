@@ -56,6 +56,15 @@ type Server struct {
 	// every handler takes.
 	switchMu sync.Mutex
 
+	// modelChoiceMu guards modelChoices: the workspace model choice that travels
+	// beside the conversation index and every conversation read. Resolving it
+	// asks the runtime for its catalog, which for claude means starting a whole
+	// process and shutting it down again, and with no conversation alive that
+	// read is polled every couple of seconds. The answer is kept per provider
+	// and configuration for modelChoiceTTL.
+	modelChoiceMu sync.Mutex
+	modelChoices  map[string]cachedModelChoice
+
 	// baseCtx is the context Run is serving on, kept so that a session created
 	// after start-up is anchored to the same tree. Before Run it is nil, which
 	// start reads as Background.

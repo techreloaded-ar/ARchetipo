@@ -56,6 +56,9 @@ func (s *streamSession) ask(f frame) {
 		return
 	}
 	if request.ToolName == "AskUserQuestion" {
+		if s.refuseUnprefacedQuestion(id) {
+			return
+		}
 		s.askInput(id, request.Input)
 		return
 	}
@@ -193,6 +196,11 @@ func (s *streamSession) RespondApproval(ctx context.Context, approvalID, optionI
 			Err:    fmt.Errorf("the claude session is not waiting on the decision %q", id),
 		}
 	}
+	return s.sendDecision(id, decision)
+}
+
+// sendDecision writes one can_use_tool answer to the process.
+func (s *streamSession) sendDecision(id string, decision map[string]any) error {
 	payload, err := json.Marshal(map[string]any{
 		"type": frameControlResponse,
 		"response": map[string]any{

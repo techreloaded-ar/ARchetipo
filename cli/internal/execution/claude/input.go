@@ -9,13 +9,59 @@ import (
 	"strings"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution/localrun"
 )
+
+// refuseUnprefacedQuestion sends a structured question back when the agent
+// has said nothing the person can read since their last message, once per
+// exchange: the second attempt goes through whatever preceded it, so a
+// stubborn agent is slowed down and never locked out. It reports whether the
+// question was refused.
+func (s *streamSession) refuseUnprefacedQuestion(id string) bool {
+	s.mu.Lock()
+	if s.saidSinceUser || s.questionRefused {
+		s.mu.Unlock()
+		return false
+	}
+	s.questionRefused = true
+	s.mu.Unlock()
+	// A write that fails means the process is gone, and a process that is
+	// gone has no question left to refuse.
+	_ = s.sendDecision(id, map[string]any{"behavior": "deny", "message": execution.QuestionPrefaceMessage})
+	return true
+}
 
 // AskUserQuestion uses the same can_use_tool transport as permissions, but
 // answers are product choices, never permission decisions. The native response
 // preserves the original input and adds answers keyed by the question text.
 // https://code.claude.com/docs/en/agent-sdk/user-input
 func (s *streamSession) askInput(id string, payload json.RawMessage) {
+	questions, ok := parseAskUserQuestion("AskUserQuestion", payload)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	_, exists := s.inputs[id]
+	s.mu.Unlock()
+	if exists {
+		// The same request id twice is a replay, not a second question.
+		return
+	}
+	// The question enters the history here, as something the agent said to
+	// the person, where it stays above the answer once the card is gone.
+	s.append(localrun.KindQuestion, execution.QuestionText(questions), "", payload)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
+}
+
+// parseAskUserQuestion projects the native AskUserQuestion input into neutral
+// questions. It is the one reading of that schema, shared by the pending
+// input and by the history row, so the card and the row never disagree.
+func parseAskUserQuestion(toolName string, payload json.RawMessage) ([]execution.InputQuestion, bool) {
+	if toolName != "AskUserQuestion" {
+		return nil, false
+	}
 	var native struct {
 		Questions []struct {
 			Question    string `json:"question"`
@@ -29,29 +75,25 @@ func (s *streamSession) askInput(id string, payload json.RawMessage) {
 		} `json:"questions"`
 	}
 	if json.Unmarshal(payload, &native) != nil || len(native.Questions) == 0 {
-		return
+		return nil, false
 	}
 	questions := make([]execution.InputQuestion, 0, len(native.Questions))
 	seen := map[string]bool{}
 	for index, question := range native.Questions {
 		if strings.TrimSpace(question.Question) == "" || seen[question.Question] {
-			return
+			return nil, false
 		}
 		seen[question.Question] = true
 		projected := execution.InputQuestion{ID: strconv.Itoa(index), Header: question.Header, Prompt: question.Question, AllowText: true, Multiple: question.MultiSelect}
 		for _, option := range question.Options {
 			if strings.TrimSpace(option.Label) == "" {
-				return
+				return nil, false
 			}
 			projected.Options = append(projected.Options, execution.InputOption{Value: option.Label, Label: option.Label, Description: option.Description, Preview: option.Preview})
 		}
 		questions = append(questions, projected)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.inputs[id]; !exists {
-		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: append(json.RawMessage(nil), payload...), Questions: questions, CreatedAt: s.now().UTC()}
-	}
+	return questions, true
 }
 
 func (s *streamSession) pendingInputs() []execution.PendingInput {

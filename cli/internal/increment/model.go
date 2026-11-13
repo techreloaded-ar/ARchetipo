@@ -92,6 +92,7 @@ type Record struct {
 	CreatedAt            time.Time        `json:"created_at"`
 	BaseBranch           string           `json:"base_branch"`
 	BaseSHA              string           `json:"base_sha"`
+	BaseSource           string           `json:"base_source,omitempty"`
 	Branch               string           `json:"branch"`
 	Workdir              string           `json:"workdir"`
 	ConversationID       string           `json:"conversation_id,omitempty"`
