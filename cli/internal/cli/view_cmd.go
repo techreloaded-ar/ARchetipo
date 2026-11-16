@@ -20,6 +20,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/isolated"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/viewreg"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/web"
 )
@@ -36,6 +37,8 @@ func newViewCmd(s streams, registry *execution.Registry) *cobra.Command {
 	var port int
 	var host string
 	var noOpen bool
+	var isolatedMode bool
+	var environmentID string
 	cmd := &cobra.Command{
 		Use:   "view",
 		Short: "Open the product workspace with chat and app preview",
@@ -58,9 +61,20 @@ The view reads and writes the same local artifacts used by ARchetipo
 the browser persist immediately. Config changes are saved locally but do not
 hot-reload the running viewer: restart "archetipo view" to apply connector or
 path changes. The server binds to the loopback interface only; no
-authentication is performed.`,
+authentication is performed.
+
+With --isolated the whole viewer, with agents, recipes and previews, runs in
+a container environment that cannot read this computer's files or reach its
+local network. It needs Docker; the environment keeps its work in a volume
+across restarts. "archetipo view stop --isolated" stops it and keeps the work.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if isolatedMode {
+				if cmd.Flags().Changed("port") || cmd.Flags().Changed("host") {
+					return iox.NewInvalidInput("--port and --host do not apply to --isolated", "the environment publishes its own ports on 127.0.0.1", nil)
+				}
+				return runIsolatedView(s, environmentID, noOpen)
+			}
 			// The launch directory decides which of the two servers is built.
 			// -C has already been applied by the root command, so the cwd is
 			// always the point the user meant to start from.
@@ -182,7 +196,9 @@ authentication is performed.`,
 	cmd.Flags().IntVar(&port, "port", defaultViewPort, "TCP port to listen on")
 	cmd.Flags().StringVar(&host, "host", "127.0.0.1", "host address to bind to (loopback only by default)")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open the browser automatically")
-	cmd.AddCommand(newViewListCmd(s), newViewStopCmd(s))
+	cmd.Flags().BoolVar(&isolatedMode, "isolated", false, "run the viewer in an isolated container environment (needs Docker)")
+	cmd.Flags().StringVar(&environmentID, "environment", isolated.DefaultID, "isolated environment to use with --isolated")
+	cmd.AddCommand(newViewListCmd(s), newViewStopCmd(s), newViewGatewayCmd())
 	return cmd
 }
 
@@ -252,12 +268,20 @@ func newViewListCmd(s streams) *cobra.Command {
 // newViewStopCmd implements `archetipo view stop [port]` and `--all`.
 func newViewStopCmd(s streams) *cobra.Command {
 	var all bool
+	var isolatedMode bool
+	var environmentID string
 	cmd := &cobra.Command{
 		Use:   "stop [port]",
 		Short: "Stop a running ARchetipo viewer",
 		Long:  "Stop the viewer on the given port, or all viewers with --all.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if isolatedMode {
+				if all || len(args) > 0 {
+					return iox.NewInvalidInput("--isolated takes no port and no --all", "run `archetipo view stop --isolated`", nil)
+				}
+				return stopIsolatedView(s, environmentID)
+			}
 			if all {
 				if len(args) > 0 {
 					return iox.NewInvalidInput("--all takes no port argument", "run `archetipo view stop --all` or `archetipo view stop <port>`", nil)
@@ -275,6 +299,8 @@ func newViewStopCmd(s streams) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "stop every running viewer")
+	cmd.Flags().BoolVar(&isolatedMode, "isolated", false, "stop the isolated environment, keeping its work")
+	cmd.Flags().StringVar(&environmentID, "environment", isolated.DefaultID, "isolated environment to stop")
 	return cmd
 }
 

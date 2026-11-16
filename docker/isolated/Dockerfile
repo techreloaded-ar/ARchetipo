@@ -5,6 +5,9 @@
 #
 # Build from the repository root:
 #   docker build -f docker/isolated/Dockerfile -t archetipo-isolated .
+#
+# The host starts it with `archetipo view --isolated`; the gateway container
+# runs `archetipo view _gateway`, the workspace container the default command.
 
 FROM golang:1.26-bookworm AS cli
 WORKDIR /src
@@ -27,7 +30,6 @@ COPY --from=cli /out/archetipo /opt/archetipo/bin/archetipo
 COPY skills/ /opt/archetipo/skills/
 COPY .archetipo/config.template.yaml /opt/archetipo/runtime/config.yaml
 COPY .archetipo/shared-runtime.md /opt/archetipo/runtime/shared-runtime.md
-COPY docker/isolated/gateway.sh /opt/archetipo/gateway.sh
 RUN ln -s /opt/archetipo/bin/archetipo /usr/local/bin/archetipo
 
 RUN useradd -m -u 1001 -s /bin/bash archetipo

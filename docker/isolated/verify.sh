@@ -5,6 +5,9 @@
 # CLI and checks from the host what the person's browser would see, and from
 # inside what the previewed application can reach.
 #
+# The environment is started by the real host launcher, `archetipo view
+# --isolated`, built from this checkout, with a throwaway state directory.
+#
 #   docker/isolated/verify.sh            run and destroy the environment
 #   KEEP=1 docker/isolated/verify.sh     leave it running for inspection
 set -u
@@ -12,6 +15,17 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 ID=verify
 P="archetipo-$ID"
 WS="$P-workspace"
+WORK=$(mktemp -d)
+export ARCHETIPO_STATE_DIR="$WORK/state"
+(cd "$ROOT/cli" && go build -o "$WORK/archetipo" ./cmd/archetipo) || exit 1
+CLI="$WORK/archetipo"
+docker image inspect archetipo-isolated:latest >/dev/null 2>&1 \
+  || docker build -f "$ROOT/docker/isolated/Dockerfile" -t archetipo-isolated:latest "$ROOT" || exit 1
+destroy() {
+  docker rm -f "$P-workspace" "$P-gateway" >/dev/null 2>&1
+  docker network rm "$P-net" >/dev/null 2>&1
+  docker volume rm "$P-home" >/dev/null 2>&1
+}
 FAIL=0
 pass() { echo "  ✓ $*"; }
 fail() { echo "  ✗ $*"; FAIL=1; }
@@ -25,13 +39,15 @@ SENTINEL_PID=$!
 cleanup() {
   kill "$SENTINEL_PID" 2>/dev/null
   rm -rf "$SENTINEL_DIR"
-  [ "${KEEP:-}" = 1 ] || "$ROOT/docker/isolated/launch.sh" destroy "$ID" >/dev/null
+  [ "${KEEP:-}" = 1 ] || destroy
+  rm -rf "$WORK"
 }
 trap cleanup EXIT
 
 echo "== environment"
-"$ROOT/docker/isolated/launch.sh" destroy "$ID" >/dev/null
-"$ROOT/docker/isolated/launch.sh" up "$ID" || exit 1
+destroy
+"$CLI" view --isolated --environment "$ID" --no-open || exit 1
+[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47800/)" = 200 ] && pass "archetipo view --isolated returned with the viewer answering" || fail "viewer not answering after launch"
 curl -s -m 3 http://127.0.0.1:47901/ | grep -q host-sentinel && pass "control: the host sentinel answers on the host" || fail "host sentinel not running"
 
 echo "== viewer reached from the host browser address only"
@@ -117,7 +133,10 @@ in_ws 'ls /Users /Volumes /mnt/c 2>/dev/null | head -1' | grep -q . && fail "a h
 in_ws 'iptables -A OUTPUT -j ACCEPT 2>&1; ip route add 10.0.0.0/8 dev eth0 2>&1' | grep -q -i 'permission denied\|not permitted' && pass "the workspace cannot change rules or routes" || fail "the workspace changed the boundary"
 
 echo "== recreation keeps work and browser origins"
-"$ROOT/docker/isolated/launch.sh" up "$ID" >/dev/null || fail "restart"
+"$CLI" view stop --isolated --environment "$ID" >/dev/null || fail "stop"
+docker ps -a --format '{{.Names}}' | grep -q "^$WS$" && fail "workspace container left after stop" || pass "stop removed the containers"
+docker volume inspect "$P-home" >/dev/null 2>&1 && pass "stop kept the volume" || fail "stop removed the volume"
+"$CLI" view --isolated --environment "$ID" --no-open >/dev/null || fail "restart"
 for n in 1 2; do
   eval "wd=\$WD$n; old=\$URL$n"
   docker exec -d -w "$wd" "$WS" sh -c "archetipo execution preview run > /tmp/preview$n.out 2>/tmp/preview$n.err"

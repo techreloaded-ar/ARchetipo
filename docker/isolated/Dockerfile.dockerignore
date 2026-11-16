@@ -3,6 +3,5 @@
 !skills/
 !.archetipo/config.template.yaml
 !.archetipo/shared-runtime.md
-!docker/isolated/gateway.sh
 cli/dist/
 skills/*-workspace
