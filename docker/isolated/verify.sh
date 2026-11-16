@@ -55,6 +55,17 @@ status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47800/api/works
 [ "$status" = 200 ] && pass "GET /api/workspaces on 127.0.0.1:47800 -> 200" || fail "viewer API answered $status"
 curl -s -m 3 -o /dev/null "http://$HOSTIP:47800/" && fail "viewer reachable on the LAN address $HOSTIP" || pass "viewer not reachable on the LAN address $HOSTIP"
 
+echo "== project added from a repository URL, cloned inside the environment"
+curl -s http://127.0.0.1:47800/api/workspaces | grep -q '"cloneAvailable":true' && pass "the viewer offers cloning" || fail "cloning not offered"
+clone=$(curl -s -X POST -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:47800' \
+  -d '{"url":"https://github.com/octocat/Hello-World"}' http://127.0.0.1:47800/api/workspaces/clone)
+echo "$clone" | grep -q '"dir":"/home/archetipo/workspaces/Hello-World"' && echo "$clone" | grep -q '"initialized":false' \
+  && pass "public repository cloned into the volume, reported as not yet a workspace" || fail "clone answered: $clone"
+in_ws 'git -C ~/workspaces/Hello-World log --oneline -1' >/dev/null && pass "the clone is a Git checkout inside the environment" || fail "clone missing inside"
+clone=$(curl -s -X POST -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:47800' \
+  -d '{"url":"https://user:secret@github.com/octocat/Hello-World"}' http://127.0.0.1:47800/api/workspaces/clone)
+echo "$clone" | grep -q WORKSPACE_CLONE_URL_INVALID && pass "a URL carrying credentials is refused" || fail "credential URL answered: $clone"
+
 echo "== project with two increments, created inside the environment"
 in_ws '
 set -e

@@ -104,6 +104,9 @@ func TestContainersKeepTheBoundary(t *testing.T) {
 	if mounts != 1 {
 		t.Fatalf("workspace has %d mounts", mounts)
 	}
+	if !hasPair(workspace, "-e", "ARCHETIPO_CLONE_DIR=/home/archetipo/workspaces") {
+		t.Fatalf("workspace does not offer cloning inside its volume: %v", workspace)
+	}
 	if !hasPair(workspace, "-e", "ARCHETIPO_PREVIEW_PORTS=47810-47829") || !hasPair(workspace, "-e", "ARCHETIPO_PREVIEW_BIND=0.0.0.0") {
 		t.Fatalf("workspace preview policy missing: %v", workspace)
 	}

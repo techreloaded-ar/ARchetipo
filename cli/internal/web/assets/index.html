@@ -631,6 +631,18 @@
             <section class="tab-panel active">
                 <div id="workspaces-list"></div>
                 <p id="workspaces-empty" class="form-notice hidden">Non è ancora stato registrato nessun workspace. Creane uno, oppure aggiungine uno esistente qui sotto.</p>
+                <form id="workspaces-clone-form" class="form-grid hidden" novalidate>
+                    <label class="field full">
+                        <span>Progetto da un repository</span>
+                        <input type="url" name="url" spellcheck="false" placeholder="https://github.com/organizzazione/progetto" />
+                        <span class="field-hint">ARchetipo lo clona nell’ambiente. Se non è ancora un workspace ARchetipo, scegli poi connettore e agenti.</span>
+                        <span class="field-error" data-error-for="url"></span>
+                    </label>
+                    <div class="form-actions full">
+                        <button type="submit" id="workspaces-clone-submit" class="primary-btn">Clona il progetto</button>
+                        <span class="status-msg" id="workspaces-clone-status" aria-live="polite"></span>
+                    </div>
+                </form>
                 <form id="workspaces-add-form" class="form-grid" novalidate>
                     <label class="field full">
                         <span>Workspace esistente</span>

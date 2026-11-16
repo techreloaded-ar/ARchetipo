@@ -270,6 +270,10 @@
 		workspaceAdding: "Aggiunta in corso…",
 		workspaceAdded: (name) => `${name} aggiunto`,
 		workspaceAddFailed: (reason) => `Aggiunta fallita: ${reason}`,
+		workspaceCloning: "Clonazione in corso…",
+		workspaceCloneFailed: (reason) => `Clonazione fallita: ${reason}`,
+		workspaceClonedNeedsInit: (name) =>
+			`${name} clonato: scegli connettore e agenti per inizializzarlo`,
 		workspaceFallbackName: "Workspace",
 
 		// Documento di prodotto
@@ -488,6 +492,13 @@
 	const workspacesList = document.getElementById("workspaces-list");
 	const workspacesEmpty = document.getElementById("workspaces-empty");
 	const workspacesAddForm = document.getElementById("workspaces-add-form");
+	const workspacesCloneForm = document.getElementById("workspaces-clone-form");
+	const workspacesCloneSubmit = document.getElementById(
+		"workspaces-clone-submit",
+	);
+	const workspacesCloneStatus = document.getElementById(
+		"workspaces-clone-status",
+	);
 	const workspacesAddSubmit = document.getElementById("workspaces-add-submit");
 	const workspacesStatus = document.getElementById("workspaces-status");
 	const workspaceHomeEl = document.getElementById("workspace-home");
@@ -1036,6 +1047,7 @@
 		if (e.key === "Escape" && isTopModal(workspacesModal)) closeWorkspaces();
 	});
 	workspacesAddForm.addEventListener("submit", onAddWorkspace);
+	workspacesCloneForm.addEventListener("submit", onCloneWorkspace);
 	// The modal and the home draw the same rows, so they are acted on by the
 	// same handler: one list rendering, one set of actions.
 	function onWorkspaceListClick(e) {
@@ -1187,7 +1199,19 @@
 			workspacesAddForm,
 			workspaceHomeActions.firstChild,
 		);
+		workspaceHomeActions.insertBefore(
+			workspacesCloneForm,
+			workspaceHomeActions.firstChild,
+		);
 		workspaceHomeEl.classList.remove("hidden");
+	}
+
+	// Cloning is offered only where the server declares a clone directory.
+	function applyCloneOffer(view) {
+		workspacesCloneForm.classList.toggle(
+			"hidden",
+			!(view && view.cloneAvailable),
+		);
 	}
 
 	function noWorkspaceMode() {
@@ -1195,6 +1219,7 @@
 	}
 
 	function renderWorkspaceHomeView(view, message) {
+		applyCloneOffer(view);
 		workspaceHomeList.innerHTML = WorkspaceHome.renderWorkspaceHome(view, {
 			formatTime: formatExecutionTime,
 			message,
@@ -9249,6 +9274,7 @@
 			formatTime: formatExecutionTime,
 		});
 		workspacesEmpty.classList.toggle("hidden", items.length > 0);
+		applyCloneOffer(view);
 		// The modal payload is the same answer the indicator reads: no extra
 		// question is asked where it is already in hand.
 		applyWorkspaceIdentity(view);
@@ -9359,6 +9385,53 @@
 			}
 		} finally {
 			workspacesAddSubmit.disabled = false;
+		}
+	}
+
+	// A repository that is already a workspace joins the list at once. Any
+	// other continues in the ordinary creation form, on the cloned directory,
+	// so connector and agents stay the person's choice.
+	async function onCloneWorkspace(e) {
+		e.preventDefault();
+		workspacesCloneForm.querySelectorAll(".field-error").forEach((el) => {
+			el.textContent = "";
+		});
+		workspacesCloneForm.querySelectorAll(".field.has-error").forEach((el) => {
+			el.classList.remove("has-error");
+		});
+		workspacesCloneSubmit.disabled = true;
+		workspacesCloneStatus.textContent = TEXT.workspaceCloning;
+		workspacesCloneStatus.className = "status-msg";
+		try {
+			const res = await apiPost("/api/workspaces/clone", {
+				url: workspacesCloneForm.url.value.trim(),
+			});
+			workspacesCloneForm.reset();
+			workspacesCloneStatus.textContent = res.registryWarning || "";
+			workspacesCloneStatus.className = res.registryWarning
+				? "status-msg warn"
+				: "status-msg";
+			if (res.initialized) {
+				showToast(TEXT.workspaceAdded(res.name), "ok");
+				await loadWorkspaces();
+				return;
+			}
+			// From the home the form lives outside the modal, which is closed.
+			if (!workspacesModal.classList.contains("hidden")) closeWorkspaces();
+			await openNewWorkspace();
+			newWorkspaceForm.dir.value = res.dir;
+			showToast(TEXT.workspaceClonedNeedsInit(res.name), "ok");
+		} catch (err) {
+			if (Array.isArray(err.fields) && err.fields.length > 0) {
+				renderFieldErrors(workspacesCloneForm, workspacesCloneStatus, err.fields);
+			} else {
+				workspacesCloneStatus.textContent = TEXT.workspaceCloneFailed(
+					err.message || err,
+				);
+				workspacesCloneStatus.className = "status-msg err";
+			}
+		} finally {
+			workspacesCloneSubmit.disabled = false;
 		}
 	}
 

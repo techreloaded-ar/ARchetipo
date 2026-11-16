@@ -129,6 +129,7 @@ var homeRoutes = []string{
 	"POST /api/workspace",
 	"GET /api/workspaces",
 	"POST /api/workspaces",
+	"POST /api/workspaces/clone",
 	"DELETE /api/workspaces/{id}",
 	"POST /api/workspaces/{id}/open",
 }

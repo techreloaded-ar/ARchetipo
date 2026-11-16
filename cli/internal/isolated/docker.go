@@ -104,6 +104,10 @@ func gatewayArgs(env Environment) []string {
 	}
 }
 
+// CloneDir is where the viewer clones projects added by repository URL: a
+// directory of the environment's volume.
+const CloneDir = "/home/archetipo/workspaces"
+
 // workspaceArgs starts the container that runs the viewer. It joins the
 // gateway's namespace, has no capability and mounts only its own volume.
 func workspaceArgs(env Environment) []string {
@@ -114,6 +118,7 @@ func workspaceArgs(env Environment) []string {
 		"-v", env.Volume() + ":/home/archetipo",
 		"-e", "ARCHETIPO_PREVIEW_BIND=0.0.0.0",
 		"-e", "ARCHETIPO_PREVIEW_PORTS=" + env.PreviewRange(),
+		"-e", "ARCHETIPO_CLONE_DIR=" + CloneDir,
 		env.Image, "archetipo", "view", "--host", "0.0.0.0", "--port", strconv.Itoa(env.ViewPort), "--no-open",
 	}
 }

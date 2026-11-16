@@ -39,6 +39,9 @@ type workspaceListView struct {
 	Open        bool                 `json:"open"`
 	CurrentPath string               `json:"currentPath"`
 	CurrentName string               `json:"currentName"`
+	// CloneAvailable declares whether this viewer offers adding a project
+	// from a repository URL; the page shows that field only when it does.
+	CloneAvailable bool `json:"cloneAvailable"`
 }
 
 // workspaceViews probes each entry and renders it. The slice is never nil: the
@@ -78,28 +81,31 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	name, path := s.openWorkspaceIdentity()
 	if s.workspaces == nil {
 		writeJSON(w, http.StatusOK, workspaceListView{
-			Workspaces:  []workspaceEntryView{},
-			Open:        path != "",
-			CurrentPath: path,
-			CurrentName: name,
+			Workspaces:     []workspaceEntryView{},
+			Open:           path != "",
+			CurrentPath:    path,
+			CurrentName:    name,
+			CloneAvailable: workspace.CloneDir() != "",
 		})
 		return
 	}
 	entries, err := s.workspaces.List()
 	if err != nil {
 		writeJSON(w, http.StatusOK, workspaceListView{
-			Workspaces:  []workspaceEntryView{},
-			Open:        path != "",
-			CurrentPath: path,
-			CurrentName: name,
+			Workspaces:     []workspaceEntryView{},
+			Open:           path != "",
+			CurrentPath:    path,
+			CurrentName:    name,
+			CloneAvailable: workspace.CloneDir() != "",
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, workspaceListView{
-		Workspaces:  s.workspaceViews(s.session(), entries),
-		Open:        path != "",
-		CurrentPath: path,
-		CurrentName: name,
+		Workspaces:     s.workspaceViews(s.session(), entries),
+		Open:           path != "",
+		CurrentPath:    path,
+		CurrentName:    name,
+		CloneAvailable: workspace.CloneDir() != "",
 	})
 }
 
@@ -175,6 +181,52 @@ func (s *Server) handleAddWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.workspaceViews(s.session(), []workspace.Entry{entry})[0])
+}
+
+// handleCloneWorkspace serves POST /api/workspaces/clone: it clones a
+// repository into the clone directory this viewer offers. A repository that is
+// already a workspace is recorded at once; any other is returned uninitialized,
+// so the page continues with the ordinary creation form on that directory and
+// the person's own choices.
+func (s *Server) handleCloneWorkspace(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := workspace.Clone(r.Context(), workspace.CloneDir(), req.URL)
+	if err != nil {
+		var invalid *workspace.ValidationError
+		if errors.As(err, &invalid) {
+			writeFieldErrors(w,
+				"the repository could not be added",
+				"fix the repository address and confirm again",
+				workspaceFieldErrors(invalid),
+			)
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	view := cloneWorkspaceView{CloneResult: result}
+	if result.Initialized {
+		if s.workspaces == nil {
+			view.RegistryWarning = "the workspace registry is unavailable: the cloned workspace was not added to the known list"
+		} else if entry, addErr := s.workspaces.Add(result.Dir); addErr != nil {
+			view.RegistryWarning = "the cloned workspace could not be added to the known list: " + addErr.Error()
+		} else {
+			view.Workspace = &s.workspaceViews(s.session(), []workspace.Entry{entry})[0]
+		}
+	}
+	writeJSON(w, http.StatusCreated, view)
+}
+
+type cloneWorkspaceView struct {
+	workspace.CloneResult
+	Workspace       *workspaceEntryView `json:"workspace,omitempty"`
+	RegistryWarning string              `json:"registryWarning,omitempty"`
 }
 
 // handleRemoveWorkspace serves DELETE /api/workspaces/{id}: it forgets one
