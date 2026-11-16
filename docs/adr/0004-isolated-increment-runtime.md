@@ -26,7 +26,7 @@ The requirement is that nothing started for an increment can read the person's f
 - **Agents**: Claude and Codex, both in the image; the person chooses through the existing provider settings.
 - **Code host**: GitHub, for clone, push and PR publication.
 - **Backlog connectors**: `file`, `github` and `jira`. Jira Cloud works as is; a Jira on a private address is blocked by the network rule below and is out of scope.
-- **Recipes**: services run as processes in the container. Recipes needing `docker compose` or another nested engine are not supported and report that prerequisite.
+- **Recipes**: a recipe that starts services itself through a container engine cannot prepare here, because no engine is available inside the environment, and reports that prerequisite. Services are declared and started by ARchetipo instead (ADR 0005).
 
 ### One boundary, not three
 
