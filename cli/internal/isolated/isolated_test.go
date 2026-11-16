@@ -239,6 +239,21 @@ func TestStartRecordsTheEnvironmentAndWaitsForTheViewer(t *testing.T) {
 	}
 }
 
+func TestDevelopmentBuildsUseTheLocallyBuiltImage(t *testing.T) {
+	for version, want := range map[string]string{
+		"":                         devImage,
+		"dev":                      devImage,
+		"0.0.0-dev.g8ca7881":       devImage,
+		"0.0.0-dev.g8ca7881.dirty": devImage,
+		"v3.1.0":                   releaseImage + ":3.1.0",
+		"3.1.0":                    releaseImage + ":3.1.0",
+	} {
+		if got := imageFor(version); got != want {
+			t.Fatalf("imageFor(%q) = %q, want %q", version, got, want)
+		}
+	}
+}
+
 func hasPair(args []string, key, value string) bool {
 	for index := 0; index+1 < len(args); index++ {
 		if args[index] == key && args[index+1] == value {
