@@ -90,6 +90,7 @@ cli/                     # Go module implementing the `archetipo` CLI and the vi
     wiki/                # Codebase-first DDD Wiki
     gitwt/               # Git worktree support
     isolated/            # `view --isolated`: environments, container provider, gateway rules
+    signin/              # Relays the agents' and GitHub's own sign-in commands to the viewer (isolated runtime only)
     validation/          # Structural validation of artifacts
     metrics/             # Workflow metrics
 examples/archetypes/     # Example custom archetypes

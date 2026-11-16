@@ -507,6 +507,12 @@
 		"workspace-home-actions",
 	);
 	const workspaceHomeCreate = document.getElementById("workspace-home-create");
+	const signinBtn = document.getElementById("signin-btn");
+	const workspaceHomeSignin = document.getElementById("workspace-home-signin");
+	const signinModal = document.getElementById("signin-modal");
+	const signinModalClose = document.getElementById("signin-modal-close");
+	const signinBody = document.getElementById("signin-body");
+	const signinStatus = document.getElementById("signin-status");
 	const configBtn = document.getElementById("config-btn");
 	const configModal = document.getElementById("config-modal");
 	const configModalClose = document.getElementById("config-modal-close");
@@ -1067,6 +1073,18 @@
 	workspacesList.addEventListener("click", onWorkspaceListClick);
 	workspaceHomeEl.addEventListener("click", onWorkspaceListClick);
 	workspaceHomeCreate.addEventListener("click", openNewWorkspace);
+	signinBtn.addEventListener("click", openSignin);
+	workspaceHomeSignin.addEventListener("click", openSignin);
+	signinModalClose.addEventListener("click", closeSignin);
+	signinModal.addEventListener("click", (e) => {
+		if (e.target === signinModal) closeSignin();
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape" && isTopModal(signinModal)) closeSignin();
+	});
+	signinBody.addEventListener("click", onSigninClick);
+	signinBody.addEventListener("submit", onSigninCode);
+	offerSignin();
 
 	configBtn.addEventListener("click", openConfig);
 	configModalClose.addEventListener("click", closeConfig);
@@ -9433,6 +9451,104 @@
 		} finally {
 			workspacesCloneSubmit.disabled = false;
 		}
+	}
+
+	// ---- Accounts (isolated runtime) -----------------------------------------
+
+	// The entry points appear only where the server offers sign-in. What a card
+	// says and which action it carries are the payload's; this code only reads
+	// it, draws it and forwards the presses.
+	let signinTimer = null;
+	let signinLast = "";
+
+	async function offerSignin() {
+		try {
+			const view = await apiGet("/api/signin");
+			const offered = Boolean(view && view.available);
+			signinBtn.classList.toggle("hidden", !offered);
+			workspaceHomeSignin.classList.toggle("hidden", !offered);
+		} catch (_) {
+			// Without an answer nothing is offered.
+		}
+	}
+
+	async function openSignin() {
+		signinStatus.textContent = "";
+		signinStatus.className = "status-msg";
+		signinLast = "";
+		signinModal.classList.remove("hidden");
+		enterModal(signinModal);
+		await refreshSignin();
+	}
+
+	function closeSignin() {
+		clearTimeout(signinTimer);
+		signinTimer = null;
+		signinModal.classList.add("hidden");
+		leaveModal(signinModal);
+	}
+
+	// Redrawn only when the payload changed, so a code being typed in the paste
+	// field is never wiped by a poll.
+	async function refreshSignin() {
+		clearTimeout(signinTimer);
+		if (signinModal.classList.contains("hidden")) return;
+		try {
+			const view = await apiGet("/api/signin");
+			const raw = JSON.stringify(view);
+			if (raw !== signinLast) {
+				signinLast = raw;
+				signinBody.innerHTML = SigninPanel.renderSigninPanel(view);
+			}
+			signinTimer = setTimeout(
+				refreshSignin,
+				SigninPanel.anyWaiting(view) ? 2000 : 10000,
+			);
+		} catch (err) {
+			signinStatus.textContent = TEXT.loadFailed(err.message || err);
+			signinStatus.className = "status-msg err";
+			signinTimer = setTimeout(refreshSignin, 5000);
+		}
+	}
+
+	async function signinAction(request) {
+		signinStatus.textContent = "";
+		signinStatus.className = "status-msg";
+		try {
+			await request();
+		} catch (err) {
+			signinStatus.textContent = err.message || String(err);
+			signinStatus.className = "status-msg err";
+		}
+		await refreshSignin();
+	}
+
+	function onSigninClick(e) {
+		const start = e.target.closest("[data-signin-start]");
+		if (start) {
+			start.disabled = true;
+			const kind = encodeURIComponent(start.dataset.signinStart);
+			signinAction(() => apiPost(`/api/signin/${kind}`, {}));
+			return;
+		}
+		const cancel = e.target.closest("[data-signin-cancel]");
+		if (cancel) {
+			cancel.disabled = true;
+			const kind = encodeURIComponent(cancel.dataset.signinCancel);
+			signinAction(() => apiDelete(`/api/signin/${kind}`));
+		}
+	}
+
+	function onSigninCode(e) {
+		const form = e.target.closest("[data-signin-code]");
+		if (!form) return;
+		e.preventDefault();
+		const kind = encodeURIComponent(form.dataset.signinCode);
+		const code = form.code.value.trim();
+		form.querySelectorAll("button, input").forEach((el) => {
+			el.disabled = true;
+		});
+		signinAction(() => apiPost(`/api/signin/${kind}/code`, { code }));
 	}
 
 	// ---- Metrics -----------------------------------------------------------

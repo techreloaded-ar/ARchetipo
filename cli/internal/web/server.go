@@ -21,6 +21,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/signin"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/workspace"
 )
 
@@ -44,6 +45,10 @@ type Server struct {
 	// machine whose state directory cannot be resolved must still get a working
 	// viewer, so the routes degrade instead of the constructor failing.
 	workspaces *workspace.Registry
+
+	// signins relays the account owners' own sign-in commands. It does not
+	// depend on a workspace: accounts belong to the environment.
+	signins *signin.Manager
 
 	// mu guards cur. Handlers take it for the length of one pointer read, so a
 	// switch never observes a half-migrated server and a request never observes
@@ -126,6 +131,7 @@ func newServer(session *workspaceSession, registry *execution.Registry, addr str
 		mux:      mux,
 		broker:   NewBroker(),
 		cur:      session,
+		signins:  signin.NewManager(),
 	}
 	// A registry we cannot open is not a reason to refuse to serve the current
 	// workspace: the field stays nil and the workspace routes say so.
@@ -195,6 +201,7 @@ func (s *Server) Run(ctx context.Context, onReady func(url string)) error {
 	select {
 	case <-ctx.Done():
 		s.broker.Close()
+		s.signins.Close()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return s.httpSrv.Shutdown(shutdownCtx)
@@ -332,6 +339,10 @@ func (s *Server) registerRoutes() {
 	s.handleAlways("GET /api/workspaces", s.handleListWorkspaces)
 	s.handleAlways("POST /api/workspaces", s.handleAddWorkspace)
 	s.handleAlways("POST /api/workspaces/clone", s.handleCloneWorkspace)
+	s.handleAlways("GET /api/signin", s.handleListSignins)
+	s.handleAlways("POST /api/signin/{kind}", s.handleStartSignin)
+	s.handleAlways("POST /api/signin/{kind}/code", s.handleSigninCode)
+	s.handleAlways("DELETE /api/signin/{kind}", s.handleCancelSignin)
 	s.handleAlways("DELETE /api/workspaces/{id}", s.handleRemoveWorkspace)
 	s.handleAlways("POST /api/workspaces/{id}/open", s.handleOpenWorkspace)
 	s.handleWorkspace("GET /api/mockups", s.handleListMockups)

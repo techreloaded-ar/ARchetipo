@@ -119,6 +119,7 @@ func workspaceArgs(env Environment) []string {
 		"-e", "ARCHETIPO_PREVIEW_BIND=0.0.0.0",
 		"-e", "ARCHETIPO_PREVIEW_PORTS=" + env.PreviewRange(),
 		"-e", "ARCHETIPO_CLONE_DIR=" + CloneDir,
+		"-e", "ARCHETIPO_RUNTIME=isolated",
 		env.Image, "archetipo", "view", "--host", "0.0.0.0", "--port", strconv.Itoa(env.ViewPort), "--no-open",
 	}
 }

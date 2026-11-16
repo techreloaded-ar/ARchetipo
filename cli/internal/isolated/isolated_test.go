@@ -104,6 +104,9 @@ func TestContainersKeepTheBoundary(t *testing.T) {
 	if mounts != 1 {
 		t.Fatalf("workspace has %d mounts", mounts)
 	}
+	if !hasPair(workspace, "-e", "ARCHETIPO_RUNTIME=isolated") {
+		t.Fatalf("workspace does not declare the isolated runtime: %v", workspace)
+	}
 	if !hasPair(workspace, "-e", "ARCHETIPO_CLONE_DIR=/home/archetipo/workspaces") {
 		t.Fatalf("workspace does not offer cloning inside its volume: %v", workspace)
 	}
