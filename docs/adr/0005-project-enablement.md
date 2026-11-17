@@ -1,7 +1,7 @@
 # ADR 0005: Project enablement with one environment description
 
-- Status: proposed
-- Date: 2026-11-16
+- Status: accepted in part: declared services are implemented; the rest is proposed
+- Date: 2026-11-16, updated 2026-11-17
 
 ## Context
 
@@ -20,7 +20,7 @@ When the description is missing or broken, the preview today always asks the AI 
 - **Enablement** is done once per project by a technical person, by hand or with the AI in the technical conversation. Its result is the environment description, reviewed and merged like code.
 - **Use** is what everyone else does. The CLI runs the description as written; the AI works on the product, never on the environment.
 - In use, a missing description or a failed preparation reports that the project is not ready for this environment and who maintains it. The agent may propose a fix only as a change the maintainers review. It does not rewrite the description silently.
-- Whether a session is enablement or use is a workspace setting the maintainers control. It is not inferred from the person.
+- Whether a session is enablement or use is decided by the person's role, `admin` or `user`, which the maintainers control. It is not inferred from what the person does. The role also governs other things (technical conversation, detailed logs, settings), so it is a concept of its own; it is deferred (see open points).
 
 ### One description
 
@@ -61,8 +61,22 @@ preview:
 - The description says which services the project needs: image, port, environment, readiness command and the variables to expose.
 - The CLI validates the declaration, starts **one container per service per checkout** with its own data volume, waits for readiness, and passes the exposed variables to every preparation step, check and preview with the real host and port.
 - Services are removed with their data when the checkout is removed, through the existing cleanup contract.
-- With `archetipo view` they run on the person's engine. With `archetipo view --isolated` the launcher starts them inside the environment, on its internal network only, under the same egress rules as the workspace and with no published port. The description and the recipe are the same in both modes.
+- With `archetipo view` they run on the person's engine, as containers published only on `127.0.0.1`, each with its own data volume. With `archetipo view --isolated` they run as processes of the workspace container, from the runtimes installed in its image, listening only on its loopback. The description is the same in both modes.
 - The project never runs the engine itself, which is never available inside the isolated environment.
+
+#### What is implemented
+
+- The declaration lives today in `.archetipo/environment.json`, version 1, under `services`; the single YAML file below comes later and will carry the same block:
+
+  ```json
+  "services": { "db": { "image": "postgres:17-alpine", "port": 5432, "data": "/var/lib/postgresql/data",
+    "env": { "POSTGRES_USER": "user", "POSTGRES_PASSWORD": "password", "POSTGRES_DB": "app" },
+    "expose": { "DATABASE_URL": "postgresql://user:password@{host}:{port}/app" } } }
+  ```
+- Each service becomes a managed resource of the existing lifecycle (ADR 0003): it gets an assigned port, starts before the project's own resources, is probed before reuse, stops in reverse order and, only at cleanup, has its data removed. Its operations are steps of the same reports.
+- Readiness is checked by ARchetipo: a connection the service keeps open or answers counts, an engine forwarder that accepts and closes does not.
+- In the isolated environment the image carries PostgreSQL 17. A service the image does not carry is refused with the list of what is available. Postgres runs as a detached server of the checkout, with its data in the checkout's environment state, no socket file and only loopback.
+- Running services as containers inside the isolated environment would need a component holding the engine socket, able to mount the person's files if its checks were wrong. It is deferred until a project needs a service the image cannot carry; the declarations will not change.
 
 ### Toolchain
 
@@ -102,18 +116,18 @@ The repository can request only what the organization allows. Images are pinned 
 
 ## Open points
 
-1. How the enablement/use setting is stored and who may change it.
-2. Where the organization policy lives for a person without central administration: a default policy shipped with ARchetipo, overridable by a file the organization distributes.
-3. Seed data across checkouts: every checkout starts from the project's seed; copying data between checkouts is out of scope.
-4. Services that need files from the repository (an init SQL, a config): mounted read-only from the checkout or baked into a project service image.
-5. Building toolchain images: by the project's CI and pulled, or built locally by the launcher on first use.
+1. **Roles, deferred.** `admin` and `user`. A simple form: the repository's `config.yaml` lists the admins by GitHub account, changed through a pull request; a person without a GitHub sign-in is an admin, as today. The role shapes the experience; the protection remains the pull request review and the isolated boundary.
+2. **Organization policy, deferred.** Until declared services can be containers inside the isolated environment, the image decides what is available there. A built-in policy comes first; a file the organization distributes later. It never lives in the repository.
+3. **Seed data, decided.** Every checkout starts from the project's seed through the exposed connection. Copying data between checkouts is out of scope. Production data is never used.
+4. **Files needed by services, deferred.** Until a project needs one: read-only, checkout-relative paths, or a project service image.
+5. **Toolchain images, deferred.** Until the first project the base image cannot run: built by the project's CI and pinned by digest; local builds only by an admin.
 
 ## Delivery order
 
-1. Format v2 read alongside v1, and the conversion command.
-2. Declared services in local mode, with the per-checkout lifecycle.
-3. Declared services in the isolated environment, with the policy checks.
+1. Declared services in local mode and in the isolated environment (PostgreSQL), with the per-checkout lifecycle. **Done.**
+2. `coaching-planner` declares its database instead of scripting it.
+3. Format v2 read alongside v1, and the conversion command.
 4. Toolchain image for the workspace container, gateway kept on the official image.
 5. `environment verify`, its CI use, and the starter descriptions.
-6. Enablement and use modes in `archetipo-environment` and in the viewer.
-7. `coaching-planner` enabled as the first real project.
+6. Roles, and enablement and use in `archetipo-environment` and in the viewer.
+7. Services as containers inside the isolated environment, with the organization policy, when a project needs them.

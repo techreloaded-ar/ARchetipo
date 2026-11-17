@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/services"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/verification"
 )
 
@@ -72,6 +74,21 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 			code = 1
 		}
 		return &iox.CodedError{Code: iox.CodeInternal, Message: "verification command ended unsuccessfully", Exit: code, Cause: err}
+	}})
+	// _service performs one lifecycle operation of a declared service. Only
+	// the resource lifecycle runs it, with the unit described in its env.
+	root.AddCommand(&cobra.Command{Use: "_service", Hidden: true, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		unit, err := services.UnitFromEnv(os.Getenv, s.out)
+		if err == nil {
+			err = services.Run(ctx, services.Select(), args[0], unit)
+		}
+		if err != nil {
+			fmt.Fprintln(s.out, err)
+			return &iox.CodedError{Code: iox.CodeInternal, Message: "service operation failed", Exit: 1, Cause: err}
+		}
+		return nil
 	}})
 	root.AddCommand(&cobra.Command{Use: "_guard", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

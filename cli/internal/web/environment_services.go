@@ -60,7 +60,11 @@ func environmentServices(root string, view environmentPreviewView) []environment
 		if label == "" {
 			label = resource.State
 		}
-		services = append(services, environmentService{Name: resource.Resource.Name, Directory: root, State: label + " · ultimo stato registrato", Owner: "Risorsa gestita dalla ricetta ambiente"})
+		owner := "Risorsa gestita dalla ricetta ambiente"
+		if resource.Resource.Service != nil {
+			owner = "Servizio dichiarato · " + resource.Resource.Service.Image
+		}
+		services = append(services, environmentService{Name: resource.Resource.Name, Directory: root, State: label + " · ultimo stato registrato", Owner: owner})
 	}
 	if len(view.Resources.Ports) > 0 {
 		ports := []string{}

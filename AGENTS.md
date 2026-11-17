@@ -91,6 +91,7 @@ cli/                     # Go module implementing the `archetipo` CLI and the vi
     gitwt/               # Git worktree support
     isolated/            # `view --isolated`: environments, container provider, gateway rules
     signin/              # Relays the agents' and GitHub's own sign-in commands to the viewer (isolated runtime only)
+    services/            # Declared services of a recipe: containers of the person's engine, installed runtimes in the isolated environment
     validation/          # Structural validation of artifacts
     metrics/             # Workflow metrics
 examples/archetypes/     # Example custom archetypes
@@ -116,7 +117,9 @@ Skills must explicitly include only the CLI subcommands they actually use, toget
 ## Project verification recipes
 
 `cli/internal/verification/` executes the explicit `.archetipo/environment.json`
-project recipe through `archetipo execution environment`. The skills own setup
+project recipe through `archetipo execution environment`. Services the recipe
+declares under `services` become managed resources whose lifecycle is
+`cli/internal/services/` (ADR 0005), never a project script calling an engine. The skills own setup
 choices and coverage; the CLI owns setup/check fingerprints, readiness, command
 ownership, timeouts and durable evidence. View must use this same standalone
 contract. It must not gain a separate provisioner or automatic approval policy.

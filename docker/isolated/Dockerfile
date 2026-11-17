@@ -28,6 +28,18 @@ RUN apt-get update \
 RUN arch="$(dpkg --print-architecture)" \
  && curl -fsSL -o /tmp/gh.deb "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" \
  && dpkg -i /tmp/gh.deb && rm /tmp/gh.deb
+# Declared services run here as processes, since the environment has no
+# container engine (ADR 0005). PostgreSQL comes from the project's official
+# repository, which carries every supported major version; no default cluster
+# is created, each checkout initializes its own.
+ARG POSTGRES_MAJOR=17
+RUN install -d /usr/share/postgresql-common/pgdg /etc/postgresql-common \
+ && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+ && echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-${POSTGRES_MAJOR} \
+ && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/codex@${CODEX_VERSION} \
  && npm cache clean --force
 

@@ -145,8 +145,18 @@ directories or explicit files. The CLI fingerprints resolved executable paths;
 unrelated harness PATH entries do not invalidate evidence. Declare additional
 environment keys only when the project's behavior actually depends on them.
 
-Register persistent dependencies through managed resources, never a detached
-shell or an unrelated service. Each lifecycle command verifies
+Declare a standard service the app needs (a database, a cache) under `services`
+instead of scripting it: ARchetipo starts one per checkout with its own port and
+data, waits until it answers, passes the exposed variables to preparation, checks
+and preview, keeps the data across stops and removes it with the checkout. The
+same declaration works with the person's container engine and in the isolated
+runtime, which has no engine; never call `docker` or another engine from helpers.
+Inside the isolated runtime only the services installed in its image are
+available (today `postgres:17`); an unavailable one is reported, not worked
+around. Seed and migrate through the exposed connection, not through the engine.
+
+Register other persistent dependencies through managed resources, never a
+detached shell or an unrelated service. Each lifecycle command verifies
 `ARCHETIPO_RESOURCE_OWNER` and `ARCHETIPO_RESOURCE_NAME`; named ports come from
 `ARCHETIPO_PORT_<NAME>`. Distinguish a denied/unreachable daemon from an absent
 resource. Verify the owned endpoint as well as identity before reuse or stop.
@@ -236,9 +246,21 @@ failure carries `kind: error` and `error.code`.
 - `archetipo execution environment configure --candidate --file -`: stdin version
   1 JSON with real `inputs`, `outputs`, optional `env_keys` and `local_files`,
   bounded idempotent `prepare`, readiness `probe`, optional `cleanup`, `checks`,
-  `ports`, `resources`.
+  `ports`, `resources`, `services`.
   Each command has `name`, explicit `argv`, `timeout_seconds` (1..1800); each
   resource has `name`, `start`, `probe`, `stop`, `stopped` (timeouts <= 30).
+  `services` is an OBJECT keyed by a lowercase name; each has `image`, the
+  `port` it listens on inside the image, optional `env` (the image's documented
+  variables), optional `data` (the image's data directory, kept across stops)
+  and `expose`, the variables the app receives, where `{host}` and `{port}` are
+  replaced with this checkout's address:
+
+  ```json
+  "services":{"db":{"image":"postgres:17-alpine","port":5432,"data":"/var/lib/postgresql/data","env":{"POSTGRES_USER":"app","POSTGRES_PASSWORD":"app","POSTGRES_DB":"app"},"expose":{"DATABASE_URL":"postgresql://app:app@{host}:{port}/app"}}}
+  ```
+
+  Services start before `resources`, in name order; declared names, their
+  exposed variables and the resource names must not collide.
   Checks have command fields, explicit `inputs`, `cache`, optional `during_preview`.
   `prepare`, `probe` and `cleanup` are ARRAYS of commands; `checks` is an OBJECT
   keyed by check name, never an array. For example (replace commands and inputs

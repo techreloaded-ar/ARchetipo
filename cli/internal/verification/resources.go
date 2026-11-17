@@ -16,6 +16,7 @@ import (
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/services"
 )
 
 // ResourceState is a recovery journal, written BEFORE every external mutation.
@@ -71,7 +72,7 @@ func resourceEnv(state ResourceState, name string) []string {
 	for _, key := range keys {
 		env = append(env, "ARCHETIPO_PORT_"+key+"="+state.Ports[key])
 	}
-	return env
+	return append(env, exposedEnv(state)...)
 }
 
 // RuntimeEnv lets the app and project checks use the exact dependency endpoints
@@ -114,6 +115,18 @@ func allocatePorts(names []string) (map[string]string, error) {
 func (s *Service) resourceCommand(ctx context.Context, result *Result, state ResourceState, record ResourceRecord, command Command) (bool, error) {
 	runner := *s
 	runner.env = resourceEnv(state, record.Resource.Name)
+	if record.Resource.Service != nil {
+		executable, err := serviceExecutable()
+		if err != nil {
+			return false, err
+		}
+		extra, err := serviceEnv(record.Resource)
+		if err != nil {
+			return false, err
+		}
+		command.Argv = append([]string{executable}, command.Argv[1:]...)
+		runner.env = append(runner.env, extra...)
+	}
 	err := runner.run(ctx, result, []Command{command})
 	return result.Passed, err
 }
@@ -279,6 +292,26 @@ func mergeEnv(base, extra []string) []string {
 		result = append(filtered, value)
 	}
 	return result
+}
+
+// removeServiceData deletes the data of the declared services of a stopped
+// journal. It runs only when the checkout's environment is cleaned up: a stop
+// keeps the data, so the app finds it again at the next start.
+func (s *Service) removeServiceData(ctx context.Context, result *Result, state ResourceState) error {
+	for n := len(state.Resources) - 1; n >= 0; n-- {
+		record := state.Resources[n]
+		if record.Resource.Service == nil {
+			continue
+		}
+		ok, err := s.resourceCommand(ctx, result, state, record, serviceCommand(services.OpRemove, 60))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+	}
+	return nil
 }
 
 func resourceFailure(result Result) error {

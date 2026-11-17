@@ -224,6 +224,9 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 			s.env = resourceEnv(resources, "")
 			err = s.stopResources(ctx, &result, &resources)
 			if err == nil && result.Passed {
+				err = s.removeServiceData(ctx, &result, resources)
+			}
+			if err == nil && result.Passed {
 				err = s.run(ctx, &result, recipe.Cleanup)
 			}
 		}
