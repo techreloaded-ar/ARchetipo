@@ -295,8 +295,8 @@ func mergeEnv(base, extra []string) []string {
 }
 
 // removeServiceData deletes the data of the declared services of a stopped
-// journal. It runs only when the checkout's environment is cleaned up: a stop
-// keeps the data, so the app finds it again at the next start.
+// journal. It runs only for the cleanup that precedes deleting the checkout:
+// any other cleanup keeps the data, so the app finds it again at the next start.
 func (s *Service) removeServiceData(ctx context.Context, result *Result, state ResourceState) error {
 	for n := len(state.Resources) - 1; n >= 0; n-- {
 		record := state.Resources[n]

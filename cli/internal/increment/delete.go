@@ -223,7 +223,7 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				if stateErr == nil || resourceErr == nil {
 					// The deletion locks above already hold preview-environment,
 					// excluding every preview while registered cleanup runs.
-					cleanup, cleanupErr := verification.New(r.Workdir, "").ForOwnedPreview().Execute(ctx, "cleanup", "", "", false)
+					cleanup, cleanupErr := verification.New(r.Workdir, "").ForOwnedPreview().ForRemoval().Execute(ctx, "cleanup", "", "", false)
 					if cleanupErr != nil {
 						return r, cleanupErr
 					}

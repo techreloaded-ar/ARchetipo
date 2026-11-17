@@ -73,7 +73,7 @@ preview:
     "env": { "POSTGRES_USER": "user", "POSTGRES_PASSWORD": "password", "POSTGRES_DB": "app" },
     "expose": { "DATABASE_URL": "postgresql://user:password@{host}:{port}/app" } } }
   ```
-- Each service becomes a managed resource of the existing lifecycle (ADR 0003): it gets an assigned port, starts before the project's own resources, is probed before reuse, stops in reverse order and, only at cleanup, has its data removed. Its operations are steps of the same reports.
+- Each service becomes a managed resource of the existing lifecycle (ADR 0003): it gets an assigned port, starts before the project's own resources, is probed before reuse, stops in reverse order keeping its data, and has its data removed only when the checkout is deleted. Its operations are steps of the same reports.
 - Readiness is checked by ARchetipo: a connection the service keeps open or answers counts, an engine forwarder that accepts and closes does not.
 - In the isolated environment the image carries PostgreSQL 17. A service the image does not carry is refused with the list of what is available. Postgres runs as a detached server of the checkout, with its data in the checkout's environment state, no socket file and only loopback.
 - Running services as containers inside the isolated environment would need a component holding the engine socket, able to mount the person's files if its checks were wrong. It is deferred until a project needs a service the image cannot carry; the declarations will not change.

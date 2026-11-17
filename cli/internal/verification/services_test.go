@@ -93,16 +93,29 @@ func TestDeclaredServiceStartsFirstAndExposesItsAddress(t *testing.T) {
 	}
 }
 
-func TestCleanupStopsServicesAndRemovesTheirData(t *testing.T) {
+func TestCleanupStopsServicesAndKeepsTheirData(t *testing.T) {
 	s, r := serviceFixture(t)
 	execute(t, s, "prepare")
 	r.calls = nil
 	if result := execute(t, s, "cleanup"); !result.Passed {
 		t.Fatalf("%+v", result)
 	}
+	want := "api-stop,api-stopped,service-stop,service-stopped"
+	if got := strings.Join(r.calls, ","); got != want {
+		t.Fatalf("stopping the environment keeps service data: got %s", got)
+	}
+}
+
+func TestRemovalCleanupAlsoRemovesServiceData(t *testing.T) {
+	s, r := serviceFixture(t)
+	execute(t, s, "prepare")
+	r.calls = nil
+	if result := execute(t, s.ForRemoval(), "cleanup"); !result.Passed {
+		t.Fatalf("%+v", result)
+	}
 	want := "api-stop,api-stopped,service-stop,service-stopped,service-remove"
 	if got := strings.Join(r.calls, ","); got != want {
-		t.Fatalf("cleanup order: got %s want %s", got, want)
+		t.Fatalf("removal order: got %s want %s", got, want)
 	}
 }
 
