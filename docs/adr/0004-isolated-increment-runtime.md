@@ -1,7 +1,7 @@
 # ADR 0004: Isolated increment runtime in a local container
 
-- Status: proposed
-- Date: 2026-11-16
+- Status: accepted and implemented for macOS; Linux is the automated CI verifier
+- Date: 2026-11-16, accepted 2026-11-18
 
 ## Context
 
@@ -21,7 +21,9 @@ The requirement is that nothing started for an increment can read the person's f
 
 ### Scope of this version
 
-- **Hosts**: macOS and Windows, developed and released together, with Docker Desktop.
+- **Hosts**: macOS with Docker Desktop. Linux is the automated CI verifier for the
+  same Linux containers and network rules. Windows is not advertised as supported
+  until the same boundary acceptance has run on Docker Desktop for Windows.
 - **Applications**: web applications only. The preview is an HTTP origin in an iframe, as today.
 - **Agents**: Claude and Codex, both in the image; the person chooses through the existing provider settings.
 - **Code host**: GitHub, for clone, push and PR publication.
@@ -71,6 +73,9 @@ Each sign-in is shown as a card in the page: a link to open and, depending on th
 - Each repository is **cloned inside** the environment's named volume, over HTTPS. Work leaves only through `git push` and the existing PR publication.
 - The same volume holds the container user's home, so worktrees, `.archetipo/` records, the conversation journal and the harness's native session files stay durable and resumable across container restarts.
 - The launcher never removes that volume implicitly. Removing it follows the same explicit keep/remove choice as increment deletion, because unpushed commits live there.
+- `archetipo view stop --isolated` keeps the volume. The separate destructive
+  command `archetipo view remove --isolated --yes` removes containers, network,
+  volume and host record only after explicit confirmation.
 - The container runs as a non-root user without `sudo`, with all capabilities dropped, `no-new-privileges` and no privileged mode.
 
 ### Network
@@ -114,7 +119,9 @@ The launcher never copies `~/.claude`, `~/.codex`, SSH keys, the host's `gh` log
 
 - Recipe, preview and agent code needs no isolation logic of its own. The product changes are the preview bind/range, adding a workspace from a URL, the launcher, the gateway and the image.
 - The launcher is host-side orchestration only. It must not grow a second provisioner or approval policy: setup, checks, evidence and publication remain the CLI contracts running inside the container.
-- `archetipo view list` and `stop` on the host must learn about a viewer running in a container; the launcher records it in the host registry.
+- `archetipo view list`, `stop` and `remove` on the host account for a viewer
+  running in a container; `stop` retains its durable volume and `remove --yes`
+  destroys it.
 - The first start downloads the image and installs dependencies; later starts reuse the volume and the existing preparation fingerprints.
 - Docker Desktop needs administrator rights, enabled virtualization (WSL2 or Hyper-V on Windows) and a paid licence for larger companies.
 - `AGENTS.md` keeps stating that worktrees are not OS security isolation until this is delivered, then describes isolated mode with its limits.
@@ -130,20 +137,27 @@ The launcher never copies `~/.claude`, `~/.codex`, SSH keys, the host's `gh` log
 
 ## Verification
 
-A new credential-free smoke, `test:view-isolated-smoke`, with only the agent simulated, proves from machine effects:
+The credential-free `npm run test:view-isolated-smoke` builds the release image
+from this checkout and proves from machine effects:
 
-- a sentinel file in the host home is unreadable from the agent, a recipe check and the preview process;
-- a listener started on the host and a private-range address are unreachable from all three, while a public host is reachable;
+- the workspace receives no host-directory mount, cannot see the usual host roots
+  and cannot change firewall rules or routes;
+- a listener started on the host and private-range addresses are unreachable from
+  the preview process, while a public host is reachable;
 - a workspace added by repository URL is cloned inside the environment, and nothing is written on the host outside the launcher's state directory;
 - the viewer and a preview iframe load from the host browser, and the browser origin survives Stop/Start;
-- the conversation and its native session resume after the container is recreated on the same volume;
-- a missing container engine fails explicitly, with the same written opt-out policy as a missing Chrome.
+- two increment previews keep their origins and work after Stop/Start;
+- the destructive command removes containers, network, durable volume and host record.
 
-Hosted CI runners may be unable to run Linux containers on macOS and Windows. Where they cannot, the smoke runs automatically on Linux and by hand on the other two before a release.
+The smoke runs automatically on Linux in CI and manually on each supported host
+before a release. Agent adapters and sign-in parsing have their own credential-free
+tests; completing subscription and GitHub sign-ins remains a manual release check
+because CI must not hold personal credentials.
 
-## To verify before building
+## Acceptance evidence
 
-These decide whether the design stands as written. They run on macOS first; the network ones are repeated on Windows before Windows is declared supported.
+These decide whether the design stands as written. Windows remains unsupported
+until the network checks are repeated there.
 
 1. **Done on macOS (Docker 29.7.2, Apple Silicon), 2026-11-16.** With the shared namespace, a workspace without capabilities reached the internet with no proxy, could not reach a listener on the host through `host.docker.internal`, the host's LAN address or the engine's bridge, could not add a route or open a raw socket, and served a page to the host on `127.0.0.1` under the same port number while the host's LAN address refused it. A control container on a default network reached the same host listener.
 2. **Done on macOS, same date.** On an `internal` network the proxy worked only for clients given the proxy variables, and routed egress through the gateway did not pass. This is why the shared namespace was chosen.

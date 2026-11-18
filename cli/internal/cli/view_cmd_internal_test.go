@@ -144,3 +144,22 @@ func TestViewListRendersMissingProjectRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveIsolatedEnvironmentRequiresExplicitConfirmation(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	cmd := newViewRemoveCmd(streams{in: strings.NewReader(""), out: &out, err: &errBuf})
+	cmd.SetArgs([]string{"--isolated"})
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "requires explicit confirmation") {
+		t.Fatalf("remove without --yes returned %v", err)
+	}
+
+	cmd = newViewRemoveCmd(streams{in: strings.NewReader(""), out: &out, err: &errBuf})
+	cmd.SetArgs([]string{"--yes"})
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "available only for isolated environments") {
+		t.Fatalf("remove without --isolated returned %v", err)
+	}
+}

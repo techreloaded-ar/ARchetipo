@@ -19,6 +19,7 @@ type Provider interface {
 	GatewayReady(ctx context.Context, env Environment) bool
 	Logs(ctx context.Context, name string) string
 	Down(ctx context.Context, env Environment) error
+	Remove(ctx context.Context, env Environment) error
 }
 
 // Timeouts of a start. The first start may also pull the image, which is not
@@ -74,6 +75,29 @@ func Stop(ctx context.Context, provider Provider, store Store, id string) (Envir
 		return Environment{}, err
 	}
 	return env, provider.Down(ctx, env)
+}
+
+// Remove destroys an environment, including its durable volume, and forgets
+// its host-side record. Callers must obtain the person's explicit confirmation
+// before invoking it because unpushed commits and saved credentials are lost.
+func Remove(ctx context.Context, provider Provider, store Store, id string) (Environment, error) {
+	env, found, err := store.Get(id)
+	if err != nil {
+		return Environment{}, err
+	}
+	if !found {
+		return Environment{}, iox.NewNotFound("isolated environment "+id+" is not recorded", "run `archetipo view --isolated` to create it", nil)
+	}
+	if err = provider.Available(ctx); err != nil {
+		return Environment{}, err
+	}
+	if err = provider.Remove(ctx, env); err != nil {
+		return Environment{}, err
+	}
+	if err = store.Forget(id); err != nil {
+		return Environment{}, err
+	}
+	return env, nil
 }
 
 func answers(ctx context.Context, url string) bool {

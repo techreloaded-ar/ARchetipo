@@ -51,6 +51,19 @@ func stopIsolatedView(s streams, id string) error {
 	return nil
 }
 
+func removeIsolatedView(s streams, id string) error {
+	store, err := isolatedStore()
+	if err != nil {
+		return err
+	}
+	env, err := isolated.Remove(context.Background(), isolated.NewDocker(), store, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(s.out, "Ambiente isolato %s eliminato, compresi il volume %s, i workspace, le credenziali e il lavoro non pubblicato.\n", env.ID, env.Volume())
+	return nil
+}
+
 func isolatedStore() (isolated.Store, error) {
 	dir, err := workspace.StateDir()
 	if err != nil {

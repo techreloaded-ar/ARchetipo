@@ -17,10 +17,14 @@ P="archetipo-$ID"
 WS="$P-workspace"
 WORK=$(mktemp -d)
 export ARCHETIPO_STATE_DIR="$WORK/state"
+VIEW_PORT=${ARCHETIPO_VERIFY_VIEW_PORT:-47800}
+PREVIEW_FIRST=$((VIEW_PORT + 10))
+PREVIEW_LAST=$((VIEW_PORT + 29))
+SENTINEL_PORT=$((VIEW_PORT + 90))
+export ARCHETIPO_ISOLATED_FIRST_PORT="$VIEW_PORT"
 (cd "$ROOT/cli" && go build -o "$WORK/archetipo" ./cmd/archetipo) || exit 1
 CLI="$WORK/archetipo"
-docker image inspect archetipo-isolated:latest >/dev/null 2>&1 \
-  || docker build -f "$ROOT/docker/isolated/Dockerfile" -t archetipo-isolated:latest "$ROOT" || exit 1
+docker build -f "$ROOT/docker/isolated/Dockerfile" -t archetipo-isolated:latest "$ROOT" || exit 1
 destroy() {
   docker rm -f "$P-workspace" "$P-gateway" >/dev/null 2>&1
   docker network rm "$P-net" >/dev/null 2>&1
@@ -34,10 +38,11 @@ in_ws() { docker exec "$WS" sh -c "$1"; }
 HOSTIP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | cut -d' ' -f1)
 SENTINEL_DIR=$(mktemp -d)
 echo "host-sentinel" > "$SENTINEL_DIR/index.html"
-(cd "$SENTINEL_DIR" && exec python3 -m http.server 47901 --bind 0.0.0.0) >/dev/null 2>&1 &
+(cd "$SENTINEL_DIR" && exec python3 -m http.server "$SENTINEL_PORT" --bind 0.0.0.0) >/dev/null 2>&1 &
 SENTINEL_PID=$!
 cleanup() {
   kill "$SENTINEL_PID" 2>/dev/null
+  wait "$SENTINEL_PID" 2>/dev/null
   rm -rf "$SENTINEL_DIR"
   [ "${KEEP:-}" = 1 ] || destroy
   rm -rf "$WORK"
@@ -47,23 +52,23 @@ trap cleanup EXIT
 echo "== environment"
 destroy
 "$CLI" view --isolated --environment "$ID" --no-open || exit 1
-[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47800/)" = 200 ] && pass "archetipo view --isolated returned with the viewer answering" || fail "viewer not answering after launch"
-curl -s -m 3 http://127.0.0.1:47901/ | grep -q host-sentinel && pass "control: the host sentinel answers on the host" || fail "host sentinel not running"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$VIEW_PORT/")" = 200 ] && pass "archetipo view --isolated returned with the viewer answering" || fail "viewer not answering after launch"
+curl -s -m 3 "http://127.0.0.1:$SENTINEL_PORT/" | grep -q host-sentinel && pass "control: the host sentinel answers on the host" || fail "host sentinel not running"
 
 echo "== viewer reached from the host browser address only"
-status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47800/api/workspaces)
-[ "$status" = 200 ] && pass "GET /api/workspaces on 127.0.0.1:47800 -> 200" || fail "viewer API answered $status"
-curl -s -m 3 -o /dev/null "http://$HOSTIP:47800/" && fail "viewer reachable on the LAN address $HOSTIP" || pass "viewer not reachable on the LAN address $HOSTIP"
+status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$VIEW_PORT/api/workspaces")
+[ "$status" = 200 ] && pass "GET /api/workspaces on 127.0.0.1:$VIEW_PORT -> 200" || fail "viewer API answered $status"
+curl -s -m 3 -o /dev/null "http://$HOSTIP:$VIEW_PORT/" && fail "viewer reachable on the LAN address $HOSTIP" || pass "viewer not reachable on the LAN address $HOSTIP"
 
 echo "== project added from a repository URL, cloned inside the environment"
-curl -s http://127.0.0.1:47800/api/workspaces | grep -q '"cloneAvailable":true' && pass "the viewer offers cloning" || fail "cloning not offered"
-clone=$(curl -s -X POST -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:47800' \
-  -d '{"url":"https://github.com/octocat/Hello-World"}' http://127.0.0.1:47800/api/workspaces/clone)
+curl -s "http://127.0.0.1:$VIEW_PORT/api/workspaces" | grep -q '"cloneAvailable":true' && pass "the viewer offers cloning" || fail "cloning not offered"
+clone=$(curl -s -X POST -H 'Content-Type: application/json' -H "Origin: http://127.0.0.1:$VIEW_PORT" \
+  -d '{"url":"https://github.com/octocat/Hello-World"}' "http://127.0.0.1:$VIEW_PORT/api/workspaces/clone")
 echo "$clone" | grep -q '"dir":"/home/archetipo/workspaces/Hello-World"' && echo "$clone" | grep -q '"initialized":false' \
   && pass "public repository cloned into the volume, reported as not yet a workspace" || fail "clone answered: $clone"
 in_ws 'git -C ~/workspaces/Hello-World log --oneline -1' >/dev/null && pass "the clone is a Git checkout inside the environment" || fail "clone missing inside"
-clone=$(curl -s -X POST -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:47800' \
-  -d '{"url":"https://user:secret@github.com/octocat/Hello-World"}' http://127.0.0.1:47800/api/workspaces/clone)
+clone=$(curl -s -X POST -H 'Content-Type: application/json' -H "Origin: http://127.0.0.1:$VIEW_PORT" \
+  -d '{"url":"https://user:secret@github.com/octocat/Hello-World"}' "http://127.0.0.1:$VIEW_PORT/api/workspaces/clone")
 echo "$clone" | grep -q WORKSPACE_CLONE_URL_INVALID && pass "a URL carrying credentials is refused" || fail "credential URL answered: $clone"
 
 echo "== project with two increments, created inside the environment"
@@ -124,7 +129,7 @@ echo "  preview 2: $URL2"
 for n in 1 2; do
   eval "url=\$URL$n; wd=\$WD$n"
   port=$(echo "$url" | sed -E 's#http://[^:]+:([0-9]+)/.*#\1#')
-  [ "$port" -ge 47810 ] && [ "$port" -le 47829 ] && pass "preview $n on port $port, inside the published range" || fail "preview $n port $port outside 47810-47829"
+  [ "$port" -ge "$PREVIEW_FIRST" ] && [ "$port" -le "$PREVIEW_LAST" ] && pass "preview $n on port $port, inside the published range" || fail "preview $n port $port outside $PREVIEW_FIRST-$PREVIEW_LAST"
   case "$url" in http://127.0.0.1:*) pass "preview $n URL names host loopback" ;; *) fail "preview $n URL $url" ;; esac
   checkout=$(curl -s -m 5 -D - -o /dev/null "$url" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-checkout"{print $2}')
   [ "$checkout" = "$wd" ] && pass "host browser address reaches the app of increment $n ($checkout)" || fail "preview $n from host returned checkout '$checkout'"
@@ -137,7 +142,7 @@ probe() {
     fetch(process.argv[1],{signal:AbortSignal.timeout(4000)}).then(r=>console.log(\"REACHED \"+r.status)).catch(()=>console.log(\"blocked\"))' '$1'"
 }
 [ "$(probe https://example.com/)" = "REACHED 200" ] && pass "internet reachable without proxy configuration" || fail "internet not reachable"
-for target in http://host.docker.internal:47901/ "http://$HOSTIP:47901/" http://192.168.65.254:47901/; do
+for target in "http://host.docker.internal:$SENTINEL_PORT/" "http://$HOSTIP:$SENTINEL_PORT/" "http://192.168.65.254:$SENTINEL_PORT/"; do
   r=$(probe "$target"); [ "$r" = blocked ] && pass "blocked: $target" || fail "$target -> $r"
 done
 in_ws 'ls /Users /Volumes /mnt/c 2>/dev/null | head -1' | grep -q . && fail "a host directory is visible" || pass "no host directory is visible (/Users, /Volumes, /mnt/c)"
@@ -154,6 +159,13 @@ for n in 1 2; do
   new=$(wait_url $n) || { fail "preview $n not ready after recreation"; continue; }
   [ "$new" = "$old" ] && pass "increment $n kept its origin $new after the container was recreated" || fail "increment $n moved from $old to $new"
 done
+
+echo "== explicit removal destroys durable work"
+"$CLI" view remove --isolated --environment "$ID" --yes >/dev/null || fail "remove"
+docker ps -a --format '{{.Names}}' | grep -q "^$WS$" && fail "workspace container left after remove" || pass "remove deleted the workspace container"
+docker network inspect "$P-net" >/dev/null 2>&1 && fail "network left after remove" || pass "remove deleted the network"
+docker volume inspect "$P-home" >/dev/null 2>&1 && fail "volume left after remove" || pass "remove deleted the durable volume"
+grep -q '"id":"verify"' "$ARCHETIPO_STATE_DIR/environments.json" 2>/dev/null && fail "environment record left after remove" || pass "remove deleted the host record"
 
 echo
 [ $FAIL = 0 ] && echo "ALL CHECKS PASSED" || echo "SOME CHECKS FAILED"

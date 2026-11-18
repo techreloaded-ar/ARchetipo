@@ -12,7 +12,7 @@
     "test:cli": "cd cli && go test ./...",
     "test:web": "node --test \"test/web/**/*.test.mjs\"",
     "test:e2e": "node ./test/e2e/run.mjs",
-    "test:e2e:unit": "node --test ./test/e2e/config.test.mjs ./test/e2e/baseline.test.mjs",
+    "test:e2e:unit": "node --test ./test/e2e/config.test.mjs ./test/e2e/baseline.test.mjs ./test/e2e/release-contract.test.mjs",
     "test:wiki-benchmark": "node ./test/benchmark/wiki/run.mjs",
     "test:wiki-benchmark:unit": "node --test ./test/benchmark/wiki/run.test.mjs",
     "test:harness-benchmark": "node ./test/benchmark/harness/run.mjs",
@@ -44,7 +44,8 @@
     "test:view-increment-smoke": "node ./test/e2e/increment-from-view-smoke.mjs",
     "test:view-preview-smoke": "node ./test/e2e/preview-from-view-smoke.mjs",
     "test:next-preview-process-smoke": "node ./test/e2e/next-preview-process-smoke.mjs",
-    "test:view-chat-smoke": "node ./test/e2e/chat-first-view-smoke.mjs"
+    "test:view-chat-smoke": "node ./test/e2e/chat-first-view-smoke.mjs",
+    "test:view-isolated-smoke": "./docker/isolated/verify.sh"
   },
   "dependencies": {
     "yaml": "^2.9.0"

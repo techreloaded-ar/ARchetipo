@@ -47,6 +47,22 @@ func TestStoreGivesEachEnvironmentItsOwnPortBlockAndKeepsIt(t *testing.T) {
 	}
 }
 
+func TestStoreCanStartFromASeparatePortBlock(t *testing.T) {
+	t.Setenv(EnvFirstPort, "48000")
+	store := Store{Dir: t.TempDir()}
+	env, err := store.Ensure(DefaultID, "image:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.ViewPort != 48000 || env.PreviewRange() != "48010-48029" {
+		t.Fatalf("unexpected block: %+v (%s)", env, env.PreviewRange())
+	}
+	t.Setenv(EnvFirstPort, "invalid")
+	if _, err = (Store{Dir: t.TempDir()}).Ensure(DefaultID, "image:1"); err == nil {
+		t.Fatal("invalid first port accepted")
+	}
+}
+
 func TestEnvironmentIDsMustNameEngineObjectsSafely(t *testing.T) {
 	for _, id := range []string{"", "Default", "-x", "a b", "a/b", "../x", strings.Repeat("a", 33)} {
 		if ValidateID(id) == nil {
@@ -198,6 +214,10 @@ func (f *fakeProvider) Down(_ context.Context, env Environment) error {
 	f.steps = append(f.steps, "down "+env.ID)
 	return nil
 }
+func (f *fakeProvider) Remove(_ context.Context, env Environment) error {
+	f.steps = append(f.steps, "remove "+env.ID)
+	return nil
+}
 
 func TestStartRecordsTheEnvironmentAndWaitsForTheViewer(t *testing.T) {
 	defer func(previous func(context.Context, string) bool, timeout time.Duration) {
@@ -227,6 +247,12 @@ func TestStartRecordsTheEnvironmentAndWaitsForTheViewer(t *testing.T) {
 	if _, err = Stop(context.Background(), provider, store, DefaultID); err != nil || provider.steps[len(provider.steps)-1] != "down default" {
 		t.Fatalf("stop: %v %v", err, provider.steps)
 	}
+	if _, err = Remove(context.Background(), provider, store, DefaultID); err != nil || provider.steps[len(provider.steps)-1] != "remove default" {
+		t.Fatalf("remove: %v %v", err, provider.steps)
+	}
+	if _, found, getErr := store.Get(DefaultID); getErr != nil || found {
+		t.Fatalf("removed environment still recorded: found=%v err=%v", found, getErr)
+	}
 
 	stopped := &fakeProvider{unavailable: errors.New("Docker non è avviato.")}
 	if _, err = Start(context.Background(), stopped, Store{Dir: t.TempDir()}, DefaultID, "img", func(string) {}); err == nil || len(stopped.steps) != 1 {
@@ -236,6 +262,47 @@ func TestStartRecordsTheEnvironmentAndWaitsForTheViewer(t *testing.T) {
 	viewerAnswers = func(context.Context, string) bool { return false }
 	if _, err = Start(context.Background(), &fakeProvider{}, Store{Dir: t.TempDir()}, DefaultID, "img", func(string) {}); err == nil {
 		t.Fatal("Start returned before the viewer answered")
+	}
+}
+
+func TestDockerRemoveDestroysContainersNetworkAndVolume(t *testing.T) {
+	env := Environment{ID: "client-a", ViewPort: 47800, Image: "img"}
+	exists := map[string]bool{
+		"container/" + env.Workspace(): true,
+		"container/" + env.Gateway():   true,
+		"network/" + env.Network():     true,
+		"volume/" + env.Volume():       true,
+	}
+	var removed []string
+	docker := &Docker{Binary: "docker"}
+	docker.Run = func(_ context.Context, args ...string) (string, error) {
+		if len(args) >= 3 && args[1] == "inspect" {
+			if exists[args[0]+"/"+args[2]] {
+				return "present", nil
+			}
+			return "", errors.New("missing")
+		}
+		if len(args) == 3 && args[0] == "rm" && args[1] == "-f" {
+			removed = append(removed, "container/"+args[2])
+			return "", nil
+		}
+		if len(args) == 3 && args[1] == "rm" {
+			removed = append(removed, args[0]+"/"+args[2])
+			return "", nil
+		}
+		return "", nil
+	}
+	if err := docker.Remove(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"container/" + env.Workspace(),
+		"container/" + env.Gateway(),
+		"network/" + env.Network(),
+		"volume/" + env.Volume(),
+	}
+	if !slices.Equal(removed, want) {
+		t.Fatalf("removed %v, want %v", removed, want)
 	}
 }
 

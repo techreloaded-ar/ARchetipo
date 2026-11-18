@@ -66,7 +66,8 @@ authentication is performed.
 With --isolated the whole viewer, with agents, recipes and previews, runs in
 a container environment that cannot read this computer's files or reach its
 local network. It needs Docker; the environment keeps its work in a volume
-across restarts. "archetipo view stop --isolated" stops it and keeps the work.`,
+across restarts. "archetipo view stop --isolated" stops it and keeps the work;
+"archetipo view remove --isolated --yes" permanently removes it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isolatedMode {
@@ -198,7 +199,34 @@ across restarts. "archetipo view stop --isolated" stops it and keeps the work.`,
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "do not open the browser automatically")
 	cmd.Flags().BoolVar(&isolatedMode, "isolated", false, "run the viewer in an isolated container environment (needs Docker)")
 	cmd.Flags().StringVar(&environmentID, "environment", isolated.DefaultID, "isolated environment to use with --isolated")
-	cmd.AddCommand(newViewListCmd(s), newViewStopCmd(s), newViewGatewayCmd())
+	cmd.AddCommand(newViewListCmd(s), newViewStopCmd(s), newViewRemoveCmd(s), newViewGatewayCmd())
+	return cmd
+}
+
+// newViewRemoveCmd permanently removes an isolated environment. --yes is
+// deliberately mandatory: the volume may contain unpushed commits, native
+// sessions and credentials, and a non-interactive CLI cannot infer consent.
+func newViewRemoveCmd(s streams) *cobra.Command {
+	var isolatedMode bool
+	var environmentID string
+	var confirmed bool
+	cmd := &cobra.Command{
+		Use:   "remove",
+		Short: "Permanently remove an isolated environment and its work",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if !isolatedMode {
+				return iox.NewInvalidInput("remove is available only for isolated environments", "run `archetipo view remove --isolated --yes`", nil)
+			}
+			if !confirmed {
+				return iox.NewInvalidInput("removing an isolated environment requires explicit confirmation", "add --yes to permanently delete its workspace, credentials and unpushed work", nil)
+			}
+			return removeIsolatedView(s, environmentID)
+		},
+	}
+	cmd.Flags().BoolVar(&isolatedMode, "isolated", false, "remove an isolated environment")
+	cmd.Flags().StringVar(&environmentID, "environment", isolated.DefaultID, "isolated environment to remove")
+	cmd.Flags().BoolVar(&confirmed, "yes", false, "confirm permanent deletion of the environment and its volume")
 	return cmd
 }
 

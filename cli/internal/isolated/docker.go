@@ -178,3 +178,25 @@ func (d *Docker) Down(ctx context.Context, env Environment) error {
 	}
 	return nil
 }
+
+// Remove destroys every engine object owned by an environment. Unlike Down it
+// removes the durable volume, so it is used only after explicit confirmation.
+func (d *Docker) Remove(ctx context.Context, env Environment) error {
+	if err := d.Down(ctx, env); err != nil {
+		return err
+	}
+	for _, object := range []struct {
+		kind string
+		name string
+	}{
+		{kind: "network", name: env.Network()},
+		{kind: "volume", name: env.Volume()},
+	} {
+		if d.exists(ctx, object.kind, object.name) {
+			if _, err := d.Run(ctx, object.kind, "rm", object.name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
