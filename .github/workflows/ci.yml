@@ -191,6 +191,8 @@ jobs:
         working-directory: cli
         run: go test ./... -count=1
 
+      - run: npm ci
+
       - name: E2E schema and baseline unit tests
         run: npm run test:e2e:unit
 
