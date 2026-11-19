@@ -223,10 +223,11 @@ function verifyAndPrint(version, platform) {
 		? path.join(prefix, "archetipo.cmd")
 		: path.join(prefix, "bin", "archetipo");
 
-	// The .cmd shim needs a shell on Windows, where the global prefix is often
-	// C:\Program Files\nodejs: quote it, or cmd.exe splits it at the space.
-	const command = isWindows ? `"${globalBin}"` : globalBin;
-	const result = run(command, ["version"], { shell: isWindows });
+	// A .cmd shim needs the shell on Windows, and with shell:true Node joins the
+	// command line without quoting it: a prefix such as "C:\Program Files\nodejs"
+	// would be split at the space by cmd.exe, so the path is quoted explicitly.
+	const verifyCommand = isWindows ? `"${globalBin}"` : globalBin;
+	const result = run(verifyCommand, ["version"], { shell: isWindows });
 	const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
 	if (result.status !== 0 || !output.includes(version)) {
 		console.error(`\nVerification failed: ${globalBin} version → "${output}"`);
