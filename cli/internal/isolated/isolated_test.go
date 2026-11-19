@@ -343,6 +343,136 @@ func TestDockerAvailableRequiresLinuxContainers(t *testing.T) {
 	}
 }
 
+// shortEngineLimits makes the engine limits fit a test and restores them.
+func shortEngineLimits(t *testing.T) {
+	t.Helper()
+	probe, command := EngineProbeTimeout, EngineCommandTimeout
+	EngineProbeTimeout, EngineCommandTimeout = 50*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { EngineProbeTimeout, EngineCommandTimeout = probe, command })
+}
+
+// returnsWithin fails the test when operation is still running after limit.
+func returnsWithin(t *testing.T, limit time.Duration, operation func() error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- operation() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(limit):
+		t.Fatalf("still waiting after %s", limit)
+		return nil
+	}
+}
+
+func recordedStore(t *testing.T) Store {
+	t.Helper()
+	store := Store{Dir: t.TempDir()}
+	if _, err := store.Ensure(DefaultID, "img"); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func TestStopReturnsWhenTheEngineNeverAnswers(t *testing.T) {
+	shortEngineLimits(t)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked [][]string
+	docker := &Docker{Binary: binary, Run: func(ctx context.Context, args ...string) (string, error) {
+		asked = append(asked, args)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	err = returnsWithin(t, 5*time.Second, func() error {
+		_, stopErr := Stop(context.Background(), docker, recordedStore(t), DefaultID)
+		return stopErr
+	})
+	if !errors.Is(err, errEngineUnresponsive) || !strings.Contains(err.Error(), "Docker non risponde") {
+		t.Fatalf("Stop on a silent engine: %v", err)
+	}
+	if len(asked) != 1 || asked[0][0] != "info" {
+		t.Fatalf("went on after the probe timed out: %v", asked)
+	}
+}
+
+func TestStopNeverReportsContainersRemovedWhenTheEngineStopsAnswering(t *testing.T) {
+	shortEngineLimits(t)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	docker := &Docker{Binary: binary, Run: func(ctx context.Context, args ...string) (string, error) {
+		switch args[0] {
+		case "info":
+			return "linux", nil
+		case "rm":
+			removed = true
+			return "", nil
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	err = returnsWithin(t, 5*time.Second, func() error {
+		_, stopErr := Stop(context.Background(), docker, recordedStore(t), DefaultID)
+		return stopErr
+	})
+	if !errors.Is(err, errEngineUnresponsive) || removed {
+		t.Fatalf("an unanswered inspect was taken for an absent container: err=%v removed=%v", err, removed)
+	}
+}
+
+func TestStopEndsWhenThePersonInterruptsIt(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	docker := &Docker{Binary: binary, Run: func(ctx context.Context, _ ...string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	ctx, interrupt := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, interrupt)
+	err = returnsWithin(t, 5*time.Second, func() error {
+		_, stopErr := Stop(ctx, docker, recordedStore(t), DefaultID)
+		return stopErr
+	})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "interrotta") {
+		t.Fatalf("Stop after an interrupt: %v", err)
+	}
+}
+
+// TestHelperSilentEngine is not a test: it is the engine process started by
+// TestRealRunnerKillsASilentEngine, which never answers.
+func TestHelperSilentEngine(t *testing.T) {
+	if os.Getenv("ARCHETIPO_TEST_SILENT_ENGINE") != "1" {
+		t.Skip("helper process")
+	}
+	time.Sleep(time.Hour)
+}
+
+// The real runner must kill the engine process on every platform: the test
+// binary itself plays the silent engine, so no Docker and no shell is needed.
+func TestRealRunnerKillsASilentEngine(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ARCHETIPO_TEST_SILENT_ENGINE", "1")
+	docker := NewDocker()
+	docker.Binary = binary
+	err = returnsWithin(t, 30*time.Second, func() error {
+		_, runErr := docker.run(context.Background(), 500*time.Millisecond, "-test.run=^TestHelperSilentEngine$")
+		return runErr
+	})
+	if !errors.Is(err, errEngineUnresponsive) {
+		t.Fatalf("silent engine process: %v", err)
+	}
+}
+
 func hasPair(args []string, key, value string) bool {
 	for index := 0; index+1 < len(args); index++ {
 		if args[index] == key && args[index+1] == value {

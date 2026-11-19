@@ -17,7 +17,7 @@ import (
 // The launcher only orchestrates on the host. It returns once the viewer
 // answers: the environment keeps running in the engine, not in this process.
 func runIsolatedView(s streams, id string, noOpen bool) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := interruptibleContext()
 	defer stop()
 	store, err := isolatedStore()
 	if err != nil {
@@ -43,7 +43,9 @@ func stopIsolatedView(s streams, id string) error {
 	if err != nil {
 		return err
 	}
-	env, err := isolated.Stop(context.Background(), isolated.NewDocker(), store, id)
+	ctx, stop := interruptibleContext()
+	defer stop()
+	env, err := isolated.Stop(ctx, isolated.NewDocker(), store, id)
 	if err != nil {
 		return err
 	}
@@ -56,12 +58,22 @@ func removeIsolatedView(s streams, id string) error {
 	if err != nil {
 		return err
 	}
-	env, err := isolated.Remove(context.Background(), isolated.NewDocker(), store, id)
+	ctx, stop := interruptibleContext()
+	defer stop()
+	env, err := isolated.Remove(ctx, isolated.NewDocker(), store, id)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(s.out, "Ambiente isolato %s eliminato, compresi il volume %s, i workspace, le credenziali e il lavoro non pubblicato.\n", env.ID, env.Volume())
 	return nil
+}
+
+// interruptibleContext ends on Ctrl+C or SIGTERM, so an engine command in
+// flight is killed and the operation returns instead of waiting on it. Both
+// signals are portable: os.Interrupt is Ctrl+C on Windows too, and Go defines
+// syscall.SIGTERM on every supported platform.
+func interruptibleContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 func isolatedStore() (isolated.Store, error) {
