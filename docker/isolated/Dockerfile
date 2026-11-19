@@ -21,12 +21,15 @@ FROM node:22-bookworm-slim
 LABEL org.opencontainers.image.source="https://github.com/techreloaded-ar/ARchetipo"
 ARG CLAUDE_CODE_VERSION=2.1.325
 ARG CODEX_VERSION=0.162.1
-ARG GH_VERSION=2.63.2
+ARG GH_VERSION=2.103.3
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl iptables iproute2 procps chromium \
  && rm -rf /var/lib/apt/lists/*
 # The distribution's GitHub CLI is too old for the browser sign-in the viewer
-# relays; the official release is pinned like the agents.
+# relays; the official release is pinned like the agents. It must carry
+# cli/oauth v1.2.2 or later: earlier releases end the device sign-in on the
+# first "slow_down", which a VM clock ticking slightly fast (WSL 2, Docker
+# Desktop) provokes (cli/cli#9370).
 RUN arch="$(dpkg --print-architecture)" \
  && curl -fsSL -o /tmp/gh.deb "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.deb" \
  && dpkg -i /tmp/gh.deb && rm /tmp/gh.deb
