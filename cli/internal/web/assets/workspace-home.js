@@ -12,7 +12,7 @@
 // the caller — the data-attributes are the whole contract between them.
 //
 // Consumable in both browser (defines window.WorkspaceHome) and Node
-// (exports renderWorkspaceHome / renderWorkspaceRows / escapeHtml).
+// (exports renderWorkspaceHomeList / renderWorkspaceRows / escapeHtml).
 (function () {
 	// The server owns both the order of the list and the vocabulary of the
 	// statuses. The frontend only knows how to phrase a status it recognises and
@@ -37,12 +37,7 @@
 		lastOpened: "Ultima apertura",
 		open: "Apri",
 		remove: "Rimuovi",
-		eyebrow: "workspace",
-		title: "Scegli un workspace",
-		subtitle:
-			"Non c'è nessun workspace aperto. Aprine uno fra quelli qui sotto, aggiungine uno esistente, oppure creane uno nuovo.",
-		empty:
-			"Non è ancora stato registrato nessun workspace. Creane uno, oppure aggiungine uno esistente qui sotto.",
+		empty: "Non è ancora stato registrato nessun workspace.",
 	};
 
 	/**
@@ -139,9 +134,8 @@
 
 	/**
 	 * Render the rows of the known-workspaces list to an HTML string.
-	 * An empty or missing list renders as the empty string: what to say instead
-	 * of nothing is the caller's decision, and the home and the modal say it
-	 * differently.
+	 * An empty or missing list renders as the empty string so the caller can
+	 * show the empty state.
 	 *
 	 * @param {object|null} view  The /api/workspaces payload.
 	 * @param {{formatTime?: function}} [opts]  Injected time formatter.
@@ -155,41 +149,26 @@
 	}
 
 	/**
-	 * Render the whole home: the heading that says no workspace is open, and
-	 * the rows — or, with nothing recorded, the same sentence the modal uses.
+	 * Render the home list or its status message.
 	 *
 	 * @param {object|null} view  The /api/workspaces payload.
 	 * @param {{formatTime?: function, message?: string}} [opts]
 	 * @returns {string} HTML string.
 	 */
-	function renderWorkspaceHome(view, opts) {
+	function renderWorkspaceHomeList(view, opts) {
 		const options = opts && typeof opts === "object" ? opts : {};
+		if (options.message) {
+			return `<p class="status-msg err" role="alert">${escapeHtml(options.message)}</p>`;
+		}
 		const rows = renderWorkspaceRows(view, options);
-		const body = rows
-			? `<div class="workspace-home-list">${rows}</div>`
-			: `<p class="form-notice">${escapeHtml(TEXT.empty)}</p>`;
-		// A message is how the caller reports that the list could not be read:
-		// a page that does not know which workspace it serves must say so rather
-		// than draw a board for one.
-		const message = options.message
-			? `<p class="status-msg err">${escapeHtml(options.message)}</p>`
-			: "";
-		return (
-			`<header class="workspace-home-head">` +
-			`<span class="workspace-home-eyebrow">${escapeHtml(TEXT.eyebrow)}</span>` +
-			`<h1 class="workspace-home-title">${escapeHtml(TEXT.title)}</h1>` +
-			`<p class="workspace-home-sub">${escapeHtml(TEXT.subtitle)}</p>` +
-			`</header>` +
-			message +
-			body
-		);
+		return rows || `<p class="workspace-home-empty">${escapeHtml(TEXT.empty)}</p>`;
 	}
 
 	// ---- exports ----
 
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderWorkspaceHome, renderWorkspaceRows, escapeHtml };
+		module.exports = { renderWorkspaceHomeList, renderWorkspaceRows, escapeHtml };
 	} else {
-		window.WorkspaceHome = { renderWorkspaceHome, renderWorkspaceRows };
+		window.WorkspaceHome = { renderWorkspaceHomeList, renderWorkspaceRows };
 	}
 })();

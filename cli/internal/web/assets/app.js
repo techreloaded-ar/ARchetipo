@@ -506,11 +506,9 @@
 	);
 	const workspacesAddSubmit = document.getElementById("workspaces-add-submit");
 	const workspacesStatus = document.getElementById("workspaces-status");
+	const workspaceEntryForms = document.getElementById("workspace-entry-forms");
 	const workspaceHomeEl = document.getElementById("workspace-home");
 	const workspaceHomeList = document.getElementById("workspace-home-list");
-	const workspaceHomeActions = document.getElementById(
-		"workspace-home-actions",
-	);
 	const workspaceHomeCreate = document.getElementById("workspace-home-create");
 	const signinBtn = document.getElementById("signin-btn");
 	const workspaceHomeSignin = document.getElementById("workspace-home-signin");
@@ -1204,10 +1202,7 @@
 		renderWorkspaceHomeView(view, "");
 	}
 
-	// No workspace open: the board, the status strip and every control that
-	// presupposes a workspace disappear, and the add form moves out of the now
-	// unreachable modal into the home — so "add an existing workspace" stays a
-	// single implementation instead of becoming two.
+	// The home takes over the entry forms from the workspace modal.
 	function enterNoWorkspaceMode() {
 		document.body.classList.add("no-workspace");
 		// Nothing is running in a workspace that is not open: the runs strip
@@ -1218,14 +1213,7 @@
 		// forgets its last step too, so no step of the workspace just left can be
 		// put back on screen by the next redraw (AC-5).
 		resetWorkspaceStatusState();
-		workspaceHomeActions.insertBefore(
-			workspacesAddForm,
-			workspaceHomeActions.firstChild,
-		);
-		workspaceHomeActions.insertBefore(
-			workspacesCloneForm,
-			workspaceHomeActions.firstChild,
-		);
+		workspaceHomeList.after(workspaceEntryForms);
 		workspaceHomeEl.classList.remove("hidden");
 	}
 
@@ -1243,7 +1231,7 @@
 
 	function renderWorkspaceHomeView(view, message) {
 		applyCloneOffer(view);
-		workspaceHomeList.innerHTML = WorkspaceHome.renderWorkspaceHome(view, {
+		workspaceHomeList.innerHTML = WorkspaceHome.renderWorkspaceHomeList(view, {
 			formatTime: formatExecutionTime,
 			message,
 		});

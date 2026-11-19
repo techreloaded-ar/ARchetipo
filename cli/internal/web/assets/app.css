@@ -4122,24 +4122,68 @@ html[data-theme="light"] .cm-s-easymde .cm-link {
 	color: var(--danger);
 }
 
-/* ---- Workspace home (US-051) -------------------------------------------
-   Shown when the viewer serves no workspace. It reuses the modal's width and
-   surfaces and the .workspace-row entries above: no new visual identity, only
-   a different place for the same list. */
+.workspace-entry-forms {
+	display: grid;
+	gap: var(--space-4);
+}
+
+.workspace-entry-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: var(--space-5);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.workspace-entry-form .field {
+	flex: 1;
+}
+
+.workspace-entry-form label {
+	font-weight: 600;
+	color: var(--text-strong);
+}
+
+.workspace-entry-hint {
+	flex: 1;
+	margin: 0 0 var(--space-1);
+	color: var(--text-muted);
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.workspace-entry-form .form-actions {
+	flex-wrap: wrap;
+	margin: 0;
+}
+
+.workspace-entry-form .status-msg,
+.workspace-entry-hint {
+	overflow-wrap: anywhere;
+}
+
+/* ---- Workspace home --------------------------------------------------- */
 
 body.no-workspace #board,
 body.no-workspace #workspace-shell,
+body.no-workspace #workspace-views,
 body.no-workspace [data-workspace-scoped] {
 	display: none !important;
 }
 
+body.no-workspace .topbar {
+	grid-template-columns: minmax(0, 1fr) auto;
+	padding-block: 0;
+}
+
 .workspace-home {
 	flex: 1 1 auto;
-	display: flex;
-	justify-content: center;
-	align-items: flex-start;
+	min-height: 0;
 	overflow-y: auto;
-	padding: var(--space-6) var(--space-5);
+	padding: clamp(24px, 5vw, 64px) clamp(16px, 4vw, 32px);
 }
 
 .workspace-home.hidden {
@@ -4147,44 +4191,67 @@ body.no-workspace [data-workspace-scoped] {
 }
 
 .workspace-home-inner {
-	width: min(820px, 100%);
-	padding: 0;
+	max-width: 900px;
+	margin-inline: auto;
 }
 
 .workspace-home-head {
-	margin-bottom: var(--space-5);
-}
-
-.workspace-home-eyebrow {
-	display: block;
-	font-size: 12px;
-	font-weight: 600;
-	letter-spacing: 0;
-	text-transform: none;
-	color: var(--text-dim);
-	margin-bottom: var(--space-2);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: var(--space-3) var(--space-5);
+	margin-bottom: var(--space-4);
 }
 
 .workspace-home-title {
-	font-family: var(--font-sans);
-	font-size: 32px;
-	font-weight: 600;
-	letter-spacing: 0;
-	line-height: 1.18;
-	color: var(--text-strong);
-	margin: 0 0 var(--space-2);
-}
-
-.workspace-home-sub {
-	font-size: 17px;
-	line-height: 1.6;
-	max-width: 60ch;
-	color: var(--text-muted);
 	margin: 0;
+	font-size: clamp(26px, 4vw, 34px);
 }
 
 .workspace-home-actions {
-	margin-top: var(--space-4);
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.workspace-home-empty {
+	margin: 0;
+	font-size: 15px;
+	color: var(--text-muted);
+}
+
+.workspace-home .workspace-entry-forms {
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+	margin-top: var(--space-5);
+}
+
+@media (max-width: 600px) {
+	body.no-workspace .workspace-indicator {
+		flex: 0 1 auto;
+		max-width: 100%;
+	}
+
+	body.no-workspace .workspace-indicator-name {
+		white-space: normal;
+	}
+
+	.workspace-home .workspace-row {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+
+	.workspace-home .workspace-row-actions {
+		justify-content: flex-start;
+	}
+
+	.workspace-home .workspace-name {
+		overflow-wrap: anywhere;
+	}
+
+	.workspace-entry-form {
+		padding: var(--space-4);
+	}
 }
 
 /* ---- Accounts (isolated runtime) ---------------------------------------- */

@@ -54,6 +54,7 @@
 // is the only shape that satisfies both halves of the requirement — not red for
 // a missing browser, and never quietly green.
 
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -81,6 +82,7 @@ const AGENT_SENTINEL = "smoke-page-load-agent-said-sentinel";
 const DRAFT_BODY = "**User Story**\nCome revisore voglio valutare una proposta prima di accettarla.\n\n**Dimostrazione**\nLeggo la proposta e la accetto nel backlog.\n\n**Criteri di accettazione**\n- [ ] AC-1 — Solo la conferma crea la storia.\n";
 const DRAFT_STORIES = ["Prima proposta da rivedere", "Seconda proposta da accettare"].map(title => ({title,epic_code:"EP-700",priority:"MEDIUM",points:3,scope:"MVP",blocked_by:[],body:DRAFT_BODY}));
 const DRAFT_RECEIPT = JSON.stringify({artifact:"spec_draft",status:"PROPOSED",proposals:DRAFT_STORIES});
+const WORKSPACE_CHOOSER_CLAIM = "la scelta del workspace è leggibile su desktop e mobile e i moduli funzionano anche nella finestra Workspace";
 
 // What this smoke claims to prove. Printed on success one by one, and printed
 // again — as *unproved* — when a missing browser makes it skip, so a skip can
@@ -111,6 +113,7 @@ const CLAIMS = [
   "le domande delle personalità accettano scelte cliccabili, selezioni multiple e testo libero, conservando la risposta dopo un errore e il polling",
   "una lettura della chat sospesa viene annullata e riprovata senza reload, perdite di messaggi o della bozza",
   "salvare il primo provider rende subito disponibile il compositore senza riavvio o vecchi avvisi",
+  WORKSPACE_CHOOSER_CLAIM,
   "questionario a passi: scelte multiple, testo libero e bozze conservate",
 ];
 
@@ -169,11 +172,12 @@ async function main() {
     await seedConversationRecord(sandboxDir);
     await seedDocumentation(sandboxDir);
 
-    view = await startViewServer(sandboxDir, cliEnv);
-    console.log(`-> view ready: ${view.url}`);
-
     browser = await launchChrome(chromePath, path.join(runDir, "chrome-profile"));
     console.log(`-> devtools: ${browser.wsEndpoint}`);
+
+    await exerciseWorkspaceChooser(browser, sandboxDir, cliEnv, runDir);
+    view = await startViewServer(sandboxDir, cliEnv);
+    console.log(`-> view ready: ${view.url}`);
 
     await exercisePage(browser, view.url, runDir);
     await exerciseDocumentation(browser, view.url, runDir);
@@ -212,6 +216,82 @@ async function main() {
 }
 
 // --- The page itself ---------------------------------------------------------
+
+async function exerciseWorkspaceChooser(browser, sandboxDir, cliEnv, runDir) {
+  const neutralDir = await fs.mkdtemp(path.join(os.tmpdir(), "archetipo-chooser-"));
+  const page = await browser.newPage();
+  let view;
+  try {
+    view = await startViewServerShared(cliPath, neutralDir, {
+      ...cliEnv,
+      ARCHETIPO_STATE_DIR: path.join(runDir, "chooser-state"),
+      ARCHETIPO_CLONE_DIR: path.join(runDir, "clones"),
+      ARCHETIPO_RUNTIME: "isolated",
+      PATH: neutralDir, // Show the access panel without probing real accounts.
+    }, "/api/workspaces");
+    await page.send("Page.enable");
+    await page.send("Page.navigate", { url: view.url });
+    await page.waitFor(
+      `document.querySelector(".workspace-home-empty") &&
+        document.querySelector("#workspace-home #workspaces-clone-form").offsetWidth &&
+        document.querySelector("#workspace-home-signin").offsetWidth`,
+      10000, "la scelta del workspace mostri entrambi i moduli e Accessi",
+    );
+
+    const dimensions = () => page.evaluate(`(() => {
+      const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const home = document.querySelector("#workspace-home");
+      const inner = rect(".workspace-home-inner");
+      const clone = rect("#workspaces-clone-form");
+      const add = rect("#workspaces-add-form");
+      return {
+        centered: Math.abs(inner.left + inner.right - home.clientWidth) <= 2,
+        overflow: home.scrollWidth > home.clientWidth || document.documentElement.scrollWidth > innerWidth,
+        sideBySide: clone.top === add.top && add.left - clone.right >= 12,
+        stacked: clone.left === add.left && add.top - clone.bottom >= 12,
+        actionsAbove: rect(".workspace-home-actions").bottom < clone.top,
+      };
+    })()`);
+    const screenshot = async (name) => {
+      const { data } = await page.send("Page.captureScreenshot", { format: "png" });
+      await fs.writeFile(path.join(runDir, name), Buffer.from(data, "base64"));
+    };
+
+    const desktop = await dimensions();
+    assert.ok(desktop.centered && desktop.sideBySide && desktop.actionsAbove && !desktop.overflow, JSON.stringify(desktop));
+    await screenshot("workspace-chooser-desktop.png");
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    const mobile = await dimensions();
+    assert.ok(mobile.stacked && mobile.actionsAbove && !mobile.overflow, JSON.stringify(mobile));
+    await screenshot("workspace-chooser-mobile.png");
+
+    for (const [button, panel] of [
+      ["workspace-home-create", "new-workspace-modal"],
+      ["workspace-home-signin", "signin-modal"],
+    ]) {
+      await page.evaluate(`document.getElementById("${button}").click()`);
+      await page.waitFor(`document.getElementById("${panel}").offsetWidth > 0`, 10000, `si apra ${panel}`);
+      await page.evaluate(`document.getElementById("${panel}-close").click()`);
+    }
+    await page.evaluate('document.getElementById("workspaces-clone-submit").click()');
+    await page.waitFor('document.getElementById("workspaces-clone-error").textContent.length > 0', 10000, "compaia l’errore di validazione dell’URL");
+    await page.evaluate(`document.getElementById("workspaces-add-path").value = ${JSON.stringify(sandboxDir)};
+      document.getElementById("workspaces-add-submit").click()`);
+    await page.waitFor('document.querySelector("#workspace-home-list [data-open]:enabled")', 10000, "il workspace aggiunto compaia nell’elenco");
+    await page.evaluate('document.querySelector("#workspace-home-list [data-open]").click()');
+    await page.waitFor('!document.body.classList.contains("no-workspace") && !document.getElementById("workspace-indicator").disabled', 10000, "si apra il workspace");
+    await page.evaluate('document.getElementById("workspace-indicator").click()');
+    await page.waitFor(
+      'document.querySelector("#workspaces-modal #workspaces-clone-form")?.offsetWidth > 0 && document.querySelector("#workspaces-modal #workspaces-add-form")?.offsetWidth > 0',
+      10000, "la finestra Workspace mostri i due moduli dopo l’apertura",
+    );
+    ok(WORKSPACE_CHOOSER_CLAIM, "I moduli sono affiancati su desktop e impilati a 390 px. Accessi, creazione, validazione URL e apertura di un workspace registrato rispondono dal browser.");
+  } finally {
+    await page.close();
+    if (view) await stopProcess(view.child);
+    await fs.rm(neutralDir, { recursive: true, force: true });
+  }
+}
 
 async function exercisePage(browser, url, runDir) {
   const page = await browser.newPage();

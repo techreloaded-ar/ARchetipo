@@ -50,7 +50,7 @@ function loadWorkspaceHome() {
 	return mod.exports;
 }
 
-const { renderWorkspaceHome, renderWorkspaceRows } = loadWorkspaceHome();
+const { renderWorkspaceHomeList, renderWorkspaceRows } = loadWorkspaceHome();
 
 // Strip every attribute from the markup, leaving only what a reader sees.
 // A word that survives this is visible text; one that does not was only ever
@@ -229,9 +229,9 @@ describe("renderWorkspaceRows", () => {
 	});
 });
 
-describe("renderWorkspaceHome", () => {
+describe("renderWorkspaceHomeList", () => {
 	it("con elenco vuoto dice che nessun workspace è stato registrato", () => {
-		const html = renderWorkspaceHome({ workspaces: [], open: false }, opts);
+		const html = renderWorkspaceHomeList({ workspaces: [], open: false }, opts);
 		assert.ok(
 			visibleText(html).includes("Non è ancora stato registrato nessun workspace"),
 			"l'elenco vuoto non si spiega",
@@ -243,7 +243,7 @@ describe("renderWorkspaceHome", () => {
 	});
 
 	it("elenca i workspace conosciuti con le stesse voci della modale", () => {
-		const home = renderWorkspaceHome(twoEntries, opts);
+		const home = renderWorkspaceHomeList(twoEntries, opts);
 		const rows = renderWorkspaceRows(twoEntries, opts);
 		assert.ok(
 			home.includes(rows),
@@ -254,23 +254,24 @@ describe("renderWorkspaceHome", () => {
 	});
 
 	it("riporta il messaggio di errore che il chiamante le passa", () => {
-		const html = renderWorkspaceHome(null, {
+		const html = renderWorkspaceHomeList(null, {
 			formatTime,
 			message: "Load failed: registro illeggibile",
 		});
 		assert.ok(visibleText(html).includes("Load failed: registro illeggibile"));
+		assert.ok(!visibleText(html).includes("Non è ancora stato registrato nessun workspace"));
 		assert.ok(!html.includes('class="workspace-row"'));
 	});
 
 	it("non lancia senza payload né opzioni", () => {
-		assert.equal(typeof renderWorkspaceHome(null), "string");
-		assert.equal(typeof renderWorkspaceHome({ workspaces: [{}] }), "string");
+		assert.equal(typeof renderWorkspaceHomeList(null), "string");
+		assert.equal(typeof renderWorkspaceHomeList({ workspaces: [{}] }), "string");
 	});
 
 	it("non lascia diventare markup un nome ostile", () => {
 		// Unica asserzione non sul testo visibile: qui l'oracolo è proprio la
 		// forma del markup, perché è il markup a essere in gioco.
-		const html = renderWorkspaceHome(
+		const html = renderWorkspaceHomeList(
 			{
 				workspaces: [
 					{
