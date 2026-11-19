@@ -230,6 +230,11 @@
 		// Conversazione
 		conversationUnreadable: (reason) =>
 			`Questa conversazione non si può più leggere: ${reason}. Ricarica per seguirla di nuovo.`,
+		// Quando non risponde nemmeno una risorsa statica il problema non è la
+		// conversazione ma il viewer, o la macchina che lo ospita: dirlo evita
+		// di cercare il guasto nella chat.
+		viewerUnreachable:
+			"Il viewer non risponde: non ha risposto nemmeno a una richiesta minima. Controlla che il processo «archetipo view» sia attivo; con l’ambiente isolato controlla che Docker risponda (docker version). La conversazione resta salvata: ricarica quando il viewer torna raggiungibile.",
 		// La barra scritta e nessun elenco sotto: senza una riga che lo dica
 		// sembra che la ricerca sia rotta, e le due ragioni per cui l'elenco è
 		// vuoto sono diverse — non c'è niente che corrisponda, oppure non c'è
@@ -5486,6 +5491,9 @@
 	const CONVERSATION_POLL_MS = 2000;
 	const CONVERSATION_READ_TIMEOUT_MS = 15000;
 	const CONVERSATION_POLL_FAILURE_LIMIT = 3;
+	// Il tempo concesso alla risorsa statica che dice se il viewer risponde
+	// ancora, quando una lettura della conversazione non è tornata.
+	const VIEWER_PROBE_TIMEOUT_MS = 5000;
 	// Ogni quanto scorre il contatore dell'attesa, e dove resta scritto che il
 	// dettaglio tecnico va tenuto aperto.
 	const CONVERSATION_WORKING_TICK_MS = 1000;
@@ -7184,14 +7192,29 @@
 		renderConversationPanel();
 		let view = preloaded;
 		if (!view) {
+			// The first read has the same deadline as the polling: without it a
+			// viewer that stopped answering left the panel empty forever, with no
+			// word about why.
+			const controller = new AbortController();
+			const deadline = setTimeout(() => controller.abort(), CONVERSATION_READ_TIMEOUT_MS);
 			try {
 				view = await apiGet(
 					`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=0`,
+					{ signal: controller.signal },
 				);
 			} catch (err) {
-				showConversationRefusal(err);
+				if (!isUnansweredRead(err)) {
+					showConversationRefusal(err);
+					renderConversationPanel();
+					return;
+				}
+				const note = await conversationReadFailureNote(err);
+				if (conversationsCurrentId !== id) return;
+				conversationLink = note;
 				renderConversationPanel();
 				return;
+			} finally {
+				clearTimeout(deadline);
 			}
 			// A later switch won while this read was in flight: applying it now
 			// would draw one conversation under the name of another.
@@ -7696,13 +7719,20 @@
 				if (generation !== conversationPollGeneration || conversationsCurrentId !== followed) return;
 				conversationPollFailures += 1;
 				conversationLink = "Aggiornamento chat interrotto; riprovo automaticamente. Il lavoro dell’agente può continuare.";
+				renderConversationPanel();
 				if (conversationPollFailures >= CONVERSATION_POLL_FAILURE_LIMIT) {
 					stopConversationPolling();
+					// stopConversationPolling advanced the generation: what is
+					// checked after the probe is that nothing moved since.
+					const stoppedGeneration = conversationPollGeneration;
 					// Nothing is reconnecting any more, so the panel must stop
-					// implying that it is.
-					conversationLink = TEXT.conversationUnreadable(err.name === "AbortError" ? "il server non ha risposto entro 15 secondi" : err.message || err);
+					// implying that it is — and must say whether the conversation
+					// or the whole viewer stopped answering.
+					const note = await conversationReadFailureNote(err);
+					if (stoppedGeneration !== conversationPollGeneration || conversationsCurrentId !== followed) return;
+					conversationLink = note;
+					renderConversationPanel();
 				}
-				renderConversationPanel();
 				return;
 			} finally {
 				clearTimeout(deadline);
@@ -8507,6 +8537,38 @@
 	}
 
 	// ---- API helpers --------------------------------------------------------
+
+	// isUnansweredRead tells a read that never came back — its deadline fired or
+	// the connection failed — from a refusal the server actually wrote.
+	function isUnansweredRead(err) {
+		return Boolean(err) && (err.name === "AbortError" || err.name === "TypeError");
+	}
+
+	// viewerAnswers asks the viewer for a static resource that takes no lock and
+	// touches no workspace. If even that does not come back, what stopped is the
+	// viewer — or the machine hosting it — and not the conversation.
+	async function viewerAnswers() {
+		const controller = new AbortController();
+		const deadline = setTimeout(() => controller.abort(), VIEWER_PROBE_TIMEOUT_MS);
+		try {
+			const r = await fetch("/logo.svg", { cache: "no-store", signal: controller.signal });
+			return r.ok;
+		} catch (_) {
+			return false;
+		} finally {
+			clearTimeout(deadline);
+		}
+	}
+
+	// conversationReadFailureNote words a conversation read that failed, naming
+	// the viewer when the viewer is what stopped answering.
+	async function conversationReadFailureNote(err) {
+		if (isUnansweredRead(err) && !(await viewerAnswers())) return TEXT.viewerUnreachable;
+		const reason = err && err.name === "AbortError"
+			? `il server non ha risposto entro ${CONVERSATION_READ_TIMEOUT_MS / 1000} secondi`
+			: (err && err.message) || String(err);
+		return TEXT.conversationUnreadable(reason);
+	}
 
 	async function apiGet(url, options = {}) {
 		const r = await fetch(url, { headers: { Accept: "application/json" }, signal: options.signal });
