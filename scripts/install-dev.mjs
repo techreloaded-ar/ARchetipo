@@ -174,8 +174,14 @@ async function buildBinary(version, platform, nativeDst) {
 	console.log(`Building ${platform.key} binary @ ${version}`);
 	const binPath = path.join(nativeDst, "bin", platform.binName);
 	await fs.mkdir(path.dirname(binPath), { recursive: true });
+	// SourceCheckout lets `archetipo view --isolated` build the isolated image
+	// from this checkout: no registry publishes one for a dev version. The
+	// value is quoted because Go splits -ldflags on spaces, and a checkout path
+	// may contain them.
+	const versionPackage = "github.com/techreloaded-ar/ARchetipo/cli/internal/version";
 	const ldflags =
-		`-s -w -X github.com/techreloaded-ar/ARchetipo/cli/internal/version.Version=${version}`;
+		`-s -w -X ${versionPackage}.Version=${version} ` +
+		`-X "${versionPackage}.SourceCheckout=${repoRoot}"`;
 
 	runOrDie(
 		"go",
@@ -217,7 +223,10 @@ function verifyAndPrint(version, platform) {
 		? path.join(prefix, "archetipo.cmd")
 		: path.join(prefix, "bin", "archetipo");
 
-	const result = run(globalBin, ["version"], { shell: isWindows });
+	// The .cmd shim needs a shell on Windows, where the global prefix is often
+	// C:\Program Files\nodejs: quote it, or cmd.exe splits it at the space.
+	const command = isWindows ? `"${globalBin}"` : globalBin;
+	const result = run(command, ["version"], { shell: isWindows });
 	const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
 	if (result.status !== 0 || !output.includes(version)) {
 		console.error(`\nVerification failed: ${globalBin} version → "${output}"`);

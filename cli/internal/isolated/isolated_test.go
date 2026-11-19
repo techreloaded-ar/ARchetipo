@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -201,7 +202,7 @@ func (f *fakeProvider) Available(context.Context) error {
 	f.steps = append(f.steps, "available")
 	return f.unavailable
 }
-func (f *fakeProvider) EnsureImage(_ context.Context, image string) error {
+func (f *fakeProvider) EnsureImage(_ context.Context, image string, _ Progress) error {
 	f.steps = append(f.steps, "image "+image)
 	return nil
 }
@@ -319,6 +320,63 @@ func TestDevelopmentBuildsUseTheLocallyBuiltImage(t *testing.T) {
 		if got := imageFor(version); got != want {
 			t.Fatalf("imageFor(%q) = %q, want %q", version, got, want)
 		}
+	}
+}
+
+func TestDevelopmentBinaryBuildsItsImageFromTheCheckout(t *testing.T) {
+	checkout := t.TempDir()
+	dockerfile := filepath.Join(checkout, "docker", "isolated", "Dockerfile")
+	if err := os.MkdirAll(filepath.Dir(dockerfile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const devVersion = "0.0.0-dev.g8ca7881"
+	engine := func(builtFor *string, calls *[]string) Runner {
+		return func(_ context.Context, args ...string) (string, error) {
+			*calls = append(*calls, strings.Join(args, " "))
+			switch {
+			case args[0] == "image" && args[1] == "inspect":
+				if *builtFor == "" {
+					return "", errors.New("no such image")
+				}
+				return *builtFor, nil
+			case args[0] == "build":
+				*builtFor = devVersion
+				return "", nil
+			case args[0] == "pull":
+				return "", errors.New("pull access denied")
+			}
+			return "", nil
+		}
+	}
+
+	builtFor, calls := "", []string{}
+	docker := &Docker{Binary: "docker", Run: engine(&builtFor, &calls), SourceCheckout: checkout, Version: devVersion}
+	var progress []string
+	if err := docker.EnsureImage(context.Background(), devImage, func(step string) { progress = append(progress, step) }); err != nil {
+		t.Fatalf("a missing development image was not built: %v", err)
+	}
+	want := "build -f " + dockerfile + " -t " + devImage + " --build-arg VERSION=" + devVersion + " --label " + imageVersionLabel + "=" + devVersion + " " + checkout
+	if len(calls) != 2 || calls[1] != want || len(progress) != 1 {
+		t.Fatalf("calls %v progress %v, want build %q", calls, progress, want)
+	}
+
+	calls = nil
+	if err := docker.EnsureImage(context.Background(), devImage, func(string) {}); err != nil || len(calls) != 1 {
+		t.Fatalf("an image built for this version was rebuilt: %v %v", err, calls)
+	}
+
+	builtFor, calls = "0.0.0-dev.gaaaaaaa", nil
+	if err := docker.EnsureImage(context.Background(), devImage, func(string) {}); err != nil || len(calls) != 2 || !strings.HasPrefix(calls[1], "build ") {
+		t.Fatalf("an image of another version was not rebuilt: %v %v", err, calls)
+	}
+
+	builtFor, calls = "", nil
+	installedWithoutCheckout := &Docker{Binary: "docker", Run: engine(&builtFor, &calls), Version: devVersion}
+	if err := installedWithoutCheckout.EnsureImage(context.Background(), devImage, func(string) {}); err == nil || !strings.Contains(calls[len(calls)-1], "pull") {
+		t.Fatalf("a binary without a checkout did not fall back to pulling: %v %v", err, calls)
 	}
 }
 

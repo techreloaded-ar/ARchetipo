@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/version"
 )
 
 // EnvEngine selects the container engine binary. Only standard features are
@@ -44,6 +46,11 @@ type Runner func(ctx context.Context, args ...string) (string, error)
 type Docker struct {
 	Binary string
 	Run    Runner
+	// SourceCheckout and Version describe a development binary installed with
+	// `npm run install:dev`: when SourceCheckout is set, the development image
+	// is built from that checkout instead of pulled, since no registry holds it.
+	SourceCheckout string
+	Version        string
 }
 
 // NewDocker returns the provider backed by the configured engine binary.
@@ -52,7 +59,7 @@ func NewDocker() *Docker {
 	if binary == "" {
 		binary = "docker"
 	}
-	d := &Docker{Binary: binary}
+	d := &Docker{Binary: binary, SourceCheckout: version.SourceCheckout, Version: version.Version}
 	d.Run = func(ctx context.Context, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, d.Binary, args...)
 		// Once the context kills the command, a child it started (a credential
@@ -154,8 +161,12 @@ func (d *Docker) Available(ctx context.Context) error {
 	return nil
 }
 
-// EnsureImage uses the local image, or pulls it once.
-func (d *Docker) EnsureImage(ctx context.Context, image string) error {
+// EnsureImage uses the local image, or pulls it once. A development binary
+// that knows its checkout builds the development image from it instead.
+func (d *Docker) EnsureImage(ctx context.Context, image string, progress Progress) error {
+	if image == devImage && strings.TrimSpace(d.SourceCheckout) != "" {
+		return d.ensureDevelopmentImage(ctx, image, progress)
+	}
 	present, err := d.exists(ctx, "image", image)
 	if err != nil {
 		return err
@@ -176,6 +187,54 @@ func (d *Docker) EnsureImage(ctx context.Context, image string) error {
 		return iox.NewPrecondition("immagine dell'ambiente isolato non disponibile: "+image, hint, err)
 	}
 	return nil
+}
+
+// imageVersionLabel records, on a development image, the CLI version it was
+// built for, so that a later `npm run install:dev` is noticed and rebuilt.
+const imageVersionLabel = "archetipo.version"
+
+// ensureDevelopmentImage builds the development image from the checkout the
+// binary was installed from when it is missing or was built for another
+// version. A dirty version names no exact content, so it always asks for a
+// build and lets the engine's build cache decide whether anything changed.
+func (d *Docker) ensureDevelopmentImage(ctx context.Context, image string, progress Progress) error {
+	builtFor, err := d.run(ctx, EngineCommandTimeout, "image", "inspect", "--format", `{{ index .Config.Labels "`+imageVersionLabel+`" }}`, image)
+	if err != nil && engineDidNotAnswer(err) {
+		return err
+	}
+	present := err == nil
+	if present && builtFor == d.Version && !strings.HasSuffix(d.Version, ".dirty") {
+		return nil
+	}
+	manualBuild := "docker build -f docker/isolated/Dockerfile -t " + devImage + " ."
+	dockerfile := filepath.Join(d.SourceCheckout, "docker", "isolated", "Dockerfile")
+	if _, statErr := os.Stat(dockerfile); statErr != nil {
+		if present {
+			progress("Il checkout " + d.SourceCheckout + " non è più disponibile: uso l'immagine " + image + " già presente.")
+			return nil
+		}
+		return iox.NewPrecondition("immagine dell'ambiente isolato non disponibile: "+image,
+			"il checkout da cui è stato installato archetipo ("+d.SourceCheckout+") non contiene docker/isolated/Dockerfile: rilancia `npm run install:dev` dal repository oppure costruisci l'immagine dalla sua radice con "+manualBuild, statErr)
+	}
+	progress("Costruisco l'immagine " + image + " dal checkout " + d.SourceCheckout + "…")
+	// Unbounded on purpose, like a pull: a first build downloads the base
+	// images and the agents. The person can still interrupt it.
+	_, err = d.Run(ctx, "build", "-f", dockerfile, "-t", image,
+		"--build-arg", "VERSION="+d.Version,
+		"--label", imageVersionLabel+"="+d.Version,
+		d.SourceCheckout)
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return iox.NewConflict("costruzione dell'immagine "+image+" interrotta", "rilancia il comando per riprovare", ctx.Err())
+	}
+	if present {
+		progress("Costruzione dell'immagine " + image + " non riuscita: uso quella già presente, che potrebbe non contenere le ultime modifiche.")
+		return nil
+	}
+	return iox.NewPrecondition("costruzione dell'immagine "+image+" dal checkout "+d.SourceCheckout+" non riuscita",
+		"verifica la connessione e che Docker abbia spazio libero, poi riprova; per vedere l'intero log costruiscila dalla radice del repository con "+manualBuild, err)
 }
 
 // gatewayArgs starts the container that owns the network namespace. It is the

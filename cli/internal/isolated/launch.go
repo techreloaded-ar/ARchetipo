@@ -14,7 +14,7 @@ import (
 // inside.
 type Provider interface {
 	Available(ctx context.Context) error
-	EnsureImage(ctx context.Context, image string) error
+	EnsureImage(ctx context.Context, image string, progress Progress) error
 	Up(ctx context.Context, env Environment, gatewayReady func(context.Context) error) error
 	GatewayReady(ctx context.Context, env Environment) bool
 	Logs(ctx context.Context, name string) string
@@ -45,7 +45,7 @@ func Start(ctx context.Context, provider Provider, store Store, id, image string
 		return Environment{}, err
 	}
 	progress("Preparo l'immagine " + env.Image + " (la prima volta può richiedere alcuni minuti)…")
-	if err = provider.EnsureImage(ctx, env.Image); err != nil {
+	if err = provider.EnsureImage(ctx, env.Image, progress); err != nil {
 		return Environment{}, err
 	}
 	progress("Avvio l'ambiente isolato " + env.ID + "…")
