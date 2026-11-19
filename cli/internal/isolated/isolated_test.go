@@ -3,6 +3,7 @@ package isolated
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -318,6 +319,27 @@ func TestDevelopmentBuildsUseTheLocallyBuiltImage(t *testing.T) {
 		if got := imageFor(version); got != want {
 			t.Fatalf("imageFor(%q) = %q, want %q", version, got, want)
 		}
+	}
+}
+
+func TestDockerAvailableRequiresLinuxContainers(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, engineOS := range []string{"linux", "windows"} {
+		t.Run(engineOS, func(t *testing.T) {
+			docker := Docker{Binary: binary, Run: func(_ context.Context, args ...string) (string, error) {
+				if !slices.Equal(args, []string{"info", "--format", "{{.OSType}}"}) {
+					t.Fatalf("unexpected engine command: %v", args)
+				}
+				return engineOS, nil
+			}}
+			err := docker.Available(context.Background())
+			if (err == nil) != (engineOS == "linux") {
+				t.Fatalf("Docker.Available() on %s: %v", engineOS, err)
+			}
+		})
 	}
 }
 

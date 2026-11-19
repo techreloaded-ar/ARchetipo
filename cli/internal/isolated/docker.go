@@ -67,8 +67,12 @@ func (d *Docker) Available(ctx context.Context) error {
 	if _, err := exec.LookPath(d.Binary); err != nil {
 		return iox.NewPrecondition("Docker non è installato.", "installa Docker Desktop e riprova", err)
 	}
-	if _, err := d.Run(ctx, "info", "--format", "{{.ServerVersion}}"); err != nil {
+	engineOS, err := d.Run(ctx, "info", "--format", "{{.OSType}}")
+	if err != nil {
 		return iox.NewPrecondition("Docker non è avviato.", "apri Docker Desktop, attendi che sia pronto e riprova", err)
+	}
+	if engineOS != "linux" {
+		return iox.NewPrecondition("l'ambiente isolato richiede container Linux", "in Docker Desktop seleziona Switch to Linux containers e riprova", nil)
 	}
 	return nil
 }

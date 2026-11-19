@@ -22,9 +22,29 @@ test("a release publishes the matching multi-architecture isolated image", async
   assert.match(tag.run, /GITHUB_REF_NAME#v/);
   assert.match(tag.run, /ghcr\.io\/techreloaded-ar\/archetipo-isolated/);
 
-  const verify = steps.find((step) => step.name === "Verify anonymous access to the published manifest");
+  const verify = steps.find((step) => step.name === "Verify isolated startup with an anonymous pull");
+  assert.ok(steps.indexOf(publish) < steps.indexOf(verify));
+  assert.ok(steps.indexOf(verify) < steps.findIndex((step) => step.name === "Publish to npm"));
+  assert.match(verify.env.RELEASE_IMAGE, /isolated-image\.outputs\.image/);
+  assert.match(verify.env.RELEASE_VERSION, /isolated-image\.outputs\.version/);
   assert.match(verify.run, /docker logout ghcr\.io/);
-  assert.match(verify.run, /imagetools inspect/);
+  assert.match(verify.run, /export DOCKER_CONFIG="\$smoke_dir\/docker"/);
+  assert.match(verify.run, /internal\/version\.Version=\$RELEASE_VERSION/);
+  const requireMissingImage = 'if docker image inspect "$RELEASE_IMAGE"';
+  const startLauncher = '"$launcher" view --isolated';
+  assert.ok(verify.run.includes(requireMissingImage));
+  assert.ok(verify.run.includes(startLauncher));
+  assert.ok(verify.run.indexOf(requireMissingImage) < verify.run.indexOf(startLauncher));
+  assert.match(verify.run, /curl --fail[^\n]*\/api\/workspaces/);
+
+  const startup = workflow.jobs["npm-startup"];
+  assert.equal(startup.needs, "release");
+  assert.ok(startup.steps.some((step) => step.run?.includes("test:view-isolated-release-smoke")));
+});
+
+test("a semver preview is marked as a prerelease on GitHub", async () => {
+  const goreleaser = parse(await readFile(new URL("cli/.goreleaser.yaml", root), "utf8"));
+  assert.equal(goreleaser.release.prerelease, "auto");
 });
 
 test("the isolated image embeds the release version in its CLI", async () => {
