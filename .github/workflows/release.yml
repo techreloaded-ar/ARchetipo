@@ -95,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-2025]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -103,17 +103,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Start a clean Docker Engine under WSL 2
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./test/e2e/start-wsl-docker.ps1
       - name: Start from the published npm package on a clean engine
-        shell: bash
         run: npm run test:view-isolated-release-smoke -- "${GITHUB_REF_NAME#v}"
 
   npm-installation:
     needs: release
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/setup-node@v4
