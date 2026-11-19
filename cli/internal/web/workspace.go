@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"path/filepath"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -82,8 +83,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, createWorkspaceView{
-		Result:          result,
-		Hint:            "open the new workspace by running `archetipo view` in " + result.Dir,
+		Result: result,
+		// The workspace was just recorded, so it is opened from the known list —
+		// also where no terminal exists, as in the isolated runtime.
+		Hint:            "open " + filepath.Base(result.Dir) + " from the list of known workspaces",
 		RegistryWarning: warning,
 	})
 }

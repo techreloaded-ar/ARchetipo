@@ -17,6 +17,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/recordfile"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/services"
 )
 
 const RecipePath = ".archetipo/environment.json"
@@ -43,6 +44,9 @@ type Resource struct {
 	Probe   Command `json:"probe"`
 	Stop    Command `json:"stop"`
 	Stopped Command `json:"stopped"`
+	// Service is set on the resources ARchetipo derives from a declared
+	// service: its lifecycle is ARchetipo's own, never a project command.
+	Service *services.Spec `json:"service,omitempty"`
 }
 
 type Recipe struct {
@@ -59,6 +63,9 @@ type Recipe struct {
 	Probe      []Command        `json:"probe"`
 	Cleanup    []Command        `json:"cleanup,omitempty"`
 	Checks     map[string]Check `json:"checks"`
+	// Services are started by ARchetipo for each checkout, before the
+	// project's own resources (ADR 0005).
+	Services map[string]services.Spec `json:"services,omitempty"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
@@ -99,7 +106,7 @@ func configure(root string, raw []byte, candidate bool) (Recipe, error) {
 		return recipe, err
 	}
 	dir := filepath.Join(root, ".archetipo")
-	encoded, err := json.Marshal(recipe)
+	encoded, err := json.Marshal(recipe.declared())
 	if err != nil {
 		return recipe, err
 	}
@@ -108,7 +115,7 @@ func configure(root string, raw []byte, candidate bool) (Recipe, error) {
 			return recipe, err
 		}
 	}
-	return recipe, recordfile.WriteAtomic(dir, filepath.Join(root, RecipePath), ".recipe-", recipe)
+	return recipe, recordfile.WriteAtomic(dir, filepath.Join(root, RecipePath), ".recipe-", recipe.declared())
 }
 
 func parseRecipe(root string, raw []byte) (Recipe, error) {
@@ -131,6 +138,9 @@ func parseRecipe(root string, raw []byte) (Recipe, error) {
 				return recipe, err
 			}
 		}
+	}
+	if err = recipe.deriveServices(); err != nil {
+		return recipe, err
 	}
 	if err = validateResources(recipe); err != nil {
 		return recipe, err
@@ -229,7 +239,7 @@ func validateResources(recipe Recipe) error {
 			if err := validateCommands([]Command{c}); err != nil {
 				return err
 			}
-			if c.TimeoutSeconds > 30 {
+			if c.TimeoutSeconds > 30 && r.Service == nil {
 				return invalid("resource commands must finish within 30 seconds")
 			}
 		}

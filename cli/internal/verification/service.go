@@ -66,6 +66,9 @@ type Service struct {
 	lifetimeOwner bool
 	previewOwner  bool
 	candidate     bool
+	// removal marks the cleanup that precedes deleting the checkout: only
+	// then is the data of declared services removed as well.
+	removal bool
 }
 
 func New(root, results string) *Service {
@@ -223,6 +226,9 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 			}
 			s.env = resourceEnv(resources, "")
 			err = s.stopResources(ctx, &result, &resources)
+			if err == nil && result.Passed && s.removal {
+				err = s.removeServiceData(ctx, &result, resources)
+			}
 			if err == nil && result.Passed {
 				err = s.run(ctx, &result, recipe.Cleanup)
 			}
@@ -565,6 +571,11 @@ func (s *Service) ForOwnedPreview() *Service { s.previewOwner = true; return s }
 // ForCandidate keeps the shared bundle untouched while testing local recipe files.
 // It retains the same checkout leases and resource ownership as normal execution.
 func (s *Service) ForCandidate() *Service { s.candidate = true; return s }
+
+// ForRemoval makes cleanup also remove the data of declared services, for the
+// deletion of the checkout. Any other cleanup (stopping a preview, the death
+// of its owner) stops them and keeps their data.
+func (s *Service) ForRemoval() *Service { s.removal = true; return s }
 func (s *Service) loadRecipe() (Recipe, error) {
 	if s.candidate {
 		return LoadLocal(s.Root)

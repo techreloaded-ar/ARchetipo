@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -24,6 +25,55 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Tests
         run: npm test
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve isolated image tag
+        id: isolated-image
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/techreloaded-ar/archetipo-isolated:$version" >> "$GITHUB_OUTPUT"
+      - name: Build and publish isolated runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/isolated/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.isolated-image.outputs.image }}
+          build-args: VERSION=${{ steps.isolated-image.outputs.version }}
+          provenance: mode=max
+          sbom: true
+      - name: Verify isolated startup with an anonymous pull
+        timeout-minutes: 10
+        env:
+          RELEASE_IMAGE: ${{ steps.isolated-image.outputs.image }}
+          RELEASE_VERSION: ${{ steps.isolated-image.outputs.version }}
+        run: |
+          docker logout ghcr.io
+          smoke_dir=$(mktemp -d)
+          export DOCKER_CONFIG="$smoke_dir/docker"
+          export ARCHETIPO_STATE_DIR="$smoke_dir/state"
+          mkdir "$DOCKER_CONFIG"
+          launcher="$smoke_dir/archetipo"
+          (cd cli && go build \
+            -ldflags "-X github.com/techreloaded-ar/ARchetipo/cli/internal/version.Version=$RELEASE_VERSION" \
+            -o "$launcher" ./cmd/archetipo)
+          if docker image inspect "$RELEASE_IMAGE" >/dev/null 2>&1; then
+            echo "The isolated startup check requires the release image to be absent locally."
+            exit 1
+          fi
+          trap '"$launcher" view remove --isolated --environment release-smoke --yes || true' EXIT
+          "$launcher" view --isolated --environment release-smoke --no-open
+          docker image inspect "$RELEASE_IMAGE" >/dev/null
+          curl --fail --silent --show-error --output /dev/null http://127.0.0.1:47800/api/workspaces
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -39,3 +89,43 @@ jobs:
         run: node ./scripts/publish-npm.mjs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  npm-startup:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Start from the published npm package on a clean engine
+        run: npm run test:view-isolated-release-smoke -- "${GITHUB_REF_NAME#v}"
+
+  npm-installation:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install and run the published native npm launcher
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          channel=latest
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            channel="${prerelease%%.*}"
+          fi
+          npm install --global --prefer-online "@techreloaded/archetipo@$channel"
+          test "$(archetipo --version)" = "archetipo $version"

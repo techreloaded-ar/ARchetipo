@@ -183,7 +183,8 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 	i := &Instance{root: root, view: View{Configured: true, Recipe: &r, State: state}, cancel: cancel, done: make(chan struct{})}
 	var listener net.Listener
 	if !prepareOnly {
-		listener, err = listenBrowserOrigin(root)
+		var browserAddress string
+		listener, browserAddress, err = listenBrowserOrigin(root)
 		if err != nil {
 			cancel()
 			_ = lock.Unlock()
@@ -197,7 +198,7 @@ func (m *Manager) launch(root, id, parentOrigin string, prepareOnly bool) (View,
 			return View{}, err
 		}
 		target, _ := url.Parse(strings.ReplaceAll(r.URL, "{port}", "1"))
-		i.view.URL = "http://" + listener.Addr().String() + target.RequestURI()
+		i.view.URL = "http://" + browserAddress + target.RequestURI()
 		i.view.Token = hex.EncodeToString(bytes)
 		i.server = &http.Server{ReadHeaderTimeout: 5 * time.Second}
 		listener = &previewListener{Listener: listener, connections: map[*previewConnection]struct{}{}}

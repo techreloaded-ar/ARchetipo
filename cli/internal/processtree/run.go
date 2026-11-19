@@ -19,3 +19,9 @@ func Run(cmd *exec.Cmd) error {
 	err := cmd.Run()
 	return errors.Join(err, cleanup())
 }
+
+// Own prepares a command started with Start so that cancelling its context
+// stops its whole process tree, not only the launcher: a wrapper that execs a
+// native binary would otherwise leave it running and holding the output open.
+// The returned stop ends any leftover once the command has exited.
+func Own(cmd *exec.Cmd) func() error { return isolate(cmd) }

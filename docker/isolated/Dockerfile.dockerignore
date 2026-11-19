@@ -1,0 +1,7 @@
+*
+!cli/
+!skills/
+!.archetipo/config.template.yaml
+!.archetipo/shared-runtime.md
+cli/dist/
+skills/*-workspace

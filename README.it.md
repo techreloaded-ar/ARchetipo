@@ -72,12 +72,19 @@ Le sessioni sono native e durevoli: cambiare schermata non chiude il lavoro.
 
 I worktree separano codice e dati di lavoro; **non sono sandbox di sicurezza del
 sistema operativo**. La base locale non richiede Kubernetes, Docker o servizi a
-pagamento. La ricetta del progetto può usare gli strumenti che servono all’app.
+pagamento. Sugli host macOS supportati, `archetipo view --isolated` esegue invece
+viewer, agenti, ricette e preview in un ambiente Docker che non monta i file della
+persona e blocca l’accesso alla rete privata. L’immagine multiarchitettura abbinata
+alla release viene pubblicata su GHCR. `archetipo view stop --isolated` ferma
+l’ambiente conservando il lavoro; `archetipo view remove --isolated --yes` elimina
+in modo permanente workspace, credenziali e lavoro non pubblicato. Windows non è
+dichiarato supportato finché non supera il collaudo dedicato del confine.
+La ricetta del progetto può usare gli strumenti che servono all’app.
 La preview resta aperta durante chat, modifiche e check dichiarati compatibili.
 Setup, build incompatibili e cleanup richiedono di fermarla. La versione verificata
 richiede report reali e integri per tutti i check, legati al codice corrente;
 la pubblicazione li ricontrolla prima di aprire la PR.
-L’esecuzione remota e l’isolamento di sicurezza richiedono un ulteriore livello runtime.
+L’esecuzione remota richiede ancora un ulteriore livello runtime.
 
 Questo branch rimuove le skill `archetipo-autopilot`, `archetipo-design`,
 `archetipo-implement` e `archetipo-review`, insieme al vecchio percorso degli

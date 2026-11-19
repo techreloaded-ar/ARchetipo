@@ -4187,6 +4187,77 @@ body.no-workspace [data-workspace-scoped] {
 	margin-top: var(--space-4);
 }
 
+/* ---- Accounts (isolated runtime) ---------------------------------------- */
+.signin-sub {
+	color: var(--text-muted);
+	margin: 0 0 var(--space-4);
+	max-width: 60ch;
+}
+
+.signin-cards {
+	display: grid;
+	gap: var(--space-3);
+}
+
+.signin-card {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: var(--space-3) var(--space-4);
+	display: grid;
+	gap: var(--space-2);
+	justify-items: start;
+}
+
+.signin-card-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-3);
+	width: 100%;
+}
+
+.signin-card-head h3 {
+	margin: 0;
+	font-size: 1rem;
+}
+
+.signin-status {
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.signin-card.is-signed-in .signin-status {
+	color: var(--success, var(--text));
+}
+
+.signin-flow {
+	display: grid;
+	gap: var(--space-2);
+	justify-items: start;
+	width: 100%;
+}
+
+.signin-step {
+	margin: 0;
+}
+
+.signin-step a.primary-btn {
+	text-decoration: none;
+}
+
+.signin-code {
+	font-size: 1.1rem;
+	letter-spacing: 0.08em;
+	user-select: all;
+}
+
+.signin-code-form {
+	display: grid;
+	gap: var(--space-2);
+	width: 100%;
+	justify-items: start;
+}
+
 /* A creation that succeeded on disk but could not be recorded is neither an
    error nor a plain success: it gets its own colour. */
 .status-msg.warn {

@@ -551,7 +551,7 @@ func (s *FileStore) lock(ctx context.Context, id string, wait bool) (*Conversati
 		if err != nil {
 			return nil, err
 		}
-		owner := []byte(strconv.Itoa(os.Getpid()) + "\n" + time.Now().UTC().Format(time.RFC3339Nano))
+		owner := []byte(strconv.Itoa(os.Getpid()) + "\n" + time.Now().UTC().Format(time.RFC3339Nano) + "\n" + processIdentity(os.Getpid()))
 		if writeErr := os.WriteFile(filepath.Join(candidate, "owner"), owner, 0o600); writeErr != nil {
 			_ = recordfile.RemoveAll(candidate)
 			return nil, writeErr
@@ -573,7 +573,7 @@ func (s *FileStore) lock(ctx context.Context, id string, wait bool) (*Conversati
 		}
 		fields := strings.Fields(string(owner))
 		pid, parseErr := strconv.Atoi(first(fields))
-		if readErr != nil || parseErr != nil || !processAlive(pid) {
+		if readErr != nil || parseErr != nil || !ownerAlive(pid, fields) {
 			if removeErr := recordfile.RemoveAll(lockPath); removeErr != nil {
 				return nil, removeErr
 			}
@@ -594,6 +594,19 @@ func (s *FileStore) lock(ctx context.Context, id string, wait bool) (*Conversati
 // probe that recovers a lock from a dead owner, exported so the owner of any
 // other durable record is judged alive or dead by one rule.
 func ProcessAlive(pid int) bool { return processAlive(pid) }
+
+// ownerAlive judges a lock's owner: its pid must be alive and, when the lock
+// recorded who held that pid, still be the same process.
+func ownerAlive(pid int, fields []string) bool {
+	if !processAlive(pid) {
+		return false
+	}
+	if len(fields) < 3 {
+		return true
+	}
+	current := processIdentity(pid)
+	return current == "" || current == fields[2]
+}
 
 func first(values []string) string {
 	if len(values) == 0 {

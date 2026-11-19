@@ -60,6 +60,7 @@ update.sh
 # Explicit source files for workspace environment orchestration.
 !cli/internal/environmentrecipe/
 !cli/internal/environmentrecipe/**
+!cli/internal/isolated/environment.go
 !cli/internal/web/environment.go
 !cli/internal/web/environment_test.go
 !cli/internal/web/environment_services.go

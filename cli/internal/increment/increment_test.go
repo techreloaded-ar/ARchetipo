@@ -328,7 +328,7 @@ func remote(t *testing.T, s *Service) {
 	if err := os.MkdirAll(bare, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, bare, "init", "--bare")
+	runGit(t, bare, "init", "--bare", "--initial-branch=main")
 	runGit(t, s.Config.ProjectRoot, "remote", "add", "origin", bare)
 	runGit(t, s.Config.ProjectRoot, "push", "-u", "origin", "main")
 }
