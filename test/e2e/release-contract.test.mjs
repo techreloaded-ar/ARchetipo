@@ -39,6 +39,8 @@ test("a release publishes the matching multi-architecture isolated image", async
 
   const startup = workflow.jobs["npm-startup"];
   assert.equal(startup.needs, "release");
+  assert.ok(startup.strategy.matrix.os.includes("windows-2025"));
+  assert.ok(startup.steps.some((step) => step.run?.includes("start-wsl-docker.ps1")));
   assert.ok(startup.steps.some((step) => step.run?.includes("test:view-isolated-release-smoke")));
 });
 
