@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
@@ -29,6 +30,8 @@ var (
 	ViewerTimeout  = 60 * time.Second
 	pollInterval   = 250 * time.Millisecond
 	viewerAnswers  = answers
+	// hostOS names the operating system the launcher runs on; tests replace it.
+	hostOS = runtime.GOOS
 )
 
 // Progress receives one line per step, for the person waiting.
@@ -39,6 +42,15 @@ type Progress func(step string)
 func Start(ctx context.Context, provider Provider, store Store, id, image string, progress Progress) (Environment, error) {
 	if err := provider.Available(ctx); err != nil {
 		return Environment{}, err
+	}
+	// Too little engine memory does not stop a start, but it is said before
+	// one: otherwise the first sign is a viewer that freezes mid-work.
+	if reporter, ok := provider.(EngineMemoryReporter); ok {
+		if total, err := reporter.EngineMemory(ctx); err == nil {
+			if warning := lowEngineMemoryWarning(total, hostOS); warning != "" {
+				progress(warning)
+			}
+		}
 	}
 	env, err := store.Ensure(id, image)
 	if err != nil {
