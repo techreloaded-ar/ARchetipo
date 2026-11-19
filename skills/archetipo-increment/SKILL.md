@@ -208,6 +208,10 @@ Commit the verified product changes on this branch, including portable
 `scripts/archetipo/` helpers when they were added or changed. Exclude local
 environment journals, databases, conversations, ownership markers and secrets;
 portable recipes are source assets, not disposable runtime state.
+Never change Git configuration to commit. `increment ready` attributes the
+candidate's commits to the person (their GitHub account, otherwise their Git
+identity); when Git has no identity, pass a temporary one to that commit only
+with `git -c user.name=… -c user.email=… commit`.
 Call `increment ready <id> --file -`:
 
 ```json

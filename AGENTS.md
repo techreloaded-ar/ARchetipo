@@ -40,6 +40,14 @@ remove their data.
 - Only an explicit approval of the displayed commit publishes a PR. Preserve the
   approved SHA/time separately from later developer commits. The viewer never merges
   branches or deploys; moving backlog cards is project management only.
+- `increment ready` attributes the candidate to the person before freezing it:
+  author and committer of the commits the increment adds on its own first-parent
+  line become the GitHub account `gh` is signed in with for the `origin` host
+  (its name, or login; the first address of `user/emails`, else its public or
+  noreply address), otherwise the person's own `git config` identity. Trees,
+  messages and dates are preserved; the base branch and the heads of earlier
+  revisions are never rewritten, and no Git configuration is changed. With
+  neither identity available the commits keep the one they were made with.
 - A new increment forks from the fetched `origin/<base>` when the repository has
   an `origin` remote and that tip is ahead of or equal to the local base branch,
   so merged PRs reach the next increment without a manual pull; a local base that

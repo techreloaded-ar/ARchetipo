@@ -125,6 +125,11 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 		if err = s.requireClean(ctx, r); err != nil {
 			return r, err
 		}
+		// The candidate is published under the person's name: attribute its
+		// commits before freezing it, so the approved SHA already carries it.
+		if err = s.attributeCandidate(ctx, r); err != nil {
+			return r, err
+		}
 		head, err := git(ctx, r.Workdir, "rev-parse", "HEAD")
 		if err != nil {
 			return r, err

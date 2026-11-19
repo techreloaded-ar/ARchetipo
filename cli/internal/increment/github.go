@@ -12,7 +12,10 @@ import (
 )
 
 // GitHub uses the user's installed gh CLI, never a token stored by ARchetipo.
-type GitHub struct{}
+// readAPI replaces `gh api` in tests; nil means the real gh.
+type GitHub struct {
+	readAPI func(ctx context.Context, dir, host, endpoint string) ([]byte, error)
+}
 
 func gh(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
