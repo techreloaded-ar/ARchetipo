@@ -3,9 +3,11 @@ package workspace
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,18 @@ func gitFixture(t *testing.T, withConfig bool) string {
 	return src
 }
 
+// localRepositoryURL is the file URL of a local directory on every platform: a
+// Windows path (C:\dir\repo) has a drive and backslashes, which are not URL
+// syntax, so it becomes file:///C:/dir/repo exactly as /dir/repo becomes
+// file:///dir/repo.
+func localRepositoryURL(directory string) string {
+	slashed := filepath.ToSlash(directory)
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
+}
+
 func allowFileClones(t *testing.T) {
 	t.Helper()
 	allowedCloneSchemes["file"] = true
@@ -55,7 +69,7 @@ func TestCloneReportsWhetherTheRepositoryIsAlreadyAWorkspace(t *testing.T) {
 	allowFileClones(t)
 	base := t.TempDir()
 	plain := gitFixture(t, false)
-	result, err := Clone(context.Background(), base, "file://"+plain)
+	result, err := Clone(context.Background(), base, localRepositoryURL(plain))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +79,12 @@ func TestCloneReportsWhetherTheRepositoryIsAlreadyAWorkspace(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(result.Dir, "README.md")); err != nil {
 		t.Fatal("clone content missing")
 	}
-	if code := fieldCode(t, mustFail(Clone(context.Background(), base, "file://"+plain))); code != CodeCloneDestination {
+	if code := fieldCode(t, mustFail(Clone(context.Background(), base, localRepositoryURL(plain)))); code != CodeCloneDestination {
 		t.Fatalf("second clone of the same name: %s", code)
 	}
 
 	other := t.TempDir()
-	result, err = Clone(context.Background(), other, "file://"+gitFixture(t, true))
+	result, err = Clone(context.Background(), other, localRepositoryURL(gitFixture(t, true)))
 	if err != nil || !result.Initialized {
 		t.Fatalf("workspace repository: %+v %v", result, err)
 	}
@@ -96,7 +110,7 @@ func TestCloneRefusesUnsafeURLsAndLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("clone without a directory: %s", code)
 	}
 	allowFileClones(t)
-	if code := fieldCode(t, mustFail(Clone(context.Background(), base, "file://"+filepath.Join(t.TempDir(), "missing")))); code != CodeCloneUnreachable {
+	if code := fieldCode(t, mustFail(Clone(context.Background(), base, localRepositoryURL(filepath.Join(t.TempDir(), "missing"))))); code != CodeCloneUnreachable {
 		t.Fatalf("unreachable repository: %s", code)
 	}
 	if entries, _ := os.ReadDir(base); len(entries) != 0 {

@@ -41,9 +41,16 @@ const assetsDir = resolve(
 	"assets",
 );
 
-const html = readFileSync(resolve(assetsDir, "index.html"), "utf8");
-const css = readFileSync(resolve(assetsDir, "app.css"), "utf8");
-const js = readFileSync(resolve(assetsDir, "app.js"), "utf8");
+// A source is read with the line endings Git stores (LF). A Windows checkout
+// may hold the same file with CRLF, and a marker spanning two lines — the blank
+// line that closes .brand — must name the same place in both.
+function readSource(name) {
+	return readFileSync(resolve(assetsDir, name), "utf8").replaceAll("\r\n", "\n");
+}
+
+const html = readSource("index.html");
+const css = readSource("app.css");
+const js = readSource("app.js");
 
 // Extracts the balanced `{...}` block that opens after `marker`. Same helper
 // as the sibling files: an assertion about "what this function does" cannot be

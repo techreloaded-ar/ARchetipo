@@ -27,7 +27,7 @@ func newPlatformEvidenceRoot(root string) (platformEvidenceRoot, error) {
 	if err != nil {
 		return platformEvidenceRoot{}, errors.Join(ErrEvidenceUnreadable, err)
 	}
-	defer windows.CloseHandle(handle)
+	defer func() { _ = windows.CloseHandle(handle) }()
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
 		return platformEvidenceRoot{}, errors.Join(ErrEvidenceUnreadable, err)
@@ -40,7 +40,7 @@ func validatePlatformEvidenceComponent(root platformEvidenceRoot, path, expected
 	if err != nil {
 		return errors.Join(ErrEvidenceUnreadable, err)
 	}
-	defer windows.CloseHandle(handle)
+	defer func() { _ = windows.CloseHandle(handle) }()
 
 	var before windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &before); err != nil {

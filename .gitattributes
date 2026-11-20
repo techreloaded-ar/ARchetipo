@@ -1,0 +1,5 @@
+# Text files are stored with LF and checked out with LF on every platform.
+# Without this a Windows checkout follows the machine's `core.autocrlf` (true
+# by default in Git for Windows) and gets CRLF: `gofmt -l .` then lists every Go
+# file, and tests that read sources by line read different bytes than in CI.
+* text=auto eol=lf

@@ -493,7 +493,10 @@ func TestNativeCodexTurnCarriesAttachedImagesAsLocalImageItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	attachment := execution.Attachment{ID: "shot.png", Name: "schermata.png", MediaType: "image/png", URL: "/api/x/shot.png", Path: dir + "/shot.png"}
+	attachment := execution.Attachment{ID: "shot.png", Name: "schermata.png", MediaType: "image/png", URL: "/api/x/shot.png", Path: filepath.Join(dir, "shot.png")}
+	// The path as a JSON document carries it: a Windows path has backslashes,
+	// which JSON escapes, so it can never be spliced raw between two quotes.
+	pathInJSON, directoryInJSON := jsonStringLiteral(t, attachment.Path), jsonStringLiteral(t, dir)
 
 	started, err := provider.StartTurn(ctx, execution.StartTurnRequest{Session: created.Session, TurnID: "turn-core-1", SubmissionID: "submission-1", Message: "guarda qui", Model: "gpt-native", Attachments: []execution.Attachment{attachment}})
 	if err != nil {
@@ -501,20 +504,20 @@ func TestNativeCodexTurnCarriesAttachedImagesAsLocalImageItems(t *testing.T) {
 	}
 	<-fake.turnStarted
 	input, _ := json.Marshal(fake.paramsOf(methodTurnStart)["input"])
-	if string(input) != `[{"text":"guarda qui","type":"text"},{"path":"`+attachment.Path+`","type":"localImage"}]` {
+	if string(input) != `[{"text":"guarda qui","type":"text"},{"path":`+pathInJSON+`,"type":"localImage"}]` {
 		t.Fatalf("turn/start input = %s", input)
 	}
-	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"guarda qui"},{"type":"localImage","path":"`+attachment.Path+`"}]}}`)
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"text","text":"guarda qui"},{"type":"localImage","path":`+pathInJSON+`}]}}`)
 
 	steered, err := provider.SteerTurn(ctx, execution.SessionCommandRequest{Session: created.Session, TurnID: started.Turn.ID, SubmissionID: "submission-2", Message: "", Attachments: []execution.Attachment{attachment}})
 	if err != nil || steered.State != execution.DeliveryConfirmed {
 		t.Fatalf("steer = %#v, %v", steered, err)
 	}
 	input, _ = json.Marshal(fake.paramsOf(methodTurnSteer)["input"])
-	if string(input) != `[{"path":"`+attachment.Path+`","type":"localImage"}]` {
+	if string(input) != `[{"path":`+pathInJSON+`,"type":"localImage"}]` {
 		t.Fatalf("turn/steer input = %s", input)
 	}
-	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"localImage","path":"`+attachment.Path+`"}]}}`)
+	fake.emit("item/started", `{"item":{"type":"userMessage","content":[{"type":"localImage","path":`+pathInJSON+`}]}}`)
 
 	var events []execution.RunEvent
 	eventCtx, stopEvents := context.WithCancel(ctx)
@@ -534,10 +537,21 @@ func TestNativeCodexTurnCarriesAttachedImagesAsLocalImageItems(t *testing.T) {
 		if event.Attachments[0].Path != "" {
 			t.Fatalf("the path is returned by value and must not be serialized: %#v", event.Attachments[0])
 		}
-		if encoded, _ := json.Marshal(event.Attachments); !strings.Contains(string(encoded), `"id":"shot.png"`) || strings.Contains(string(encoded), dir) {
+		if encoded, _ := json.Marshal(event.Attachments); !strings.Contains(string(encoded), `"id":"shot.png"`) || strings.Contains(string(encoded), strings.Trim(directoryInJSON, `"`)) {
 			t.Fatalf("attachment serialization = %s", encoded)
 		}
 	}
+}
+
+// jsonStringLiteral renders a string as a JSON document writes it, quotes
+// included.
+func jsonStringLiteral(t *testing.T, value string) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 // The attachments directory the viewer hands over at creation reaches the

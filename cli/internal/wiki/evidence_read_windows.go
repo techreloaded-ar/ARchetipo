@@ -32,7 +32,7 @@ func openEvidenceRegular(path string) (*os.File, func() error, error) {
 	}
 	var before windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &before); err != nil {
-		windows.CloseHandle(handle)
+		_ = windows.CloseHandle(handle)
 		return nil, nil, err
 	}
 	var tagInfo windowsFileAttributeTagInfo
@@ -42,16 +42,16 @@ func openEvidenceRegular(path string) (*os.File, func() error, error) {
 		(*byte)(unsafe.Pointer(&tagInfo)),
 		uint32(unsafe.Sizeof(tagInfo)),
 	); err != nil {
-		windows.CloseHandle(handle)
+		_ = windows.CloseHandle(handle)
 		return nil, nil, err
 	}
 	if tagInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		windows.CloseHandle(handle)
+		_ = windows.CloseHandle(handle)
 		return nil, nil, ErrUnsafeSourcePath
 	}
 	file := os.NewFile(uintptr(handle), path)
 	if file == nil {
-		windows.CloseHandle(handle)
+		_ = windows.CloseHandle(handle)
 		return nil, nil, errors.New("creating evidence file from native handle")
 	}
 	verify := func() error {

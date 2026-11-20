@@ -158,13 +158,19 @@ try {
 
   // A real parent dies while a compatible check uses its service. Its private
   // pipe must cancel the command tree before the guard runs registered cleanup.
+  // The stand-in owner is a Node process, and on Windows Node ends its direct
+  // children together with itself (a kill-on-close job object): the guard
+  // would die with its owner instead of outliving it. No real owner does that:
+  // the guard is started by the Go CLI, whose children are outside that job.
+  // `detached` starts the guard outside it, so only the closed pipe reaches it.
+  const startGuardOutsideOwnerJob = process.platform === 'win32';
   recipe.checks.functional.during_preview = true;
   recipe.checks.slow.during_preview = true;
   recipe.checks.slow.timeout_seconds = 30;
   writeFileSync(join(project, '.archetipo/environment.json'), JSON.stringify(recipe, null, 2));
   const liveOwner = spawn(process.execPath, ['-e', `
     const {spawn}=require('node:child_process');
-    const guard=spawn(process.argv[1],['execution','environment','_guard'],{stdio:['pipe','pipe','inherit']});
+    const guard=spawn(process.argv[1],['execution','environment','_guard'],{stdio:['pipe','pipe','inherit'],detached:${startGuardOutsideOwnerJob}});
     guard.stdin.write(JSON.stringify({root:process.argv[2]})+'\\n');
     guard.stdout.pipe(process.stdout); guard.on('exit',code=>process.exit(code||0));
   `, bin, project], {cwd:project, stdio:['ignore','pipe','pipe']});
