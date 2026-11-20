@@ -97,12 +97,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Wait until the registry serves this release
+        run: node ./scripts/wait-npm-release.mjs "${GITHUB_REF_NAME#v}"
       - name: Start from the published npm package on a clean engine
         run: npm run test:view-isolated-release-smoke -- "${GITHUB_REF_NAME#v}"
 
@@ -113,11 +115,15 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Wait until the registry serves this release
+        shell: bash
+        run: node ./scripts/wait-npm-release.mjs "${GITHUB_REF_NAME#v}"
       - name: Install and run the published native npm launcher
         shell: bash
         run: |
