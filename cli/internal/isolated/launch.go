@@ -52,6 +52,15 @@ func Start(ctx context.Context, provider Provider, store Store, id, image string
 			}
 		}
 	}
+	// Few processors do not stop a start either: they make every build and
+	// test of the projects inside slower, with nothing to point at the cause.
+	if reporter, ok := provider.(EngineCPUReporter); ok {
+		if engine, err := reporter.EngineCPUs(ctx); err == nil {
+			if warning := fewEngineCPUsWarning(engine, hostCPUs(), hostOS); warning != "" {
+				progress(warning)
+			}
+		}
+	}
 	env, err := store.Ensure(id, image)
 	if err != nil {
 		return Environment{}, err

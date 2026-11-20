@@ -146,7 +146,7 @@ func parseRecipe(root string, raw []byte) (Recipe, error) {
 		return recipe, err
 	}
 	for _, key := range recipe.EnvKeys {
-		if !envPattern.MatchString(key) || (strings.HasPrefix(key, "ARCHETIPO_ENVIRONMENT_") || strings.HasPrefix(key, "ARCHETIPO_RESOURCE_") || strings.HasPrefix(key, "ARCHETIPO_PORT_")) {
+		if !envPattern.MatchString(key) || reservedEnvName(key) {
 			return recipe, invalid("invalid environment input key: " + key)
 		}
 	}

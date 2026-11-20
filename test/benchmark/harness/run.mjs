@@ -111,6 +111,51 @@ try {
   }
   invoke('cleanup', ['cleanup']);
   r = check('after-cleanup'); assert(r.passed && !r.reused); assert.equal(counts().prepare, 4);
+  // A check in an increment checkout is told which commit the increment started
+  // from, so the project can select by its own changes. An ordinary checkout
+  // gets no base, even when the caller's environment carries one: the CLI never
+  // guesses it.
+  const baseProject = join(output, 'increment-project');
+  mkdirSync(join(baseProject, '.archetipo'), { recursive: true });
+  mkdirSync(join(baseProject, 'src'));
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  git(baseProject, 'init', '-b', 'main');
+  git(baseProject, 'config', 'user.email', 'benchmark@example.test');
+  git(baseProject, 'config', 'user.name', 'Benchmark');
+  writeFileSync(join(baseProject, '.archetipo/config.yaml'), 'connector: file\n');
+  writeFileSync(join(baseProject, '.archetipo/shared-runtime.md'), 'benchmark runtime\n');
+  writeFileSync(join(baseProject, 'src/message.txt'), 'hello bicycle');
+  writeFileSync(join(baseProject, 'print-base.mjs'), "console.log(JSON.stringify({sha:process.env.ARCHETIPO_BASE_SHA??null,branch:process.env.ARCHETIPO_BASE_BRANCH??null,increment:process.env.ARCHETIPO_INCREMENT_ID??null}));\n");
+  writeFileSync(join(baseProject, '.archetipo/environment.json'), JSON.stringify({
+    version: 1, inputs: ['print-base.mjs'], outputs: [], prepare: [],
+    probe: [{ name: 'runtime', argv: [process.execPath, '--version'], timeout_seconds: 10 }],
+    checks: { base: { name: 'base', argv: [process.execPath, 'print-base.mjs'], timeout_seconds: 10, inputs: ['src', 'print-base.mjs'], cache: false } },
+  }, null, 2));
+  git(baseProject, 'add', '-A');
+  git(baseProject, 'commit', '-m', 'initial');
+  const inheritedBase = { ...process.env, ARCHETIPO_BASE_SHA: 'inherited-from-another-checkout', ARCHETIPO_BASE_BRANCH: 'inherited', ARCHETIPO_INCREMENT_ID: 'inc-inherited' };
+  const baseCheck = (label, root) => {
+    const start = performance.now();
+    const envelope = JSON.parse(execFileSync(bin, ['-C', root, 'execution', 'environment', 'check', 'base'], { encoding: 'utf8', timeout: 15000, env: inheritedBase }));
+    assert.equal(envelope.kind, 'verification_result');
+    assert(envelope.data.passed && envelope.data.stable, JSON.stringify(envelope));
+    rows.push({ label, elapsed_ms: Math.round(performance.now() - start), exit: 0, envelope });
+    const received = JSON.parse(readFileSync(envelope.data.steps[0].log_path, 'utf8'));
+    console.log(`${label}: base=${received.sha}`);
+    return { report: envelope.data, received };
+  };
+  const ordinary = baseCheck('check-base-ordinary-checkout', baseProject);
+  assert.deepEqual(ordinary.received, { sha: null, branch: null, increment: null });
+  assert.equal(ordinary.report.base_sha, undefined);
+  const created = JSON.parse(execFileSync(bin, ['-C', baseProject, 'increment', 'create'], { encoding: 'utf8', timeout: 30000, input: JSON.stringify({ title: 'Bicycle trips', request: 'Add bicycle trips' }) })).data;
+  const mainCommit = git(baseProject, 'rev-parse', 'main');
+  assert.equal(created.base_sha, mainCommit);
+  writeFileSync(join(created.workdir, 'src/message.txt'), 'bicycle trips');
+  git(created.workdir, 'commit', '-am', 'product change');
+  const inIncrement = baseCheck('check-base-increment-checkout', created.workdir);
+  assert.deepEqual(inIncrement.received, { sha: mainCommit, branch: 'main', increment: created.id });
+  assert.equal(inIncrement.report.base_sha, mainCommit);
+
   // A real parent dies while a compatible check uses its service. Its private
   // pipe must cancel the command tree before the guard runs registered cleanup.
   recipe.checks.functional.during_preview = true;

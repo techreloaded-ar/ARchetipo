@@ -170,6 +170,14 @@ Respect existing ownership and retry budgets; never replace the native session
 with a transcript. For a small change, work directly in this session.
 
 Verify changed behavior with appropriate real browser, API and database checks.
+Get the cheapest answer first. Before running checks, search for every test that
+exercises what you changed (changed names, routes, positions of fields or
+columns, shared test helpers, a second copy of the same scenario) and update it
+with the code: a test left behind costs a whole round of the suite, twice. Run
+the declared checks from the fastest to the slowest, and a check targeted on the
+changes before a complete one. When the project's runner starts in this
+checkout as it is (typically unit tests), run just the affected tests first.
+This shortens the way to the declared checks and never replaces them.
 Run EVERY declared recipe check with `archetipo execution environment check <name>`
 (kind `verification_result`, require `data.passed && data.stable`). Reuse only the
 CLI's retained original evidence. `--fresh` deliberately reruns a check; a failure
@@ -178,6 +186,26 @@ current reports (`kind: verification_result`, `data` is the original report arra
 No declared checks, missing reports, changed inputs or missing logs block readiness.
 Do not remove or narrow a failing check to claim a verified candidate. Explain
 existing application failures and fix the relevant cause before readiness.
+A check that the recipe declares as targeted on the changes receives the
+increment's base (`ARCHETIPO_BASE_SHA`) from the CLI and its report records
+`base_sha`. Report it in `checks` for what it ran (how many tests it selected),
+never as the complete suite, and say when the complete suite is left to the
+pull request's CI. How the gate is composed belongs to the environment method.
+
+Tests you write or change run at full speed: no video recording, slow motion or
+pacing pauses, and no second copy of a scenario kept only to be watched. Record
+a demo only when the person explicitly asks for one, and keep the recording out
+of the test files the declared checks run. For a Playwright project use
+`archetipo -C <worktree> e2e demo --spec <code> --grep <test title>`, where
+`--spec` names the artifact folder (the linked business story's code): it
+returns `kind: e2e_demo` with `passed`, `video_path` and `output_dir`, injecting
+video and slow motion for that single run. `skipped: true` with a `reason` means
+recording is disabled in the workspace settings: tell the person how to enable
+it instead of adding recording settings to a test. The command starts the runner
+with your own process environment, not the recipe's: when the scenario needs
+services only the recipe provides, report that limit instead of pointing the run
+at another database. With another runner, or with no story code to name, use
+the runner's own recording option for that one run.
 
 Keep the preview running during questions and ordinary edits. Checks explicitly
 marked `during_preview: true` can use its prepared services without reinstalling

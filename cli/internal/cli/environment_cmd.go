@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/environmentrecipe"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/services"
@@ -124,6 +125,7 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 				return err
 			}
 			var result any
+			var warnings []string
 			switch operation {
 			case "configure":
 				var raw []byte
@@ -180,12 +182,22 @@ func newEnvironmentCmd(s streams) *cobra.Command {
 				if candidate {
 					service.ForCandidate()
 				}
+				if operation == "check" {
+					// The project decides what to select from its changes; the
+					// CLI only says which commit this increment started from.
+					base, found, baseErr := increment.CheckoutBase(cfg)
+					if baseErr != nil {
+						warnings = append(warnings, "increment base unavailable, the check ran without "+verification.EnvBaseSHA+": "+baseErr.Error())
+					} else if found {
+						service.ForIncrementBase(base)
+					}
+				}
 				result, err = service.Execute(ctx, operation, name, spec, fresh)
 			}
 			if err != nil {
 				return err
 			}
-			return iox.WriteOKWithWarnings(s.out, "verification_result", result, cfg.ResolutionNotices)
+			return iox.WriteOKWithWarnings(s.out, "verification_result", result, append(warnings, cfg.ResolutionNotices...))
 		}
 		root.AddCommand(cmd)
 	}

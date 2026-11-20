@@ -229,6 +229,62 @@ or destructive data changes while the app runs. Leave it false otherwise. Tests'
 scratch outputs stay separate from preview output. Do not enable it to bypass an
 ownership conflict. Reuse healthy services and demo data across revision rounds.
 
+## Keep the local gate fast
+
+The declared checks run at every revision of every increment, before the person
+can try or approve anything: their total duration is the feedback loop of the
+whole product. What follows is guidance to weigh against the actual project, not
+a fixed recipe. Record what you chose, what it costs and what it leaves out in
+the technical summary.
+
+- Measure before designing. After the first complete round read `duration_ms`
+  in each report and state the total. Aim for a local round near one minute; a
+  round of several minutes deserves a cause and a decision, not acceptance.
+- Do not pay twice for the same work. Checks are independent and exclusive, so
+  one cannot rely on another's output: when a test suite needs the production
+  build, prefer one check whose helper builds once and then tests over a `build`
+  check followed by a suite that builds again.
+- Run steps that share no output together inside one helper (for example
+  static checks, unit tests and the build), keep their output distinguishable,
+  finish them all and fail when any of them failed, so one round reports
+  everything there is to fix.
+- Let runners size their own parallelism from the processors they see; do not
+  pin a low worker count. When the runtime shows few processors, report it as a
+  cause of slow checks rather than changing the person's machine settings.
+- When a suite still takes minutes, prefer a targeted local check to running it
+  whole at every revision. Its command reads `ARCHETIPO_BASE_SHA` and selects
+  what the change can affect, starting from the runner's own selection of
+  changed or related tests before any custom logic. It runs the complete
+  selection when the variable is absent, when a file with global effect changed
+  (dependencies, runner or framework configuration, schema, shared layout) or
+  when the selection cannot be computed. It always includes a small smoke set
+  and prints what it selected and why. Keep custom selection small, pure and
+  covered by the project's own unit tests. Selecting end-to-end tests from
+  application sources is a heuristic: say so.
+- A targeted check may replace the complete suite in the local gate only when
+  the complete suite still gates the change elsewhere: read the project's CI
+  configuration and confirm it runs that suite on pull requests. Without it,
+  keep the complete suite local and make it faster instead. Name the check for
+  what it runs (for example `e2e-changed`, never `e2e`), so that no report or
+  pull request reads as the complete suite having passed, and state in product
+  language which coverage is local and which belongs to CI. The person can ask
+  for the complete suite locally at any time; this choice is never a way to get
+  a failing check out of the way.
+- Exercise both paths before publishing: the complete selection, and the
+  targeted one against a real change.
+- Tests in the gate run at full speed. Video recording, slow motion and pacing
+  pauses are not part of functional tests by default; a recorded demo is made
+  only when the person asks for one, outside the declared checks. When existing
+  tests carry such settings, report how many and what they cost and propose
+  their removal as a change the maintainers review; do not rewrite the tests
+  during enablement.
+
+Helpers run on the person's computer and in the isolated runtime alike, on
+Windows, macOS and Linux. Prefer the project's own runtime for anything beyond
+a trivial command (a script in the language the project already uses) over
+shell-specific job control, and never assume a POSIX shell exists unless the
+project already requires one.
+
 ## CLI contract
 
 All envelopes use `schema: archetipo/v1`; success carries `kind` and `data`,
@@ -293,7 +349,14 @@ failure carries `kind: error` and `error.code`.
   `reused_report` and per-step log paths. Fresh executes preparation again.
 - `archetipo execution environment check <name> [--candidate] [--fresh]`:
   `kind: verification_result` with the same evidence fields. A `passed:false`
-  result is a failure even when the envelope/command succeeds.
+  result is a failure even when the envelope/command succeeds. In an increment
+  checkout the check command also receives `ARCHETIPO_BASE_SHA` (the commit the
+  increment started from), `ARCHETIPO_BASE_BRANCH` and `ARCHETIPO_INCREMENT_ID`,
+  and the report records `base_sha`. In any other checkout they are absent, even
+  if the caller's environment carries them: the CLI never guesses a base, and a
+  command that finds none runs its complete selection. They are passed to checks
+  only, never to `prepare`, `probe` or `cleanup`, and cannot be listed in
+  `env_keys`.
 - `archetipo execution environment cleanup`: `kind: verification_result`,
   executes registered stop adapters. For stop/restart verification, publish the
   qualified bundle first, stop only its resources, then prepare it again and

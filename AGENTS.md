@@ -144,6 +144,20 @@ cleanup, a preview Stop/Start and a new preparation: `VerifyEvidence` reads the
 recipe and the retained original reports, never the live check cache, and revokes
 only for changed declared inputs, missing or altered reports, or a later completed
 failed run of the same check on the current inputs.
+In an increment checkout, check commands receive `ARCHETIPO_BASE_SHA`,
+`ARCHETIPO_BASE_BRANCH` and `ARCHETIPO_INCREMENT_ID` from the increment's record
+(`increment.CheckoutBase`), so a project can declare a check targeted on its
+changes. The CLI passes the base and selects nothing; outside an increment the
+variables are absent and inherited values are dropped, never guessed from Git.
+They reach checks only, enter no fingerprint and cannot be `env_keys`. How fast
+the local gate is remains a recipe design choice guided by
+`archetipo-environment` («Keep the local gate fast»): guidance, not a rule the
+CLI enforces, and every declared check stays required for a candidate. Video
+recording and slow motion are never part of functional tests by default; a demo
+is recorded only on the person's explicit request, outside the declared checks.
+`view --isolated` says before starting when the engine has fewer than half of the
+computer's processors (and fewer than eight), as it does for low memory; neither
+reading blocks a start.
 Checks explicitly declared `during_preview` may use retained preparation while the
 app runs; setup and cleanup remain exclusive. Owner death cancels those checks
 before guard cleanup. `environment evidence` inspects original reports. Product
@@ -407,6 +421,10 @@ failed delivery preserve the selection, retries send the same answer, and the
 next question stays in the same conversation at desktop and 390px widths.
 Screenshots remain in the ignored run directory.
 
+
+The harness benchmark also creates a real increment in a second Git project and
+verifies that its check receives the increment's base, while the ordinary
+checkout receives none even when the caller's environment carries one.
 
 The harness benchmark also exercises runtime capability reports without a known
 stack, candidate setup qualification (two real preparations and readiness on warm

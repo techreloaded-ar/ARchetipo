@@ -318,10 +318,24 @@ func resourceFailure(result Result) error {
 	return iox.NewPrecondition("environment resources did not stop", fmt.Sprintf("inspect %s; ownership journal retained for retry", result.ReportPath), nil)
 }
 
+// reservedEnvPrefixes are the variables ARchetipo sets for the commands of a
+// checkout. An inherited value would describe another checkout, so it is
+// dropped; a recipe cannot declare one as a project input either.
+var reservedEnvPrefixes = []string{"ARCHETIPO_ENVIRONMENT_", "ARCHETIPO_RESOURCE_", "ARCHETIPO_PORT_", "ARCHETIPO_BASE_", "ARCHETIPO_INCREMENT_"}
+
+func reservedEnvName(name string) bool {
+	for _, prefix := range reservedEnvPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func runtimeBase() []string {
 	env := []string{}
 	for _, value := range os.Environ() {
-		if strings.HasPrefix(value, "ARCHETIPO_ENVIRONMENT_") || strings.HasPrefix(value, "ARCHETIPO_RESOURCE_") || strings.HasPrefix(value, "ARCHETIPO_PORT_") {
+		if reservedEnvName(value) {
 			continue
 		}
 		env = append(env, value)

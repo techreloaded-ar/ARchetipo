@@ -37,6 +37,18 @@ fixtures and cleanup belong in idempotent project tooling. Never store real
 secrets in the recipe or argv. Environment input values are hashed, not recorded.
 Declare every environment variable affecting validity in `env_keys`.
 
+In the checkout of an increment, check commands also receive `ARCHETIPO_BASE_SHA`
+(the commit the increment started from), `ARCHETIPO_BASE_BRANCH` and
+`ARCHETIPO_INCREMENT_ID`, read from the increment's own record, and the report
+records `base_sha`. A project can use the base to run a targeted selection of a
+long suite; ARchetipo passes the commit and selects nothing itself. In any other
+checkout the variables are absent, including values inherited from the caller:
+no base is guessed from Git, and a command that finds none must run its complete
+selection. They reach checks only (never `prepare`, `probe` or `cleanup`), do not
+enter any fingerprint, since a checkout keeps its base for its whole life, and
+cannot be declared in `env_keys`. A targeted check is declared and named as such
+by the project recipe; every declared check is still required for a candidate.
+
 All recipe paths are project-relative; symlinks are rejected so a worktree cannot
 silently certify a parent's installation. Inputs are files or directories, not
 globs. Directory contents include new untracked files. Declare all relevant code,
@@ -84,7 +96,9 @@ there is one bounded readiness repair, not an unlimited retry loop.
 `npm run test:harness-benchmark` builds the real CLI and runs an owned local HTTP
 service. It measures cold/warm paths, source and dependency invalidation, service
 recovery, failed checks, concurrent calls, timeouts, hard process death, descendant
-cleanup and restart. Each run preserves JSON/HTML reports and full evidence under
+cleanup and restart. It also creates a real increment in a second Git project and
+verifies that its check receives the increment's base while the ordinary checkout
+receives none. Each run preserves JSON/HTML reports and full evidence under
 `test/workspaces/harness-benchmark/runs/`. The warm fixture budget is two seconds;
 it measures deterministic overhead only. Real agent latency and application setup
 are separate measurements, and require native-session trials as well.

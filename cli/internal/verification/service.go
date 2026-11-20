@@ -46,6 +46,35 @@ type Result struct {
 	DurationMS    int64     `json:"duration_ms"`
 	Steps         []Step    `json:"steps"`
 	Invalidation  string    `json:"invalidation,omitempty"`
+	// BaseSHA is the increment base the check command received, when it ran in
+	// an increment checkout. A check that selects by changes selected against it.
+	BaseSHA string `json:"base_sha,omitempty"`
+}
+
+// IncrementBase names the increment that owns a checkout and the commit it
+// forked from. Check commands receive it so that a project can select what to
+// run from its own changes; ARchetipo never selects for the project.
+type IncrementBase struct {
+	IncrementID string
+	BaseSHA     string
+	BaseBranch  string
+}
+
+// Environment variables a check command receives in an increment checkout.
+const (
+	EnvIncrementID = "ARCHETIPO_INCREMENT_ID"
+	EnvBaseSHA     = "ARCHETIPO_BASE_SHA"
+	EnvBaseBranch  = "ARCHETIPO_BASE_BRANCH"
+)
+
+func (b IncrementBase) env() []string {
+	env := []string{}
+	for _, pair := range [][2]string{{EnvIncrementID, b.IncrementID}, {EnvBaseSHA, b.BaseSHA}, {EnvBaseBranch, b.BaseBranch}} {
+		if pair[1] != "" && !strings.ContainsAny(pair[1], "\x00\r\n") {
+			env = append(env, pair[0]+"="+pair[1])
+		}
+	}
+	return env
 }
 
 type state struct {
@@ -69,6 +98,9 @@ type Service struct {
 	// removal marks the cleanup that precedes deleting the checkout: only
 	// then is the data of declared services removed as well.
 	removal bool
+	// incrementBase is passed to check commands only; preparation, probes and
+	// cleanup do not depend on what an increment changed.
+	incrementBase IncrementBase
 }
 
 func New(root, results string) *Service {
@@ -301,6 +333,7 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 		return result, err
 	}
 	result.InputKey, result.PreparationID = key, value.PreparationID
+	result.BaseSHA = s.incrementBase.BaseSHA
 	if check.Cache && !fresh {
 		if previous, ok := s.cached(value.Checks[name], key); ok {
 			current, hashErr := fingerprint(s.Root, recipe, inputs, value.PreparationID)
@@ -321,7 +354,7 @@ func (s *Service) Execute(ctx context.Context, operation, name, spec string, fre
 	if err = s.saveState(value); err != nil {
 		return result, err
 	}
-	if err = s.run(ctx, &result, []Command{check.Command}); err != nil {
+	if err = s.runWith(ctx, &result, []Command{check.Command}, s.incrementBase.env()); err != nil {
 		return result, err
 	}
 	after, err := fingerprint(s.Root, recipe, inputs, value.PreparationID)
@@ -479,6 +512,12 @@ func (s *Service) saveResult(result *Result) error {
 }
 
 func (s *Service) run(ctx context.Context, result *Result, commands []Command) error {
+	return s.runWith(ctx, result, commands, nil)
+}
+
+// runWith adds variables meant for these commands only to the environment
+// every command of the checkout receives.
+func (s *Service) runWith(ctx context.Context, result *Result, commands []Command, commandEnv []string) error {
 	result.Passed = true
 	for _, command := range commands {
 		step := Step{Name: command.Name, Argv: command.Argv, StartedAt: time.Now().UTC(), ExitCode: -1, LogPath: filepath.Join(filepath.Dir(result.ReportPath), fmt.Sprintf("%02d-%s.log", len(result.Steps)+1, command.Name))}
@@ -492,7 +531,7 @@ func (s *Service) run(ctx context.Context, result *Result, commands []Command) e
 			return err
 		}
 		stepCtx, cancel := context.WithTimeout(ctx, time.Duration(command.TimeoutSeconds)*time.Second)
-		env := mergeEnv(runtimeBase(), append([]string{"CI=1", "ARCHETIPO_ENVIRONMENT_ID=" + s.environmentID(), "ARCHETIPO_ENVIRONMENT_ROOT=" + s.Root, "ARCHETIPO_ENVIRONMENT_STATE=" + s.dir()}, s.env...))
+		env := mergeEnv(runtimeBase(), append([]string{"CI=1", "ARCHETIPO_ENVIRONMENT_ID=" + s.environmentID(), "ARCHETIPO_ENVIRONMENT_ROOT=" + s.Root, "ARCHETIPO_ENVIRONMENT_STATE=" + s.dir()}, append(append([]string{}, s.env...), commandEnv...)...))
 		runErr := s.Runner.Run(stepCtx, s.Root, env, command, output)
 		if stepCtx.Err() != nil {
 			runErr = stepCtx.Err()
@@ -576,6 +615,14 @@ func (s *Service) ForCandidate() *Service { s.candidate = true; return s }
 // deletion of the checkout. Any other cleanup (stopping a preview, the death
 // of its owner) stops them and keeps their data.
 func (s *Service) ForRemoval() *Service { s.removal = true; return s }
+
+// ForIncrementBase makes check commands receive the increment that owns this
+// checkout and the commit it forked from. It changes no fingerprint: a checkout
+// keeps the same base for its whole life.
+func (s *Service) ForIncrementBase(base IncrementBase) *Service {
+	s.incrementBase = base
+	return s
+}
 func (s *Service) loadRecipe() (Recipe, error) {
 	if s.candidate {
 		return LoadLocal(s.Root)
