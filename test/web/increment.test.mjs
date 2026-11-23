@@ -105,6 +105,30 @@ test("approvazione e richiesta di modifiche stanno nella riga dei prossimi passi
  assert.match(unavailable,/data-increment-step-prompt="Vorrei cambiare: ">[^<]*<span aria-hidden="true">✎<\/span>Vorrei cambiare…<\/button>/);
 });
 
+// Il lavoro non ha una fascia sua sotto la testata: titolo, stato e il comando
+// che apre specifica e decisioni stanno nella testata della conversazione, e
+// quella riga risparmiata resta alla storia. Fasi e comandi viaggiano in un
+// gruppo solo, così se la riga non basta vanno a capo insieme.
+test("il lavoro sta nella testata della conversazione, non in una fascia sua", () => {
+ const increment={id:'inc-9',title:'Esportazione <clienti>',status_label:'Etichetta fornita',phases:[{label:'Fase fornita',state:'current'}],revisions:[revision]};
+ const html=renderConversation({...base,increment},'',{});
+ const head=html.slice(html.indexOf('<div class="conv-head">'),html.indexOf('class="conv-timeline'));
+ assert.match(head,/<section class="conv-increment" data-increment-id="inc-9"/,'la fascia del lavoro è uscita dalla testata');
+ assert.match(head,/<strong title="Esportazione &lt;clienti&gt;">Esportazione &lt;clienti&gt;<\/strong>/,'il titolo accorciato deve restare leggibile per intero nel suo title');
+ assert.match(head,/Etichetta fornita/);
+ assert.match(head,/data-increment-panel="open"/);
+ assert.equal((html.match(/<section class="conv-increment" /g)||[]).length,1,'il lavoro è disegnato due volte');
+ const rest=head.slice(head.indexOf('<div class="conv-head-rest">'));
+ assert.ok(head.indexOf('<section class="conv-increment"')<head.indexOf('<div class="conv-head-rest">'),'il lavoro precede fasi e comandi');
+ assert.match(rest,/Fase fornita/,'le fasi stanno nel gruppo che va a capo intero');
+ assert.match(rest,/data-conversation-preview/,'i comandi stanno nel gruppo che va a capo intero');
+ const css=readFileSync(new URL('../../cli/internal/web/assets/app.css',import.meta.url),'utf8');
+ assert.match(css,/\.conv-discussion:has\(> \.conv-head > \.conv-increment\)/,'con un lavoro il pannello deve poter scorrere: la regola deve seguirlo nella testata');
+ assert.doesNotMatch(css,/\.conv-discussion:has\(> \.conv-increment\)/,'resta una regola per la fascia che non esiste più');
+ const plain=renderConversation(base,'',{});
+ assert.doesNotMatch(plain,/class="conv-increment"/,'una conversazione senza lavoro non ne disegna la fascia');
+});
+
 test("le azioni della board e del dettaglio non ereditano la chat selezionata", () => {
  const source=readFileSync(new URL('../../cli/internal/web/assets/app.js',import.meta.url),'utf8');
  assert.match(source,/bindActionsPanel\(storyActions, false\)/);

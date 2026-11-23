@@ -86,7 +86,9 @@
 
 		// Attenzione sulle run
 		waitingCount: (n) => `${n} in attesa`,
-		waitingHint: "Vai alla run che aspetta una risposta",
+		runningCount: (n) => `${n} in corso`,
+		waitingHint: "Mostra le esecuzioni: qualcuna aspetta una risposta",
+		runningHint: "Mostra le esecuzioni in corso",
 
 		// Piano: righe dei task
 		taskBodyPlaceholder: "Corpo del task in markdown…",
@@ -1868,11 +1870,14 @@
 	//
 	// And where a press leads is no longer a panel by default: since US-060 the
 	// payload says which conversation a run was started from and at which line,
-	// so the strip and its topbar indicator lead to that point in the
-	// conversation whenever the entry names one, and to the panel that mounts
-	// the run only when it does not.
+	// so a row of the list leads to that point in the conversation whenever the
+	// entry names one, and to the panel that mounts the run only when it does
+	// not.
+	//
+	// The list takes no row of the page: the conversation keeps the whole
+	// height, and what is in flight is one indicator in the topbar that opens
+	// the list over the page when it is pressed.
 
-	const WORKSPACE_RUNS_RAIL_OPEN_KEY = "archetipo.runsOpen";
 	const WORKSPACE_RUNS_POLL_MS = 2000;
 	const WORKSPACE_RUNS_POLL_FAILURE_LIMIT = 3;
 
@@ -1885,6 +1890,10 @@
 	// un role="status" (la decisione in attesa), e reinserirlo identico ogni
 	// pochi secondi significherebbe riannunciarlo a ogni giro allo screen reader.
 	let workspaceRunsHTML = null;
+	// L'elenco si apre sopra la pagina, sotto l'indicatore che lo comanda, e
+	// non occupa nessuna riga. Aperto o chiuso lo decide chi guarda: lo stato
+	// sta qui e non nel DOM, perché il contenuto viene riscritto a ogni passata.
+	let workspaceRunsListOpen = false;
 
 	function stopWorkspaceRunsPolling() {
 		if (workspaceRunsTimer === null) return;
@@ -1905,37 +1914,57 @@
 	}
 
 	// The indicator lives in the topbar so it stays visible whatever view is on
-	// screen, and it counts from the very payload the strip draws — one read,
-	// one truth about what is waiting.
+	// screen, and it counts from the very payload the list draws — one read,
+	// one truth about what is in flight and what is waiting. It is the only
+	// thing the runs cost the page: waiting comes first, because that is what
+	// asks for a person, and with nothing waiting it says how many are at work.
 	function renderRunsAttention() {
 		if (!runsAttentionEl) return;
+		const total = WorkspaceRuns.runCount(workspaceRunsView);
 		const waiting = WorkspaceRuns.awaitingCount(workspaceRunsView);
-		runsAttentionEl.classList.toggle("hidden", waiting === 0);
-		runsAttentionEl.textContent = waiting ? TEXT.waitingCount(waiting) : "";
+		const label = waiting
+			? TEXT.waitingCount(waiting)
+			: total
+				? TEXT.runningCount(total)
+				: "";
+		runsAttentionEl.classList.toggle("hidden", total === 0);
+		runsAttentionEl.classList.toggle("is-running", total > 0 && waiting === 0);
+		// Riscritto solo se cambia: è una regione live, e ripetere la stessa
+		// frase a ogni passata di polling la farebbe riannunciare.
+		if (runsAttentionEl.textContent !== label) runsAttentionEl.textContent = label;
 		runsAttentionEl.setAttribute(
 			"title",
-			waiting ? TEXT.waitingHint : "",
+			waiting ? TEXT.waitingHint : total ? TEXT.runningHint : "",
 		);
+		if (total === 0) setWorkspaceRunsListOpen(false);
 	}
 
-	// Aperta o chiusa la striscia lo decide chi guarda, e la scelta sopravvive
-	// al ridisegno: il pannello viene riscritto da zero a ogni passata, quindi
-	// lo stato non può stare nel DOM. Chiusa di partenza — una riga — perché
-	// quello che serve a colpo d'occhio è quante run ci sono e su cosa stanno.
-	let workspaceRunsExpanded = false;
-	try {
-		workspaceRunsExpanded =
-			localStorage.getItem(WORKSPACE_RUNS_RAIL_OPEN_KEY) === "1";
-	} catch (_) {
-		/* ignore */
+	function positionWorkspaceRunsList() {
+		if (!workspaceRunsEl || !runsAttentionEl) return;
+		const anchor = runsAttentionEl.getBoundingClientRect();
+		// Allineato al bordo destro dell'indicatore, ma mai fuori dalla
+		// finestra: su uno schermo stretto l'indicatore può stare a sinistra.
+		const width = Math.min(420, window.innerWidth - 16);
+		const right = Math.min(window.innerWidth - anchor.right, window.innerWidth - width - 8);
+		workspaceRunsEl.style.top = `${Math.round(anchor.bottom + 6)}px`;
+		workspaceRunsEl.style.right = `${Math.max(8, Math.round(right))}px`;
+	}
+
+	function setWorkspaceRunsListOpen(open) {
+		const next = !!open && WorkspaceRuns.runCount(workspaceRunsView) > 0;
+		workspaceRunsListOpen = next;
+		if (workspaceRunsEl) {
+			if (next) positionWorkspaceRunsList();
+			workspaceRunsEl.classList.toggle("is-open", next);
+		}
+		if (runsAttentionEl) {
+			runsAttentionEl.setAttribute("aria-expanded", next ? "true" : "false");
+		}
 	}
 
 	function renderWorkspaceRunsPanel() {
 		if (!workspaceRunsEl) return;
-		workspaceRunsEl.classList.toggle("has-runs", !!(workspaceRunsView && workspaceRunsView.runs && workspaceRunsView.runs.length));
-		const html = WorkspaceRuns.renderWorkspaceRuns(workspaceRunsView, {
-			expanded: workspaceRunsExpanded,
-		});
+		const html = WorkspaceRuns.renderWorkspaceRuns(workspaceRunsView);
 		if (html !== workspaceRunsHTML) {
 			workspaceRunsHTML = html;
 			workspaceRunsEl.innerHTML = html;
@@ -2034,27 +2063,7 @@
 	}
 
 	if (workspaceRunsEl) {
-		// `toggle` non risale la gerarchia: la cattura è l'unico modo di sentirlo
-		// su un <details> che il ridisegno sostituisce di continuo.
-		workspaceRunsEl.addEventListener(
-			"toggle",
-			(e) => {
-				const panel = e.target;
-				if (!panel || !panel.classList.contains("ws-runs-panel")) return;
-				workspaceRunsExpanded = panel.open;
-				try {
-					localStorage.setItem(
-						WORKSPACE_RUNS_RAIL_OPEN_KEY,
-						panel.open ? "1" : "0",
-					);
-				} catch (_) {
-					/* ignore */
-				}
-			},
-			true,
-		);
-
-		// The strip is redrawn on every poll, so the handler lives on the section
+		// The list is redrawn on every poll, so the handler lives on the section
 		// and each row carries its own identity in its data attributes.
 		workspaceRunsEl.addEventListener("click", async (e) => {
 			const stop = e.target.closest("[data-run-stop]");
@@ -2083,6 +2092,8 @@
 			// conversation is reached there and one started from the board keeps
 			// leading exactly where it always did.
 			const id = row.dataset.runId || "";
+			// Chi ha scelto una riga è arrivato: l'elenco si toglie di mezzo.
+			setWorkspaceRunsListOpen(false);
 			openRunTarget(
 				Object.assign(
 					{
@@ -2096,16 +2107,39 @@
 		});
 	}
 
-	if (runsAttentionEl) {
-		// The indicator leads to the first entry that is waiting: seeing that
-		// something needs an answer and reaching the answer are one gesture. The
-		// whole entry is handed over, so when the run was born in a conversation
-		// the press lands on the very block that is waiting.
+	if (runsAttentionEl && workspaceRunsEl) {
+		// The indicator opens the list of what is in flight, and the list is
+		// where a run is reached or stopped: the entry that waits is marked
+		// there, and pressing it lands on the very block that is waiting.
 		runsAttentionEl.addEventListener("click", () => {
-			const runs = (workspaceRunsView && workspaceRunsView.runs) || [];
-			const waiting = runs.find((run) => run && run.awaiting_response);
-			if (!waiting) return;
-			openRunTarget(waiting);
+			setWorkspaceRunsListOpen(!workspaceRunsListOpen);
+		});
+
+		// Un elenco aperto sopra la pagina si chiude premendo altrove o con
+		// Esc, come ogni menu: Esc è preso in cattura e non prosegue, perché
+		// chiude l'elenco e non anche il pannello che gli sta sotto.
+		document.addEventListener("click", (e) => {
+			if (!workspaceRunsListOpen) return;
+			const target = e.target;
+			// Una riga appena ridisegnata non è più nel documento: chi l'ha
+			// premuta stava dentro l'elenco, non fuori.
+			if (!(target instanceof Node) || !target.isConnected) return;
+			if (workspaceRunsEl.contains(target) || runsAttentionEl.contains(target)) return;
+			setWorkspaceRunsListOpen(false);
+		});
+		document.addEventListener(
+			"keydown",
+			(e) => {
+				if (!workspaceRunsListOpen || e.key !== "Escape") return;
+				e.preventDefault();
+				e.stopPropagation();
+				setWorkspaceRunsListOpen(false);
+				runsAttentionEl.focus();
+			},
+			true,
+		);
+		window.addEventListener("resize", () => {
+			if (workspaceRunsListOpen) positionWorkspaceRunsList();
 		});
 	}
 

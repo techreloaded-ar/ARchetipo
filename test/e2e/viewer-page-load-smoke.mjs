@@ -706,8 +706,13 @@ async function exerciseActivityComposer(browser, url) {
   if (await page.evaluate(`!!document.querySelector('[data-conversation-activities-toggle]')`)) throw new Error("Il compositore dell’inception mostra ancora il tasto Attività");
   ok(CLAIMS[9], "storia e inception chiedono la proposta; l’invio la consegna una volta e un rifiuto conserva il testo");
   await page.waitFor(`!!document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’esecuzione da fermare");
-  await page.evaluate(`document.querySelector('.ws-runs-panel').open = true`);
-  if (await page.evaluate(`getComputedStyle(document.getElementById('workspace-runs')).display`) === "none") throw new Error("Le esecuzioni sono nascoste nella vista Conversazione");
+  // L'elenco non occupa righe della pagina: resta chiuso finché non lo apre
+  // l'indicatore della barra superiore, che è l'unico posto da cui si comanda.
+  if (await page.evaluate(`getComputedStyle(document.getElementById('workspace-runs')).display`) !== "none") throw new Error("L’elenco delle esecuzioni occupa la pagina senza essere stato aperto");
+  await page.waitFor(`!document.getElementById('runs-attention').classList.contains('hidden')`, 10000, "l’indicatore delle esecuzioni nella barra superiore");
+  await page.evaluate(`document.getElementById('runs-attention').click()`);
+  if (await page.evaluate(`getComputedStyle(document.getElementById('workspace-runs')).display`) === "none") throw new Error("L’indicatore non apre l’elenco delle esecuzioni nella vista Conversazione");
+  if (await page.evaluate(`getComputedStyle(document.getElementById('workspace-runs')).position`) !== "fixed") throw new Error("L’elenco delle esecuzioni toglie spazio alla conversazione invece di aprirsi sopra la pagina");
   await page.evaluate(`document.querySelector('[data-run-stop="smoke-active"]').click()`);
   await page.waitFor(`window.smokeStopped && !document.querySelector('[data-run-stop="smoke-active"]')`, 10000, "l’arresto dall’elenco delle esecuzioni");
   if (exceptions.length) throw new Error(`Eccezioni nel flusso delle attività: ${JSON.stringify(exceptions)}`);

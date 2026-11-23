@@ -1384,8 +1384,7 @@
 					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 				</div>
 			</div>
-			${hintHtml}
-			${await_}
+			${hintHtml || await_ ? `<div class="conv-composer-foot">${hintHtml}${await_}</div>` : ""}
 		</form>`;
 	}
 
@@ -1499,11 +1498,18 @@
 		} else if (question.allow_text) {
 			other = `<label class="conv-input-text">${escapeHtml(TEXT.inputFreeAnswer)}${field(true)}</label>`;
 		}
-		const hint = choices.length ? `<p class="conv-input-hint">${escapeHtml(multi ? TEXT.inputPickMany : TEXT.inputPickOne)}</p>` : "";
 		// The header names the question's tab when there is one; repeating it
 		// above the prompt would say the same word twice.
 		const legend = textAt(question, "header") && !withTabs ? `<legend>${escapeHtml(question.header)}</legend>` : "";
-		return `<fieldset data-conversation-input-question="${id}"${multi ? ' data-conversation-input-multi="true"' : ""}>${legend}<p class="conv-input-prompt">${escapeHtml(textAt(question, "prompt"))}</p>${hint}<div class="conv-input-options">${options}${other}</div></fieldset>`;
+		return `<fieldset data-conversation-input-question="${id}"${multi ? ' data-conversation-input-multi="true"' : ""}>${legend}<p class="conv-input-prompt">${escapeHtml(textAt(question, "prompt"))}</p><div class="conv-input-options">${options}${other}</div></fieldset>`;
+	}
+
+	// How a question with options is answered — one choice or several — is
+	// said once, on the row of the controls and not on a line of its own: the
+	// card spends its height on the question and its options.
+	function renderInputHint(question) {
+		if (!arrayAt(question, "options").length) return "";
+		return `<span class="conv-input-hint">${escapeHtml(question.multiple === true ? TEXT.inputPickMany : TEXT.inputPickOne)}</span>`;
 	}
 
 	/**
@@ -1546,14 +1552,16 @@
 			? `<button type="button" class="primary-btn" data-conversation-input-step="next"${disabled}>${escapeHtml(TEXT.inputNext)}</button>`
 			: `<button type="submit" class="primary-btn"${ui.busy || !complete ? " disabled" : ""}>${escapeHtml(TEXT.inputSend)}</button>`;
 		const fields = renderInputQuestion(questions[step], step, draft, ui.busy, total > 1, context);
-		// Head, tabs and nav stay put; images and fields scroll inside the
-		// body, so the card never grows past its ceiling and the conversation
-		// that led to the question stays readable above it.
+		// Head and nav stay put; images and fields scroll inside the body, so
+		// the card never grows past its ceiling and the conversation that led
+		// to the question stays readable above it. Title, tabs and counter
+		// share the one row of the head, and the hint shares the row of the
+		// controls: a card that is one message spends two rows on furniture,
+		// not four.
 		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
-				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${counter}</div>
-				${tabs}
+				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${tabs}${counter}</div>
 				<div class="conv-input-body">${renderQuestionImages(context && context.images)}<div class="conv-input-fields">${fields}</div></div>
-				<div class="conv-input-nav">${previous}${forward}</div>
+				<div class="conv-input-nav">${renderInputHint(questions[step])}${previous}${forward}</div>
 			</form>`;
 	}
 
@@ -1602,7 +1610,13 @@
 	// today the close control, and only while the conversation is live. The head
 	// does not decide what belongs there and never builds it: it is handed the
 	// markup or the empty string, exactly like every other fact it draws.
-	function renderHead(view, badge, variant, controls) {
+	//
+	// `work` is the product work the conversation belongs to — its title, its
+	// state and the command that opens specification and decisions — handed
+	// over the same way. It sits in this band, beside the state of the
+	// conversation, and not in a band of its own under it: one row of
+	// furniture instead of two, and the height goes to the conversation.
+	function renderHead(view, badge, variant, controls, work) {
 		const dir = objectAt(view, "conversation")
 			? textAt(objectAt(view, "conversation"), "working_dir")
 			: "";
@@ -1632,11 +1646,14 @@
 			: "";
 		return `<div class="conv-head">
 			<span class="conv-badge ${variant}">${escapeHtml(badge)}</span>
-			${dirHtml}
-			<span class="conv-head-spacer"></span>
-			${providerHtml}
-			${locationHtml}
-			${typeof controls === "string" ? controls : ""}
+			${typeof work === "string" ? work : ""}
+			<div class="conv-head-rest">
+				${dirHtml}
+				<span class="conv-head-spacer"></span>
+				${providerHtml}
+				${locationHtml}
+				${typeof controls === "string" ? controls : ""}
+			</div>
 		</div>`;
 	}
 
@@ -1910,7 +1927,10 @@
 			}
 			return `<button type="button" class="conv-step conv-step-open${tone}" data-increment-step-open="${escapeHtml(open)}" data-increment-step-target="${escapeHtml(target)}">${text}</button>`;
 		};
-		return `<section class="conv-increment conv-next" data-increment-id="${escapeHtml(textAt(increment, "id"))}" aria-label="Prossimi passi dell’incremento">${label ? `<span class="conv-next-label">${escapeHtml(label)}</span>` : ""}${note ? `<span class="conv-next-note">${escapeHtml(note)}</span>` : ""}${steps.map(chip).join("")}${textAt(increment,"result_notice") ? `<span class="conv-next-note">${escapeHtml(increment.result_notice)}</span>` : ""}</section>`;
+		// I passi prima e le note dopo, su quel che resta della riga: una nota
+		// lunga si legge per intero nel suo title e non spinge i passi a capo.
+		const noteLine = (text) => text ? `<span title="${escapeHtml(text)}" class="conv-next-note">${escapeHtml(text)}</span>` : "";
+		return `<section class="conv-increment conv-next" data-increment-id="${escapeHtml(textAt(increment, "id"))}" aria-label="Prossimi passi dell’incremento">${label ? `<span class="conv-next-label">${escapeHtml(label)}</span>` : ""}${steps.map(chip).join("")}${noteLine(note)}${noteLine(textAt(increment, "result_notice"))}</section>`;
 	}
 
 	// La conferma di un passo che non si annulla prende il posto del campo, alla
@@ -1940,7 +1960,7 @@
 		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
         const quickActions = arrayAt(increment, "next_steps").length ? "" : arrayAt(increment, "quick_actions").map(action => '<button type="button" class="ghost-btn" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
 		if (!panel) {
-			return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><header><strong>'+escapeHtml(textAt(increment,"title"))+'</strong><span class="conv-increment-phase">'+escapeHtml(textAt(increment,"candidate_label") || textAt(increment,"status_label"))+'</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'">Specifica e decisioni</button></header><div class="conv-work-actions">'+quickActions+'</div></section>';
+			return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><header><strong title="'+escapeHtml(textAt(increment,"title"))+'">'+escapeHtml(textAt(increment,"title"))+'</strong><span class="conv-increment-phase">'+escapeHtml(textAt(increment,"candidate_label") || textAt(increment,"status_label"))+'</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'">Specifica e decisioni</button></header><div class="conv-work-actions">'+quickActions+'</div></section>';
 		}
 		if (!panelOpen) return "";
 		const renderChange = (change, feedback) => {
@@ -1978,7 +1998,6 @@
 		const blocks = [];
 		const workflow = objectAt(value, "workflow");
 		if (workflow && textAt(workflow, "label")) blocks.push(renderNotice("info", textAt(workflow, "label"), textAt(workflow, "detail")));
-		if (objectAt(value, "increment")) blocks.push(renderIncrement(objectAt(value, "increment"), local));
 
 		const conversation = objectAt(value, "conversation");
 		// Not offered says a conversation cannot be *opened* here; it says nothing
@@ -2126,7 +2145,7 @@
 		const controls = `${textAt(objectAt(value, "conversation"), "id") ? '<button type="button" class="conv-close-btn" data-conversation-preview>Preview</button><button type="button" class="conv-close-btn conv-panel-toggle" data-work-panel-toggle aria-controls="workspace-inspector" aria-expanded="false" aria-label="Apri pannello" title="Apri pannello"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>' : ""}${renderTechnicalControl(local)}${renderLifecycleControls(value, Object.assign({}, local, {active}))}`;
 		const drafts = objectAt(value, "spec_drafts");
 		return `<section class="conv-panel ${variant}${drafts && local.proposalsOpen ? " has-proposals-open" : ""}${objectAt(value, "increment") && (objectAt(local, "incrementSections") || {})["panel-" + textAt(value.increment, "id")] ? " has-increment-open" : ""}" aria-label="${escapeHtml(TEXT.panel)}">
-			<div class="conv-discussion">${renderHead(value, badge, variant, controls)}
+			<div class="conv-discussion">${renderHead(value, badge, variant, controls, renderIncrement(objectAt(value, "increment"), local))}
 			${renderDraftToolbar(drafts, local)}
 			${blocks.join("")}</div>
 			${renderSpecDrafts(drafts, local)}

@@ -65,14 +65,14 @@
 /* Increment details and pending decisions can exceed a short conversation
    frame. Keep a readable timeline and allow the whole frame to scroll, so
    the composer and consent buttons remain reachable instead of being clipped. */
-.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) {
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-head > .conv-increment) {
 	overflow-y: auto;
 	overscroll-behavior: contain;
 }
-.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > .conv-timeline {
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-head > .conv-increment) > .conv-timeline {
 	flex: 1 0 min(220px, 30vh);
 }
-.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-increment) > :not(.conv-timeline) {
+.workspace-primary > .shell-pane-conversation .conv-discussion:has(> .conv-head > .conv-increment) > :not(.conv-timeline) {
 	flex-shrink: 0;
 }
 
@@ -5123,19 +5123,76 @@ body.no-workspace .topbar {
 
 /* The questionnaire has a ceiling: a question is one message of the
    conversation, not the conversation. What exceeds it scrolls inside the
-   body; head, tabs and the send control stay in sight. */
+   body; head, tabs and the send control stay in sight.
+
+   It is drawn dense on purpose. Title, tabs and counter are one row, the
+   hint and the controls another, and an option is one line — its label and,
+   beside it, what it means — so the height goes to the conversation above. */
 .conv-questionnaire {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-	padding: 12px 12px;
-	max-height: min(40vh, 26rem);
+	gap: 4px;
+	padding: 8px 12px;
+	max-height: min(34vh, 21rem);
 }
 .conv-input-body {
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
 	padding: 2px;
+}
+.conv-questionnaire .conv-input-head {
+	align-items: center;
+	justify-content: flex-start;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	font-size: 13px;
+}
+.conv-questionnaire .conv-input-head > strong { color: var(--text-muted); font-weight: 600; }
+.conv-questionnaire .conv-input-counter { margin-left: auto; }
+.conv-questionnaire .conv-input-tabs { gap: 4px; }
+.conv-questionnaire .conv-input-tab { padding: 1px 10px; }
+.conv-questionnaire .conv-input-fields,
+.conv-questionnaire fieldset { gap: 4px; }
+.conv-questionnaire fieldset p { margin: 0; }
+.conv-questionnaire .conv-input-prompt { font-size: 14px; line-height: 1.4; }
+.conv-questionnaire .conv-input-options { gap: 0; }
+.conv-questionnaire .conv-input-option {
+	gap: 8px;
+	padding: 3px 8px;
+	border-color: transparent;
+	border-radius: 6px;
+	font-size: 14px;
+	line-height: 1.4;
+}
+.conv-questionnaire .conv-input-option:hover { border-color: transparent; background: var(--surface-3); }
+.conv-questionnaire .conv-input-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.conv-questionnaire .conv-input-option input { margin: 4px 0 0; }
+.conv-questionnaire .conv-input-option span { display: block; }
+.conv-questionnaire .conv-input-option strong { font-weight: 600; }
+.conv-questionnaire .conv-input-option small { margin-left: 8px; font-size: 13px; }
+.conv-questionnaire .conv-input-preview { margin: 0 0 4px 28px; }
+.conv-questionnaire .conv-input-other + .conv-input-text { margin: 2px 0 2px 28px; }
+.conv-questionnaire .conv-input-text textarea,
+.conv-questionnaire .conv-input-text input { padding: 6px 10px; }
+.conv-questionnaire .conv-input-nav { align-items: center; }
+.conv-questionnaire .conv-input-nav .conv-input-hint { margin-right: auto; }
+.conv-questionnaire .conv-input-nav .ghost-btn { margin-right: 0; }
+.conv-questionnaire .conv-input-nav .ghost-btn,
+.conv-questionnaire .conv-input-nav .primary-btn {
+	min-height: 28px;
+	height: auto;
+	padding: 2px 12px;
+	font-size: 13px;
+}
+/* Sul telefono si preme col dito: le righe restano dense, i bersagli no. */
+@media (max-width: 600px) {
+	.conv-questionnaire { max-height: min(40vh, 24rem); }
+	.conv-questionnaire .conv-input-option { padding: 6px 8px; }
+	.conv-questionnaire .conv-input-option small { display: block; margin-left: 0; }
+	.conv-questionnaire .conv-input-tab { padding: 6px 12px; }
+	.conv-questionnaire .conv-input-nav .ghost-btn,
+	.conv-questionnaire .conv-input-nav .primary-btn { min-height: 40px; padding: 6px 14px; }
 }
 
 .conv-input pre,
@@ -5203,7 +5260,7 @@ body.no-workspace .topbar {
    conversation out of view. */
 .conv-input-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-2); }
 .conv-input-image { margin: 0; flex: 0 1 auto; max-width: 100%; }
-.conv-input-image img { display: block; max-height: 140px; width: auto; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.conv-input-image img { display: block; max-height: 104px; width: auto; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
 .conv-input-image figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .conv-input-other + .conv-input-text { margin-left: 28px; }
 .conv-input-text { display: grid; gap: 6px; }
@@ -6160,10 +6217,10 @@ body.no-workspace .topbar {
 .conv-composer {
 	flex: 0 0 auto;
 	background: var(--surface);
-	padding: var(--space-3) var(--gutter);
+	padding: var(--space-2) var(--gutter);
 	display: flex;
 	flex-direction: column;
-	gap: var(--space-2);
+	gap: 6px;
 	position: relative;
 }
 
@@ -6190,9 +6247,11 @@ body.no-workspace .topbar {
 	border-radius: var(--radius-lg);
 	color: var(--text);
 	font: 16px/1.5 var(--font-sans);
-	padding: var(--space-3) var(--space-4);
+	padding: 10px var(--space-4);
 	resize: none;
-	min-height: 64px;
+	/* Una riga a riposo: il campo cresce scrivendo (app.js lo misura), e
+	   finché è vuoto l'altezza resta alla conversazione. */
+	min-height: 44px;
 	max-height: min(40vh, 320px);
 	overflow-y: auto;
 }
@@ -6487,14 +6546,25 @@ body.no-workspace .topbar {
    still allowed, but it is not what makes the run start again. */
 .conv-composer-await {
 	margin: 0;
-	font-size: 13px;
+	font-size: 12px;
 	font-weight: 600;
 	color: var(--attention);
 }
 
+/* Il promemoria del campo e l'attesa di una risposta stanno sulla stessa riga,
+   sotto al campo: due frasi brevi non valgono due righe di conversazione. */
+.conv-composer-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px var(--space-3);
+	min-width: 0;
+}
+
 /* ---- Workspace shell (US-057) ------------------------------------------
-   One column, not two. The shell is a stack of two rows — the full-width strip
-   of what is running and the primary column — and the primary column holds one
+   One column, not two. The primary column takes the whole shell — what is
+   running is a list opened over the page from the topbar, never a row of its
+   own — and it holds one
    view at a time: the conversation, which is the home of the workspace, the
    board, or the spec detail. The permanent view switcher is no longer a row of
    its own: it is drawn in the topbar, in the middle cell US-061 left free, so
@@ -6636,19 +6706,30 @@ body.no-workspace .topbar {
 	box-shadow: inset 0 -2px 0 var(--accent);
 }
 
-/* ---- Runs strip --------------------------------------------------------- */
-/* Full width, above the primary column, so what is in flight stays readable in
-   every view without taking width away from the conversation. It collapses
-   entirely when nothing is running (see .workspace-runs:empty below).
-
-   The strip *is* the summary line: no padding of its own and no ground of its
-   own, because the panel inside it is one row tall until it is opened. */
+/* ---- Runs list ---------------------------------------------------------- */
+/* What is in flight costs the page nothing: no row above the primary column,
+   no column beside it. The list is drawn over the page, under the indicator of
+   the topbar that opens it (app.js sets top and right from that indicator),
+   and it is on screen only while a person asked for it and something runs. */
 .workspace-shell > .workspace-runs {
-	grid-row: 1;
+	position: fixed;
+	top: 56px;
+	right: 12px;
+	z-index: 55;
+	display: none;
+	width: min(420px, calc(100vw - 16px));
+	max-height: min(60vh, 520px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	padding: 0;
 	background: var(--surface);
-	border-bottom: 1px solid var(--border);
-	min-width: 0;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-lg);
+}
+
+.workspace-shell > .workspace-runs.is-open:not(:empty) {
+	display: block;
 }
 
 /* ---- Spec pane ---------------------------------------------------------- */
@@ -6725,15 +6806,6 @@ body.no-workspace .topbar {
 /* The visual language of the conversation panel above: same card, same rail,
    same badge — because it is the same kind of thing to a reader, an agent at
    work. Every word comes from the payload through workspace-runs.js. */
-.workspace-runs:empty {
-	display: none;
-}
-
-/* Keep running executions reachable even when their conversation is gone. */
-#workspace-shell[data-view="conversation"] .workspace-runs:not(.has-runs) {
-	display: none;
-}
-
 .ws-runs-panel {
 	display: block;
 	border: 0;
@@ -6743,62 +6815,20 @@ body.no-workspace .topbar {
 	min-width: 0;
 }
 
-/* La riga di sommario è la striscia. Chiusa dice quante run ci sono e su cosa
-   stanno lavorando — che è ciò che si legge a colpo d'occhio — e costa una riga
-   sola; il dettaglio di ognuna si apre premendola. Aperta o chiusa che sia, il
-   contatore in attesa resta al suo posto, ed è lo stesso numero che la barra
+/* L'intestazione dell'elenco: che cos'è e quante voci aspettano una risposta.
+   Resta in vista mentre l'elenco scorre, ed è lo stesso numero che la barra
    superiore mostra. */
 .ws-runs-head {
+	position: sticky;
+	top: 0;
+	z-index: 1;
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
 	min-height: var(--control-h);
-	padding: 0 var(--gutter);
-	border-bottom: 0;
-	background: transparent;
-	cursor: pointer;
-	user-select: none;
-	list-style: none;
-}
-
-.ws-runs-head::-webkit-details-marker {
-	display: none;
-}
-
-/* Il verso della freccia è l'unico segno che dice se la riga è aperta: sta in
-   fondo, dove la si preme, e ruota invece di cambiare forma. */
-.ws-runs-head::after {
-	content: "";
-	flex: none;
-	width: 7px;
-	height: 7px;
-	border-right: 1.6px solid var(--text-dim);
-	border-bottom: 1.6px solid var(--text-dim);
-	transform: translateY(-2px) rotate(45deg);
-	transition: transform var(--transition);
-}
-
-.ws-runs-panel[open] > .ws-runs-head {
+	padding: 0 var(--space-4);
 	border-bottom: 1px solid var(--border);
-}
-
-.ws-runs-panel[open] > .ws-runs-head::after {
-	transform: translateY(1px) rotate(225deg);
-}
-
-.ws-runs-head:hover {
-	background: var(--surface-3);
-}
-
-/* Qualcosa aspetta una risposta: l'albicocca prende la riga intera, così la
-   striscia si fa notare anche chiusa. */
-.ws-runs-panel.is-awaiting > .ws-runs-head {
-	background: var(--attention-soft);
-}
-
-.ws-runs-panel.is-awaiting > .ws-runs-head:hover {
-	background: var(--attention-soft);
-	filter: brightness(0.99);
+	background: var(--surface);
 }
 
 .ws-runs-title {
@@ -6808,22 +6838,6 @@ body.no-workspace .topbar {
 	letter-spacing: 0;
 	color: var(--text-muted);
 	flex: none;
-}
-
-/* Su cosa stanno lavorando, in una riga sola. Sparisce all'apertura, dove ogni
-   run ha la sua riga e ripeterlo sarebbe rumore. */
-.ws-runs-digest {
-	font-family: var(--font-mono);
-	font-size: var(--ui-text-sm);
-	color: var(--text-dim);
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.ws-runs-panel[open] .ws-runs-digest {
-	display: none;
 }
 
 .ws-runs-head-spacer {
@@ -6859,14 +6873,8 @@ body.no-workspace .topbar {
 	flex-direction: column;
 }
 
-.ws-runs-empty {
-	padding: var(--space-3) var(--gutter);
-	font-size: var(--ui-text);
-	color: var(--text-dim);
-}
-
 .ws-run {
-	padding: var(--space-2) var(--gutter);
+	padding: var(--space-2) var(--space-4);
 	border-top: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
@@ -6877,6 +6885,15 @@ body.no-workspace .topbar {
 
 .ws-run:first-child {
 	border-top: none;
+}
+
+/* Fermare una run è un comando della riga, non la riga: piccolo, in fondo. */
+.ws-run > .ghost-btn {
+	align-self: flex-end;
+	min-height: 28px;
+	height: auto;
+	padding: 2px 12px;
+	font-size: 13px;
 }
 
 .ws-run:hover {
@@ -6973,7 +6990,8 @@ body.no-workspace .topbar {
 
 /* ---- Attention indicator in the topbar ---------------------------------- */
 /* It stays visible whatever pane is on screen, so a run waiting for an answer
-   is never something you have to go and look for. */
+   is never something you have to go and look for. It is also the only thing
+   the runs cost the page: pressing it opens their list over the page. */
 .runs-attention {
 	display: inline-flex;
 	align-items: center;
@@ -6984,11 +7002,30 @@ body.no-workspace .topbar {
 	color: var(--attention);
 	border-radius: var(--radius-sm);
 	padding: 0 var(--space-3);
+	font-family: inherit;
 	font-size: 13px;
 	font-weight: 600;
 	letter-spacing: 0;
 	white-space: nowrap;
 	cursor: pointer;
+}
+
+.runs-attention:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+/* Al lavoro, e niente che aspetti una persona: la stessa targhetta, senza il
+   colore dell'attenzione e senza il battito, che restano di chi aspetta. */
+.runs-attention.is-running {
+	border-color: var(--border-strong);
+	background: var(--surface);
+	color: var(--text-muted);
+}
+
+.runs-attention.is-running::before {
+	background: var(--work);
+	animation: none;
 }
 
 .runs-attention.hidden,
@@ -7143,12 +7180,6 @@ body.no-workspace .topbar {
    viewer's own tokens — the search field it draws is deliberately absent, since
    full-text search is out of this spec's scope and an inert box would promise
    what the page cannot keep. */
-
-/* The runs strip stays full width in both layouts: the rail takes a column of
-   the last row only, so what is running keeps spanning the whole shell. */
-.workspace-shell > .workspace-runs {
-	grid-column: 1 / -1;
-}
 
 .conversation-rail {
 	display: flex;
@@ -8250,11 +8281,32 @@ body.no-workspace .topbar {
 .story-linked-work a { font-size:13px; margin-left:auto; }
 .conv-work-home { background:var(--bg); }
 .conv-work-welcome h1 { font-weight:500; letter-spacing:-.02em; }
-.conv-increment { border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; margin:0; padding:12px 16px; }
-.conv-increment>header { flex-wrap:wrap; row-gap:6px; }
-.conv-increment>header>strong { flex:1 1 160px; }
-.conv-increment-phase { font-weight:500; color:var(--text-muted); }
-.conv-increment>header>button { margin-left:auto; }
+/* Il lavoro non ha una fascia sua: titolo, stato e il comando che apre
+   specifica e decisioni stanno nella testata della conversazione, accanto al
+   suo stato. È il titolo a cedere spazio — si accorcia prima che la riga vada
+   a capo — e l'altezza che la fascia spendeva resta alla conversazione. */
+.conv-increment { border:0; border-radius:0; background:transparent; margin:0; padding:0; }
+.conv-head > .conv-increment { display:flex; align-items:center; flex-wrap:wrap; gap:4px var(--space-2); flex:100 1 380px; min-width:min(260px,100%); }
+/* Fasi e comandi viaggiano insieme. Senza un lavoro il gruppo non esiste per
+   l'impaginazione; con un lavoro, se la riga non basta, va a capo tutto intero
+   — fasi a sinistra, comandi a destra — e il titolo si tiene la prima riga,
+   invece di restare schiacciato fra comandi spezzati su due righe. */
+.conv-head-rest { display:contents; }
+.conv-head > .conv-increment ~ .conv-head-rest { display:flex; align-items:center; flex-wrap:wrap; gap:4px var(--space-2); flex:1 1 auto; min-width:0; }
+.conv-head:has(> .conv-increment) { row-gap:4px; }
+/* Sul telefono una riga sola non c'è: stato, fasi e comandi scorrono come
+   sempre, e il lavoro chiude la testata su una riga sua, col titolo che si
+   accorcia accanto a stato e comando. */
+@media (max-width:640px) {
+	.conv-head > .conv-increment { order:1; flex:1 1 100%; min-width:0; }
+	.conv-head > .conv-increment ~ .conv-head-rest { display:contents; }
+	.conv-increment>header { flex-wrap:nowrap; }
+}
+.conv-increment>header { flex:1 1 auto; gap:var(--space-2); font-size:13px; }
+.conv-increment>header>strong { flex:0 1 auto; }
+.conv-increment-phase { font-weight:500; color:var(--text-muted); white-space:nowrap; }
+.conv-increment>header>button { flex:none; min-height:28px; height:auto; padding:2px 10px; font-size:13px; white-space:nowrap; }
+.conv-head .conv-work-actions { margin-top:0; }
 .conv-work-actions:empty { display:none; }
 @media(max-width:700px) { .story-view-actions { flex-wrap:wrap; } .spec-pane-body>.modal-header { flex-wrap:wrap; } }
 
@@ -8298,35 +8350,46 @@ body.no-workspace .topbar {
 .environment-attention button:disabled { opacity:.6; cursor:wait; }
 .environment-notice:empty { display:none; }
 
-/* Next steps declared by the process Template. */
+/* Next steps declared by the process Template. One thin row above the field:
+   small chips, and the note beside them on what is left of the row — whole
+   in its tooltip, cut on the row — because the height belongs to the
+   conversation and a step is pressed, not read. */
 .conv-next {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	gap: 4px 6px;
 	flex: 1 1 100%;
 	min-width: 0;
-	padding: 8px 0;
+	padding: 0;
 }
 .conv-next-label {
 	font-size: 12px;
 	font-weight: 500;
 	color: var(--text-dim);
-	margin: 0 4px 0 0;
+	margin: 0 2px 0 0;
 }
-.conv-next-note{font-size:12px;color:var(--text-muted);margin-right:4px;overflow-wrap:anywhere}
+.conv-next-note {
+	flex: 1 1 10rem;
+	min-width: 0;
+	font-size: 12px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 .conv-step {
 	display: inline-flex;
 	align-items: center;
-	gap: 8px;
+	gap: 6px;
 	max-width: 100%;
-	min-height: 36px;
-	padding: 8px 12px;
+	min-height: 26px;
+	padding: 2px 10px;
 	border: 1px solid var(--border-strong);
 	border-radius: var(--radius-sm);
 	background: var(--surface);
 	color: var(--text);
-	font: 500 14px/1.3 var(--font-sans);
+	font: 500 13px/1.3 var(--font-sans);
 	text-decoration: none;
 	cursor: pointer;
 	overflow-wrap: anywhere;
@@ -8342,8 +8405,8 @@ body.no-workspace .topbar {
 	color: var(--text-muted);
 }
 .conv-step.is-warn{background:var(--attention-soft);border-color:var(--attention-border);color:var(--attention);font-weight:600}
-.conv-next-confirm{display:flex;flex-wrap:wrap;align-items:center;gap:12px;flex:1 1 100%;padding:12px 12px 12px 16px}
-.conv-next-confirm p{margin:0;flex:1 1 280px;min-width:0;font-size:15px;line-height:1.45}
+.conv-next-confirm{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;flex:1 1 100%;padding:4px 0}
+.conv-next-confirm p{margin:0;flex:1 1 280px;min-width:0;font-size:14px;line-height:1.4}
 .conv-next-confirm small{display:block;color:var(--text-muted);font-size:13px}
 .thread-row.is-child{margin-left:14px}
 .conv-input-text[hidden]{display:none}
@@ -8387,9 +8450,17 @@ body.no-workspace .topbar {
 		min-height: 56px;
 	}
 
-	/* Keep decisions and their explanation together above the message. */
-	.conv-next-label, .conv-next-note {
+	/* Keep decisions and their explanation together above the message. No
+	   tooltip under a finger: here the note is read whole, on its own lines. */
+	.conv-next-label {
 		flex: 0 1 auto;
+	}
+
+	.conv-next-note {
+		flex: 1 1 100%;
+		white-space: normal;
+		overflow: visible;
+		overflow-wrap: anywhere;
 	}
 
 	.conv-step {

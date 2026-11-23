@@ -125,11 +125,12 @@
                     </button>
                 </div>
             </div>
-            <!-- How many runs are waiting for an answer (US-055). It lives in
-                 the topbar so it stays visible whatever view is on screen, and
-                 it is filled from the same /api/workspace/runs payload the runs
-                 strip draws. Empty until there is something to wait for. -->
-            <div id="runs-attention" class="runs-attention hidden" aria-live="polite" data-workspace-scoped></div>
+            <!-- How many runs are in flight, and first of all how many are
+                 waiting for an answer (US-055). It lives in the topbar so it
+                 stays visible whatever view is on screen, it is filled from the
+                 same /api/workspace/runs payload the runs list draws, and
+                 pressing it opens that list. Empty until something runs. -->
+            <button id="runs-attention" type="button" class="runs-attention hidden" aria-live="polite" aria-haspopup="true" aria-expanded="false" aria-controls="workspace-runs" data-workspace-scoped></button>
             <span class="action-sep" aria-hidden="true"></span>
             <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Cambia tema" title="Cambia tema (T)">
                 <svg class="theme-ico theme-ico-sun" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></g></svg>
@@ -164,11 +165,12 @@
          workspace is open — #workspace-home stays outside it, and
          body.no-workspace hides the shell. -->
     <div id="workspace-shell" class="workspace-shell workspace-shell--wide">
-        <!-- What the workspace is running right now (US-055), as a full-width
-             strip above the primary column: it is visible in every view, so it
-             never takes width away from the conversation. Drawn by the pure
+        <!-- What the workspace is running right now (US-055). It is a list
+             opened over the page from the indicator of the topbar, outside the
+             primary column: it takes neither width nor height away from the
+             conversation and it is reachable in every view. Drawn by the pure
              renderer in workspace-runs.js from /api/workspace/runs. -->
-        <section id="workspace-runs" class="workspace-runs" data-workspace-scoped></section>
+        <section id="workspace-runs" class="workspace-runs" aria-label="Esecuzioni in corso" data-workspace-scoped></section>
 
         <!-- The index of the conversations this workspace has had (US-058).
              It lives in the shell and not in #workspace-primary on purpose: it

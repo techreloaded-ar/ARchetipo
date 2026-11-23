@@ -48,7 +48,7 @@ function loadWorkspaceRuns() {
 	return mod.exports;
 }
 
-const { renderWorkspaceRuns, awaitingCount } = loadWorkspaceRuns();
+const { renderWorkspaceRuns, awaitingCount, runCount } = loadWorkspaceRuns();
 
 // Strip every attribute from the markup, leaving only what a reader sees.
 // An identifier that survives this is visible text; one that does not was
@@ -241,5 +241,42 @@ describe("renderWorkspaceRuns", () => {
 
 		assert.ok(!html.includes("<script>"), "il markup del payload non deve produrre un tag");
 		assert.ok(html.includes("&lt;script&gt;"), "il markup del payload deve essere neutralizzato");
+	});
+});
+
+// Lo spazio è della conversazione: ciò che gira non ha una riga sua nella
+// pagina. È un elenco aperto dall'indicatore della barra superiore, e quello
+// stesso indicatore conta le voci che l'elenco disegna.
+describe("l'elenco delle run non occupa la pagina", () => {
+	const assetsDir = dirname(helperPath);
+	const css = readFileSync(resolve(assetsDir, "app.css"), "utf8");
+	const js = readFileSync(resolve(assetsDir, "app.js"), "utf8");
+	const html = readFileSync(resolve(assetsDir, "index.html"), "utf8");
+
+	it("conta le voci che disegna, in attesa o no", () => {
+		assert.equal(runCount(null), 0);
+		assert.equal(runCount({ runs: [] }), 0);
+		assert.equal(runCount({ runs: [null, {}, { id: "e1", awaiting_response: true }] }), 2);
+	});
+
+	it("è un elenco intero, non una riga che si apre e si chiude", () => {
+		const panel = renderWorkspaceRuns({ runs: [{ id: "e1", scope: "spec", spec_code: "US-1", action: "a", status: "s" }] });
+		assert.doesNotMatch(panel, /<details|<summary/, "l'elenco non è più una striscia richiudibile nella pagina");
+		assert.match(panel, /data-run-stop="e1"/, "fermare una run resta un comando dell'elenco");
+	});
+
+	it("si apre sopra la pagina e resta chiuso finché non lo si chiede", () => {
+		const rule = /\.workspace-shell > \.workspace-runs\s*\{([^}]*)\}/.exec(css);
+		assert.ok(rule, "app.css non dichiara più l'elenco delle run");
+		assert.match(rule[1], /position:\s*fixed/, "l'elenco deve stare fuori dal flusso: in una riga sua toglierebbe altezza alla conversazione");
+		assert.match(rule[1], /display:\s*none/, "l'elenco nasce chiuso");
+		assert.match(css, /\.workspace-shell > \.workspace-runs\.is-open:not\(:empty\)\s*\{[^}]*display:\s*block/, "l'elenco si mostra solo aperto e solo se qualcosa gira");
+		assert.doesNotMatch(css, /\.workspace-runs\s*\{[^}]*grid-row/, "l'elenco occupa di nuovo una riga della shell");
+	});
+
+	it("lo comanda l'indicatore della barra superiore, che è un bottone", () => {
+		assert.match(html, /<button id="runs-attention"[^>]*aria-controls="workspace-runs"/, "l'indicatore deve essere un bottone che dichiara ciò che apre");
+		assert.match(js, /runsAttentionEl\.addEventListener\("click", \(\) => \{\s*setWorkspaceRunsListOpen\(!workspaceRunsListOpen\);/, "premere l'indicatore non apre più l'elenco");
+		assert.match(js, /TEXT\.runningCount\(total\)/, "con run al lavoro e nessuna in attesa l'indicatore sparirebbe, e con lui l'unico accesso all'elenco");
 	});
 });

@@ -56,18 +56,13 @@
 	}
 
 	// The only words this module owns. None of them names a step, a state or an
-	// action of anybody's method: they are the furniture of a list — what the
-	// list is, and what it says when it is empty. A caller that wants other
-	// wording passes it in.
+	// action of anybody's method: they are the furniture of a list. A caller
+	// that wants other wording passes it in.
 	const DEFAULT_TEXT = {
 		title: "Esecuzioni in corso",
-		empty: "In questo workspace non sta girando niente.",
 		awaiting: "aspetta te",
 		stop: "Ferma",
 	};
-
-	/** How many targets the closed summary names before it counts the rest. */
-	const DIGEST_MAX = 3;
 
 	function textOption(opts, key) {
 		const given = opts && typeof opts === "object" ? opts[key] : null;
@@ -136,30 +131,6 @@
 		return `<div class="ws-run-notice">${escapeHtml(notice)}</div>`;
 	}
 
-	/**
-	 * The one-line digest read on the closed summary: the very targets the rows
-	 * carry, in the very order they carry them. Nothing is named here that the
-	 * open list does not repeat, and past DIGEST_MAX the remainder is counted
-	 * rather than truncated in silence.
-	 *
-	 * With nothing in flight the digest is the sentence that says so, because a
-	 * closed summary is the only thing on screen and the absence must still be
-	 * declared.
-	 */
-	function renderDigest(entries, opts) {
-		if (!entries.length) {
-			return `<span class="ws-runs-digest">${escapeHtml(textOption(opts, "empty"))}</span>`;
-		}
-		const names = entries
-			.map((entry) => stringAt(entry, "spec_code") || stringAt(entry, "scope"))
-			.filter(Boolean);
-		if (!names.length) return "";
-		const shown = names.slice(0, DIGEST_MAX);
-		const rest = names.length - shown.length;
-		const text = shown.join(" \u00b7 ") + (rest > 0 ? ` +${rest}` : "");
-		return `<span class="ws-runs-digest">${escapeHtml(text)}</span>`;
-	}
-
 	function renderRow(entry, opts) {
 		if (!entry || typeof entry !== "object") return "";
 		const id = stringAt(entry, "id");
@@ -205,23 +176,36 @@
 	}
 
 	/**
+	 * How many entries the payload lists, waiting or not: the very entries the
+	 * list draws, so the indicator that opens the list and the list itself can
+	 * never disagree on whether there is anything to show.
+	 *
+	 * @param {object|null} view  The /api/workspace/runs payload.
+	 * @returns {number}
+	 */
+	function runCount(view) {
+		return arrayAt(view, "runs").filter(
+			(entry) => entry && typeof entry === "object",
+		).length;
+	}
+
+	/**
 	 * Render the workspace runs view to an HTML string.
 	 *
 	 * Never throws on a partial payload: a null view, a missing runs array and
 	 * an entry without action or status are all answers, and each has a
-	 * rendering. An empty list is a rendered state, not an empty string — the
-	 * rail says that nothing is in flight rather than silently disappearing.
+	 * rendering. With nothing in flight it renders nothing at all: the list is
+	 * shown on request, from the indicator of the topbar, and an indicator with
+	 * nothing to count is not drawn either.
 	 *
-	 * The panel is a <details>: closed it is one line — what the list is, what
-	 * it is working on, and how many entries are waiting — and open it is the
-	 * full list. Whether it is open is not this module's memory: the caller
-	 * passes it in, because it is a choice a person made and the strip is
-	 * redrawn from scratch on every poll.
+	 * The panel is the whole list under one heading — what the list is and how
+	 * many entries are waiting. It takes no room of its own on the page:
+	 * whether it is on screen is the caller's choice, because it is a gesture a
+	 * person made and the list is redrawn from scratch on every poll.
 	 *
 	 * @param {object|null} view  The /api/workspace/runs payload.
-	 * @param {{title?: string, empty?: string, awaiting?: string, expanded?: boolean}} [opts]
-	 *        Wording overrides for the furniture of the list, and whether the
-	 *        panel is drawn open.
+	 * @param {{title?: string, awaiting?: string, stop?: string}} [opts]
+	 *        Wording overrides for the furniture of the list.
 	 * @returns {string} HTML string.
 	 */
 	function renderWorkspaceRuns(view, opts) {
@@ -233,28 +217,24 @@
 		const badge = waiting
 			? `<span class="ws-runs-badge is-awaiting">${escapeHtml(String(waiting))}</span>`
 			: "";
-		const expanded = !!(opts && typeof opts === "object" && opts.expanded);
-		const head = `<summary class="ws-runs-head">
+		const head = `<div class="ws-runs-head">
 			<span class="ws-runs-title">${escapeHtml(textOption(opts, "title"))}</span>
-			${renderDigest(entries, opts)}
 			<span class="ws-runs-head-spacer"></span>
 			${badge}
-		</summary>`;
-		const rows = entries.length
-			? entries.map((entry) => renderRow(entry, opts)).join("")
-			: `<li class="ws-runs-empty">${escapeHtml(textOption(opts, "empty"))}</li>`;
+		</div>`;
+		const rows = entries.map((entry) => renderRow(entry, opts)).join("");
 		const classes = `ws-runs-panel${waiting ? " is-awaiting" : ""}`;
-		return `<details class="${classes}"${expanded ? " open" : ""}>
+		return `<div class="${classes}">
 			${head}
 			<ul class="ws-runs-list">${rows}</ul>
-		</details>`;
+		</div>`;
 	}
 
 	// ---- exports ----
 
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderWorkspaceRuns, awaitingCount, escapeHtml };
+		module.exports = { renderWorkspaceRuns, awaitingCount, runCount, escapeHtml };
 	} else {
-		window.WorkspaceRuns = { renderWorkspaceRuns, awaitingCount };
+		window.WorkspaceRuns = { renderWorkspaceRuns, awaitingCount, runCount };
 	}
 })();
