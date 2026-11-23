@@ -468,26 +468,99 @@
 	// stessa (`/api/…`) restano com'erano. Il parser emette gli attributi con le
 	// entità HTML, quindi il percorso si decodifica prima di entrare nella query
 	// e si ri-escapa dopo.
+	//
+	// Il percorso è quello che l'agente ha scritto, non quello che il parser ne
+	// ha fatto: il parser codifica ciò che in un URL non può stare — lo spazio,
+	// una lettera accentata, la barra rovesciata di Windows — e quella codifica
+	// si toglie prima di passare il percorso al server, che cerca un file e non
+	// un URL. E `C:\…` o `C:/…` è un disco, non uno schema: su Windows è il
+	// percorso assoluto che un agente scrive quasi sempre, e letto come schema
+	// restava un indirizzo che nessun browser sa aprire.
 	const WORKSPACE_FILE_ROUTE = "/api/workspace/file?path=";
-	function resolveWorkspaceImages(html, conversationID) {
+	const WINDOWS_DRIVE_PATH = /^[a-z]:[\\/]/i;
+
+	/**
+	 * Il percorso del file che un indirizzo d'immagine nomina, oppure la
+	 * stringa vuota quando l'indirizzo non è un file del workspace: un URL con
+	 * uno schema suo, un indirizzo della pagina, un'àncora.
+	 */
+	function workspaceImagePath(src) {
+		let path = String(src === null || src === undefined ? "" : src).trim();
+		try {
+			path = decodeURIComponent(path);
+		} catch (_) {
+			// Un `%` che non codifica niente è un carattere del nome.
+		}
+		path = path
+			.replace(/^file:\/\/(localhost)?(?=\/)/i, "")
+			.replace(/^\/(?=[a-z]:[\\/])/i, "")
+			.replace(/^\.\//, "");
+		if (!path || path.startsWith("/api/") || path.startsWith("#")) return "";
+		if (!WINDOWS_DRIVE_PATH.test(path) && /^[a-z][a-z0-9+.-]*:/i.test(path)) return "";
+		return path;
+	}
+
+	/** L'indirizzo con cui la pagina chiede al server un file del workspace. */
+	function workspaceFileURL(path, conversationID) {
 		const scope = conversationID ? `&conversation=${encodeURIComponent(conversationID)}` : "";
+		return WORKSPACE_FILE_ROUTE + encodeURIComponent(path) + scope;
+	}
+
+	function resolveWorkspaceImages(html, conversationID) {
 		return String(html).replace(
 			/(<img\b[^>]*?\bsrc=)(["'])([^"']*)\2/gi,
 			(match, before, quote, src) => {
-				const path = src
+				const path = workspaceImagePath(src
 					.replace(/&amp;/g, "&")
 					.replace(/&quot;/g, '"')
 					.replace(/&#39;/g, "'")
 					.replace(/&lt;/g, "<")
-					.replace(/&gt;/g, ">")
-					.replace(/^file:\/\/(localhost)?(?=\/)/i, "")
-					.replace(/^\.\//, "");
-				if (!path || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith("/api/") || path.startsWith("#")) {
-					return match;
-				}
-				return `${before}"${escapeHtml(WORKSPACE_FILE_ROUTE + encodeURIComponent(path) + scope)}"`;
+					.replace(/&gt;/g, ">"));
+				if (!path) return match;
+				return `${before}"${escapeHtml(workspaceFileURL(path, conversationID))}"`;
 			},
 		);
+	}
+
+	/**
+	 * Il nome con cui si riconosce la stessa immagine citata in due modi — il
+	 * percorso relativo in una risposta, quello assoluto in un'anteprima, la
+	 * copia che il server tiene di un file letto: il nome del file, senza la
+	 * strada che ci arriva.
+	 */
+	function imageKey(src) {
+		let value = String(src === null || src === undefined ? "" : src).replace(/&amp;/g, "&");
+		if (value.startsWith(WORKSPACE_FILE_ROUTE)) {
+			value = value.slice(WORKSPACE_FILE_ROUTE.length).split("&")[0];
+		}
+		try {
+			value = decodeURIComponent(value);
+		} catch (_) {
+			// Vedi workspaceImagePath.
+		}
+		value = value.split(/[?#]/)[0].replace(/\\/g, "/");
+		return value.slice(value.lastIndexOf("/") + 1).toLowerCase();
+	}
+
+	/** Gli indirizzi delle immagini che un testo Markdown cita, nell'ordine. */
+	function markdownImageSources(source) {
+		const found = [];
+		String(source === null || source === undefined ? "" : source).replace(
+			/!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))[^)]*\)|<img\b[^>]*?\bsrc=(["'])([^"']*)\3/gi,
+			(match, bracketed, bare, quote, attribute) => {
+				found.push(bracketed || bare || attribute || "");
+				return match;
+			},
+		);
+		return found.filter(Boolean);
+	}
+
+	/** Lo stesso testo senza le immagini che cita. */
+	function withoutMarkdownImages(source) {
+		return String(source === null || source === undefined ? "" : source)
+			.replace(/!\[[^\]]*\]\(\s*(?:<[^>]+>|[^)\s]+)[^)]*\)/g, "")
+			.replace(/[ \t]{2,}/g, " ")
+			.trim();
 	}
 
 	/** Il tipo di un evento, o stringa vuota: i payload parziali non sollevano. */
@@ -1087,10 +1160,15 @@
 			let seenImages = [];
 			const seenImageIDs = new Set();
 			let turnShowedImage = false;
+			// Quali immagini le risposte del turno hanno già messo sotto gli
+			// occhi di chi legge, per nome di file: la card della domanda non
+			// le ripete, e mostra invece quelle che nessuna risposta ha mostrato.
+			const shownImageKeys = new Set();
 			const flushImages = () => {
 				seenImages = [];
 				seenImageIDs.clear();
 				turnShowedImage = false;
+				shownImageKeys.clear();
 			};
 			let streamMetadata = [];
 			// La domanda ancora aperta è la card del questionario, con le sue
@@ -1114,6 +1192,11 @@
 				if (answer) {
 					rows.push(answer);
 					if (/<img\b/i.test(answer)) turnShowedImage = true;
+					answer.replace(/<img\b[^>]*?\bsrc=(["'])([^"']*)\1/gi, (match, quote, src) => {
+						const key = imageKey(src);
+						if (key) shownImageKeys.add(key);
+						return match;
+					});
 				}
 				agentRun = [];
 				if (streamMetadata.length) {
@@ -1181,7 +1264,14 @@
 			// Un turno che si chiude su una domanda strutturata: le immagini che
 			// l'agente ha letto e non ha mostrato da sé sono le varianti fra cui
 			// si sceglie, e le riceve la card della domanda, sopra le opzioni.
-			if (!turnShowedImage && seenImages.length && hasPendingQuestionnaire(view)) local.questionImages = seenImages.slice();
+			//
+			// Le varianti possono stare anche nelle anteprime delle opzioni, e
+			// lì non le ha lette nessuno: la card le prende da sé, e qui riceve
+			// soltanto l'elenco di quelle che il turno ha già mostrato.
+			if (hasPendingQuestionnaire(view)) {
+				local.shownImageKeys = Array.from(shownImageKeys);
+				if (!turnShowedImage && seenImages.length) local.questionImages = seenImages.slice();
+			}
 		}
 		for (const [anchor, blocks] of anchored) {
 			if (emitted.has(anchor)) continue;
@@ -1458,10 +1548,11 @@
 	 */
 	// The preview an option carries — the harness's own field for mockups and
 	// visual comparisons — is Markdown like an agent answer, but its images
-	// are not drawn here: the agent shows them in its own answer, right above
-	// the card, and the choice reads as text alone — variant A, variant B.
-	// What is left of the preview once the images are gone, if anything, is
-	// drawn beside the option.
+	// are not drawn beside the option: the choice reads as text alone —
+	// variant A, variant B — and the images go to the gallery above the
+	// options (questionGalleryImages), unless an answer of the turn already
+	// showed them. What is left of the preview once the images are gone, if
+	// anything, is drawn beside the option.
 	function renderInputOptionPreview(option, context) {
 		const source = textAt(option, "preview");
 		if (!source) return "";
@@ -1481,10 +1572,16 @@
 		const kind = multi ? "checkbox" : "radio";
 		// La preview sta accanto all'etichetta, non dentro: dentro un <label>
 		// un click sull'immagine sceglierebbe l'opzione invece di aprirla.
-		const options = choices.map((option) => `<label class="conv-input-option">
+		// Un'immagine citata nella descrizione va nella galleria come quelle
+		// dell'anteprima: qui la descrizione è una riga di testo, e la sintassi
+		// di un'immagine letta come testo non dice niente a nessuno.
+		const options = choices.map((option) => {
+			const description = withoutMarkdownImages(textAt(option, "description"));
+			return `<label class="conv-input-option">
 			<input type="${kind}" name="question-${index}" data-conversation-input-option value="${escapeHtml(textAt(option, "value"))}"${answer.options.includes(option.value) ? " checked" : ""}${disabled}>
-			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${textAt(option, "description") ? `<small>${escapeHtml(option.description)}</small>` : ""}</span>
-		</label>${renderInputOptionPreview(option, context)}`).join("");
+			<span><strong>${escapeHtml(textAt(option, "label"))}</strong>${description ? `<small>${escapeHtml(description)}</small>` : ""}</span>
+		</label>${renderInputOptionPreview(option, context)}`;
+		}).join("");
 		const field = (required) => question.secret
 			? `<input type="password" autocomplete="off" data-conversation-input-text value="${escapeHtml(answer.text)}"${disabled}${required ? " required" : ""}>`
 			: `<textarea data-conversation-input-text rows="2" placeholder="${escapeHtml(TEXT.inputOtherPlaceholder)}"${disabled}${required ? " required" : ""}>${escapeHtml(answer.text)}</textarea>`;
@@ -1519,17 +1616,64 @@
 	 * the one rule the adapter's protocol already imposes. The step shown is
 	 * the page's choice (`ui.inputSteps`), like the drafts.
 	 */
-	// Le immagini che il turno ha letto per questa domanda, sopra le opzioni:
-	// la didascalia è il nome del file, perché è l'unico nome che hanno. La
-	// galleria c'è solo quando l'agente non le ha mostrate da sé nella
-	// risposta: altrimenti la card è testo e basta.
+	// Le immagini fra cui si sceglie, sopra le opzioni. Vengono da due posti e
+	// la galleria le tiene insieme, una volta sola per file:
+	//
+	// - le anteprime (e le descrizioni) delle opzioni della domanda mostrata,
+	//   che è dove l'harness mette i mockup di una scelta: portano come
+	//   didascalia l'etichetta dell'opzione, perché è quella che si preme;
+	// - le immagini che l'agente ha letto nel turno, quando nessuna risposta
+	//   ne ha mostrata una: la didascalia è il nome del file, l'unico che hanno.
+	//
+	// Ciò che una risposta del turno ha già mostrato non si ripete: se le ha
+	// mostrate tutte, la card è testo e basta. Di un file letto la pagina usa
+	// la copia che il server ne tiene, anche quando lo cita un'anteprima: quel
+	// file può stare fuori dal workspace, dove la route dei file non arriva.
+	function questionGalleryImages(question, context) {
+		const read = arrayAt(context, "images").filter((image) => image && textAt(image, "url"));
+		const readByKey = new Map();
+		for (const image of read) {
+			const key = imageKey(textAt(image, "name") || textAt(image, "url"));
+			if (key && !readByKey.has(key)) readByKey.set(key, image);
+		}
+		const shown = new Set(arrayAt(context, "shownImageKeys"));
+		const used = new Set();
+		const gallery = [];
+		for (const option of arrayAt(question, "options")) {
+			const cited = markdownImageSources(`${textAt(option, "preview")}\n${textAt(option, "description")}`);
+			for (const src of cited) {
+				const key = imageKey(src);
+				if (!key || shown.has(key) || used.has(key)) continue;
+				const copy = readByKey.get(key);
+				const path = workspaceImagePath(src);
+				// Fuori dal workspace si accetta solo il web: un indirizzo che
+				// finisce in un href non può essere uno schema qualsiasi.
+				const url = copy
+					? textAt(copy, "url")
+					: path
+						? workspaceFileURL(path, context && context.conversationID)
+						: /^https?:\/\//i.test(src) ? src : "";
+				if (!url) continue;
+				used.add(key);
+				gallery.push({ url, name: key, caption: textAt(option, "label") });
+			}
+		}
+		for (const image of read) {
+			const key = imageKey(textAt(image, "name") || textAt(image, "url"));
+			if (key && used.has(key)) continue;
+			if (key) used.add(key);
+			gallery.push(image);
+		}
+		return gallery;
+	}
+
 	function renderQuestionImages(images) {
 		const items = (Array.isArray(images) ? images : []).filter((image) => image && textAt(image, "url"));
 		if (!items.length) return "";
 		return `<div class="conv-input-images">${items.map((image) => {
 			// Un nome che è solo l'impronta del contenuto non dice niente: niente didascalia.
 			const stem = textAt(image, "name").replace(/\.[a-z0-9]+$/i, "");
-			const caption = /^[0-9a-f]{20,}$/i.test(stem) ? "" : stem.replace(/[-_]+/g, " ");
+			const caption = textAt(image, "caption") || (/^[0-9a-f]{20,}$/i.test(stem) ? "" : stem.replace(/[-_]+/g, " "));
 			return `<figure class="conv-input-image"><a href="${escapeHtml(textAt(image, "url"))}" target="_blank" rel="noopener"><img src="${escapeHtml(textAt(image, "url"))}" alt="${escapeHtml(textAt(image, "name"))}" loading="lazy"></a>${caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ""}</figure>`;
 		}).join("")}</div>`;
 	}
@@ -1560,14 +1704,14 @@
 		// not four.
 		return `<form class="conv-input conv-questionnaire" data-conversation-input-form="${id}">
 				<div class="conv-input-head"><strong>${escapeHtml(input.title || TEXT.inputPending)}</strong>${tabs}${counter}</div>
-				<div class="conv-input-body">${renderQuestionImages(context && context.images)}<div class="conv-input-fields">${fields}</div></div>
+				<div class="conv-input-body">${renderQuestionImages(questionGalleryImages(questions[step], context))}<div class="conv-input-fields">${fields}</div></div>
 				<div class="conv-input-nav">${renderInputHint(questions[step])}${previous}${forward}</div>
 			</form>`;
 	}
 
 	function renderConversationInputs(view, ui) {
 		const session = objectAt(view, "session");
-		const context = { markedParse: markdownParser(ui), conversationID: textAt(objectAt(view, "conversation"), "id"), images: arrayAt(ui, "questionImages") };
+		const context = { markedParse: markdownParser(ui), conversationID: textAt(objectAt(view, "conversation"), "id"), images: arrayAt(ui, "questionImages"), shownImageKeys: arrayAt(ui, "shownImageKeys") };
 		return arrayAt(session, "pending_inputs").map((input) => {
 			if (!input || !input.id) return "";
 			const id = escapeHtml(input.id);
@@ -1994,6 +2138,7 @@
 		// questo disegno soltanto: azzerate qui, così un oggetto `ui` riusato
 		// dal chiamante non le trascina nel disegno successivo.
 		local.questionImages = [];
+		local.shownImageKeys = [];
 		const typed = typeof draft === "string" ? draft : "";
 		const blocks = [];
 		const workflow = objectAt(value, "workflow");

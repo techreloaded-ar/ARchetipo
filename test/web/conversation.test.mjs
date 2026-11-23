@@ -1014,6 +1014,43 @@ describe("renderConversation — la run dentro il flusso", () => {
 			assert.ok(!html.includes('src="/Users/'), "nessun percorso assoluto nudo deve restare nel markup");
 		});
 
+		// Su Windows il percorso assoluto che un agente scrive comincia con il
+		// disco, e `C:` letto come schema lasciava l'immagine a un indirizzo che
+		// nessun browser apre. Il parser inoltre codifica ciò che in un URL non
+		// può stare — la barra rovesciata, lo spazio, una lettera accentata — e
+		// il server cerca un file, non un URL: la codifica si toglie prima.
+		// Gli src qui sotto sono quelli che marked emette davvero per
+		// `![](C:\Users\…)`, `![](C:/Users/…)`, `![](file:///C:/…)`,
+		// `![](<docs/my mock/a b.png>)` e `![](docs/città.png)`.
+		it("un percorso di Windows e un percorso codificato dal parser passano dalla route come li ha scritti l'agente", () => {
+			const html = renderConversation(
+				withConversation({
+					events: [{ id: 1, seq: 1, at: "2026-08-21T10:00:01.000Z", kind: "text", text: "varianti" }],
+					last_id: 1,
+				}),
+				"",
+				{
+					markedParse: () =>
+						'<p><img src="C:%5CUsers%5Cx%5Crepo%5Cdocs%5Ca.png" alt="A"> ' +
+						'<img src="C:/Users/x/repo/docs/b.png" alt="B"> ' +
+						'<img src="file:///C:/Users/x/repo/docs/c.png" alt="C"> ' +
+						'<img src="docs/my%20mock/a%20b.png" alt="D"> ' +
+						'<img src="docs/citt%C3%A0.png" alt="E"> ' +
+						'<img src="docs/100%.png" alt="F"> ' +
+						'<img alt="remota" src="https://example.test/i%20j.png"></p>',
+				},
+			);
+			const routed = (path) => `src="/api/workspace/file?path=${encodeURIComponent(path)}&amp;conversation=conv-1"`;
+			assert.ok(html.includes(routed("C:\\Users\\x\\repo\\docs\\a.png")), `il percorso con barre rovesciate torna quello scritto dall'agente: ${html}`);
+			assert.ok(html.includes(routed("C:/Users/x/repo/docs/b.png")), `C:/ è un disco, non uno schema: ${html}`);
+			assert.ok(html.includes(routed("C:/Users/x/repo/docs/c.png")), `file:///C:/ perde lo schema e la barra davanti al disco: ${html}`);
+			assert.ok(html.includes(routed("docs/my mock/a b.png")), `lo spazio non resta codificato due volte: ${html}`);
+			assert.ok(html.includes(routed("docs/città.png")), `una lettera accentata non resta codificata due volte: ${html}`);
+			assert.ok(html.includes(routed("docs/100%.png")), `un % che non codifica niente è un carattere del nome: ${html}`);
+			assert.ok(html.includes('src="https://example.test/i%20j.png"'), "un URL del web resta com'è, codifica compresa");
+			assert.ok(!/src="C:/.test(html), `nessun percorso di Windows nudo deve restare nel markup: ${html}`);
+		});
+
 		// Le immagini che l'agente legge nel turno non hanno una riga propria
 		// nella storia: la persona ha chiesto di vederle solo nella risposta
 		// dell'agente o, quando deve scegliere, nella card della domanda. Niente
@@ -2230,6 +2267,66 @@ describe('runtime input questions', () => {
    assert.ok(!card.includes('<img'), `la card porta un'immagine: ${card}`);
    assert.ok(!card.includes('conv-input-images'), 'nessuna galleria quando la risposta mostra già le immagini');
    assert.ok(html.includes('elenco-a-interruttore.png&amp;conversation=conv-1" alt="A"') || html.includes('alt="A" src="/api/workspace/file?path='), `l'immagine sta nella risposta dell'agente: ${html}`);
+  });
+  // Il caso segnalato il 23 nov 2026: l'agente prepara i mockup senza
+  // leggerli come immagini (nessun allegato nel turno), non li mette in
+  // una risposta e li cita solo nelle anteprime delle opzioni. La card
+  // toglieva le immagini dalle anteprime contando sulla risposta, la
+  // galleria contava sugli allegati: le varianti si vedevano soltanto a
+  // scelta fatta, nella riga della domanda in storia. Ora le anteprime
+  // dell'opzione alimentano la galleria, con l'etichetta come didascalia.
+  describe('le varianti citate solo nelle anteprime delle opzioni', () => {
+   const parse = (md) => `<p>${md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')}</p>`;
+   const quiet = [turn[0], turn[5], turn[6]];
+   const previewed = { ...variants, options: [
+    { ...variants.options[0], preview: '![Variante A](docs/mockups/elenco-a.png)' },
+    { ...variants.options[1], preview: 'Una pagina a parte.\n\n![Variante B](C:\\Users\\x\\repo\\docs\\mockups\\elenco-b.png)' },
+   ] };
+   const routed = (path) => `/api/workspace/file?path=${encodeURIComponent(path)}&amp;conversation=conv-1`;
+   it('stanno nella galleria sopra le opzioni, con l’etichetta dell’opzione come didascalia', () => {
+    const card = questionnaireOf(renderConversation(openQuestion([previewed], quiet), '', { markedParse: parse }));
+    assert.ok(card.includes('conv-input-images'), `galleria assente: le varianti non si vedono prima di scegliere: ${card}`);
+    assert.ok(card.indexOf('conv-input-images') < card.indexOf('conv-input-options'), 'le immagini stanno sopra le opzioni');
+    assert.ok(card.includes(`<img src="${routed('docs/mockups/elenco-a.png')}"`), `manca la variante A: ${card}`);
+    assert.ok(card.includes(`<img src="${routed('C:\\Users\\x\\repo\\docs\\mockups\\elenco-b.png')}"`), `manca la variante B, citata con un percorso di Windows: ${card}`);
+    assert.ok(card.includes('<figcaption>Variante A — interruttore</figcaption>') && card.includes('<figcaption>Variante B — pagina dedicata</figcaption>'), `la didascalia è l'etichetta che si preme: ${card}`);
+    assert.ok(!card.slice(card.indexOf('conv-input-options')).includes('<img'), 'le opzioni restano testo');
+    assert.ok(card.includes('Una pagina a parte.'), 'il testo dell’anteprima resta accanto all’opzione');
+   });
+   it('non dipendono dal parser: senza, la galleria c’è lo stesso', () => {
+    const card = questionnaireOf(renderConversation(openQuestion([previewed], quiet), '', {}));
+    assert.ok(card.includes(`<img src="${routed('docs/mockups/elenco-a.png')}"`), `galleria assente senza parser: ${card}`);
+   });
+   it('un’immagine che la risposta ha già mostrato non si ripete, le altre sì', () => {
+    const partly = [turn[0], { id: 40, seq: 40, at: '2026-11-03T14:28:40.000Z', kind: 'text', message_id: 'm1', text: 'Ecco la prima:\n\n![A](/Users/x/repo/docs/mockups/elenco-a.png)' }, turn[6]];
+    const html = renderConversation(openQuestion([{ ...previewed, options: [previewed.options[0], { ...previewed.options[1], preview: '![B](docs/mockups/elenco-b.png)' }] }], partly), '', { markedParse: parse });
+    const card = questionnaireOf(html);
+    assert.ok(!card.includes('elenco-a.png'), `la variante già mostrata nella risposta è ripetuta nella card: ${card}`);
+    assert.ok(card.includes(`<img src="${routed('docs/mockups/elenco-b.png')}"`), `la variante che nessuna risposta ha mostrato manca: ${card}`);
+   });
+   it('di un file letto usa la copia del server, e non lo mostra due volte', () => {
+    const alsoRead = { ...variants, options: [{ ...variants.options[0], preview: '![A](/Users/x/.archetipo/tmp/mockups/1/elenco-a-interruttore.png)' }, variants.options[1]] };
+    const card = questionnaireOf(renderConversation(openQuestion([alsoRead], turn), '', { markedParse: parse }));
+    assert.equal((card.match(/elenco-a-interruttore\.png"/g) || []).length, 3, `la variante A è disegnata una volta sola (href, src, alt): ${card}`);
+    assert.ok(card.includes('<img src="/api/workspace/conversations/conv-1/attachments/elenco-a-interruttore.png"'), 'usa la copia che il server tiene del file letto');
+    assert.ok(card.includes('<figcaption>Variante A — interruttore</figcaption>'), 'con l’etichetta dell’opzione come didascalia');
+    assert.ok(card.includes('attachments/elenco-b-pagina-dedicata.png"'), 'l’immagine letta e non citata resta in galleria');
+   });
+   it('mostra le immagini della sola domanda in vista, e toglie la sintassi dalla descrizione', () => {
+    const second = { id: '1', header: 'Colore', prompt: 'Quale tinta?', allow_text: true, options: [{ value: 'Blu', label: 'Blu', description: 'Freddo ![blu](docs/mockups/blu.png)' }, { value: 'Rosso', label: 'Rosso' }] };
+    const first = questionnaireOf(renderConversation(openQuestion([previewed, second], quiet), '', {}));
+    assert.ok(first.includes('elenco-a.png') && !first.includes('blu.png'), `la prima domanda mostra solo le sue varianti: ${first}`);
+    const next = questionnaireOf(renderConversation(openQuestion([previewed, second], quiet), '', { inputSteps: { 'input-1': 1 } }));
+    assert.ok(next.includes(`<img src="${routed('docs/mockups/blu.png')}"`) && !next.includes('elenco-a.png'), `la seconda domanda mostra solo le sue: ${next}`);
+    assert.ok(next.includes('<small>Freddo</small>'), `la descrizione resta testo, senza la sintassi dell'immagine: ${next}`);
+   });
+   it('un indirizzo che non è un file né una pagina web non entra nella galleria', () => {
+    const hostile = { ...variants, options: [{ ...variants.options[0], preview: '![x](javascript:alert(1))\n\n![y](data:image/png;base64,QUJD)\n\n![z](https://example.test/z.png)' }, variants.options[1]] };
+    const card = questionnaireOf(renderConversation(openQuestion([hostile], quiet), '', {}));
+    assert.ok(!/(href|src)="(javascript|data):/i.test(card), `schema non ammesso finito in un href o in un src: ${card}`);
+    assert.equal((card.match(/<figure /g) || []).length, 1, `in galleria entra solo l'immagine del web: ${card}`);
+    assert.ok(card.includes('<img src="https://example.test/z.png"'), 'un’immagine del web resta ammessa');
+   });
   });
  });
  // La domanda strutturata è una cosa detta alla persona (evento `question`,
