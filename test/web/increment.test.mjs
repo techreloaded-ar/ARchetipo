@@ -58,7 +58,9 @@ test("il renderer non contiene gli stati o i comandi del processo", () => {
 test("il contesto è compatto e i dettagli sono chiusi inizialmente", () => {
  const view = {...base, increment:{id:"compact",title:"Incremento",status_label:"Fase fornita",activity_label:"Agente al lavoro",phases:[{label:"Comprensione",state:"done"},{label:"Sviluppo",state:"current",stories:[{code:"US-001",title:"Base",state:"todo",state_label:"Da fare"},{code:"US-002",title:"Filtro",state:"current",state_label:"In lavorazione"}],stories_focus:"Ora: Filtro"},{label:"Preparazione",state:"todo"}],revisions:[revision],stories:[{code:"US-001",title:"Base",body:"Requisiti della base",status_label:"Da fare"},{code:"US-002",title:"Filtro",body:"Criteri completi",status_label:"Stato fornito",active:true}],result:{summary:"Risultato molto lungo"}}};
  const compact = renderConversation(view,"bozza",{});
- assert.match(compact,/Fase fornita/);
+ // Lo stato della versione non sta più nella testata: lo mostra il pannello.
+ assert.doesNotMatch(compact,/Fase fornita/);
+ assert.match(renderConversation(view,"bozza",{incrementSections:{"panel-compact":true}}),/<span class="conv-increment-phase">Fase fornita<\/span>/);
  assert.match(compact,/Specifica e decisioni/);
  assert.match(compact,/class="conv-phases has-stories"/);
  assert.match(compact,/aria-current="step">Sviluppo<ol class="conv-phase-stories"/);
@@ -105,26 +107,33 @@ test("approvazione e richiesta di modifiche stanno nella riga dei prossimi passi
  assert.match(unavailable,/data-increment-step-prompt="Vorrei cambiare: ">[^<]*<span aria-hidden="true">✎<\/span>Vorrei cambiare…<\/button>/);
 });
 
-// Il lavoro non ha una fascia sua sotto la testata: titolo, stato e il comando
-// che apre specifica e decisioni stanno nella testata della conversazione, e
-// quella riga risparmiata resta alla storia. Fasi e comandi viaggiano in un
-// gruppo solo, così se la riga non basta vanno a capo insieme.
-test("il lavoro sta nella testata della conversazione, non in una fascia sua", () => {
+// Il lavoro non ha una fascia sua sotto la testata: nella testata della
+// conversazione è un comando solo, quello che apre specifica e decisioni, e
+// quella riga risparmiata resta alla storia. Il titolo lo dice l'elenco delle
+// conversazioni e lo stato della versione il pannello che il comando apre:
+// nella testata non si ripetono, e il titolo resta nel title del comando.
+test("nella testata il lavoro è il solo comando che apre specifica e decisioni", () => {
  const increment={id:'inc-9',title:'Esportazione <clienti>',status_label:'Etichetta fornita',phases:[{label:'Fase fornita',state:'current'}],revisions:[revision]};
  const html=renderConversation({...base,increment},'',{});
  const head=html.slice(html.indexOf('<div class="conv-head">'),html.indexOf('class="conv-timeline'));
- assert.match(head,/<section class="conv-increment" data-increment-id="inc-9"/,'la fascia del lavoro è uscita dalla testata');
- assert.match(head,/<strong title="Esportazione &lt;clienti&gt;">Esportazione &lt;clienti&gt;<\/strong>/,'il titolo accorciato deve restare leggibile per intero nel suo title');
- assert.match(head,/Etichetta fornita/);
- assert.match(head,/data-increment-panel="open"/);
+ assert.match(head,/<section class="conv-increment" data-increment-id="inc-9"/,'il comando del lavoro è uscito dalla testata');
+ assert.match(head,/<button type="button" class="ghost-btn" data-increment-panel="open"[^>]* title="Esportazione &lt;clienti&gt;">Specifica e decisioni<\/button>/,'il comando porta il titolo del lavoro nel suo title');
+ assert.doesNotMatch(head,/>Esportazione &lt;clienti&gt;</,'il titolo è tornato nella testata: lo dice già l’elenco delle conversazioni');
+ assert.doesNotMatch(head,/Etichetta fornita/,'lo stato è tornato nella testata: sta nel pannello di specifica e decisioni');
+ assert.match(head,/Fase fornita/,'le fasi restano nella testata');
  assert.equal((html.match(/<section class="conv-increment" /g)||[]).length,1,'il lavoro è disegnato due volte');
- const rest=head.slice(head.indexOf('<div class="conv-head-rest">'));
- assert.ok(head.indexOf('<section class="conv-increment"')<head.indexOf('<div class="conv-head-rest">'),'il lavoro precede fasi e comandi');
- assert.match(rest,/Fase fornita/,'le fasi stanno nel gruppo che va a capo intero');
- assert.match(rest,/data-conversation-preview/,'i comandi stanno nel gruppo che va a capo intero');
+ const opened=renderConversation({...base,increment},'',{incrementSections:{'panel-inc-9':true}});
+ const panel=opened.slice(opened.indexOf('<aside id="increment-details"'));
+ assert.match(panel,/<h2>Esportazione &lt;clienti&gt;<\/h2><span class="conv-increment-phase">Etichetta fornita<\/span>/,'titolo e stato si leggono nel pannello');
+ assert.match(renderConversation({...base,increment:{...increment,candidate_label:'Versione fornita'}},'',{incrementSections:{'panel-inc-9':true}}),/<span class="conv-increment-phase">Versione fornita<\/span>/,'lo stato della versione, quando il server lo dà, è quello mostrato');
  const css=readFileSync(new URL('../../cli/internal/web/assets/app.css',import.meta.url),'utf8');
  assert.match(css,/\.conv-discussion:has\(> \.conv-head > \.conv-increment\)/,'con un lavoro il pannello deve poter scorrere: la regola deve seguirlo nella testata');
  assert.doesNotMatch(css,/\.conv-discussion:has\(> \.conv-increment\)/,'resta una regola per la fascia che non esiste più');
+ assert.doesNotMatch(css,/\.conv-increment>header/,'resta una regola per l’intestazione che la fascia non ha più');
+ // Le fasi si accorciano sulla larghezza della testata, non della finestra:
+ // con elenco e pannello aperti la testata è stretta anche su uno schermo largo.
+ assert.match(css,/\.conv-head\s*\{\s*container:\s*conv-head\s*\/\s*inline-size/,'la testata non è più il contenitore su cui si misurano le fasi');
+ assert.match(css,/@container conv-head \(max-width:\s*\d+px\)\s*\{[^}]*\.conv-phase:not\(\.is-current\)\s*\{[^}]*font-size:\s*0/,'sotto la soglia le fasi non correnti devono ridursi al pallino');
  const plain=renderConversation(base,'',{});
  assert.doesNotMatch(plain,/class="conv-increment"/,'una conversazione senza lavoro non ne disegna la fascia');
 });

@@ -146,7 +146,6 @@
 		// rileggere a ogni messaggio, e la larghezza che occupa la toglie al campo.
 		writeHint: "invio: invia · maiusc+invio: a capo",
 		readOnly: "sola lettura",
-		awaitHint: "In attesa della tua risposta. Rispondi alla domanda o alla richiesta di autorizzazione per continuare.",
 		send: "Invia",
 		waitForTurnHint: "questo provider non supporta steering: attendi la fine del turn o interrompilo",
 		inputPending: "Input richiesto",
@@ -1423,7 +1422,12 @@
 	// lascia scegliere — con che modello si parla. Sta sulla riga del comando
 	// che la usa e non in un riquadro sopra: si legge con chi si parla
 	// nell'istante in cui si decide di parlargli.
-	function renderComposer(active, draft, ui, offered, awaiting, agentRow) {
+	//
+	// Che l'agente aspetti una risposta il compositore non lo dice: lo dicono
+	// la domanda o la richiesta di consenso disegnate subito sopra, e
+	// l'indicatore della barra superiore. Una terza frase sotto al campo
+	// costava una riga alla conversazione per ripetere le altre due.
+	function renderComposer(active, draft, ui, offered, agentRow) {
 		const writable = typeof ui.writable === "boolean" ? ui.writable : active && offered !== false;
 		const disabled = ui.busy || !writable ? " disabled" : "";
 		const placeholder = writable
@@ -1448,9 +1452,6 @@
 		const hintHtml = hint
 			? `<span class="conv-composer-hint">${escapeHtml(hint)}</span>`
 			: "";
-		const await_ = awaiting
-			? `<p class="conv-composer-await">${escapeHtml(TEXT.awaitHint)}</p>`
-			: "";
 		// Il comando per allegare c'è solo quando il server lo ha offerto; le
 		// anteprime dei file scelti stanno sopra al campo, dove si legge quello
 		// che partirà. Qualsiasi file: le immagini le vede l'agente, gli altri
@@ -1474,7 +1475,7 @@
 					<button type="submit" class="primary-btn"${disabled}>${escapeHtml(TEXT.send)}</button>
 				</div>
 			</div>
-			${hintHtml || await_ ? `<div class="conv-composer-foot">${hintHtml}${await_}</div>` : ""}
+			${hintHtml}
 		</form>`;
 	}
 
@@ -1755,11 +1756,11 @@
 	// does not decide what belongs there and never builds it: it is handed the
 	// markup or the empty string, exactly like every other fact it draws.
 	//
-	// `work` is the product work the conversation belongs to — its title, its
-	// state and the command that opens specification and decisions — handed
-	// over the same way. It sits in this band, beside the state of the
-	// conversation, and not in a band of its own under it: one row of
-	// furniture instead of two, and the height goes to the conversation.
+	// `work` is the product work the conversation belongs to — the command
+	// that opens its specification and decisions — handed over the same way.
+	// It sits in this band, beside the state of the conversation, and not in
+	// a band of its own under it: one row of furniture instead of two, and
+	// the height goes to the conversation.
 	function renderHead(view, badge, variant, controls, work) {
 		const dir = objectAt(view, "conversation")
 			? textAt(objectAt(view, "conversation"), "working_dir")
@@ -1791,13 +1792,11 @@
 		return `<div class="conv-head">
 			<span class="conv-badge ${variant}">${escapeHtml(badge)}</span>
 			${typeof work === "string" ? work : ""}
-			<div class="conv-head-rest">
-				${dirHtml}
-				<span class="conv-head-spacer"></span>
-				${providerHtml}
-				${locationHtml}
-				${typeof controls === "string" ? controls : ""}
-			</div>
+			${dirHtml}
+			<span class="conv-head-spacer"></span>
+			${providerHtml}
+			${locationHtml}
+			${typeof controls === "string" ? controls : ""}
 		</div>`;
 	}
 
@@ -2103,8 +2102,16 @@
 		const panelOpen = opened["panel-" + textAt(increment, "id")] === true;
 		const stories = Array.isArray(increment.stories) ? increment.stories : (latest ? arrayAt(latest, "stories") : []);
         const quickActions = arrayAt(increment, "next_steps").length ? "" : arrayAt(increment, "quick_actions").map(action => '<button type="button" class="ghost-btn" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
+		// Lo stato della versione — in lavorazione, da verificare, verificata —
+		// si legge nel pannello che questo comando apre, accanto al titolo.
+		const stateLabel = textAt(increment,"candidate_label") || textAt(increment,"status_label");
 		if (!panel) {
-			return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><header><strong title="'+escapeHtml(textAt(increment,"title"))+'">'+escapeHtml(textAt(increment,"title"))+'</strong><span class="conv-increment-phase">'+escapeHtml(textAt(increment,"candidate_label") || textAt(increment,"status_label"))+'</span><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'">Specifica e decisioni</button></header><div class="conv-work-actions">'+quickActions+'</div></section>';
+			// Nella testata il lavoro è un comando solo: quello che apre
+			// specifica e decisioni. Il titolo lo dice già l'elenco delle
+			// conversazioni, sulla riga selezionata, e a che punto è il lavoro
+			// lo dicono le fasi accanto: ripeterli qui costava alla testata la
+			// larghezza che la tiene su una riga. Il titolo resta nel title.
+			return '<section class="conv-increment" data-increment-id="'+escapeHtml(textAt(increment,"id"))+'" aria-label="Lavoro di prodotto"><button type="button" class="ghost-btn" data-increment-panel="open" aria-controls="increment-details" aria-expanded="'+panelOpen+'" title="'+escapeHtml(textAt(increment,"title"))+'">Specifica e decisioni</button><div class="conv-work-actions">'+quickActions+'</div></section>';
 		}
 		if (!panelOpen) return "";
 		const renderChange = (change, feedback) => {
@@ -2128,7 +2135,7 @@
         if (pr) contents += link(textAt(pr, "url"), "Pull request #" + pr.number + " ↗");
 		const controls = arrayAt(increment, "actions").map(action => '<button type="button" class="approval-btn allow" data-increment-action="' + escapeHtml(textAt(action, "id")) + '"' + disabled + '>' + escapeHtml(textAt(action, "label")) + '</button>').join("");
 		const remove = increment.delete_label ? '<button type="button" class="ghost-btn" data-increment-delete' + (ui.busy ? ' disabled' : '') + '>' + escapeHtml(increment.delete_label) + '</button>' : '';
-		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Specifica e decisioni"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2><button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi specifica e decisioni">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<button type="button" class="ghost-btn" data-increment-export>Esporta dossier</button><div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
+		return '<aside id="increment-details" class="conv-increment-panel" tabindex="-1" aria-label="Specifica e decisioni"><header><h2>' + escapeHtml(textAt(increment, "title")) + '</h2>' + (stateLabel ? '<span class="conv-increment-phase">' + escapeHtml(stateLabel) + '</span>' : "") + '<button type="button" class="ghost-btn" data-increment-panel="close" aria-label="Chiudi specifica e decisioni">Chiudi</button></header><div class="conv-increment-body" tabindex="0">' + section("request", "Richiesta iniziale", '<p class="conv-increment-request">' + escapeHtml(textAt(increment, "request")) + '</p>') + contents + '<button type="button" class="ghost-btn" data-increment-export>Esporta dossier</button><div class="conv-proposal-controls">' + controls + remove + '</div><p class="conv-increment-note">' + escapeHtml(textAt(increment, 'note')) + '</p></div></aside>';
 	}
 
 	function renderConversation(view, draft, ui) {
@@ -2179,7 +2186,7 @@
 
 		if (!conversation) {
 			if (local.activitySelection) {
-				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}${renderComposer(false, typed, Object.assign({}, local, { writable: offered }), offered, false, renderConversationModelChoice(value, local, false))}</section>`;
+				return `<section class="conv-panel conv-empty-panel" aria-label="${escapeHtml(TEXT.panel)}">${renderHead(value, TEXT.badgeNoneOpen, "conv-off")}${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}${renderComposer(false, typed, Object.assign({}, local, { writable: offered }), offered, renderConversationModelChoice(value, local, false))}</section>`;
 			}
 			const startWork = objectAt(objectAt(local, "activities"), "start_work");
 			if (startWork && !local.openingSpecCode) {
@@ -2188,7 +2195,7 @@
 					<div class="conv-work-welcome"><span class="conv-work-eyebrow">Dal problema al prodotto</span><h1>Quale problema vuoi risolvere?</h1><p>Racconta cosa vuoi migliorare. Costruiamo una soluzione, la proviamo e impariamo insieme.</p></div>
 					${local.refusal ? `<p role="alert">${escapeHtml(local.refusal)}</p>` : ""}
 					${!enabled ? `<p role="status">${escapeHtml(textAt(startWork, "unavailable_reason"))}</p>` : ""}
-					${renderComposer(false, typed, Object.assign({}, local, {writable: enabled, activitySelection: {placeholder: startWork.placeholder}}), enabled, false, renderConversationModelChoice(value, local, false))}
+					${renderComposer(false, typed, Object.assign({}, local, {writable: enabled, activitySelection: {placeholder: startWork.placeholder}}), enabled, renderConversationModelChoice(value, local, false))}
      ${renderWorkspacePreviewEntry(objectAt(objectAt(local,"activities"),"workspace_preview"))}
 					<details class="conv-work-other"><summary>Conversazione e altre attività</summary>${renderActivities(objectAt(local, "activities"), local)}</details>
 				</section>`;
@@ -2278,7 +2285,6 @@
 				typed,
 				composerUI,
 				offered,
-				anyAwaiting(value),
 				renderConversationModelChoice(value, local, active),
 			),
 		);

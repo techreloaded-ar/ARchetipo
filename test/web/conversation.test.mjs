@@ -1343,9 +1343,12 @@ describe("renderConversation — la run dentro il flusso", () => {
 			!/<textarea[^>]*\sdisabled/.test(html),
 			"un'attesa non deve togliere la parola a chi scrive",
 		);
+		// L'attesa la dice la carta della decisione, sopra al campo: sotto al
+		// campo non c'è una frase che la ripeta.
+		assert.ok(html.includes("run-approval-title"), "manca la carta che chiede la decisione");
 		assert.ok(
-			html.includes("conv-composer-await"),
-			"manca il suggerimento sull'attesa sotto il compositore",
+			!html.includes("conv-composer-await") && !html.includes("In attesa della tua risposta."),
+			"sotto il compositore è tornata la frase che ripete l'attesa",
 		);
 	});
 
@@ -2060,15 +2063,17 @@ describe("renderConversation — la decisione della conversazione", () => {
 		}
 	});
 
-	it("il compositore dichiara l'attesa anche senza run", () => {
+	it("l'attesa la dice la carta della decisione, non una frase sotto il compositore", () => {
 		const html = renderConversation(
 			withConversation({ events: RUN_EVENTS, last_id: 3, approvals: [APPROVAL] }),
 			"",
 		);
+		assert.ok(html.includes("conv-approvals"), "manca la carta che chiede la decisione");
 		assert.ok(
-			html.includes("conv-composer-await"),
-			"il compositore non dice che si sta aspettando una risposta",
+			!html.includes("conv-composer-await") && !html.includes("In attesa della tua risposta."),
+			"sotto il compositore è tornata la frase che ripete l'attesa",
 		);
+		assert.ok(!/<textarea[^>]*\sdisabled/.test(html), "un'attesa non deve togliere la parola a chi scrive");
 	});
 
 	it("la decisione presa scompare quando non è più pendente", () => {

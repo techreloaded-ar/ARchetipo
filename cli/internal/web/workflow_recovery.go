@@ -43,6 +43,14 @@ func (ws *workspaceSession) attachWorkflow(record conversationlog.Record, view *
 		if record.IncrementID != "" && run.Status == workflowrun.Running && (record.CurrentTurn == nil || record.CurrentTurn.State != execution.TurnFailed) {
 			view.Workflow = nil
 		}
+		// Blocked work that explains nothing, while the session itself is
+		// waiting for an answer or a consent, would say a second time what
+		// the question or the approval card already asks. The notice stays
+		// when it carries the reason of the block, and when nothing else on
+		// the page asks for the person.
+		if run.Status == workflowrun.Blocked && run.LastError == "" && (record.Work == execution.SessionWaitingInput || record.Work == execution.SessionWaitingApproval) {
+			view.Workflow = nil
+		}
 		return
 	}
 	if record.CurrentTurn != nil && record.CurrentTurn.State == execution.TurnFailed {

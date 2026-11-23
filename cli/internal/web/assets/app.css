@@ -21,9 +21,6 @@
 .conv-composer-surface [hidden]{display:none!important}
 @media (max-width:900px){.conv-composer-surface>.conv-composer-input{flex-basis:100%}.conv-composer-surface>.conv-composer-row{flex-basis:100%}}
 .conv-increment{flex:0 0 auto;min-width:0;margin:8px 0;padding:8px 16px;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);background:var(--surface)}
-.conv-increment>header{display:flex;align-items:center;gap:12px;font-size:14px;min-width:0}
-.conv-increment>header>strong{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.conv-increment-phase{font-size:12px;color:var(--accent);font-weight:600}
 .conv-phases{display:flex;align-items:center;gap:4px;min-width:0;margin:0;padding:0;list-style:none;font-size:12px;color:var(--text-dim);white-space:nowrap;overflow:hidden}
 .conv-phase{display:flex;align-items:center;gap:4px}
 .conv-phase+.conv-phase{padding-left:16px;background:linear-gradient(var(--border-strong),var(--border-strong)) no-repeat 0 50%/10px 1.5px}
@@ -60,7 +57,6 @@
 .conv-increment-panel .conv-proposal-controls{flex-wrap:wrap;margin-top:14px}
 .conv-increment-result{padding:12px 0;border-top:1px solid var(--border)}
 .conv-increment-result li,.conv-increment-feedback{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
-@media(max-width:640px){.conv-increment>header{flex-wrap:wrap;gap:4px 8px}.conv-increment>header>strong{flex-basis:60%}.conv-increment>header>button{padding:4px 0;font-size:12px}.conv-increment-phase{font-size:12px}}
 
 /* Increment details and pending decisions can exceed a short conversation
    frame. Keep a readable timeline and allow the whole frame to scroll, so
@@ -6542,24 +6538,6 @@ body.no-workspace .topbar {
 	padding-top: var(--space-4);
 }
 
-/* Said under the composer while a run is stopped: writing to the agent is
-   still allowed, but it is not what makes the run start again. */
-.conv-composer-await {
-	margin: 0;
-	font-size: 12px;
-	font-weight: 600;
-	color: var(--attention);
-}
-
-/* Il promemoria del campo e l'attesa di una risposta stanno sulla stessa riga,
-   sotto al campo: due frasi brevi non valgono due righe di conversazione. */
-.conv-composer-foot {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 2px var(--space-3);
-	min-width: 0;
-}
 
 /* ---- Workspace shell (US-057) ------------------------------------------
    One column, not two. The primary column takes the whole shell — what is
@@ -8281,31 +8259,31 @@ body.no-workspace .topbar {
 .story-linked-work a { font-size:13px; margin-left:auto; }
 .conv-work-home { background:var(--bg); }
 .conv-work-welcome h1 { font-weight:500; letter-spacing:-.02em; }
-/* Il lavoro non ha una fascia sua: titolo, stato e il comando che apre
-   specifica e decisioni stanno nella testata della conversazione, accanto al
-   suo stato. È il titolo a cedere spazio — si accorcia prima che la riga vada
-   a capo — e l'altezza che la fascia spendeva resta alla conversazione. */
+/* Il lavoro non ha una fascia sua: nella testata della conversazione è un
+   comando solo, quello che apre specifica e decisioni, accanto allo stato
+   della conversazione. Il titolo lo dice l'elenco delle conversazioni e lo
+   stato della versione il pannello che il comando apre: l'altezza che la
+   fascia spendeva, e la larghezza che titolo e stato occupavano nella riga,
+   restano alla conversazione. */
 .conv-increment { border:0; border-radius:0; background:transparent; margin:0; padding:0; }
-.conv-head > .conv-increment { display:flex; align-items:center; flex-wrap:wrap; gap:4px var(--space-2); flex:100 1 380px; min-width:min(260px,100%); }
-/* Fasi e comandi viaggiano insieme. Senza un lavoro il gruppo non esiste per
-   l'impaginazione; con un lavoro, se la riga non basta, va a capo tutto intero
-   — fasi a sinistra, comandi a destra — e il titolo si tiene la prima riga,
-   invece di restare schiacciato fra comandi spezzati su due righe. */
-.conv-head-rest { display:contents; }
-.conv-head > .conv-increment ~ .conv-head-rest { display:flex; align-items:center; flex-wrap:wrap; gap:4px var(--space-2); flex:1 1 auto; min-width:0; }
+.conv-head > .conv-increment { display:flex; align-items:center; flex-wrap:wrap; gap:4px var(--space-2); flex:0 1 auto; min-width:0; }
 .conv-head:has(> .conv-increment) { row-gap:4px; }
-/* Sul telefono una riga sola non c'è: stato, fasi e comandi scorrono come
-   sempre, e il lavoro chiude la testata su una riga sua, col titolo che si
-   accorcia accanto a stato e comando. */
-@media (max-width:640px) {
-	.conv-head > .conv-increment { order:1; flex:1 1 100%; min-width:0; }
-	.conv-head > .conv-increment ~ .conv-head-rest { display:contents; }
-	.conv-increment>header { flex-wrap:nowrap; }
+/* Le fasi cedono spazio prima che i comandi vadano a capo, e lo cedono sulla
+   larghezza della testata, non della finestra: con l'elenco delle
+   conversazioni e il pannello di lavoro aperti la testata è stretta anche su
+   uno schermo largo. Sotto la soglia restano il nome della fase corrente e i
+   pallini delle altre — la stessa forma che hanno sugli schermi stretti. */
+.conv-head { container:conv-head / inline-size; }
+@container conv-head (max-width:1080px) {
+	.conv-phase:not(.is-current) { font-size:0; gap:0; }
+	.conv-phase+.conv-phase { padding-left:16px; }
+	.conv-phase+.conv-phase>.conv-phase-stories { left:16px; }
+	.conv-phase-story:not(.is-current) { font-size:0; gap:0; }
+	.conv-phase-stories-focus { display:none; }
 }
-.conv-increment>header { flex:1 1 auto; gap:var(--space-2); font-size:13px; }
-.conv-increment>header>strong { flex:0 1 auto; }
-.conv-increment-phase { font-weight:500; color:var(--text-muted); white-space:nowrap; }
-.conv-increment>header>button { flex:none; min-height:28px; height:auto; padding:2px 10px; font-size:13px; white-space:nowrap; }
+.conv-increment-phase { font-size:12px; font-weight:500; color:var(--text-muted); white-space:nowrap; }
+.conv-increment>button { flex:none; min-height:28px; height:auto; padding:2px 10px; font-size:13px; white-space:nowrap; }
+.conv-increment-panel>header>h2 { flex:1 1 auto; min-width:0; }
 .conv-head .conv-work-actions { margin-top:0; }
 .conv-work-actions:empty { display:none; }
 @media(max-width:700px) { .story-view-actions { flex-wrap:wrap; } .spec-pane-body>.modal-header { flex-wrap:wrap; } }

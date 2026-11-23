@@ -194,3 +194,47 @@ func TestIncrementOmitsGenericWorkflowNoticeButKeepsInterruptions(t *testing.T) 
 		})
 	}
 }
+
+// A blocked run with nothing to explain, in a session that is itself waiting
+// for the person, repeats what the question or the approval card already
+// asks: the notice is omitted. It stays when it carries the reason of the
+// block, and when no pending request asks for the person in its place.
+func TestBlockedWorkflowNoticeYieldsToThePendingRequest(t *testing.T) {
+	const blocked = "È necessario un intervento per proseguire"
+	for _, tc := range []struct {
+		name      string
+		work      execution.SessionWorkState
+		lastError string
+		want      string
+		detail    string
+	}{
+		{name: "waiting for an answer", work: execution.SessionWaitingInput},
+		{name: "waiting for a consent", work: execution.SessionWaitingApproval},
+		{name: "nothing pending", work: execution.SessionIdle, want: blocked},
+		{name: "blocked with a reason while waiting", work: execution.SessionWaitingInput, lastError: "connessione persa", want: blocked, detail: "connessione persa"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			store := workflowrun.New(root)
+			run, err := store.Start(context.Background(), workflowrun.Start{Skill: "archetipo-example", Invocation: "/archetipo-example", Scope: "ALL", ConversationID: "conv-test", State: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.Update(context.Background(), run.ID, workflowrun.Checkpoint{Revision: run.Revision, Status: workflowrun.Blocked, State: json.RawMessage(`{}`), LastError: tc.lastError}); err != nil {
+				t.Fatal(err)
+			}
+			record := conversationlog.Record{ID: "conv-test", WorkingDir: root, IncrementID: "inc-test", Work: tc.work, CurrentTurn: &execution.SessionTurn{ID: "turn-test", State: execution.TurnActive}}
+			var view conversationView
+			(&workspaceSession{}).attachWorkflow(record, &view)
+			if tc.want == "" {
+				if view.Workflow != nil {
+					t.Fatalf("the notice repeats the pending request: %+v", view.Workflow)
+				}
+				return
+			}
+			if view.Workflow == nil || view.Workflow.Label != tc.want || view.Workflow.Detail != tc.detail {
+				t.Fatalf("want notice %q with detail %q, got %+v", tc.want, tc.detail, view.Workflow)
+			}
+		})
+	}
+}

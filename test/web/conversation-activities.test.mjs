@@ -31,10 +31,13 @@ describe("attività della conversazione", () => {
 			execution_id: "exec-draft", in_this_thread: true, label: "Proponi una spec",
 			status: "RUNNING", progress_label: "In attesa della tua risposta", awaiting_response: true,
 		}] }, "La risposta", {});
-		assert.ok(visible(html).includes("In attesa della tua risposta"));
+		// Nella lettura ordinaria l'attesa non ha una frase sua sotto il campo:
+		// la dice l'ultima cosa che l'agente ha scritto, e l'indicatore in alto.
+		assert.ok(!visible(html).includes("In attesa della tua risposta"));
 		assert.ok(!visible(html).includes("Proponi una spec"));
 		const technical = renderConversation({ ...view, runs: [{ execution_id: "exec-draft", in_this_thread: true, label: "Proponi una spec", progress_label: "In attesa della tua risposta", awaiting_response: true }] }, "", { technicalAll: true });
 		assert.ok(visible(technical).includes("Proponi una spec"));
+		assert.ok(visible(technical).includes("In attesa della tua risposta"), "nel dettaglio tecnico il progresso è quello fornito dal server");
 		assert.match(technical, /class="conv-run is-waiting"/);
 		assert.ok(!visible(html).includes("RUNNING"));
 		assert.doesNotMatch(html, /class="conv-run is-waiting"/);
@@ -56,7 +59,8 @@ describe("attività della conversazione", () => {
 			}],
 		}] } }, "", {});
 		assert.ok(visible(html).includes("Quali ciclisti vuoi aiutare?"));
-		assert.ok(visible(html).includes("In attesa della tua risposta"));
+		// L'attesa è la card della domanda: nessuna frase sotto il campo la ripete.
+		assert.ok(!visible(html).includes("In attesa della tua risposta"));
 		assert.match(html, /data-conversation-input-form="question"/);
 		assert.doesNotMatch(html, /class="conv-working"/);
 	});
