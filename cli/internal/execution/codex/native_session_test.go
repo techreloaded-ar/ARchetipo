@@ -590,7 +590,8 @@ func TestNativeCodexSessionCarriesTheAttachmentsDirectoryToItsClient(t *testing.
 
 // The same rule the claude adapter applies: a structured question of the
 // agent's own thread that nothing readable preceded since the person's last
-// message is sent back once with the reason and never enters the history; the
+// message is sent back with the reason — twice per exchange at most, the
+// second time naming the mistake — and never enters the history; the
 // one asked after writing is the one the person reads. A child thread's
 // question is never sent back.
 func TestNativeCodexSendsBackAStructuredQuestionWithoutAVisibleMessageOnce(t *testing.T) {
@@ -635,8 +636,11 @@ func TestNativeCodexSendsBackAStructuredQuestionWithoutAVisibleMessageOnce(t *te
 	}
 	fake.request(83, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"when","question":"Quando?"}]}`)
 	waitForFakeError(t, fake, "83", execution.QuestionPrefaceMessage)
-	// Sent back once per exchange and no more.
+	// Asked again with nothing written, it is sent back a second time with
+	// the words that name that mistake; twice per exchange and no more.
 	fake.request(84, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"when","question":"Quando?"}]}`)
+	waitForFakeError(t, fake, "84", execution.QuestionPrefaceInsistence)
+	fake.request(85, "item/tool/requestUserInput", `{"threadId":"thread-1","turnId":"turn-1","questions":[{"id":"when","question":"Quando?"}]}`)
 	waitForCodexSession(t, provider, created.Session, func(s execution.SessionSnapshot) bool { return len(s.PendingInputs) == 2 })
 }
 

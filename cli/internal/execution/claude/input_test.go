@@ -3,6 +3,8 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
@@ -126,26 +128,53 @@ func TestStructuredQuestionWithoutAVisibleMessageIsSentBackOnce(t *testing.T) {
 	}
 }
 
-// Sent back once per exchange and no more: an agent that asks again without
-// writing anything is let through, because a question refused forever would
-// leave the person with no question at all.
-func TestStructuredQuestionIsNotSentBackTwiceInOneExchange(t *testing.T) {
+// One refusal was not enough: the agent reasoned again, wrote nothing and
+// asked the same question, which went through bare. So the second bare
+// attempt of an exchange is sent back too, with the words that name that
+// mistake. Twice and no more: an agent that asks a third time without writing
+// anything is let through, because a question refused forever would leave the
+// person with no question at all.
+func TestStructuredQuestionIsSentBackAtMostTwiceInOneExchange(t *testing.T) {
 	fake := newFakeClaude()
 	client, _ := openConversation(t, fake)
+	const bareQuestion = `{"type":"control_request","request_id":"%s","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Per chi?","header":"Livia","options":[{"label":"Clienti"},{"label":"Colleghi"}]}]}}}`
 	fake.emit(discoveryInputFrame)
 	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 1 })
-	fake.emit(`{"type":"control_request","request_id":"discovery-2","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Per chi?","header":"Livia","options":[{"label":"Clienti"},{"label":"Colleghi"}]}]}}}`)
-	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
-	if len(decisionsWritten(fake)) != 1 {
-		t.Fatalf("decisions = %#v", decisionsWritten(fake))
+	fake.emit(fmt.Sprintf(bareQuestion, "discovery-2"))
+	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 2 })
+	if second := decisionsWritten(fake)[1]; second["request_id"] != "discovery-2" || second["behavior"] != "deny" || second["message"] != execution.QuestionPrefaceInsistence {
+		t.Fatalf("second refusal = %#v", second)
 	}
-	// The person's answer opens a new exchange: the next bare question is sent back again.
-	if err := client.respondInput(context.Background(), "discovery-2", map[string][]string{"0": {"Clienti"}}); err != nil {
+	if len(client.pendingInputs()) != 0 {
+		t.Fatal("a question sent back twice is pending")
+	}
+	fake.emit(fmt.Sprintf(bareQuestion, "discovery-3"))
+	waitFor(t, func() bool { return len(client.pendingInputs()) == 1 })
+	if len(decisionsWritten(fake)) != 2 {
+		t.Fatalf("the third attempt was answered by this layer: %#v", decisionsWritten(fake))
+	}
+	// The person's answer opens a new exchange: the next bare question is
+	// sent back again, starting from the first refusal.
+	if err := client.respondInput(context.Background(), "discovery-3", map[string][]string{"0": {"Clienti"}}); err != nil {
 		t.Fatal(err)
 	}
-	fake.emit(`{"type":"control_request","request_id":"discovery-3","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Quando?","header":"Ugo","options":[{"label":"Ora"},{"label":"Dopo"}]}]}}}`)
-	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 3 })
-	if last := decisionsWritten(fake)[2]; last["request_id"] != "discovery-3" || last["behavior"] != "deny" {
-		t.Fatalf("third decision = %#v", last)
+	fake.emit(fmt.Sprintf(bareQuestion, "discovery-4"))
+	waitFor(t, func() bool { return len(decisionsWritten(fake)) == 4 })
+	if last := decisionsWritten(fake)[3]; last["request_id"] != "discovery-4" || last["behavior"] != "deny" || last["message"] != execution.QuestionPrefaceMessage {
+		t.Fatalf("refusal of the new exchange = %#v", last)
+	}
+}
+
+// The refusal asks for the message and must not cost the option descriptions:
+// the wording that asked to name only the choices was answered by a question
+// with no message before it and «Proposta di Andrea» as the whole description.
+func TestQuestionPrefaceRefusalsAskForTheMessageAndKeepOptionDescriptions(t *testing.T) {
+	for _, refusal := range []string{execution.QuestionPrefaceMessage, execution.QuestionPrefaceInsistence} {
+		if !strings.Contains(refusal, "description") || strings.Contains(refusal, "only the choices") {
+			t.Fatalf("refusal invites bare options: %q", refusal)
+		}
+	}
+	if _, refuse := execution.QuestionPrefaceRefusal(2); refuse {
+		t.Fatal("a third bare attempt must be let through")
 	}
 }

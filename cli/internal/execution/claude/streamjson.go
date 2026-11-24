@@ -163,13 +163,13 @@ type streamSession struct {
 	lastAssistantText string
 	// saidSinceUser reports whether the agent has written anything the
 	// person can read since their last message: a text block, never a
-	// thinking block. questionRefused remembers that one structured question
-	// of this exchange was already sent back for lack of such a message, so a
-	// second attempt is let through rather than refused forever.
-	saidSinceUser   bool
-	questionRefused bool
-	nextControl     int
-	pending         map[string]chan controlOutcome
+	// thinking block. questionRefusals counts the structured questions of
+	// this exchange already sent back for lack of such a message, so the
+	// refusals stay bounded rather than going on forever.
+	saidSinceUser    bool
+	questionRefusals int
+	nextControl      int
+	pending          map[string]chan controlOutcome
 	// tools maps a tool_use_id to the name of the tool that opened it, so the
 	// result frame can name the tool it belongs to. It is cleared at the end of
 	// every turn: a map that lived for the whole session would grow with the

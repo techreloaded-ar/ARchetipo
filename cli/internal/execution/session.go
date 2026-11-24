@@ -238,11 +238,36 @@ type InputOption struct {
 // QuestionPrefaceMessage is what the agent reads when a structured question
 // is sent back because nothing visible preceded it since the person's last
 // message. The guidance already asks for the preface; the refusal is what
-// makes it happen when the agent keeps the explanation in its reasoning —
-// which the person never sees — and the proposals in option descriptions,
-// which nobody reads as a proposal. Both local adapters refuse with it, once
-// per exchange, so a second attempt goes through.
-const QuestionPrefaceMessage = "Not yet: the person has read nothing from you since their last message — what you write while reasoning is never shown to them. First send an ordinary message where each perspective says what it proposes and why (with the mockup image lines where variants have one), then ask this question again, naming only the choices. Option descriptions are not where a proposal is read."
+// makes it happen when the agent keeps the explanation in its reasoning,
+// which the person never sees. It asks for the message and leaves the option
+// descriptions alone: an earlier wording that asked to name only the choices
+// was obeyed in its second half alone — the agent asked again without a
+// message and with the descriptions emptied down to «Proposta di Andrea», so
+// the person read no reason anywhere.
+const QuestionPrefaceMessage = "Not yet: the person has read nothing from you since their last message — what you write while reasoning is never shown to them. Reply first with ordinary text, outside your reasoning, where each perspective says what it proposes and why (with the mockup image lines where variants have one), then ask this question again. Keep a description on every option: what choosing it implies and, when it is a personality's proposal, that personality's reason in one line."
+
+// QuestionPrefaceInsistence is the second and last refusal of one exchange,
+// for the agent that answered the first by reasoning again and calling the
+// tool with no text. It names that exact mistake, because the agent believes
+// it has complied: its reasoning says «I summarized the proposals».
+const QuestionPrefaceInsistence = "Still nothing the person can read: your last reply held reasoning and this tool call, and no text. Reasoning is not a message. Write the proposals now as the visible text of your reply — a sentence or two per perspective, what it proposes and why — and call this tool again only after that text, with the option descriptions intact."
+
+// QuestionPrefaceRefusal decides whether a structured question that nothing
+// readable preceded is sent back, given how many times this exchange already
+// sent one back, and with which words. Two refusals and no more: a question
+// refused forever would leave the person with no question at all, so a
+// stubborn agent is slowed down and never locked out. Both local adapters ask
+// it, so the two providers refuse the same number of times with the same text.
+func QuestionPrefaceRefusal(earlierRefusals int) (string, bool) {
+	switch earlierRefusals {
+	case 0:
+		return QuestionPrefaceMessage, true
+	case 1:
+		return QuestionPrefaceInsistence, true
+	default:
+		return "", false
+	}
+}
 
 // QuestionText renders structured questions as the Markdown a person reads
 // in the history: the speaking header, the prompt, then one line per option

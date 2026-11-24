@@ -13,21 +13,26 @@ import (
 )
 
 // refuseUnprefacedQuestion sends a structured question back when the agent
-// has said nothing the person can read since their last message, once per
-// exchange: the second attempt goes through whatever preceded it, so a
-// stubborn agent is slowed down and never locked out. It reports whether the
-// question was refused.
+// has said nothing the person can read since their last message. How many
+// times one exchange sends a question back, and with which words, is
+// execution.QuestionPrefaceRefusal's: a stubborn agent is slowed down and
+// never locked out. It reports whether the question was refused.
 func (s *streamSession) refuseUnprefacedQuestion(id string) bool {
 	s.mu.Lock()
-	if s.saidSinceUser || s.questionRefused {
+	if s.saidSinceUser {
 		s.mu.Unlock()
 		return false
 	}
-	s.questionRefused = true
+	message, refuse := execution.QuestionPrefaceRefusal(s.questionRefusals)
+	if !refuse {
+		s.mu.Unlock()
+		return false
+	}
+	s.questionRefusals++
 	s.mu.Unlock()
 	// A write that fails means the process is gone, and a process that is
 	// gone has no question left to refuse.
-	_ = s.sendDecision(id, map[string]any{"behavior": "deny", "message": execution.QuestionPrefaceMessage})
+	_ = s.sendDecision(id, map[string]any{"behavior": "deny", "message": message})
 	return true
 }
 

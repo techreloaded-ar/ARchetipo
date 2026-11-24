@@ -89,18 +89,18 @@ type appServer struct {
 	lastFull    string
 	// saidSinceUser reports whether the agent's own thread has written
 	// anything the person can read since their last message — a message
-	// delta or a completed message, never reasoning. questionRefused
-	// remembers that one structured question of this exchange was already
-	// sent back for lack of such a message, so a second attempt goes through.
-	saidSinceUser   bool
-	questionRefused bool
-	turnStatus      string
-	turnError       string
-	turnCoreID      string
-	submissionID    string
-	appendEvent     func(execution.RunEvent)
-	serverRequest   func(rpcMessage)
-	notification    func(string, json.RawMessage)
+	// delta or a completed message, never reasoning. questionRefusals
+	// counts the structured questions of this exchange already sent back
+	// for lack of such a message, so the refusals stay bounded.
+	saidSinceUser    bool
+	questionRefusals int
+	turnStatus       string
+	turnError        string
+	turnCoreID       string
+	submissionID     string
+	appendEvent      func(execution.RunEvent)
+	serverRequest    func(rpcMessage)
+	notification     func(string, json.RawMessage)
 
 	// instructions are the messages a caller composed rather than the person,
 	// each with the text the history shows in its place, kept until the
@@ -423,7 +423,7 @@ func (a *appServer) startTurnWithPermissions(ctx context.Context, prompt, model,
 	a.agent.Reset()
 	a.messageText = make(map[string]string)
 	a.lastFull = ""
-	a.saidSinceUser, a.questionRefused = false, false
+	a.saidSinceUser, a.questionRefusals = false, 0
 	a.mu.Unlock()
 	result, err := a.call(ctx, methodTurnStart, params)
 	if err != nil {
@@ -627,20 +627,25 @@ func (a *appServer) FinalMessage() string {
 // last word no longer counts as a preface to the next question.
 func (a *appServer) noteUserSpoke() {
 	a.mu.Lock()
-	a.saidSinceUser, a.questionRefused = false, false
+	a.saidSinceUser, a.questionRefusals = false, 0
 	a.mu.Unlock()
 }
 
 // refuseUnprefacedQuestion reports whether a structured question must be sent
 // back because the agent has said nothing readable since the person's last
-// message — once per exchange, so a stubborn agent is slowed down and never
-// locked out. See execution.QuestionPrefaceMessage.
-func (a *appServer) refuseUnprefacedQuestion() bool {
+// message, and with which words. How many times one exchange sends a question
+// back is execution.QuestionPrefaceRefusal's, so a stubborn agent is slowed
+// down and never locked out.
+func (a *appServer) refuseUnprefacedQuestion() (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.saidSinceUser || a.questionRefused {
-		return false
+	if a.saidSinceUser {
+		return "", false
 	}
-	a.questionRefused = true
-	return true
+	message, refuse := execution.QuestionPrefaceRefusal(a.questionRefusals)
+	if !refuse {
+		return "", false
+	}
+	a.questionRefusals++
+	return message, true
 }

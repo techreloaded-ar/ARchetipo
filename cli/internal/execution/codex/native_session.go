@@ -669,17 +669,20 @@ func (s *nativeSession) registerRequest(request rpcMessage) []execution.InputQue
 		s.approvals[id] = execution.PendingApproval{ID: id, ToolName: request.Method, Title: title, Args: request.Params, Options: approvalOptions(request), CreatedAt: now}
 	case "item/tool/requestUserInput":
 		// A question of the agent's own thread that nothing readable preceded
-		// is sent back with the reason, once per exchange, and never enters
-		// the history: the one asked after writing is the one the person
-		// reads. A child thread's question is let through — its words are the
-		// worker's, folded elsewhere, and this layer cannot judge them.
+		// is sent back with the reason, a bounded number of times per
+		// exchange, and never enters the history: the one asked after writing
+		// is the one the person reads. A child thread's question is let
+		// through — its words are the worker's, folded elsewhere, and this
+		// layer cannot judge them.
 		scope := codexRequestScopeOf(request)
 		own := scope.ThreadID == "" || scope.ThreadID == s.metadata.Native.ID
-		if own && s.client != nil && s.client.refuseUnprefacedQuestion() {
-			delete(s.requests, id)
-			payload, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "error": map[string]any{"code": -32000, "message": execution.QuestionPrefaceMessage}})
-			_ = s.client.process.Send(payload)
-			return nil
+		if own && s.client != nil {
+			if refusalMessage, refuse := s.client.refuseUnprefacedQuestion(); refuse {
+				delete(s.requests, id)
+				payload, _ := json.Marshal(map[string]any{"id": json.RawMessage(request.ID), "error": map[string]any{"code": -32000, "message": refusalMessage}})
+				_ = s.client.process.Send(payload)
+				return nil
+			}
 		}
 		questions := inputQuestions(request.Params)
 		s.inputs[id] = execution.PendingInput{ID: id, Title: "Rispondi all’agente", Payload: request.Params, Questions: questions, CreatedAt: now}

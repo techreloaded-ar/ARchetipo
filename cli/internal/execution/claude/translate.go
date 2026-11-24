@@ -279,7 +279,7 @@ func (s *streamSession) projectUser(f frame, raw json.RawMessage) {
 func (s *streamSession) appendUserMessage(text string, attachments []execution.Attachment, raw json.RawMessage) {
 	s.mu.Lock()
 	s.saidSinceUser = false
-	s.questionRefused = false
+	s.questionRefusals = 0
 	s.mu.Unlock()
 	s.appendWith(execution.RunEvent{Kind: localrun.KindUserMessage, Text: text, Attachments: execution.AttachmentReferences(attachments), Raw: raw})
 }
