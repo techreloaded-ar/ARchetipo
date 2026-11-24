@@ -50,6 +50,10 @@ the first specification, or include `story_codes` in a later `propose` payload
 to version changed links. Codes must exist in the parent backlog; never clone
 its stories into an internal delivery board. Do not change story status merely
 because this work is ready or its PR merged. No formal implementation plan is required.
+The backlog trace of this work is the CLI's: `increment publish` records one spec
+in REVIEW carrying the approved specification, and `increment refresh` closes it
+when the PR is merged. Never write, move or close that spec yourself, and never
+add one with `spec add` to stand in for it.
 The CLI versions the specification and marks the exact revision approved only
 after the person's decision. Keep the specification consistent with decisions; never rewrite
 requirements to conceal a failed implementation or test. Preserve unknowns.

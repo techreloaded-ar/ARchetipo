@@ -16,6 +16,10 @@ import (
 // agent that is working on it.
 const blockedCodeRunningExecution = "running_execution"
 
+// blockedCodeClosedByIncrement refuses DONE for a spec an increment published:
+// that card is closed by the merge of the increment's PR, never by hand.
+const blockedCodeClosedByIncrement = "closed_by_increment"
+
 // transitionPreview answers "what happens if I move this spec there?" before
 // anything is written. The server owns the answer because only it can see the
 // branch, the worktree, the runs, the review and the plan; the browser only
@@ -28,6 +32,10 @@ type transitionPreview struct {
 	BlockedCode       string   `json:"blocked_code"`
 	Impacts           []string `json:"impacts"`
 	RecommendedAction string   `json:"recommended_action"`
+
+	// BlockedMessage is the server's own sentence for a refusal that depends on
+	// the workspace state rather than on a fixed rule the viewer can word.
+	BlockedMessage string `json:"blocked_message,omitempty"`
 }
 
 // boardColumnIDForStatus is the inverse of boardLayout: the column a spec in
@@ -141,12 +149,32 @@ func (s *Server) handleTransitionPreview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// A spec an increment published is closed by the merge of its PR: DONE is
+	// refused before anything is asked, and no other move is routed through the
+	// classic approval or request-changes flows, which do not apply to it.
+	_, closedByIncrement, err := s.incrementAwaitingMergeBehindSpec(ws, code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if closedByIncrement && to == boardColumnIDForStatus(domain.StatusDone) {
+		writeJSON(w, http.StatusOK, transitionPreview{
+			From:           from,
+			To:             to,
+			Allowed:        false,
+			BlockedCode:    blockedCodeClosedByIncrement,
+			BlockedMessage: closedByIncrementReason(code),
+			Impacts:        []string{},
+		})
+		return
+	}
+
 	// The review is read only when leaving REVIEW, which is the only place it
 	// can say anything: it decides both the flow to route through and whether
 	// anything would be orphaned by not routing through it.
 	var review domain.Review
 	recommended := ""
-	if from == "review" {
+	if from == "review" && !closedByIncrement {
 		if rs, ok := ws.conn.(connector.ReviewStore); ok {
 			if r, err := rs.ReadReview(ctx, code); err == nil {
 				review = r

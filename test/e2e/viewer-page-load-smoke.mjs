@@ -182,6 +182,7 @@ async function main() {
     await exercisePage(browser, view.url, runDir);
     await exerciseDocumentation(browser, view.url, runDir);
     await exerciseDocumentationRace(browser, view.url);
+    await exerciseConversationDeepLink(browser, view.url);
     await exerciseProviderOnboarding(browser, view.url, runDir);
     await exerciseActivityComposer(browser, view.url);
     await exercisePermissionComposer(browser, view.url, runDir);
@@ -1196,6 +1197,29 @@ async function exerciseDocumentation(browser, url, runDir) {
 }
 
 // Hold a real response to prove a late read cannot navigate over a newer choice.
+// A story an increment leaves in the backlog links its conversation as
+// `?conversation=<id>`. Arriving from that address must open that thread in the
+// conversation view and consume the parameter, so a reload is an ordinary one.
+async function exerciseConversationDeepLink(browser, url) {
+  const page = await browser.newPage();
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Page.navigate", { url: `${url}/?conversation=${encodeURIComponent(CONVERSATION_ID)}` });
+  await page.waitFor(
+    `document.getElementById("workspace-shell")?.dataset.view === "conversation"
+      && document.querySelector('#workspace-conversations .thread.is-current')?.getAttribute("data-conversation-id") === ${JSON.stringify(CONVERSATION_ID)}
+      && !new URLSearchParams(location.search).has("conversation")`,
+    15000,
+    "la conversazione aperta dal link diretto",
+    () => page.evaluate(
+      `JSON.stringify({ view: document.getElementById("workspace-shell")?.dataset.view ?? null,
+        current: document.querySelector('#workspace-conversations .thread.is-current')?.getAttribute("data-conversation-id") ?? null,
+        search: location.search })`,
+    ),
+  );
+  await page.close();
+}
+
 async function exerciseDocumentationRace(browser, url) {
   const page = await browser.newPage();
   await page.send('Runtime.enable');

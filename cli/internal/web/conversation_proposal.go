@@ -182,6 +182,14 @@ func (s *Server) resolveSpecProposal(ctx context.Context, ws *workspaceSession, 
 		view.UnlockedBy = specStageRemedy
 		return
 	}
+	// The same refusal startSpecAction gives, in the same sentence.
+	if _, owned, ownerErr := s.incrementAwaitingMergeBehindSpec(ws, view.SpecCode); ownerErr != nil {
+		view.UnavailableReason = ownerErr.Error()
+		return
+	} else if owned {
+		view.UnavailableReason = closedByIncrementReason(view.SpecCode)
+		return
+	}
 	spec, err := ws.conn.ReadSpecDetail(ctx, view.SpecCode)
 	if err != nil {
 		// A spec the backlog does not hold arrives here, and it is a reason like

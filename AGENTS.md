@@ -38,6 +38,20 @@ remove their data.
   are secondary, fully usable product views.
 - A work can link original business stories. Never clone them into an internal
   delivery backlog or mark them DONE merely because code passes checks or a PR merges.
+- Publication leaves one backlog spec per increment, and only publication does:
+  once the person approved the candidate and the PR is open, `increment publish`
+  records a spec in REVIEW whose body is the approved specification verbatim,
+  followed by the increment id, the PR and — with the `file` connector only,
+  where the conversation is reachable — a `?conversation=<id>` link the viewer
+  opens. The record names it in `backlog_spec_code`. It is the increment's trace,
+  not a delivery story: it is filed under the first linked story's epic, or under
+  the `Incrementi` epic, and the linked original stories are never touched.
+- That spec has no classic review. While its PR is open the viewer offers no
+  `review` action and no Revisione panel for it, and refuses approval, request
+  changes, integration and a card move to DONE; the person reviews in the
+  increment's conversation. `increment refresh` moves it to DONE when the PR is
+  merged, before declaring the increment delivered. `archetipo spec move` stays
+  the manual override. A spec the person removed is not recreated.
 - Version the Markdown specification and linked requirement snapshots. Preserve
   prior results, observations, decisions and the original request.
 - Product development requires the person's approval of the current specification
@@ -317,7 +331,7 @@ product work is covered by the browser smokes below and the increment Go suite.
 
 ### Standalone smoke tests
 
-- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome with only the agent and GitHub simulated. It starts from an original enterprise story, develops and revises a specification, recovers the same native session after process death while preserving a checkpoint, tests preview and reload, requires business approval for a single PR, reconciles later developer commits and verifies bidirectional story/work/PR links and dossier export. Reports and desktop/mobile screenshots remain ignored.
+- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome with only the agent and GitHub simulated. It starts from an original enterprise story, develops and revises a specification, recovers the same native session after process death while preserving a checkpoint, tests preview and reload, requires business approval for a single PR, reconciles later developer commits and verifies bidirectional story/work/PR links and dossier export. It also verifies the increment's own backlog spec: recorded in REVIEW by publication with the approved specification, the conversation link and the PR, offered no classic review, refused a manual approval, and moved to DONE by the merge while the original story stays untouched. Reports and desktop/mobile screenshots remain ignored.
   It also reads an increment report from its own worktree as inert text and
   verifies that reopening an already open thread preserves its native identity.
 
@@ -355,6 +369,10 @@ product work is covered by the browser smokes below and the increment Go suite.
 - `npm run test:wiki-smoke`: builds the CLI, inspects a sandbox codebase, initializes the Wiki, creates ordinary and decision/reference pages, then verifies validation, unsafe-path errors, root-source affected matching, ADR search, cataloging, selective approval, tracked-versus-context freshness, explicit reconfirmation, distinct unreadable-evidence findings, and index regeneration. This credential-free smoke runs unchanged in the Ubuntu/macOS/Windows CI test matrix after Node setup.
 
 When adding or modifying E2E tests, prefer explicit fixtures with a complete `.archetipo/config.yaml`, use `env_required` for external credentials, keep generated reports out of commits, and update this section whenever runner semantics change.
+
+The page-load smoke also loads the page from a `?conversation=<id>` address and
+verifies that the linked thread opens in the conversation view and the parameter
+is consumed from the address.
 
 The page-load smoke also follows a live conversation across three 500-event
 pages without clicking the history control. It verifies that old messages remain,

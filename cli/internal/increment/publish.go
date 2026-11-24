@@ -71,6 +71,12 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 		if err = s.save(r); err != nil {
 			return r, err
 		}
+		// The approved work now has a PR: leave its trace in the backlog, waiting
+		// in REVIEW. A failure keeps the increment in publication, where the same
+		// approval can be retried without opening a second PR or a second spec.
+		if err = s.ensureBacklogSpec(ctx, &r); err != nil {
+			return r, err
+		}
 		r.Status = Proposed
 		return r, s.save(r)
 	})
@@ -94,6 +100,15 @@ func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
 		}
 		r.PR = pr
 		if pr.State == "MERGED" {
+			// The merge is what closes the increment's backlog spec: it is moved
+			// to DONE before the increment is declared delivered, so a failure
+			// here is retried by the next refresh instead of being forgotten.
+			if err = s.closeBacklogSpec(ctx, r); err != nil {
+				if saveErr := s.save(r); saveErr != nil {
+					return r, saveErr
+				}
+				return r, err
+			}
 			r.IntegrationSHA = pr.HeadSHA
 			// Integration is a developer decision. Preserve the business
 			// candidate SHA without approving the developers' later commits.

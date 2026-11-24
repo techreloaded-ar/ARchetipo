@@ -290,6 +290,17 @@ async function main(){
    const traceDetail=await traceResponse.json();
    assert.equal(traceResponse.status,200,JSON.stringify(traceDetail));
    assert.ok(traceDetail.works.some(work=>work.pr_url?.includes("/pull/128")),JSON.stringify(traceDetail.works));
+   // La pubblicazione lascia nel backlog la traccia dell'incremento: una sola
+   // storia in REVIEW, con la specifica approvata e la strada per tornare al
+   // lavoro. La revisione classica non la riguarda e nessuno la chiude a mano.
+   const recorded=await cliJSON(["increment","show",inc.id]);
+   assert.ok(recorded.backlog_spec_code,"publication left no backlog spec");
+   const ownSpec=await (await fetch(view.url+"/api/spec/"+recorded.backlog_spec_code)).json();
+   assert.equal(ownSpec.spec.status,"REVIEW");assert.equal(ownSpec.classic_review,false);assert.deepEqual(ownSpec.actions,[]);
+   assert.ok(ownSpec.spec.body.includes("?conversation="+recorded.conversation_id)&&ownSpec.spec.body.includes("/pull/128")&&ownSpec.spec.body.includes(inc.id),ownSpec.spec.body);
+   assert.ok(ownSpec.works.some(work=>work.id===inc.id&&work.note),JSON.stringify(ownSpec.works));
+   const approvalByHand=await fetch(view.url+"/api/spec/"+recorded.backlog_spec_code+"/approve",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+   assert.equal(approvalByHand.status,409,"increment spec approved by hand");
    await page.evaluate(`document.querySelector('[data-increment-panel="open"]').click()`);
    await page.waitFor(`!!document.querySelector('[data-linked-story="US-001"]')`,timeout,"work links original story");
    await page.evaluate(`document.querySelector('[data-linked-story="US-001"]').click()`);
@@ -306,8 +317,12 @@ async function main(){
    gh.pr.state="MERGED";gh.pr.headRefOid="developer-revision";await fs.writeFile(ghState,JSON.stringify(gh));
    published=await cliJSON(["increment","refresh",inc.id]);
    assert.equal(published.status,"DELIVERED");assert.equal(published.approved_sha,approved);assert.equal(published.integration_sha,"developer-revision");
-   assert.equal((await cliJSON(["spec","list"],undefined,sandbox)).items.length,1);
-   ok("Storia originale ↔ lavoro ↔ PR; dossier esportabile; recupero dopo crash; approvazione umana e un’unica PR; merge dei developer senza falsare il backlog.");
+   // Il merge chiude la storia dell'incremento e solo quella: la storia
+   // originale resta dov'era, perché il codice integrato non la dichiara fatta.
+   assert.equal((await cliJSON(["spec","list"],undefined,sandbox)).items.length,2);
+   assert.equal((await cliJSON(["spec","show",recorded.backlog_spec_code],undefined,sandbox)).spec.status,"DONE");
+   assert.equal((await cliJSON(["spec","show","US-001"],undefined,sandbox)).spec.status,"TODO");
+   ok("Storia originale ↔ lavoro ↔ PR; dossier esportabile; recupero dopo crash; approvazione umana e un’unica PR; storia dell’incremento in REVIEW alla pubblicazione e DONE al merge, senza toccare la storia originale.");
   }
   const reportDir=path.join(inc.workdir,"docs/test-results",inc.id);
   await fs.mkdir(reportDir,{recursive:true});

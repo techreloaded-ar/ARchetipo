@@ -49,22 +49,12 @@ type fieldError struct {
 // so a gap in the numbering never re-issues a code that was already used.
 // Codes that are not US-<number> are ignored rather than treated as an error:
 // a backlog may legitimately carry epic or task identifiers.
+//
+// The rule lives in the domain because the increment's backlog trace assigns
+// its code the same way: two places allocating differently would hand out the
+// same code twice.
 func nextSpecCode(specs []domain.Spec) string {
-	highest := 0
-	for _, spec := range specs {
-		suffix, ok := strings.CutPrefix(strings.TrimSpace(spec.Code), "US-")
-		if !ok {
-			continue
-		}
-		n, err := strconv.Atoi(suffix)
-		if err != nil || n <= 0 {
-			continue
-		}
-		if n > highest {
-			highest = n
-		}
-	}
-	return fmt.Sprintf("US-%03d", highest+1)
+	return domain.NextSpecCode(specs)
 }
 
 // normalizeSpecTitle reduces a title to its comparable identity: trimmed,

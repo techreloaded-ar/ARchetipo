@@ -12,6 +12,7 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/metrics"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/template"
@@ -213,12 +214,20 @@ type specWorkView struct {
 	StatusLabel    string `json:"status_label"`
 	ConversationID string `json:"conversation_id"`
 	PRURL          string `json:"pr_url,omitempty"`
+	// Note is the server's sentence about what this work means for the story,
+	// present only when the story is the backlog spec the work itself published.
+	Note string `json:"note,omitempty"`
 }
 type specDetailView struct {
-	Works    []specWorkView `json:"works"`
-	Spec     domain.Spec    `json:"spec"`
-	PlanBody string         `json:"plan_body"`
-	Tasks    []domain.Task  `json:"tasks"`
+	Works []specWorkView `json:"works"`
+	// ClassicReview says whether the Revisione panel of the classic backlog path
+	// applies to this spec now. A spec an increment published is under review in
+	// the increment's conversation and is closed by the merge of its PR, so the
+	// panel — and its verdict — does not apply to it.
+	ClassicReview bool          `json:"classic_review"`
+	Spec          domain.Spec   `json:"spec"`
+	PlanBody      string        `json:"plan_body"`
+	Tasks         []domain.Task `json:"tasks"`
 	// Template and Actions answer "what can I do with this spec now?" with the
 	// process rules, so the browser never has to know them. Actions is always a
 	// list: a status with no admissible action is an empty one, never a null.
@@ -270,29 +279,51 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// closedByIncrement is true while the increment that published this spec has
+	// not been merged: the classic steps of the backlog path then do not apply.
+	closedByIncrement := false
 	for _, record := range records {
+		published := record.BacklogSpecCode == spec.Code
+		linked := false
 		for _, link := range record.LinkedStories {
 			if link.Code == spec.Code {
-				work := specWorkView{ID: record.ID, Title: inlineMarkdownMarkers.Replace(record.Title), StatusLabel: tpl.IncrementStatusLabel(record.Status), ConversationID: record.ConversationID}
-				if _, readErr := ws.conversationStore().GetMetadata(ctx, record.ConversationID); readErr != nil {
-					work.ConversationID = ""
-				}
-				if record.PR != nil {
-					work.PRURL = record.PR.URL
-				}
-				works = append(works, work)
+				linked = true
 				break
 			}
 		}
+		if !published && !linked {
+			continue
+		}
+		work := specWorkView{ID: record.ID, Title: inlineMarkdownMarkers.Replace(record.Title), StatusLabel: tpl.IncrementStatusLabel(record.Status), ConversationID: record.ConversationID}
+		if _, readErr := ws.conversationStore().GetMetadata(ctx, record.ConversationID); readErr != nil {
+			work.ConversationID = ""
+		}
+		if record.PR != nil {
+			work.PRURL = record.PR.URL
+		}
+		if published {
+			work.Note = "Questa storia è la traccia di questo incremento: la revisione avviene nella sua conversazione e la storia si chiude da sola quando la PR viene integrata."
+			if record.Status == increment.Delivered {
+				work.Note = "Questa storia è la traccia di questo incremento, chiusa dall’integrazione della sua PR."
+			} else {
+				closedByIncrement = true
+			}
+		}
+		works = append(works, work)
+	}
+	actions := tpl.ActionsFor(spec.Status)
+	if closedByIncrement {
+		actions = nil
 	}
 	writeJSON(w, http.StatusOK, specDetailView{
-		Works:     works,
-		Spec:      spec,
-		PlanBody:  planBody,
-		Tasks:     tasks,
-		Template:  newTemplateView(tpl),
-		Actions:   s.decorateActions(ctx, ws, code, tpl.ActionsFor(spec.Status), len(tasks)),
-		Execution: latest,
+		Works:         works,
+		ClassicReview: spec.Status == domain.StatusReview && !closedByIncrement,
+		Spec:          spec,
+		PlanBody:      planBody,
+		Tasks:         tasks,
+		Template:      newTemplateView(tpl),
+		Actions:       s.decorateActions(ctx, ws, code, actions, len(tasks)),
+		Execution:     latest,
 	})
 }
 
@@ -496,6 +527,14 @@ func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("spec %s has a running execution (%s)", req.Code, id),
 			"wait for the run to finish, or cancel it, before moving the card", nil))
 		return
+	}
+	// The card of an increment's spec reaches DONE with the merge of its PR and
+	// in no other way from the viewer. Every other move stays project management.
+	if req.To == boardColumnIDForStatus(domain.StatusDone) {
+		if err := s.refuseClassicReviewOfIncrementSpec(ws, req.Code); err != nil {
+			writeError(w, err)
+			return
+		}
 	}
 	res, err := ws.conn.MoveBoardCard(ctx, req.Code, req.To, anchor)
 	if err != nil {

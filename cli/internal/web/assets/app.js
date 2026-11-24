@@ -68,6 +68,8 @@
 		transitionBlockedRunning:
 			"C'è una run in corso su questa spec: aspetta che finisca, oppure annullala, prima di spostarla.",
 		transitionDone: (code, column) => `${code} spostata in ${column}`,
+		linkedConversationUnavailable:
+			"La conversazione di questo link non è disponibile in questo workspace.",
 		noEpicsYet:
 			"Crea la prima epica insieme alla storia",
 		backlogUnreadable: "Il backlog non si è potuto leggere",
@@ -794,6 +796,20 @@
         } catch (err) { showToast(err.message || String(err), "err"); }
         finally { specDevelopBtn.disabled = false; }
     });
+	// Il corpo di una storia nata da un incremento porta un link alla sua
+	// conversazione. Dentro la pagina non serve ricaricare: si apre il thread,
+	// come fa il bottone dei lavori collegati. Un clic con un modificatore resta
+	// del browser, che aprirà lo stesso indirizzo in un'altra scheda.
+	specBodyView.addEventListener("click", async (event) => {
+		if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+		const anchor = event.target.closest("a[href]");
+		if (!anchor) return;
+		const id = conversationIdInAddress(anchor.getAttribute("href"));
+		if (!id) return;
+		event.preventDefault();
+		try { setShellView("conversation"); await switchToConversation(id); }
+		catch (err) { showToast(err.message || String(err), "err"); }
+	});
     document.getElementById("story-linked-work").addEventListener("click", async event => {
         const button = event.target.closest("[data-linked-conversation]");
         if (!button) return;
@@ -1761,6 +1777,38 @@
 		}
 	}
 
+	// ---- Link diretto a una conversazione ---------------------------------
+	//
+	// `?conversation=<id>` apre quel thread. È un indirizzo relativo, quindi vale
+	// su qualunque porta il visore stia servendo; lo scrive la CLI nel corpo della
+	// storia che un incremento lascia nel backlog. Sono dichiarazioni di funzione,
+	// e il nome del parametro sta dentro di loro, perché vengono chiamate durante
+	// l'avvio: una costante più in basso sarebbe ancora in zona morta.
+
+	/** L'id di conversazione che quell'indirizzo chiede a questa pagina, o "". */
+	function conversationIdInAddress(address) {
+		try {
+			const url = new URL(address, window.location.href);
+			if (url.origin !== window.location.origin || url.pathname !== window.location.pathname) return "";
+			return url.searchParams.get("conversation") || "";
+		} catch (_) {
+			return "";
+		}
+	}
+
+	// Il link si consuma: letto una volta, esce dall'indirizzo, così un ricarico
+	// riapre l'ultima conversazione guardata e non per sempre quella del link.
+	function takeConversationFromLocation() {
+		const id = conversationIdInAddress(window.location.href);
+		if (!id) return "";
+		if (typeof window.history?.replaceState === "function") {
+			const url = new URL(window.location.href);
+			url.searchParams.delete("conversation");
+			window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+		}
+		return id;
+	}
+
 	/** L'indirizzo che descrive la schermata con quella spec aperta (o nessuna). */
 	function locationWithSpec(code) {
 		const url = new URL(window.location.href);
@@ -2649,7 +2697,9 @@
 			return;
 		}
 		if (preview.allowed === false) {
-			showToast(TEXT.transitionBlockedRunning, "err");
+			// Un rifiuto che dipende dallo stato del workspace arriva già
+			// scritto dal server; l'unico a regola fissa è la run in corso.
+			showToast(preview.blocked_message || TEXT.transitionBlockedRunning, "err");
 			await onCancel();
 			return;
 		}
@@ -2745,7 +2795,7 @@
 			fillSpecForm(currentSpecSnapshot);
 			fillPlanView(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
 			fillPlanForm(currentPlanSnapshot.plan_body, currentPlanSnapshot.tasks);
-			updateReviewTabVisibility(currentSpecSnapshot);
+			updateReviewTabVisibility(detail.classic_review === true);
 			specStatus.textContent = "";
 		} catch (err) {
 			specStatus.textContent = TEXT.loadFailed(err.message || err);
@@ -3363,8 +3413,10 @@
 
 	// ---- Review (diff + inline comments) -----------------------------------
 
-	function updateReviewTabVisibility(spec) {
-		const inReview = spec && spec.status === "REVIEW";
+	// Se il pannello Revisione vale per questa storia lo dice il server: non
+	// basta che sia in REVIEW, perché una storia nata da un incremento si rivede
+	// nella conversazione dell'incremento e si chiude con l'integrazione della PR.
+	function updateReviewTabVisibility(inReview) {
 		reviewTab.classList.toggle("hidden", !inReview);
 		if (!inReview && reviewTab.classList.contains("active")) {
 			activateTab("story");
@@ -8274,6 +8326,15 @@
 			if (root) conversationDraft = sessionStorage.getItem("archetipo.chat-draft:" + root) || "";
 		} catch { /* Storage may be unavailable; conversation loading still works. */ }
 		const live = liveConversationEntries();
+		// Un link diretto vince sull'ultima conversazione guardata: chi arriva
+		// da una storia del backlog ha chiesto quel thread, non quello di ieri.
+		const linked = takeConversationFromLocation();
+		if (linked) {
+			setShellView("conversation");
+			try { await switchToConversation(linked); } catch { /* si dice sotto */ }
+			if (conversationView?.conversation?.id === linked) return;
+			showToast(TEXT.linkedConversationUnavailable, "err");
+		}
   let remembered="";
   try{remembered=sessionStorage.getItem("archetipo.last-chat:"+conversationsIndex?.workspace_root)||"";}catch{}
   if(remembered){

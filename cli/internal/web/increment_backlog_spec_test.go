@@ -1,0 +1,113 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
+)
+
+// seedIncrementBehindSpec writes the record of an increment whose publication
+// left code in the backlog, as the increment store itself would read it.
+func seedIncrementBehindSpec(t *testing.T, projectRoot, code, status string) {
+	t.Helper()
+	const id = "inc-backlog-spec"
+	root := filepath.Join(projectRoot, ".archetipo", "increments")
+	record := increment.Record{
+		ID:              id,
+		Title:           "Export customers",
+		Status:          status,
+		CreatedAt:       time.Now().UTC(),
+		Workdir:         filepath.Join(root, "worktrees", id),
+		Branch:          "archetipo/increments/" + id,
+		BacklogSpecCode: code,
+		PR:              &increment.PullRequest{URL: "https://github.com/example/product/pull/1", Number: 1, State: "OPEN"},
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, id+".json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func specDetailOf(t *testing.T, srv *Server, code string) specDetailView {
+	t.Helper()
+	response := doJSON(t, srv, http.MethodGet, "/api/spec/"+code, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("detail %s: %d %s", code, response.Code, response.Body.String())
+	}
+	var detail specDetailView
+	if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	return detail
+}
+
+func TestSpecPublishedByAnIncrementIsClosedOnlyByItsMerge(t *testing.T) {
+	srv, conn, dir := newTransitionServer(t, false)
+	seedIncrementBehindSpec(t, dir, "US-902", increment.Proposed)
+	ctx := context.Background()
+
+	detail := specDetailOf(t, srv, "US-902")
+	if detail.ClassicReview || len(detail.Actions) != 0 {
+		t.Fatalf("the classic review was offered on an increment's spec: review=%v actions=%+v", detail.ClassicReview, detail.Actions)
+	}
+	if len(detail.Works) != 1 || detail.Works[0].Note == "" || detail.Works[0].PRURL == "" {
+		t.Fatalf("the spec does not lead back to its increment: %+v", detail.Works)
+	}
+	if ordinary := specDetailOf(t, srv, "US-901"); ordinary.ClassicReview || len(ordinary.Works) != 0 {
+		t.Fatalf("a story outside review gained a review or a work: %+v", ordinary)
+	}
+
+	blocked := previewOf(t, srv, "US-902", "done")
+	if blocked.Allowed || blocked.BlockedCode != blockedCodeClosedByIncrement || blocked.BlockedMessage == "" {
+		t.Fatalf("DONE was offered by hand: %+v", blocked)
+	}
+	if back := previewOf(t, srv, "US-902", "todo"); !back.Allowed || back.RecommendedAction != "" {
+		t.Fatalf("a plain move was refused or routed through the classic review: %+v", back)
+	}
+
+	for _, route := range []string{"/api/spec/US-902/approve", "/api/spec/US-902/request-changes"} {
+		if status, body := postJSON(t, srv, route, nil); status != http.StatusConflict {
+			t.Fatalf("%s: %d %v", route, status, body)
+		}
+	}
+	if status, body := postJSON(t, srv, "/api/board/move", map[string]any{"code": "US-902", "to": "done"}); status != http.StatusConflict {
+		t.Fatalf("card dragged onto DONE: %d %v", status, body)
+	}
+	if spec, err := conn.ReadSpecDetail(ctx, "US-902"); err != nil || spec.Status != domain.StatusReview {
+		t.Fatalf("a refused step changed the spec: %+v %v", spec, err)
+	}
+	if status, body := postJSON(t, srv, "/api/board/move", map[string]any{"code": "US-902", "to": "todo"}); status != http.StatusOK {
+		t.Fatalf("project management move refused: %d %v", status, body)
+	}
+}
+
+func TestSpecOfADeliveredIncrementIsAnOrdinaryStoryAgain(t *testing.T) {
+	srv, conn, dir := newTransitionServer(t, false)
+	seedIncrementBehindSpec(t, dir, "US-902", increment.Delivered)
+
+	// The person moved the closed spec back under review: from here on the
+	// classic path applies, because no merge is left to close it.
+	detail := specDetailOf(t, srv, "US-902")
+	if !detail.ClassicReview || len(detail.Works) != 1 || detail.Works[0].Note == "" {
+		t.Fatalf("delivered increment still owns the review: %+v", detail)
+	}
+	if status, body := postJSON(t, srv, "/api/spec/US-902/approve", nil); status != http.StatusOK {
+		t.Fatalf("approve after delivery: %d %v", status, body)
+	}
+	if spec, err := conn.ReadSpecDetail(context.Background(), "US-902"); err != nil || spec.Status != domain.StatusDone {
+		t.Fatalf("approval did not close the ordinary story: %+v %v", spec, err)
+	}
+}

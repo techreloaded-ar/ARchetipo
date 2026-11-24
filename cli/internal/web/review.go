@@ -153,6 +153,12 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// Sending an increment's spec back to TODO would start a rework nobody runs:
+	// changes to an increment are asked in its own conversation.
+	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+		writeError(w, err)
+		return
+	}
 	rs, ok := ws.conn.(connector.ReviewStore)
 	if !ok {
 		writeError(w, iox.NewConnector(iox.CodePreconditionMissing, "this connector does not persist review comments", "use the file connector", nil))
@@ -264,6 +270,14 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 			"only a spec waiting under review can be approved", nil))
 		return
 	}
+	// A spec an increment published is not accepted here: the person already
+	// approved that candidate when the PR was opened, and what closes the spec is
+	// the developers' merge. Approving it by hand would declare DONE a change
+	// that is not integrated yet.
+	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+		writeError(w, err)
+		return
+	}
 	rs, ok := ws.conn.(connector.ReviewStore)
 	if !ok {
 		// Approving without being able to record the verdict is refused rather
@@ -337,6 +351,10 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !ws.cfg.Worktree.Enabled {
 		writeError(w, iox.NewConflict("worktree workflow is disabled", "enable worktree.enabled in config.yaml", nil))
+		return
+	}
+	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+		writeError(w, err)
 		return
 	}
 	spec, err := ws.conn.ReadSpecDetail(ctx, code)

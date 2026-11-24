@@ -109,6 +109,10 @@ type Record struct {
 	PR            *PullRequest      `json:"pull_request,omitempty"`
 	Published     map[string]string `json:"published_stories,omitempty"`
 	PublishedEpic string            `json:"published_epic,omitempty"`
+	// BacklogSpecCode names the single backlog spec that publication records for
+	// this increment. It is the increment's trace, not a delivery story: it waits
+	// in REVIEW while the PR is open and is closed only by the merge.
+	BacklogSpecCode string `json:"backlog_spec_code,omitempty"`
 }
 type PullRequest struct {
 	URL     string `json:"url"`

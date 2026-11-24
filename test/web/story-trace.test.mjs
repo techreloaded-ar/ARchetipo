@@ -13,3 +13,8 @@ test("Enterprise trace connects original stories, work and developer PR with esc
  assert.match(renderStories([{code:'US-001',title:'Selection',status_label:'Waiting for business'}]),/data-linked-story="US-001"/);
  assert.doesNotMatch(renderStories([]),/story-links/);
 });
+test("A work says what it means for the story only in the server's own words",()=>{
+ const html=renderWorks([{title:'Increment',conversation_id:'conv-1',status_label:'In revisione ai developer',note:'Server <note> about the closure'}]);
+ assert.match(html,/Server &lt;note&gt; about the closure/);
+ assert.doesNotMatch(renderWorks([{title:'Increment',status_label:'Lavoro in corso'}]),/docs-note/);
+});
