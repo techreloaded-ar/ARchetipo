@@ -58,16 +58,42 @@ func (s *Service) Propose(ctx context.Context, id string, p Proposal) (Record, e
 			return r, nil
 		}
 		revision := Revision{Number: len(r.Revisions) + 1, Proposal: p, CreatedAt: time.Now().UTC(), Change: r.PendingChange, LinkedStories: append([]StoryLink(nil), r.LinkedStories...)}
-		if r.PendingChange != nil {
+		// A change the person asked for on a verified candidate does not wait for
+		// a second decision: it is developed at once and the person approves this
+		// revision together with the candidate that implements it. Any other
+		// revision still stops here until it is approved.
+		switch {
+		case r.PendingChange != nil:
 			revision.Feedback = r.PendingChange.Feedback
+			revision.ApprovalWithCandidate = true
+			r.Status = Developing
+		case refinesRequestedChange(r):
+			// Refining the specification while that same request is being developed
+			// answers the same request: it carries it and keeps the work going.
+			requested := r.Revisions[len(r.Revisions)-1]
+			revision.Change, revision.Feedback = requested.Change, requested.Feedback
+			revision.ApprovalWithCandidate = true
+			r.Status = Developing
+		default:
+			r.Status = Discovery
 		}
 		r.Revisions = append(r.Revisions, revision)
 		r.PendingChange = nil
-		r.Status = Discovery
 		r.ReadySHA, r.ReadyScope, r.ApprovedSHA = "", "", ""
 		r.Result = nil
 		return r, s.save(r)
 	})
+}
+
+// refinesRequestedChange reports whether the work is developing a change the
+// person asked for whose specification still awaits their approval with the
+// candidate.
+func refinesRequestedChange(r Record) bool {
+	if r.Status != Developing || len(r.Revisions) == 0 {
+		return false
+	}
+	latest := r.Revisions[len(r.Revisions)-1]
+	return latest.ApprovalWithCandidate && !latest.Approved
 }
 
 // ApproveIntent records the person's decision on the exact displayed revision.
@@ -127,7 +153,12 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 				return r, iox.NewInvalidInput("preview must be a local HTTP URL", "provide the local preview address, or omit it", parseErr)
 			}
 		}
-		if len(r.Revisions) == 0 || r.PendingChange != nil || !r.Revisions[len(r.Revisions)-1].Approved {
+		if len(r.Revisions) == 0 || r.PendingChange != nil {
+			return r, iox.NewConflict("the requested change has no specification revision", "persist the specification that records the requested change before recording its result", nil)
+		}
+		// A revision that records a change the person asked for is approved with
+		// this very candidate; any other revision needs their approval first.
+		if current := r.Revisions[len(r.Revisions)-1]; !current.Approved && !current.ApprovalWithCandidate {
 			return r, iox.NewConflict("specification is not approved", "obtain the person's approval of the current revision before development", nil)
 		}
 		if err = s.requireClean(ctx, r); err != nil {

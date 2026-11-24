@@ -49,13 +49,18 @@ type Revision struct {
 	LinkedStories []StoryLink `json:"linked_stories,omitempty"`
 	Number        int         `json:"number"`
 	Proposal
-	ApprovalSource string           `json:"approval_source,omitempty"`
-	Approved       bool             `json:"approved,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
-	Feedback       string           `json:"feedback,omitempty"`
-	Result         *Result          `json:"result,omitempty"`
-	HeadSHA        string           `json:"head_sha,omitempty"`
-	Change         *FeedbackRequest `json:"change,omitempty"`
+	ApprovalSource string `json:"approval_source,omitempty"`
+	Approved       bool   `json:"approved,omitempty"`
+	// ApprovalWithCandidate marks a revision that records a change the person
+	// asked for on a verified candidate. It is developed at once
+	// and the person approves it together with the candidate that implements
+	// it: Approved stays false until that publication approval.
+	ApprovalWithCandidate bool             `json:"approval_with_candidate,omitempty"`
+	CreatedAt             time.Time        `json:"created_at"`
+	Feedback              string           `json:"feedback,omitempty"`
+	Result                *Result          `json:"result,omitempty"`
+	HeadSHA               string           `json:"head_sha,omitempty"`
+	Change                *FeedbackRequest `json:"change,omitempty"`
 }
 type SquashCommit struct {
 	Title string `json:"title" yaml:"title"`

@@ -136,8 +136,124 @@ func TestProductRevisionRevokesCandidateWithoutStoryTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ReadySHA != "" || r.Status != Discovery || len(r.Revisions) != 2 {
+	if r.ReadySHA != "" || r.Result != nil || r.Status != Developing || len(r.Revisions) != 2 {
 		t.Fatalf("stale version: %+v", r)
+	}
+}
+
+// candidateFor commits a new product change and records its verified candidate.
+func candidateFor(t *testing.T, s *Service, r Record, content string) Record {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(r.Workdir, "hello.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, r.Workdir, "add", "hello.txt")
+	runGit(t, r.Workdir, "commit", "-m", "feat: requested change")
+	verifyProduct(t, r)
+	r, err := s.Ready(context.Background(), r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: export customers"}, Summary: "Try the requested change.", Checks: []string{"Diff check"}})
+	if err != nil {
+		t.Fatalf("a requested change could not be recorded as a candidate: %v", err)
+	}
+	return r
+}
+
+// A change the person asks for on the candidate they are trying is developed at
+// once: no second specification approval stands between their request and the
+// candidate, and the publication approval is what approves the revised revision.
+func TestRequestedChangeIsDevelopedAtOnceAndApprovedWithItsCandidate(t *testing.T) {
+	s, r := productWork(t)
+	ctx := context.Background()
+	r, err := s.Propose(ctx, r.ID, Proposal{Intent: "Cancellation before departure"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = ready(t, s, r)
+	if r, err = s.RequestChanges(ctx, r.ID, FeedbackRequest{Feedback: "Allow cancellation until one hour before"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Ready(ctx, r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: result"}, Summary: "Result", Checks: []string{"check"}}); err == nil {
+		t.Fatal("a requested change became a candidate without its specification revision")
+	}
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Cancellation until one hour before departure"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revised := r.Revisions[1]
+	if r.Status != Developing || !revised.ApprovalWithCandidate || revised.Approved || revised.Feedback != "Allow cancellation until one hour before" || r.PendingChange != nil {
+		t.Fatalf("requested change waits for a separate specification approval: %+v", r)
+	}
+	if _, err = s.ApproveIntent(ctx, r.ID, 2); err == nil {
+		t.Fatal("a revision approved with its candidate was offered a separate approval")
+	}
+	// Refining the specification while developing that request keeps the work going.
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Cancellation until one hour before departure, with a confirmation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refined := r.Revisions[2]
+	if r.Status != Developing || !refined.ApprovalWithCandidate || refined.Approved || refined.Feedback != revised.Feedback {
+		t.Fatalf("refining a requested change stopped its development: %+v", r)
+	}
+	r = candidateFor(t, s, r, "cancellation until one hour before\n")
+	if r.Status != Review || r.Revisions[2].Approved {
+		t.Fatalf("candidate was not offered for the person's decision: %+v", r)
+	}
+	if !strings.Contains(Dossier(r), "awaits the person's approval together with its verified candidate") {
+		t.Fatal("dossier hides that the revised specification is still to be approved")
+	}
+	remote(t, s)
+	hosting := &fakeHosting{}
+	s.Hosting = hosting
+	if _, err = s.Publish(ctx, r.ID, r.ReadySHA, 2); err == nil {
+		t.Fatal("publication approved a revision other than the displayed one")
+	}
+	r, err = s.Publish(ctx, r.ID, r.ReadySHA, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := r.Revisions[2]
+	if r.Status != Proposed || !approved.Approved || approved.ApprovalSource != "person" || !approved.ApprovalWithCandidate {
+		t.Fatalf("publication did not record the approval of the revised specification: %+v", approved)
+	}
+	if r.Revisions[1].Approved {
+		t.Fatal("a superseded revision was approved by a decision taken on a later one")
+	}
+	if !strings.Contains(hosting.body, "approved by the person together with its verified candidate") {
+		t.Fatal("the PR dossier lost the approval of the revised specification")
+	}
+}
+
+// Only a change requested on a verified candidate skips the separate approval:
+// before a candidate exists there is no change request to record, and a
+// specification revised during the first development still stops the work.
+func TestOnlyAChangeRequestedOnACandidateSkipsTheSpecificationApproval(t *testing.T) {
+	s, r := productWork(t)
+	ctx := context.Background()
+	r, err := s.Propose(ctx, r.ID, Proposal{Intent: "First requirements"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RequestChanges(ctx, r.ID, FeedbackRequest{Feedback: "Change it"}); err == nil {
+		t.Fatal("a change request replaced the approval of the first specification")
+	}
+	if r, err = s.ApproveIntent(ctx, r.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RequestChanges(ctx, r.ID, FeedbackRequest{Feedback: "Add the export date"}); err == nil {
+		t.Fatal("a change request was recorded before any candidate existed")
+	}
+	r, err = s.Propose(ctx, r.ID, Proposal{Intent: "Requirements revised during the first development"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != Discovery || r.Revisions[1].ApprovalWithCandidate || r.Revisions[1].Approved {
+		t.Fatalf("a specification revised before any candidate started development: %+v", r)
+	}
+	if _, err = s.Ready(ctx, r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: result"}, Summary: "Result", Checks: []string{"check"}}); err == nil {
+		t.Fatal("an unapproved revision became a candidate")
+	}
+	if r, err = s.ApproveIntent(ctx, r.ID, 2); err != nil || r.Status != Developing {
+		t.Fatalf("the revised specification could not be approved: %+v %v", r, err)
 	}
 }
 

@@ -254,9 +254,11 @@ async function main(){
   assert.equal(afterChat.state,"ready","chat stopped the preview");assert.equal(afterChat.url,livePreview.url,"chat replaced the preview");
   await cliJSON(["increment","feedback",inc.id],{feedback:"Aggiungi Excel"});
   const revised=await cliJSON(["increment","propose",inc.id],{intent:"Esportare CSV ed Excel"});
-  assert.equal(revised.status,"DISCOVERY");assert.equal(revised.ready_sha,undefined);
-  const acceptedRevision=await cliJSON(["increment","approve",inc.id],{revision:2});
-  assert.equal(acceptedRevision.status,"DEVELOPING");
+  // The person asked for this change: its revision is developed at once and is
+  // approved together with the candidate, with no second specification approval.
+  assert.equal(revised.status,"DEVELOPING","a requested change waited for a separate specification approval");assert.equal(revised.ready_sha,undefined);
+  assert.equal(revised.revisions[1].approval_with_candidate,true);
+  assert.notEqual(revised.revisions[1].approved,true,"the revised specification was approved before the person saw its result");
   assert.equal((await cliJSON(["increment","list"],undefined,sandbox)).length,1);
   await cliJSON(["increment","learn",inc.id],{observation:"L’esportazione deve essere leggibile da Excel",decision:"Manteniamo entrambi i formati"});
   if(enterprise){
@@ -275,12 +277,16 @@ async function main(){
   if(enterprise){
    await page.waitFor(`document.getElementById("workspace-shell").dataset.view === "conversation" && !!document.querySelector('.conv-next [data-increment-step-open="preview"]') && !!document.querySelector('.conv-next [data-increment-step-action="publish"]:not(:disabled)') && !!document.querySelector('.conv-next [data-increment-step-prompt]') && !document.querySelector('.conv-review-decision')`,timeout,"tested version: approval and change request sit in the next-steps row beside the preview, with no block above the history");
    const approved=(await read()).increment.ready_sha;
+   await page.waitFor(`document.querySelector('.conv-next [data-increment-step-open="details"][data-increment-step-target="intent"]')?.textContent.includes('v2')`,timeout,"revised requirements offered beside the candidate they are approved with");
    await page.evaluate(`document.querySelector('[data-increment-step-action="publish"]').click()`);
    await page.waitFor(`!!document.querySelector('[data-increment-step-run="publish"]:not(:disabled)')`,timeout,"explicit publication confirmation");
+   assert.ok((await page.evaluate(`document.querySelector('.conv-next-confirm').textContent`)).includes("versione 2 della specifica"),"the confirmation does not say that it also approves the revised specification");
    assert.equal((await read()).increment.status,"REVIEW","publication happened before confirmation");
    await page.evaluate(`document.querySelector('[data-increment-step-run="publish"]').click()`);
    await until(async()=>(await read()).increment.status==="PROPOSED","one PR after human approval").catch(async error=>{throw new Error(error.message+"; "+await page.evaluate("document.body.innerText.slice(-2000)"));});
    let published=(await read()).increment;
+   assert.equal(published.revisions[1].approved,true,"approving the candidate did not approve the specification it was verified against");
+   assert.equal(published.revisions[1].approval_source,"person");
    const repeated=await fetch(view.url+"/api/increments/"+inc.id+"/publish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:2,head_sha:approved})});
    assert.equal(repeated.status,200);
    const gh=JSON.parse(await fs.readFile(ghState,"utf8"));assert.equal(gh.creates,1);

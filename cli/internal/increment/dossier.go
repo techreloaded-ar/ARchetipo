@@ -19,6 +19,13 @@ func Dossier(r Record) string {
 		if revision.Feedback != "" {
 			fmt.Fprintf(&body, "\nRequested change: %s\n", revision.Feedback)
 		}
+		if revision.ApprovalWithCandidate {
+			decision := "awaits the person's approval together with its verified candidate"
+			if revision.Approved {
+				decision = "approved by the person together with its verified candidate"
+			}
+			fmt.Fprintf(&body, "\nSpecification revision developed on the person's change request: %s.\n", decision)
+		}
 		for _, story := range revision.LinkedStories {
 			fmt.Fprintf(&body, "\n### %s — %s\n\n%s\n\n%s\n", story.Code, story.Title, story.Body, story.URL)
 		}

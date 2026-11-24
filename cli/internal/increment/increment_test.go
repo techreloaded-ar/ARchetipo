@@ -200,6 +200,11 @@ func specify(t *testing.T, s *Service, r Record, _ ...domain.Spec) Record {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A revision that answers the person's change request is already in
+	// development: it is approved with its candidate, not here.
+	if r.Revisions[len(r.Revisions)-1].ApprovalWithCandidate {
+		return r
+	}
 	r, err = s.ApproveIntent(context.Background(), r.ID, r.Revisions[len(r.Revisions)-1].Number)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +213,7 @@ func specify(t *testing.T, s *Service, r Record, _ ...domain.Spec) Record {
 }
 func ready(t *testing.T, s *Service, r Record) Record {
 	t.Helper()
-	if len(r.Revisions) > 0 && !r.Revisions[len(r.Revisions)-1].Approved {
+	if len(r.Revisions) > 0 && !r.Revisions[len(r.Revisions)-1].Approved && !r.Revisions[len(r.Revisions)-1].ApprovalWithCandidate {
 		var err error
 		r, err = s.ApproveIntent(context.Background(), r.ID, r.Revisions[len(r.Revisions)-1].Number)
 		if err != nil {

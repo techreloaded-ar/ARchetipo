@@ -36,6 +36,17 @@ alle storie originali, feedback, osservazioni, decisioni e risultati delle verif
 Ogni risultato è legato a un commit pulito e alla specifica provata. Una modifica
 esplicita revoca il candidato corrente, conservando prove e versione precedenti.
 Una domanda o un’osservazione non riscrivono i requisiti e non approvano codice.
+
+La persona approva la specifica due volte al massimo: la prima versione, prima
+che inizi lo sviluppo, e quella finale, insieme al risultato provato. Una
+modifica che la persona chiede sul candidato che sta provando produce una nuova
+revisione che non attende una conferma separata: il lavoro torna in sviluppo, la
+revisione è marcata `approval_with_candidate` e viene approvata dalla stessa
+decisione che apre la PR, perché il candidato è legato alla specifica con cui è
+stato verificato. Finché quel candidato non è registrato, le revisioni che
+affinano la stessa richiesta restano in sviluppo. Una specifica rivista prima
+del primo candidato, o che nessuno ha chiesto, continua a fermarsi finché non è
+approvata.
 `ready` richiede i report originali di **tutti** i check dichiarati nella ricetta:
 comandi conclusi con successo, input correnti, preparazione valida e log integri.
 `checks` è una spiegazione leggibile, non una prova. Report, impronte degli input,
@@ -66,10 +77,10 @@ dossier che restituisce `data.id` e `data.markdown`.
 | `increment propose <id> --file -` | `{"intent":"Markdown","story_codes":["US-010"]}`; versiona specifica e riferimenti |
 | `increment approve <id> --file -` | `{"revision":2}`; registra la conferma della persona sulla revisione corrente e abilita lo sviluppo |
 | `increment ready <id> --file -` | `{"summary":"Come provarlo e limiti","checks":["Controllo reale e riferimento alla prova"],"squash_commit":{"title":"feat: descrizione del risultato"}}`; congela candidato pulito e committato |
-| `increment feedback <id> --file -` | `{"feedback":"Comportamento da cambiare"}`; richiede una nuova specifica/verifica |
+| `increment feedback <id> --file -` | `{"feedback":"Comportamento da cambiare"}`; registra la modifica chiesta dalla persona sul candidato in revisione. Il `propose` successivo riporta il lavoro in sviluppo e la revisione si approva con il nuovo candidato |
 | `increment learn <id> --file -` | `{"observation":"Osservazione reale","decision":"Decisione facoltativa"}` |
 | `increment conclude <id> --file -` | Stesso payload, decisione obbligatoria; conclude senza pubblicare codice |
-| `increment publish <id> --file -` | `{"revision":2,"head_sha":"commit visualizzato"}`; approvazione esplicita del candidato e PR idempotente |
+| `increment publish <id> --file -` | `{"revision":2,"head_sha":"commit visualizzato"}`; approvazione esplicita del candidato e della revisione di specifica con cui è stato verificato, PR idempotente |
 | `increment refresh <id>` | Rilegge PR; distingue SHA approvato e successivo head integrato dai developer |
 | `increment dossier <id>` | Esporta richiesta, versioni, storie, prove, decisioni e consegna; funziona anche dopo rimozione dell’ambiente |
 
@@ -240,8 +251,12 @@ reach a technical environment conversation, prepare a message, approve a verifie
 candidate or inspect its PR. Suggested messages preserve the current draft and
 are sent only by the person. Publication offers an inline confirmation of its
 effect. The person approves the exact specification revision before product
-development starts; a later revision requires a new decision. This adds no
-internal story tasks.
+development starts. A later revision that records a change they asked for on a
+candidate in review is developed at once and approved together with its new
+candidate: the next steps offer its requirements beside the preview, and the
+publication confirmation names the revision it also approves. Any other revision
+requires a new decision.
+This adds no internal story tasks.
 The environment conversation appears below the product conversation in the rail.
 
 Runtime questions use a questionnaire with one question at a time, multiple

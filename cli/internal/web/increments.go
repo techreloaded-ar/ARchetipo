@@ -187,6 +187,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		if action.ID == "approve-intent" && (len(r.Revisions) == 0 || r.Revisions[len(r.Revisions)-1].Approved) {
 			continue
 		}
+		if action.ID == "publish" {
+			action.Confirm = publicationConfirm(r, action.Confirm)
+		}
 		offered = append(offered, action)
 		view.Actions = append(view.Actions, incrementControl{ID: action.ID, Label: action.Label})
 		if action.ID == "publish" || action.ID == "refresh" {
@@ -202,7 +205,7 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 		decision := &incrementDecisionView{Title: "Decidi sul risultato", Available: candidateValid && !view.Busy}
 		for _, action := range tpl.IncrementActions {
 			if action.ID == "publish" {
-				decision.Steps = append(decision.Steps, incrementStepView{Kind: "decision", Action: action.ID, Label: action.Label, Confirm: action.Confirm})
+				decision.Steps = append(decision.Steps, incrementStepView{Kind: "decision", Action: action.ID, Label: action.Label, Confirm: publicationConfirm(r, action.Confirm)})
 				for _, prompt := range action.Prompts {
 					decision.Steps = append(decision.Steps, incrementStepView{Kind: "prompt", Label: prompt.Label, Prompt: prompt.Text})
 				}
@@ -217,6 +220,31 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 	}
 	return view
 }
+
+// revisionAwaitingApprovalWithCandidate returns the current specification revision when
+// it records a change the person asked for and still awaits their approval,
+// which they give together with the candidate.
+func revisionAwaitingApprovalWithCandidate(r increment.Record) (increment.Revision, bool) {
+	if len(r.Revisions) == 0 {
+		return increment.Revision{}, false
+	}
+	current := r.Revisions[len(r.Revisions)-1]
+	return current, current.ApprovalWithCandidate && !current.Approved
+}
+
+// publicationConfirm says, in the confirmation the Template declares, that the
+// approval also covers a specification revised on the person's change request.
+// The Template's own confirmation is never modified.
+func publicationConfirm(r increment.Record, confirm *template.IncrementConfirm) *template.IncrementConfirm {
+	revision, awaiting := revisionAwaitingApprovalWithCandidate(r)
+	if confirm == nil || !awaiting {
+		return confirm
+	}
+	withSpecification := *confirm
+	withSpecification.Text = fmt.Sprintf("Approverai anche la versione %d della specifica, aggiornata con le modifiche che hai chiesto. ", revision.Number) + confirm.Text
+	return &withSpecification
+}
+
 func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, record conversationlog.Record, view *conversationView) {
 	if record.IncrementID == "" {
 		return
@@ -241,8 +269,17 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 }
 func incrementPrompt(r increment.Record, message string, wikiEnabled bool) string {
 	approval := "The current specification is awaiting the person's approval. Do not change product code until its exact revision is approved."
-	if len(r.Revisions) > 0 && r.Revisions[len(r.Revisions)-1].Approved {
-		approval = "The current specification revision has the person's approval."
+	if len(r.Revisions) > 0 {
+		switch current := r.Revisions[len(r.Revisions)-1]; {
+		case r.PendingChange != nil:
+			approval = "The person asked for a change to the approved specification. Persist the revised specification, then implement and verify it in this same turn: do not stop to ask for its approval."
+		case current.Approved && r.Status == increment.Review:
+			approval = "The current specification revision has the person's approval and its candidate is in review. A change the person asks for now is recorded with increment feedback and a revised specification, then implemented and verified without asking for another specification approval: the person approves that revision together with the candidate."
+		case current.Approved:
+			approval = "The current specification revision has the person's approval."
+		case current.ApprovalWithCandidate:
+			approval = "The current specification revision records a change the person asked for: implement and verify it now, without asking for its approval. The person approves this revision together with the candidate."
+		}
 	}
 	wiki := "Automatic Wiki updates are disabled by workspace configuration: do not create or edit Wiki pages or its index."
 	if wikiEnabled {
@@ -546,6 +583,9 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 	}
 	if r.Status == increment.Review {
 		steps = append(steps, incrementStepView{Kind: "open", Open: "preview", Label: "Apri l’anteprima"})
+		if revision, awaiting := revisionAwaitingApprovalWithCandidate(r); awaiting {
+			steps = append(steps, incrementStepView{Kind: "open", Open: "details", Target: "intent", Label: fmt.Sprintf("Leggi i requisiti aggiornati · v%d", revision.Number)})
+		}
 	}
 	if r.Status == increment.Proposed && r.PR != nil && r.PR.URL != "" {
 		steps = append(steps, incrementStepView{Kind: "open", Open: "url", Target: r.PR.URL, Label: fmt.Sprintf("Apri la PR #%d su GitHub ↗", r.PR.Number)})

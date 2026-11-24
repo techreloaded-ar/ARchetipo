@@ -33,6 +33,13 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 			return r, err
 		}
 		r.ApprovedSHA = r.ReadySHA
+		// The candidate is bound to the specification it was verified against, so
+		// approving it is the person's decision on that revision too: a revision
+		// developed on their change request is approved here, not before.
+		if approved := &r.Revisions[len(r.Revisions)-1]; !approved.Approved {
+			approved.Approved = true
+			approved.ApprovalSource = "person"
+		}
 		if r.ApprovedAt == nil {
 			now := time.Now().UTC()
 			r.ApprovedAt = &now

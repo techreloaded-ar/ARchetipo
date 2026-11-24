@@ -58,8 +58,14 @@ remove their data.
   the manual override. A spec the person removed is not recreated.
 - Version the Markdown specification and linked requirement snapshots. Preserve
   prior results, observations, decisions and the original request.
-- Product development requires the person's approval of the current specification
-  revision; a revised specification needs a new approval.
+- Product development requires the person's approval of the first specification
+  revision. A change the person asks for on a candidate in review, recorded with
+  `increment feedback`, yields a revision marked `approval_with_candidate`: it is
+  developed at once and approved by the same decision that publishes its
+  candidate, never by a separate step. Revisions that refine that request before
+  its candidate is recorded stay in development. Any other revision — written
+  before the first candidate, or nobody asked for — still needs a new approval
+  before development.
 - `increment dossier` and the PR carry a portable business record. Environment
   removal retains this record and its story references through the deletion receipt.
 - Only an explicit approval of the displayed commit publishes a PR. Preserve the

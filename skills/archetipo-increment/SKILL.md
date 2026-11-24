@@ -41,7 +41,9 @@ the person to confirm its requirements. Wait for `increment approve <id> --file 
 with `{"revision":<current revision number>}` before changing product code. In
 View, only the person's approval control calls this command. When invoked
 standalone, call it only after the person explicitly confirms the displayed
-revision in the conversation. A new revision invalidates an earlier approval.
+revision in the conversation. A revision you write on your own initiative
+invalidates an earlier approval and waits for a new one. A revision that records
+a change the person asked for does not wait: see «Learn, adapt and hand over».
 
 Stories and the enterprise backlog remain optional planning tools. Read linked
 stories when present and keep acceptance criteria and documentation consistent.
@@ -87,7 +89,9 @@ elements. Only these need none: a change of copy or labels alone; colours or
 styling of what is already there, with the same arrangement; behaviour with no
 visible change (logic, API, data, performance); a fix that restores the
 intended rendering. When in doubt, make them: two variants cost minutes and
-spare a revision. When you make none, say so in one line and why.
+spare a revision. When you make none, say so in one line and why. A change the
+person asks for while trying the preview usually needs none either: no approval
+of the revision is requested, and the preview itself shows the result.
 
 A mockup here is an image and nothing else: a PNG per variant, two or three
 variants at most, each a static picture of the proposed screen. Produce it
@@ -290,17 +294,35 @@ revalidates the code and evidence. No story state is needed.
 
 ## Learn, adapt and hand over
 
-A question alone preserves the specification and candidate. An explicit requested
-change after readiness is recorded with `increment feedback <id> --file -`:
+A question alone preserves the specification and candidate. A change the person
+explicitly asks for after readiness, on the candidate they are trying, is
+recorded with `increment feedback <id> --file -`, in their own words:
 
 ```json
 {"feedback":"Requested behavior and any selected page/element reference"}
 ```
 
-Then update the specification, implement and verify in this same work. Keep
-observations and decisions with `learn` when they add product knowledge. Do not
-create another environment or require another approval for ordinary iteration.
-Do not expand scope beyond the person's request without discussing it.
+Then persist the revised specification with `increment propose`: the CLI records
+it as the answer to that request and keeps the work in development. Implement,
+verify and call `increment ready` in this same turn. Do not stop to ask for an
+approval of the revised specification, and do not wait for `increment approve`:
+the person asked for the change, and approves that revision together with the
+candidate, with the same control that opens the PR. `increment publish` records
+that approval. Close the turn saying in one or two lines what changed in the
+requirements, so the person knows what they are approving besides the code.
+
+If the person adds to that request before you record the new candidate, revise
+the specification again with `increment propose`: it stays in development and is
+approved with the same candidate. `increment feedback` itself needs a candidate
+in review.
+
+This is for a change the person asked for on a candidate. When the request is
+ambiguous, or would redefine the problem instead of adjusting the solution, ask
+before building, as for any product choice. A specification revised before the
+first candidate exists, or one nobody asked for, still waits for its approval.
+Keep observations and decisions with `learn` when they add product
+knowledge. Do not create another environment for ordinary iteration, and do not
+expand scope beyond the person's request without discussing it.
 
 Only publish after explicit human approval of the displayed tested version:
 `increment publish <id> --file -` with `{"revision":N,"head_sha":"tested commit"}`.

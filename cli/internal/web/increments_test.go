@@ -339,6 +339,74 @@ func TestIncrementGuidanceUsesTemplateAndReachesWaitingEnvironment(t *testing.T)
 	}
 }
 
+// A specification revised on the person's change request is approved with its
+// candidate: the review offers its requirements beside the preview, the
+// publication confirmation names the revision it also approves, and the agent is
+// told not to stop for a separate approval.
+func TestRequestedChangeIsApprovedWithItsCandidateInTheView(t *testing.T) {
+	srv := newConversationServer(t, newConversingProvider("chatty", 0))
+	ws := srv.session()
+	tpl, err := srv.resolveTemplate(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var publish template.IncrementAction
+	for _, action := range tpl.IncrementActions {
+		if action.ID == "publish" {
+			publish = action
+		}
+	}
+	declared := publish.Confirm.Text
+	approvedFirst := increment.Revision{Number: 1, Approved: true, ApprovalSource: "person"}
+	requestedChange := increment.Revision{Number: 2, ApprovalWithCandidate: true, Feedback: "Aggiungi Excel"}
+	work := increment.Record{ID: "inc-requested-change", Workdir: t.TempDir(), Status: increment.Review, DevelopmentMode: increment.Continuous, Revisions: []increment.Revision{approvedFirst, requestedChange}}
+
+	confirm := publicationConfirm(work, publish.Confirm)
+	if !strings.Contains(confirm.Text, "versione 2 della specifica") || !strings.HasSuffix(confirm.Text, declared) {
+		t.Fatalf("publication confirmation hides the revision it approves: %q", confirm.Text)
+	}
+	if publish.Confirm.Text != declared {
+		t.Fatal("the Template's own confirmation was modified")
+	}
+	view := incrementView{}
+	srv.incrementNextSteps(ws, work, []template.IncrementAction{publish}, &view)
+	requirements := false
+	for _, step := range view.NextSteps {
+		if step.Action == "approve-intent" {
+			t.Fatal("a requested change was sent back to a separate specification approval")
+		}
+		if step.Open == "details" && step.Target == "intent" && strings.Contains(step.Label, "v2") {
+			requirements = true
+		}
+	}
+	if !requirements {
+		t.Fatalf("revised requirements are not reachable beside the candidate: %+v", view.NextSteps)
+	}
+	if prompt := incrementPrompt(work, "ok", false); !strings.Contains(prompt, "without asking for its approval") {
+		t.Fatal("the agent was not told that the revision is approved with its candidate")
+	}
+
+	// Once the person approved the candidate, nothing is left to announce.
+	work.Revisions[1].Approved = true
+	if publicationConfirm(work, publish.Confirm).Text != declared {
+		t.Fatal("an approved revision still changes the publication confirmation")
+	}
+	work.Revisions = work.Revisions[:1]
+	if prompt := incrementPrompt(work, "cambia il formato", false); !strings.Contains(prompt, "increment feedback") || !strings.Contains(prompt, "without asking for another specification approval") {
+		t.Fatal("a change requested on a candidate in review still asks for a second approval")
+	}
+	// Before a candidate exists the first approval is all there is to say.
+	work.Status = increment.Developing
+	if prompt := incrementPrompt(work, "cambia il formato", false); strings.Contains(prompt, "increment feedback") {
+		t.Fatal("a change request was offered before any candidate exists")
+	}
+	work.Status = increment.Review
+	work.PendingChange = &increment.FeedbackRequest{Feedback: "Aggiungi Excel"}
+	if prompt := incrementPrompt(work, "ok", false); !strings.Contains(prompt, "do not stop to ask for its approval") {
+		t.Fatal("a recorded change request lost its guidance")
+	}
+}
+
 func TestReviewDecisionRemainsVisibleWhenCandidateNeedsVerification(t *testing.T) {
 	srv := newConversationServer(t, newConversingProvider("chatty", 0))
 	work := increment.Record{ID: "inc-review", Status: increment.Review, DevelopmentMode: increment.Continuous}
