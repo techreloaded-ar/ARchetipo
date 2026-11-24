@@ -183,7 +183,7 @@ func (s *Server) resolveSpecProposal(ctx context.Context, ws *workspaceSession, 
 		return
 	}
 	// The same refusal startSpecAction gives, in the same sentence.
-	if _, owned, ownerErr := s.incrementAwaitingMergeBehindSpec(ws, view.SpecCode); ownerErr != nil {
+	if _, owned, ownerErr := s.incrementAwaitingMergeBehindSpec(ctx, ws, view.SpecCode); ownerErr != nil {
 		view.UnavailableReason = ownerErr.Error()
 		return
 	} else if owned {

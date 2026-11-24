@@ -43,7 +43,11 @@ remove their data.
   records a spec in REVIEW whose body is the approved specification verbatim,
   followed by the increment id, the PR and — with the `file` connector only,
   where the conversation is reachable — a `?conversation=<id>` link the viewer
-  opens. The record names it in `backlog_spec_code`. It is the increment's trace,
+  opens. The record names it in `backlog_spec_code`; the code alone is not its
+  identity, because a removed spec's code is given to the next story written, so
+  a spec is an increment's own only when its body names that increment's id. An
+  older increment that still names a reassigned code is not a work of the story
+  carrying it now, and its merge never closes that story. It is the increment's trace,
   not a delivery story: it is filed under the first linked story's epic, or under
   the `Incrementi` epic, and the linked original stories are never touched.
 - That spec has no classic review. While its PR is open the viewer offers no

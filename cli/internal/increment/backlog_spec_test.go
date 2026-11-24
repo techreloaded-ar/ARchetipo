@@ -126,6 +126,28 @@ func TestMergeDeliversAnIncrementWhoseBacklogSpecWasRemoved(t *testing.T) {
 	}
 }
 
+// A code is computed from the specs that exist, so the code of a removed
+// backlog spec is given again to the next story written. The record of the
+// increment that published the removed one still names it: its merge must not
+// close a story that only happens to carry that code now.
+func TestMergeDoesNotCloseAnotherStoryThatWasGivenTheSameCode(t *testing.T) {
+	s, r, hosting := publishedWork(t, []string{"US-010"})
+	ctx := context.Background()
+	r.BacklogSpecCode = "US-010"
+	if err := s.save(r); err != nil {
+		t.Fatal(err)
+	}
+	hosting.pr.State = "MERGED"
+	r, err := s.Refresh(ctx, r.ID)
+	if err != nil || r.Status != Delivered {
+		t.Fatalf("a story of somebody else kept the increment open: %+v %v", r, err)
+	}
+	other, err := s.Connector.ReadSpecDetail(ctx, "US-010")
+	if err != nil || other.Status != domain.StatusTodo {
+		t.Fatalf("the merge closed a story the increment never published: %+v %v", other, err)
+	}
+}
+
 func TestBacklogSpecLinksTheConversationOnlyWhereItCanBeOpened(t *testing.T) {
 	r := Record{ID: "inc-1", ConversationID: "conv-1", Revisions: []Revision{{Number: 1, Proposal: Proposal{Intent: "Approved behavior"}}}, PR: &PullRequest{URL: "https://github.com/example/product/pull/7", Number: 7}}
 	local := BacklogSpecBody(r, true)

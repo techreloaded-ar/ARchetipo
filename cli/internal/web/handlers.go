@@ -283,7 +283,7 @@ func (s *Server) handleGetSpec(w http.ResponseWriter, r *http.Request) {
 	// not been merged: the classic steps of the backlog path then do not apply.
 	closedByIncrement := false
 	for _, record := range records {
-		published := record.BacklogSpecCode == spec.Code
+		published := record.OwnsBacklogSpec(spec)
 		linked := false
 		for _, link := range record.LinkedStories {
 			if link.Code == spec.Code {
@@ -531,7 +531,7 @@ func (s *Server) handleMoveCard(w http.ResponseWriter, r *http.Request) {
 	// The card of an increment's spec reaches DONE with the merge of its PR and
 	// in no other way from the viewer. Every other move stays project management.
 	if req.To == boardColumnIDForStatus(domain.StatusDone) {
-		if err := s.refuseClassicReviewOfIncrementSpec(ws, req.Code); err != nil {
+		if err := s.refuseClassicReviewOfIncrementSpec(ctx, ws, req.Code); err != nil {
 			writeError(w, err)
 			return
 		}

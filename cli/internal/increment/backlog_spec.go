@@ -50,6 +50,17 @@ func BacklogSpecBody(r Record, linkConversation bool) string {
 	return body.String()
 }
 
+// OwnsBacklogSpec reports whether spec is the backlog spec this increment's
+// publication recorded. The code alone is not an identity: a new code is
+// computed from the specs that exist, so a spec removed from the backlog hands
+// its code to the next one written, while the record of the increment that
+// published the removed one keeps naming it. The increment id publication
+// writes in the body is what tells the two apart — the same rule
+// ensureBacklogSpec applies before adopting a spec.
+func (r Record) OwnsBacklogSpec(spec domain.Spec) bool {
+	return r.BacklogSpecCode != "" && r.BacklogSpecCode == spec.Code && strings.Contains(spec.Body, r.ID)
+}
+
 // backlogIsAbsent tells an empty workspace from a failed read: a project that
 // never had a backlog answers a missing precondition, and that is a backlog
 // with no specs rather than a reason to refuse the publication.
@@ -159,8 +170,11 @@ func (s *Service) backlogSpecEpic(ctx context.Context, r Record, existing []doma
 // been merged. It is the only closure that spec has: nobody approves it by hand.
 //
 // A spec the person removed from the backlog is not put back, and one already
-// closed is left alone. Any other failure is returned, so the increment is not
-// declared delivered while its backlog trace still says it is under review.
+// closed is left alone. A spec that now carries the same code and is not this
+// increment's own — the code was given again after the removal — is somebody
+// else's story and is never closed by this merge. Any other failure is
+// returned, so the increment is not declared delivered while its backlog trace
+// still says it is under review.
 func (s *Service) closeBacklogSpec(ctx context.Context, r Record) error {
 	if r.BacklogSpecCode == "" || s.Connector == nil {
 		return nil
@@ -178,7 +192,7 @@ func (s *Service) closeBacklogSpec(ctx context.Context, r Record) error {
 		}
 		return nil
 	}
-	if spec.Status == domain.StatusDone {
+	if spec.Status == domain.StatusDone || !r.OwnsBacklogSpec(spec) {
 		return nil
 	}
 	_, err = s.Connector.TransitionStatus(ctx, r.BacklogSpecCode, domain.StatusDone)

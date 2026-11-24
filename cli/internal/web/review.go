@@ -155,7 +155,7 @@ func (s *Server) handleRequestChanges(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Sending an increment's spec back to TODO would start a rework nobody runs:
 	// changes to an increment are asked in its own conversation.
-	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+	if err := s.refuseClassicReviewOfIncrementSpec(ctx, ws, code); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -274,7 +274,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	// approved that candidate when the PR was opened, and what closes the spec is
 	// the developers' merge. Approving it by hand would declare DONE a change
 	// that is not integrated yet.
-	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+	if err := s.refuseClassicReviewOfIncrementSpec(ctx, ws, code); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -353,7 +353,7 @@ func (s *Server) handleIntegrate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewConflict("worktree workflow is disabled", "enable worktree.enabled in config.yaml", nil))
 		return
 	}
-	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+	if err := s.refuseClassicReviewOfIncrementSpec(ctx, ws, code); err != nil {
 		writeError(w, err)
 		return
 	}

@@ -298,7 +298,7 @@ func (s *Server) startSpecAction(ctx context.Context, ws *workspaceSession, code
 	}
 	// A spec an increment published has no classic step left to run: its review
 	// is the increment's own, and its closure is the merge of the PR.
-	if err := s.refuseClassicReviewOfIncrementSpec(ws, code); err != nil {
+	if err := s.refuseClassicReviewOfIncrementSpec(ctx, ws, code); err != nil {
 		return nil, err
 	}
 	if _, err := execution.RequiredCapability(action); err != nil {

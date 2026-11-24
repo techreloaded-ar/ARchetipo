@@ -152,7 +152,7 @@ func (s *Server) handleTransitionPreview(w http.ResponseWriter, r *http.Request)
 	// A spec an increment published is closed by the merge of its PR: DONE is
 	// refused before anything is asked, and no other move is routed through the
 	// classic approval or request-changes flows, which do not apply to it.
-	_, closedByIncrement, err := s.incrementAwaitingMergeBehindSpec(ws, code)
+	_, closedByIncrement, err := s.incrementAwaitingMergeBehindSpec(ctx, ws, code)
 	if err != nil {
 		writeError(w, err)
 		return

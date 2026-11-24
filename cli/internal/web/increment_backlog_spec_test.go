@@ -9,15 +9,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/config"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector/filefs"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 )
 
 // seedIncrementBehindSpec writes the record of an increment whose publication
-// left code in the backlog, as the increment store itself would read it.
+// left code in the backlog, as the increment store itself would read it, and
+// names the increment in the spec's body, as publication does: that line is
+// what makes the spec this increment's own.
 func seedIncrementBehindSpec(t *testing.T, projectRoot, code, status string) {
 	t.Helper()
 	const id = "inc-backlog-spec"
+	seedIncrementNamingSpec(t, projectRoot, id, code, status)
+	cfg := config.Default()
+	cfg.ProjectRoot = projectRoot
+	body := "Approved behavior\n\n---\n\nIncremento `" + id + "`\n"
+	if _, err := filefs.New(cfg).UpdateSpec(context.Background(), code, domain.SpecUpdate{Body: &body}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedIncrementNamingSpec writes only the record: an increment that names code
+// as its backlog spec, whatever the spec carrying that code says today.
+func seedIncrementNamingSpec(t *testing.T, projectRoot, id, code, status string) {
+	t.Helper()
 	root := filepath.Join(projectRoot, ".archetipo", "increments")
 	record := increment.Record{
 		ID:              id,
@@ -91,6 +108,34 @@ func TestSpecPublishedByAnIncrementIsClosedOnlyByItsMerge(t *testing.T) {
 	}
 	if status, body := postJSON(t, srv, "/api/board/move", map[string]any{"code": "US-902", "to": "todo"}); status != http.StatusOK {
 		t.Fatalf("project management move refused: %d %v", status, body)
+	}
+}
+
+// The code of a removed backlog spec is given again to the next story written,
+// while the record of the increment that published the removed one keeps naming
+// it. That older increment is not a work of the story that carries the code
+// today: it is not listed, its PR is not offered, and it does not take the
+// classic review away.
+func TestIncrementNamingAReassignedCodeIsNotAWorkOfTheStoryThatCarriesItNow(t *testing.T) {
+	srv, conn, dir := newTransitionServer(t, false)
+	seedIncrementNamingSpec(t, dir, "inc-removed-earlier", "US-902", increment.Proposed)
+
+	detail := specDetailOf(t, srv, "US-902")
+	if len(detail.Works) != 0 || !detail.ClassicReview {
+		t.Fatalf("an increment that never published this story is shown behind it: works=%+v review=%v", detail.Works, detail.ClassicReview)
+	}
+	if blocked := previewOf(t, srv, "US-902", "done"); blocked.BlockedCode == blockedCodeClosedByIncrement {
+		t.Fatalf("DONE refused in the name of somebody else's increment: %+v", blocked)
+	}
+
+	// The increment that did publish the story is still its one work.
+	seedIncrementBehindSpec(t, dir, "US-902", increment.Proposed)
+	detail = specDetailOf(t, srv, "US-902")
+	if len(detail.Works) != 1 || detail.Works[0].ID != "inc-backlog-spec" || detail.ClassicReview {
+		t.Fatalf("the story does not lead back to its own increment alone: works=%+v review=%v", detail.Works, detail.ClassicReview)
+	}
+	if spec, err := conn.ReadSpecDetail(context.Background(), "US-902"); err != nil || spec.Status != domain.StatusReview {
+		t.Fatalf("reading the detail changed the spec: %+v %v", spec, err)
 	}
 }
 
