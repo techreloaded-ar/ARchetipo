@@ -9,6 +9,24 @@ import (
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 )
 
+// incrementPayload is the stdin payload of the increment operations without a
+// domain shape of their own. readStructuredInput decodes it with yaml.v3, which
+// ignores json tags and would otherwise match only lowercased field names: every
+// snake_case key needs its yaml tag, or it is silently dropped.
+type incrementPayload struct {
+	Observation          string   `json:"observation" yaml:"observation"`
+	Decision             string   `json:"decision" yaml:"decision"`
+	DevelopmentMode      string   `json:"development_mode" yaml:"development_mode"`
+	Title                string   `json:"title" yaml:"title"`
+	Request              string   `json:"request" yaml:"request"`
+	OriginConversationID string   `json:"origin_conversation_id" yaml:"origin_conversation_id"`
+	Revision             int      `json:"revision" yaml:"revision"`
+	Feedback             string   `json:"feedback" yaml:"feedback"`
+	Kind                 string   `json:"kind" yaml:"kind"`
+	StoryCodes           []string `json:"story_codes" yaml:"story_codes"`
+	HeadSHA              string   `json:"head_sha" yaml:"head_sha"`
+}
+
 func newIncrementCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "increment", Short: "Develop an isolated product increment"}
 	var confirmed bool
@@ -104,19 +122,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 			case "refresh":
 				value, err = service.Refresh(cmd.Context(), args[0])
 			default:
-				var input struct {
-					Observation          string   `json:"observation"`
-					Decision             string   `json:"decision"`
-					DevelopmentMode      string   `json:"development_mode"`
-					Title                string   `json:"title"`
-					Request              string   `json:"request"`
-					OriginConversationID string   `json:"origin_conversation_id"`
-					Revision             int      `json:"revision"`
-					Feedback             string   `json:"feedback"`
-					Kind                 string   `json:"kind"`
-					StoryCodes           []string `json:"story_codes" yaml:"story_codes"`
-					HeadSHA              string   `json:"head_sha"`
-				}
+				var input incrementPayload
 				// Proposals and verification results retain their existing domain shapes.
 				switch operation {
 				case "propose":

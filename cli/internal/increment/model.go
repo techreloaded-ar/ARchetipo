@@ -27,7 +27,7 @@ const Continuous = "continuous"
 
 // Stories is decoded only to reject retired delivery payloads explicitly.
 type Proposal struct {
-	StoryCodes []string      `json:"story_codes,omitempty"`
+	StoryCodes []string      `json:"story_codes,omitempty" yaml:"story_codes,omitempty"`
 	Intent     string        `json:"intent"`
 	Stories    []domain.Spec `json:"stories,omitempty"`
 }
