@@ -35,6 +35,14 @@ func fingerprint(root string, recipe Recipe, inputs []string, extra any) (string
 	}
 	commands := append(append(append([]Command{}, recipe.Prepare...), recipe.Probe...), recipe.Cleanup...)
 	for _, resource := range recipe.Resources {
+		// A declared service is carried out by the running ARchetipo binary, never
+		// by a tool of the project, and its declaration is already hashed with the
+		// recipe above. Resolving the `archetipo` its journal names would tie every
+		// retained report to ARchetipo's own launcher: updating ARchetipo would
+		// revoke the evidence of a candidate whose inputs never changed.
+		if resource.Service != nil {
+			continue
+		}
 		commands = append(commands, resource.Start, resource.Probe, resource.Stop, resource.Stopped)
 	}
 	for _, check := range recipe.Checks {

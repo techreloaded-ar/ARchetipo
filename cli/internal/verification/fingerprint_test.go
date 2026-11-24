@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/services"
 )
 
 func TestAgentEvidenceRemainsCurrentInViewerProcess(t *testing.T) {
@@ -103,6 +105,54 @@ func TestFingerprintTracksResolvedExecutable(t *testing.T) {
 	after, err := fingerprint(root, recipe, nil, nil)
 	if err != nil || before == after {
 		t.Fatalf("a different resolved toolchain did not invalidate: %v", err)
+	}
+}
+
+// A recipe with declared services names `archetipo` in the lifecycle commands it
+// derives. Reinstalling ARchetipo rewrites that launcher: the retained reports
+// of a candidate must survive it, while the declaration itself stays an input.
+func TestFingerprintIgnoresTheArchetipoLauncherOfDeclaredServices(t *testing.T) {
+	launcherDirectory := t.TempDir()
+	launcherName := "archetipo"
+	if os.PathSeparator == '\\' {
+		launcherName += ".cmd"
+	}
+	launcher := filepath.Join(launcherDirectory, launcherName)
+	if err := os.WriteFile(launcher, []byte("launcher of the installed version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", launcherDirectory)
+	declaredService := services.Spec{
+		Image: "postgres:17-alpine", Port: 5432, Data: "/var/lib/postgresql/data",
+		Env:    map[string]string{"POSTGRES_USER": "user", "POSTGRES_PASSWORD": "password", "POSTGRES_DB": "app"},
+		Expose: map[string]string{"DATABASE_URL": "postgresql://user:password@{host}:{port}/app"},
+	}
+	recipeWithService := func(spec services.Spec) Recipe {
+		recipe := Recipe{Version: 1, Services: map[string]services.Spec{"db": spec}}
+		if err := recipe.deriveServices(); err != nil {
+			t.Fatal(err)
+		}
+		return recipe
+	}
+	root := t.TempDir()
+	beforeUpdate, err := fingerprint(root, recipeWithService(declaredService), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(launcher, []byte("launcher rewritten by an update of ARchetipo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	afterUpdate, err := fingerprint(root, recipeWithService(declaredService), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeUpdate != afterUpdate {
+		t.Fatal("updating ARchetipo invalidated evidence whose declared inputs never changed")
+	}
+	declaredService.Image = "postgres:16-alpine"
+	otherDeclaration, err := fingerprint(root, recipeWithService(declaredService), nil, nil)
+	if err != nil || otherDeclaration == afterUpdate {
+		t.Fatalf("a changed service declaration did not invalidate: %v", err)
 	}
 }
 

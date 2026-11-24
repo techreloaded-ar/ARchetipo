@@ -285,6 +285,68 @@ func TestPublicationRecoversUnknownOutcomeWithoutAnotherPR(t *testing.T) {
 	}
 }
 
+type unreachableHosting struct{ fakeHosting }
+
+func (h *unreachableHosting) Find(context.Context, string, string, string) (*PullRequest, error) {
+	return nil, errors.New("hosting did not answer")
+}
+
+// A publication that stopped after the approval was saved, and whose frozen
+// evidence was revoked meanwhile, must not be a dead end: the candidate is
+// recorded again, goes back to the person, and the retry adopts a PR that
+// already exists instead of opening a second one.
+func TestStoppedPublicationWithRevokedEvidenceReturnsToReviewThroughReady(t *testing.T) {
+	s, r := productWork(t)
+	ctx := context.Background()
+	r, err := s.Propose(ctx, r.ID, Proposal{Intent: "Verified export"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = ready(t, s, r)
+	remote(t, s)
+	s.Hosting = &unreachableHosting{}
+	if _, err = s.Publish(ctx, r.ID, r.ReadySHA, 1); err == nil {
+		t.Fatal("publication without an answering hosting was reported as success")
+	}
+	stopped, err := s.Read(r.ID)
+	if err != nil || stopped.Status != Publishing || stopped.PR != nil || stopped.ApprovedAt == nil {
+		t.Fatalf("publication did not stop after the approval: %+v %v", stopped, err)
+	}
+	if err = os.Remove(stopped.Result.Evidence[0].Steps[0].LogPath); err != nil {
+		t.Fatal(err)
+	}
+	pullRequestOpenedByHand := &PullRequest{URL: "https://github.com/example/product/pull/8", Number: 8, State: "OPEN", HeadSHA: stopped.ReadySHA}
+	hosting := &fakeHosting{pr: pullRequestOpenedByHand}
+	s.Hosting = hosting
+	if _, err = s.Publish(ctx, r.ID, stopped.ReadySHA, 1); err == nil {
+		t.Fatal("published on revoked evidence")
+	}
+	verifyProduct(t, stopped)
+	recorded, err := s.Ready(ctx, r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: export customers"}, Summary: "Verified again", Checks: []string{"Diff check"}})
+	if err != nil {
+		t.Fatalf("a stopped publication could not record its candidate again: %v", err)
+	}
+	if recorded.Status != Review || recorded.ReadySHA != stopped.ReadySHA || recorded.ApprovedSHA != "" || recorded.ApprovedAt != nil {
+		t.Fatalf("recorded candidate kept an approval given on superseded evidence: %+v", recorded)
+	}
+	published, err := s.Publish(ctx, r.ID, recorded.ReadySHA, 1)
+	if err != nil || published.Status != Proposed || published.PR == nil || published.PR.Number != 8 || hosting.creates != 0 {
+		t.Fatalf("new approval did not adopt the existing PR: %+v creates=%d %v", published, hosting.creates, err)
+	}
+	if published.ApprovedSHA != recorded.ReadySHA || published.ApprovedAt == nil || published.BacklogSpecCode == "" {
+		t.Fatalf("adopted publication lost its approval or its backlog spec: %+v", published)
+	}
+
+	// Once a PR is recorded the approval stands: only the publication is retried.
+	published.Status = Publishing
+	if err = s.save(published); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Ready(ctx, r.ID, Result{SquashCommit: &SquashCommit{Title: "feat: export customers"}, Summary: "Verified again", Checks: []string{"Diff check"}}); err == nil {
+		t.Fatal("a publication with a recorded PR was sent back to review")
+	}
+}
+
 func TestCandidateRequiresMachineEvidenceAndRetainsApprovalReports(t *testing.T) {
 	s := fixture(t)
 	ctx := context.Background()

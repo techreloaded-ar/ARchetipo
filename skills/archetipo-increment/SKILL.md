@@ -298,6 +298,15 @@ The PR carries the specification, original story references, decisions and evide
 that does not retroactively approve or verify their commits. `increment refresh`
 reads the actual PR state. Never merge or deploy on behalf of this method.
 
+A publication can stop after the approval was saved (`PUBLISHING`) and then be
+refused because the candidate's evidence no longer holds: `E_PRECONDITION`
+naming a check or its evidence. While no PR is recorded, run the named checks
+again and call `increment ready`: the candidate returns to review and the person
+approves it again. Prefer this to pushing the branch or opening the PR by hand:
+only `increment publish` records the PR, leaves the increment's backlog spec and
+lets the merge close it. It adopts a PR that already exists for the branch
+instead of opening a second one.
+
 ## Deterministic contract
 
 All increment operations return `archetipo/v1`, `kind: increment`, record in `data`.

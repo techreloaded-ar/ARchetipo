@@ -64,6 +64,12 @@ remove their data.
   person's explicit approval in the Revisione panel (or a REVIEW → DONE move routed
   through it) closes the story and, with `worktree.enabled: true`, integrates its
   per-story branch; any other card move is project management only.
+- A publication that stopped before recording a PR is not a dead end. While the
+  record is `PUBLISHING` and holds no PR, `increment ready` records the candidate
+  again: it returns to REVIEW and the earlier approval, given on superseded
+  evidence, is dropped, so the person approves the displayed commit again. Once a
+  PR is recorded the approval stands and only the publication is retried.
+  `increment publish` adopts a PR that already exists for the branch.
 - `increment ready` attributes the candidate to the person before freezing it:
   author and committer of the commits the increment adds on its own first-parent
   line become the GitHub account `gh` is signed in with for the `origin` host
@@ -164,6 +170,10 @@ timeout and hard process death. Preserve its timing reports under the ignored
 run directory. Do not present these timings as end-to-end LLM/application speed.
 A cached check is valid only for its complete declared inputs and retained original
 evidence; a fresh failure revokes an older pass of the same candidate.
+A fingerprint covers the resolved executables of the project's own commands. The
+lifecycle of a declared service is carried out by the running ARchetipo binary:
+its declaration is an input, the `archetipo` launcher is not, so updating
+ARchetipo never revokes the evidence of a candidate whose inputs did not change.
 A candidate recorded by `increment ready` keeps its frozen evidence across a
 cleanup, a preview Stop/Start and a new preparation: `VerifyEvidence` reads the
 recipe and the retained original reports, never the live check cache, and revokes

@@ -97,7 +97,15 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 		if r.DevelopmentMode != Continuous {
 			return r, iox.NewPrecondition("historical delivery work is read-only", "start a new product work", nil)
 		}
-		if r.Status != Developing && r.Status != Review {
+		// A publication that stopped before recording a PR may find its frozen
+		// evidence revoked (a changed toolchain, a removed report). Recording the
+		// candidate again is its only way forward; it returns to review below and
+		// the earlier approval, given on superseded evidence, is not carried over.
+		publicationWithoutPR := r.Status == Publishing && r.PR == nil
+		if r.Status != Developing && r.Status != Review && !publicationWithoutPR {
+			if r.Status == Publishing {
+				return r, iox.NewConflict("increment already has a published PR", "retry the publication of the approved result", nil)
+			}
 			return r, iox.NewConflict("increment is not being developed", "persist the current specification first", nil)
 		}
 		if strings.TrimSpace(result.Summary) == "" || len(result.Checks) == 0 {
@@ -162,6 +170,9 @@ func (s *Service) Ready(ctx context.Context, id string, result Result) (Record, 
 		r.Result = &result
 		r.ReadySHA = head
 		r.ReadyScope = candidateScope(r)
+		if publicationWithoutPR {
+			r.ApprovedSHA, r.ApprovedAt = "", nil
+		}
 		r.Status = Review
 		latest := &r.Revisions[len(r.Revisions)-1]
 		latest.Result = &result
