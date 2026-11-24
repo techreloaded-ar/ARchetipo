@@ -255,8 +255,13 @@ Call `increment ready <id> --file -`:
 {"summary":"What can be tried, instructions and known limits","checks":["Actual check and result; original evidence path"],"preview_url":"http://127.0.0.1:3000","squash_commit":{"title":"One line describing the product change","body":"What changes and why"}}
 ```
 
-`squash_commit.title` is required and must be one non-empty line. Follow the
-base branch commit convention and workspace language. The PR uses this title and
+`squash_commit.title` is required and must be one non-empty line. Write title
+and body in the workspace language, like everything else the person reads: the
+PR shows them as they are, and the person approving the candidate is the first
+to read that title. From the base branch's commit convention take the form
+only — a type prefix such as `feat:`, the tense, the length — never the
+language: a history written in English does not make the PR of an Italian
+workspace English. The PR uses this title and
 body followed by the complete product dossier; keep the specification and evidence.
 Call `increment ready` before asking the person to try the finished preview or
 choose whether to approve the result. The approval control is offered only for
@@ -324,7 +329,9 @@ not permission to write workflow files directly. Only the CLI persists artifacts
 
 The `increment ready` JSON payload must contain
 `"squash_commit":{"title":"feat: describe the product change","body":"Why and what changed"}`.
-Use a non-empty single-line title following the project's commit style. The CLI
+Use a non-empty single-line title in the workspace language, shaped like the
+project's commits (prefix, tense) and never translated into their language;
+write the body in the workspace language too. The CLI
 uses it for the PR title and retains the complete business dossier in the body.
 This does not authorize a merge or publication; explicit approval of the displayed
 candidate remains required.
