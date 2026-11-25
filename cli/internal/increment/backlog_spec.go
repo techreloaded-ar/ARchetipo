@@ -176,25 +176,35 @@ func (s *Service) backlogSpecEpic(ctx context.Context, r Record, existing []doma
 // returned, so the increment is not declared delivered while its backlog trace
 // still says it is under review.
 func (s *Service) closeBacklogSpec(ctx context.Context, r Record) error {
-	if r.BacklogSpecCode == "" || s.Connector == nil {
-		return nil
-	}
-	spec, err := s.Connector.ReadSpecDetail(ctx, r.BacklogSpecCode)
-	if err != nil {
-		items, listErr := s.Connector.FetchBacklogItems(ctx, "")
-		if listErr != nil {
-			return err
-		}
-		for _, item := range items {
-			if item.Code == r.BacklogSpecCode {
-				return err
-			}
-		}
-		return nil
-	}
-	if spec.Status == domain.StatusDone || !r.OwnsBacklogSpec(spec) {
-		return nil
+	spec, found, err := s.ownBacklogSpec(ctx, r)
+	if err != nil || !found || spec.Status == domain.StatusDone {
+		return err
 	}
 	_, err = s.Connector.TransitionStatus(ctx, r.BacklogSpecCode, domain.StatusDone)
 	return err
+}
+
+// ownBacklogSpec reads the backlog spec the increment's publication recorded.
+// found is false, without an error, when the person removed it or when its code
+// now names somebody else's story. A read that fails while the backlog still
+// lists the code is returned, so the caller never mistakes a failure for an
+// absence.
+func (s *Service) ownBacklogSpec(ctx context.Context, r Record) (spec domain.Spec, found bool, err error) {
+	if r.BacklogSpecCode == "" || s.Connector == nil {
+		return domain.Spec{}, false, nil
+	}
+	spec, err = s.Connector.ReadSpecDetail(ctx, r.BacklogSpecCode)
+	if err != nil {
+		items, listErr := s.Connector.FetchBacklogItems(ctx, "")
+		if listErr != nil {
+			return domain.Spec{}, false, err
+		}
+		for _, item := range items {
+			if item.Code == r.BacklogSpecCode {
+				return domain.Spec{}, false, err
+			}
+		}
+		return domain.Spec{}, false, nil
+	}
+	return spec, r.OwnsBacklogSpec(spec), nil
 }

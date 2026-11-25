@@ -103,6 +103,9 @@ func (s *Server) incrementView(ctx context.Context, ws *workspaceSession, r incr
 	if r.Status == increment.Concluded {
 		view.StatusLabel = "Apprendimento registrato"
 	}
+	if r.PullRequestClosedUnmerged() {
+		view.StatusLabel = "PR chiusa senza merge"
+	}
 
 	view.Stories = []incrementStoryView{}
 	labels := map[domain.Status]string{domain.StatusTodo: tpl.Statuses.Todo, domain.StatusPlanned: tpl.Statuses.Planned, domain.StatusInProgress: tpl.Statuses.InProgress, domain.StatusReview: tpl.Statuses.Review, domain.StatusDone: tpl.Statuses.Done}
@@ -254,7 +257,21 @@ func (s *Server) attachIncrement(ctx context.Context, ws *workspaceSession, reco
 	if err != nil {
 		if receipt, receiptErr := s.incrementService(ws).DeletionReceipt(record.IncrementID); receiptErr == nil && receipt.Deleted {
 			receipt.Record.Title = inlineMarkdownMarkers.Replace(receipt.Record.Title)
-			view.Increment = &incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef}
+			note := "L’ambiente locale è stato eliminato. Commit recuperabili tramite Git: " + receipt.BackupRef + "."
+			if receipt.BacklogSpecRemoved != "" {
+				note += " La spec " + receipt.BacklogSpecRemoved + " è stata rimossa dal backlog."
+			}
+			if abandoned := receipt.EnvironmentAbandoned; abandoned != nil {
+				note += " Servizi e dati di test non rimossi, da eliminare a mano"
+				if len(abandoned.Resources) > 0 {
+					note += " (" + strings.Join(abandoned.Resources, ", ") + ")"
+				}
+				if abandoned.EnvironmentID != "" {
+					note += ", ambiente " + abandoned.EnvironmentID
+				}
+				note += ". Motivo: " + abandoned.Reason + "."
+			}
+			view.Increment = &incrementView{Record: receipt.Record, StatusLabel: "Ambiente eliminato", Actions: []incrementControl{}, Note: note}
 			return
 		}
 		view.Notice = "Incremento non disponibile: " + err.Error()
@@ -590,6 +607,11 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 	if r.Status == increment.Proposed && r.PR != nil && r.PR.URL != "" {
 		steps = append(steps, incrementStepView{Kind: "open", Open: "url", Target: r.PR.URL, Label: fmt.Sprintf("Apri la PR #%d su GitHub ↗", r.PR.Number)})
 	}
+	if r.PullRequestClosedUnmerged() && view.DeleteLabel != "" {
+		// Nothing will integrate this increment as it is: the way out stands
+		// beside the refresh, and it is the same removal the panel offers.
+		steps = append(steps, incrementStepView{Kind: "delete", Tone: "warn", Label: view.DeleteLabel})
+	}
 	primary := false
 	for _, action := range offered {
 		kind := "action"
@@ -610,7 +632,11 @@ func (s *Server) incrementNextSteps(ws *workspaceSession, r increment.Record, of
 	}
 	notes := []string{}
 	if r.Status == increment.Proposed {
-		notes = append(notes, "in attesa del merge della PR")
+		if r.PullRequestClosedUnmerged() {
+			notes = append(notes, "la PR è stata chiusa su GitHub senza merge: elimina l’incremento per chiuderlo senza integrarlo, oppure riapri la PR per riproporlo")
+		} else {
+			notes = append(notes, "in attesa del merge della PR")
+		}
 		if check := ws.prChecks.last(r.ID); check.err != "" {
 			notes = append(notes, "ultimo controllo non riuscito: "+check.err)
 		} else if !check.at.IsZero() {

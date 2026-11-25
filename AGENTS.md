@@ -56,6 +56,16 @@ remove their data.
   increment's conversation. `increment refresh` moves it to DONE when the PR is
   merged, before declaring the increment delivered. `archetipo spec move` stays
   the manual override. A spec the person removed is not recreated.
+- The person can close an increment without integrating it at any moment. A PR
+  closed without a merge leaves the record `PROPOSED` with the PR state `CLOSED`:
+  `increment refresh` records it, the viewer says so instead of waiting for a
+  merge and offers the removal beside the refresh; a reopened PR is awaited
+  again. Removing an increment that was never merged also removes its own
+  backlog spec (the one whose body names its id), because no merge is left to
+  close it; the spec of a delivered increment, one already DONE, one the person
+  removed and a reassigned code are never touched, and a connector that cannot
+  delete specs leaves it in place and says so. The deletion plan announces the
+  spec and an open PR, which stays the person's to close on GitHub.
 - Version the Markdown specification and linked requirement snapshots. Preserve
   prior results, observations, decisions and the original request.
 - Product development requires the person's approval of the first specification
@@ -232,7 +242,7 @@ Rules that follow from this, and that a change must not quietly undo:
 - **Choices are per turn.** Model and options chosen during a turn apply to the *next* one, are validated against the session's own catalog, and never move the workspace default.
 - **Worker interactions retain native ownership.** A parent turn ending must not discard a worker's pending approval or input. It remains answerable after reload until its own native turn ends, the runtime resolves it or the connection is released. Stopping such a worker preserves the already completed parent turn.
 - **Ownership is per conversation.** One viewer process at a time holds a native runtime, through the conversation lock the journal already uses; a second viewer reads it and is refused only when it writes.
-- **Conversation deletion and environment removal are distinct choices.** `DELETE …/{id}` releases the runtime. Chat-only `DELETE …/{id}/record` removes the ARchetipo record and timeline and preserves the native session. For linked worktrees, deletion and archiving require an explicit keep/remove choice; confirmed increment removal delegates to the shared CLI increment deletion contract, which stops owned work, runs the registered environment cleanup, retains only a Git recovery ref for committed work (no environment archive) and removes its local worktree, branch and live records. Archiving with removal keeps the conversation readable. Never delete the harness transcript, guess service ownership or remove working files merely because a conversation was closed.
+- **Conversation deletion and environment removal are distinct choices.** `DELETE …/{id}` releases the runtime. Chat-only `DELETE …/{id}/record` removes the ARchetipo record and timeline and preserves the native session. For linked worktrees, deletion and archiving require an explicit keep/remove choice; confirmed increment removal delegates to the shared CLI increment deletion contract, which stops owned work, runs the registered environment cleanup, retains only a Git recovery ref for committed work (no environment archive) and removes its local worktree, branch and live records. Archiving with removal keeps the conversation readable. A registered cleanup that runs and fails is never a dead end: the worktree is preserved, the refusal names the failed step in its own words and offers a second explicit choice (`--abandon-environment`, `environment=abandon` in the viewer) that removes the increment leaving those services and test data in place, named in the deletion receipt. Never delete the harness transcript, guess service ownership or remove working files merely because a conversation was closed.
 
 The contract lives in `cli/internal/execution/session.go`; the adapters are `claude/native_session.go` and `codex/native_session.go`; the viewer side is `web/native_session.go`, `web/session_action.go` and `web/native_runtime.go`. `arcipelago` does **not** implement `SessionProvider` and keeps the legacy `Conversationalist` and batch run path.
 
@@ -351,7 +361,7 @@ product work is covered by the browser smokes below and the increment Go suite.
 
 ### Standalone smoke tests
 
-- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome with only the agent and GitHub simulated. It starts from an original enterprise story, develops and revises a specification, recovers the same native session after process death while preserving a checkpoint, tests preview and reload, requires business approval for a single PR, reconciles later developer commits and verifies bidirectional story/work/PR links and dossier export. It also verifies the increment's own backlog spec: recorded in REVIEW by publication with the approved specification, the conversation link and the PR, offered no classic review, refused a manual approval, and moved to DONE by the merge while the original story stays untouched. Reports and desktop/mobile screenshots remain ignored.
+- `npm run test:view-increment-smoke`: drives the real viewer, CLI, connector and native Codex adapter in headless Chrome with only the agent and GitHub simulated. It starts from an original enterprise story, develops and revises a specification, recovers the same native session after process death while preserving a checkpoint, tests preview and reload, requires business approval for a single PR, reconciles later developer commits and verifies bidirectional story/work/PR links and dossier export. It also verifies the increment's own backlog spec: recorded in REVIEW by publication with the approved specification, the conversation link and the PR, offered no classic review, refused a manual approval, and moved to DONE by the merge while the original story stays untouched. Before the merge it closes the simulated PR without merging and verifies that the viewer says so, offers the removal and announces the backlog spec it would take away, then waits again once the PR is reopened. Reports and desktop/mobile screenshots remain ignored.
   It also reads an increment report from its own worktree as inert text and
   verifies that reopening an already open thread preserves its native identity.
 
@@ -460,7 +470,11 @@ preserve the live iframe across Preview/Increment tab changes.
   HTTP test services. Covers cancelled confirmation, keep/remove choices during
   conversation deletion and archiving, the dedicated increment delete button,
   cleanup of synthetic data/services, branch/worktree removal, retained archived
-  native identities, Git recovery refs without environment archives and a 390px confirmation dialog. No AI
+  native identities, Git recovery refs without environment archives and a 390px confirmation dialog. It also
+  breaks one environment so that its cleanup fails: the dialog names the reason and
+  offers to proceed, cancelling leaves the increment intact with its archive control
+  usable, and the explicit choice removes worktree and branch while the receipt
+  records what was left behind. No AI
   credentials or remote traffic; missing Chrome fails. Reports and screenshots
   remain under ignored `test/workspaces/increment-deletion-smoke/` paths.
 
@@ -504,6 +518,10 @@ cover manager restart and refusal of an occupied retained proxy port. Increment
 tests cover common recipes published only from a worktree, without materialized
 parent files, including replacement of unchanged older versioned helpers while
 preserving edited and untracked helpers.
+
+The page-load smoke also verifies that, once an increment action that rereads
+the conversation index has ended, the archive controls of the rail are enabled
+again.
 
 The page-load smoke also verifies first-provider onboarding: saving the provider
 refreshes the home and removes its former unavailable notice without a restart.

@@ -320,6 +320,20 @@ async function main(){
 
    const original=await cliJSON(["spec","show","US-001"],undefined,sandbox);
    assert.equal(original.spec.status,"TODO");
+   // Una PR chiusa senza merge non resta «in attesa del merge»: il viewer lo
+   // dice, offre la rimozione dell'incremento e annuncia che porterà via anche
+   // la sua storia nel backlog. Riaperta la PR, l'attesa riprende.
+   gh.pr.state="CLOSED";await fs.writeFile(ghState,JSON.stringify(gh));
+   const refreshView=async()=>{const response=await fetch(view.url+"/api/increments/"+inc.id+"/refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});assert.equal(response.status,200,"refresh refused");return response.json();};
+   const closedView=await refreshView();
+   assert.equal(closedView.status,"PROPOSED");assert.equal(closedView.status_label,"PR chiusa senza merge");
+   assert.match(closedView.next_steps_note,/chiusa su GitHub senza merge/);assert.doesNotMatch(closedView.next_steps_note,/in attesa del merge/);
+   assert.ok(closedView.next_steps.some(step=>step.kind==="delete"&&step.label),JSON.stringify(closedView.next_steps));
+   const closedPlan=await (await fetch(view.url+"/api/increments/"+inc.id+"/deletion-plan")).json();
+   assert.ok(closedPlan.message.includes(recorded.backlog_spec_code),closedPlan.message);
+   gh.pr.state="OPEN";await fs.writeFile(ghState,JSON.stringify(gh));
+   const reopenedView=await refreshView();
+   assert.match(reopenedView.next_steps_note,/in attesa del merge della PR/);assert.ok(!reopenedView.next_steps.some(step=>step.kind==="delete"));
    gh.pr.state="MERGED";gh.pr.headRefOid="developer-revision";await fs.writeFile(ghState,JSON.stringify(gh));
    published=await cliJSON(["increment","refresh",inc.id]);
    assert.equal(published.status,"DELIVERED");assert.equal(published.approved_sha,approved);assert.equal(published.integration_sha,"developer-revision");

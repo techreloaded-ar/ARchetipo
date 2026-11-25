@@ -7194,6 +7194,32 @@
 		return "?" + query;
 	}
 
+	// sendRemoval manda una rimozione e, se il cleanup dell'ambiente fallisce,
+	// non lascia la persona davanti a un rifiuto: il server dice il motivo e
+	// offre di procedere comunque, con le sue parole e nello stesso dialogo
+	// delle altre scelte. Solo quella scelta esplicita rimanda la richiesta;
+	// chi annulla ottiene null e l'incremento resta com'era.
+	async function sendRemoval(send) {
+		try {
+			return await send("");
+		} catch (err) {
+			if (!err || !err.removal) throw err;
+			if (await chooseRemoval(err.removal) !== "abandon") return null;
+			return await send("environment=abandon");
+		}
+	}
+
+	function withQuery(url, extra) {
+		if (!extra) return url;
+		return url + (url.includes("?") ? "&" : "?") + extra;
+	}
+
+	function removalDoneText(result) {
+		return result.environment_abandoned
+			? "Incremento eliminato. Servizi e dati di test non rimossi: restano su questo computer."
+			: "Incremento e ambiente eliminati. Copia locale salvata per il recupero.";
+	}
+
 	async function deleteCurrentIncrement() {
 		const current = conversationView?.increment;
 		if (!current || conversationBusy) return;
@@ -7201,12 +7227,16 @@
 			const plan = await apiGet(`/api/increments/${encodeURIComponent(current.id)}/deletion-plan`);
 			if (await chooseRemoval(plan) !== "delete") return;
 			conversationBusy = true; renderConversationPanel();
-			const result = await apiDelete(`/api/increments/${encodeURIComponent(current.id)}?confirm=true&head=${encodeURIComponent(plan.increment.head_sha)}`);
+			const url = `/api/increments/${encodeURIComponent(current.id)}?confirm=true&head=${encodeURIComponent(plan.increment.head_sha)}`;
+			const result = await sendRemoval((extra) => apiDelete(withQuery(url, extra)));
+			if (!result) return;
 			conversationsUndo = null;
 			conversationBusy = false;
 			if (result.conversation_ids?.includes(conversationsCurrentId)) prepareConversationOpen("");
-			showToast("Incremento e ambiente eliminati. Copia locale salvata per il recupero.", "ok");
+			showToast(removalDoneText(result), "ok");
 			await loadConversationsIndex();
+			// La spec che l'incremento aveva registrato esce dal backlog con lui.
+			loadBoard();
 		} catch (err) { showToast(TEXT.deleteFailed(err.message || err), "err"); }
 		finally { conversationBusy = false; renderConversationPanel(); }
 	}
@@ -7218,7 +7248,9 @@
 			const plan = await apiGet(`/api/workspace/conversations/${encodeURIComponent(id)}/deletion-plan`);
 			const choice = await chooseRemoval(plan);
 			if (!choice) return;
-			deleted = await apiDelete(`/api/workspace/conversations/${encodeURIComponent(id)}/record${removalQuery(choice, plan)}`);
+			const url = `/api/workspace/conversations/${encodeURIComponent(id)}/record${removalQuery(choice, plan)}`;
+			deleted = await sendRemoval((extra) => apiDelete(withQuery(url, extra)));
+			if (!deleted) return;
 		} catch (err) {
 			showToast(TEXT.deleteFailed(err.message || err), "err");
 			return;
@@ -7231,7 +7263,8 @@
 			record && record.id
 				? { id: record.id, title: record.title || "", record }
 				: null;
-		showToast(deleted.archive_path ? "Conversazione e ambiente eliminati. Copia locale salvata per il recupero." : TEXT.conversationDeleted, "ok");
+		showToast(deleted.worktree_removed ? removalDoneText(deleted) : TEXT.conversationDeleted, "ok");
+		if (deleted.worktree_removed) loadBoard();
 		// Il pannello non può restare su un thread che non esiste più: torna
 		// all'offerta di aprirne uno nuovo, che è lo stato di un workspace che
 		// non sta mostrando nessuna conversazione.
@@ -8934,9 +8967,12 @@
 				if (!choice) return;
 				query = removalQuery(choice, plan);
 			}
+			const archiveUrl = `/api/workspace/conversations/${encodeURIComponent(id)}/archive${query}`;
 			const view = native
-				? await apiPost(`/api/workspace/conversations/${encodeURIComponent(id)}/archive${query}`, {})
+				? await sendRemoval((extra) => apiPost(withQuery(archiveUrl, extra), {}))
 				: await apiDelete(`/api/workspace/conversations/${encodeURIComponent(id)}?after_id=${conversationAfterID}`);
+			if (!view) return;
+			if (query.includes("worktree=delete")) loadBoard();
 			conversationRefusal = "";
 			// A slot has just been freed, so the reason an open was refused is no
 			// longer the truth of this workspace.
@@ -9027,6 +9063,12 @@
 			newConversation.disabled = conversationBusy;
 			newConversation.setAttribute("aria-busy", String(conversationBusy));
 		}
+		// La rail viene ridisegnata dai suoi dati, non a ogni comando: un indice
+		// riletto mentre un comando era in volo lasciava l'archiviazione spenta
+		// anche dopo la sua fine, finché la rail non veniva ridisegnata.
+		conversationsRailEl
+			?.querySelectorAll("[data-conversation-archive], [data-conversation-archive-confirm], [data-conversation-archive-abort]")
+			.forEach((control) => { control.disabled = conversationBusy; });
 		if (!conversationEl) return;
 		const discussionScroll = conversationEl.querySelector(".conv-discussion")?.scrollTop || 0;
 		// Il questionario scorre dentro il proprio corpo — `.conv-input-body`
@@ -9304,6 +9346,8 @@
 			// fault: the run panel treats a 409 as "no interactive run here"
 			// rather than as an error to paint red.
 			if (data && data.hint) err.hint = data.hint;
+			// A refused removal may carry the server's own way forward.
+			if (data && data.removal) err.removal = data.removal;
 			err.status = r.status;
 			throw err;
 		}

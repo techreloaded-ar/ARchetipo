@@ -2063,6 +2063,12 @@
 			if (kind === "prompt") {
 				return `<button type="button" class="conv-step conv-step-prompt" data-increment-step-prompt="${escapeHtml(textAt(step, "prompt"))}"${ui.busy ? " disabled" : ""}><span aria-hidden="true">✎</span>${text}</button>`;
 			}
+			// La rimozione dell'incremento è la stessa del pannello: qui la offre
+			// il server quando è la via d'uscita, e resta possibile mentre
+			// l'agente lavora.
+			if (kind === "delete") {
+				return `<button type="button" class="conv-step conv-step-action${tone}" data-increment-delete${ui.busy ? " disabled" : ""}>${text}</button>`;
+			}
 			if (kind !== "open") return "";
 			const open = textAt(step, "open");
 			if (open === "url") {

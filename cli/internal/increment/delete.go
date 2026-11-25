@@ -8,8 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/domain"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/iox"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/preview"
@@ -22,12 +25,29 @@ type DeletionPlan struct {
 	HeadSHA         string `json:"head_sha"`
 	Dirty           bool   `json:"dirty"`
 	UnmergedCommits int    `json:"unmerged_commits"`
+	// RemovesBacklogSpec names the backlog spec the deletion takes away with the
+	// increment; KeepsBacklogSpec names one the connector cannot delete.
+	RemovesBacklogSpec string `json:"removes_backlog_spec,omitempty"`
+	KeepsBacklogSpec   string `json:"keeps_backlog_spec,omitempty"`
 }
 
 type DeletionOptions struct {
 	HeadSHA               string
 	Confirm               bool
 	PreserveConversations bool
+	// AbandonEnvironment lets the deletion proceed when the registered cleanup
+	// ran and failed. It is a second, explicit decision: the services and test
+	// data that could not be removed stay on the computer and are named in the
+	// receipt.
+	AbandonEnvironment bool
+}
+
+// AbandonedEnvironment records what a deletion left behind because its cleanup
+// failed and the person chose to remove the increment anyway.
+type AbandonedEnvironment struct {
+	Reason        string   `json:"reason"`
+	EnvironmentID string   `json:"environment_id,omitempty"`
+	Resources     []string `json:"resources,omitempty"`
 }
 
 type DeletionResult struct {
@@ -40,6 +60,109 @@ type DeletionResult struct {
 	Deleted                bool     `json:"deleted"`
 	ConversationIDs        []string `json:"conversation_ids"`
 	ConversationsPreserved bool     `json:"conversations_preserved"`
+	// The backlog spec of an increment closed without being integrated goes
+	// with it. BacklogSpecSettled makes that step resumable like the others.
+	BacklogSpecSettled   bool                  `json:"backlog_spec_settled,omitempty"`
+	BacklogSpecRemoved   string                `json:"backlog_spec_removed,omitempty"`
+	BacklogSpecKept      string                `json:"backlog_spec_kept,omitempty"`
+	EnvironmentAbandoned *AbandonedEnvironment `json:"environment_abandoned,omitempty"`
+}
+
+// EnvironmentCleanupError reports a registered cleanup that ran and failed. The
+// worktree is preserved; the same confirmed deletion may be repeated once the
+// cause is fixed, or with AbandonEnvironment to leave the named resources behind.
+type EnvironmentCleanupError struct {
+	Reason        string
+	ReportPath    string
+	EnvironmentID string
+	Resources     []string
+	coded         *iox.CodedError
+}
+
+func (e *EnvironmentCleanupError) Error() string { return e.coded.Error() }
+func (e *EnvironmentCleanupError) Unwrap() error { return e.coded }
+
+// cleanupFailureReason names the step that failed in its own words: the line
+// of its log that states a failure, else the first one that is not a CLI
+// envelope. The complete log stays in the report the error names.
+func cleanupFailureReason(cleanup verification.Result) string {
+	for _, step := range cleanup.Steps {
+		if step.Error == "" && step.ExitCode == 0 {
+			continue
+		}
+		detail := step.Error
+		if raw, err := os.ReadFile(step.LogPath); err == nil {
+			first, failure := "", ""
+			for _, line := range strings.Split(string(raw), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "{") {
+					continue
+				}
+				if first == "" {
+					first = line
+				}
+				lower := strings.ToLower(line)
+				if strings.Contains(lower, "error") || strings.Contains(lower, "fail") || strings.Contains(lower, "fatal") || strings.Contains(lower, "denied") {
+					failure = line
+					break
+				}
+			}
+			if failure != "" {
+				detail = failure
+			} else if first != "" {
+				detail = first
+			}
+		}
+		if runes := []rune(detail); len(runes) > 300 {
+			detail = string(runes[:300]) + "…"
+		}
+		return step.Name + ": " + detail
+	}
+	return "the cleanup reported a failure without a failed step"
+}
+
+// registeredResourceNames lists the resources the environment journal still
+// holds, read before cleanup rewrites it.
+func registeredResourceNames(environment *verification.Service) []string {
+	state, err := environment.Resources()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(state.Resources))
+	for _, resource := range state.Resources {
+		names = append(names, resource.Resource.Name)
+	}
+	return names
+}
+
+// withdrawBacklogSpec settles the backlog spec of an increment that is removed
+// before being integrated: nothing would ever close it, so it goes with the
+// increment. A delivered increment keeps its spec as the trace of what was
+// merged, a spec the person already closed or removed is left alone, and a code
+// that now names somebody else's story is never touched. With apply false it
+// only reports what a deletion would do.
+func (s *Service) withdrawBacklogSpec(ctx context.Context, r Record, apply bool) (removed, kept string, err error) {
+	merged := r.PR != nil && r.PR.State == "MERGED"
+	if r.Status == Delivered || merged || r.BacklogSpecCode == "" || s.Connector == nil {
+		return "", "", nil
+	}
+	spec, found, err := s.ownBacklogSpec(ctx, r)
+	deleter, canDelete := s.Connector.(connector.SpecDeleter)
+	if !canDelete {
+		if err == nil && (!found || spec.Status == domain.StatusDone) {
+			return "", "", nil
+		}
+		return "", r.BacklogSpecCode, nil
+	}
+	if err != nil || !found || spec.Status == domain.StatusDone {
+		return "", "", err
+	}
+	if apply {
+		if _, err = deleter.DeleteSpec(ctx, spec.Code); err != nil {
+			return "", "", err
+		}
+	}
+	return spec.Code, "", nil
 }
 
 // DeletionPlan verifies actual Git ownership before offering a destructive action.
@@ -108,8 +231,12 @@ func (s *Service) DeletionPlan(ctx context.Context, id string) (DeletionPlan, er
 	if err != nil {
 		return plan, err
 	}
-	plan.UnmergedCommits, err = strconv.Atoi(count)
-	return plan, err
+	if plan.UnmergedCommits, err = strconv.Atoi(count); err != nil {
+		return plan, err
+	}
+	// An unreadable backlog never hides the plan: the deletion itself reads it again.
+	plan.RemovesBacklogSpec, plan.KeepsBacklogSpec, _ = s.withdrawBacklogSpec(ctx, r, false)
+	return plan, nil
 }
 
 // Delete is explicit, local and recoverable. The caller must stop native work
@@ -223,12 +350,23 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				if stateErr == nil || resourceErr == nil {
 					// The deletion locks above already hold preview-environment,
 					// excluding every preview while registered cleanup runs.
-					cleanup, cleanupErr := verification.New(r.Workdir, "").ForOwnedPreview().ForRemoval().Execute(ctx, "cleanup", "", "", false)
+					environment := verification.New(r.Workdir, "").ForOwnedPreview().ForRemoval()
+					registered := registeredResourceNames(environment)
+					cleanup, cleanupErr := environment.Execute(ctx, "cleanup", "", "", false)
 					if cleanupErr != nil {
 						return r, cleanupErr
 					}
 					if !cleanup.Passed {
-						return r, iox.NewPrecondition("environment cleanup failed", "inspect "+cleanup.ReportPath+"; worktree preserved", nil)
+						// A failed cleanup is never a dead end: the person may fix
+						// its cause and retry, or decide to leave the resources.
+						reason := cleanupFailureReason(cleanup)
+						if !options.AbandonEnvironment {
+							return r, &EnvironmentCleanupError{
+								Reason: reason, ReportPath: cleanup.ReportPath, EnvironmentID: cleanup.EnvironmentID, Resources: registered,
+								coded: iox.NewPrecondition("environment cleanup failed: "+reason, "fix the cause and retry, or repeat the confirmed deletion with --abandon-environment to leave its services and test data in place; report: "+cleanup.ReportPath+"; worktree preserved", nil),
+							}
+						}
+						result.EnvironmentAbandoned = &AbandonedEnvironment{Reason: reason, EnvironmentID: cleanup.EnvironmentID, Resources: registered}
 					}
 				} else if !os.IsNotExist(stateErr) {
 					return r, stateErr
@@ -307,6 +445,15 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				}
 			}
 			result.BranchRemoved = true
+			if err = save(); err != nil {
+				return r, err
+			}
+		}
+		if !result.BacklogSpecSettled {
+			if result.BacklogSpecRemoved, result.BacklogSpecKept, err = s.withdrawBacklogSpec(ctx, r, true); err != nil {
+				return r, err
+			}
+			result.BacklogSpecSettled = true
 			if err = save(); err != nil {
 				return r, err
 			}

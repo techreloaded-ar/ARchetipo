@@ -1810,6 +1810,9 @@ async function exerciseIncrementStepsAndReleasedPreview(browser, url) {
  await page.evaluate(`document.querySelector('[data-increment-step-action]').click();document.querySelector('[data-increment-step-run]').click()`);
  await page.waitFor(`window.guidedPosts.length===1`,10000,'la pubblicazione esplicita del candidato');
  if(!await page.evaluate(`window.guidedPosts[0].head_sha==='displayed-candidate'&&window.guidedPosts[0].revision===3`))throw new Error('Pubblicato un candidato diverso da quello mostrato');
+ // L'azione rilegge l'indice mentre è ancora in volo: finita l'azione, i
+ // comandi di archiviazione della rail non devono restare spenti.
+ await page.waitFor(`document.querySelectorAll('[data-conversation-archive]').length>0&&Array.from(document.querySelectorAll('[data-conversation-archive]')).every(control=>!control.disabled)`,10000,'archiviazione di nuovo disponibile nella rail dopo l’azione dell’incremento',()=>page.evaluate(`JSON.stringify(Array.from(document.querySelectorAll('[data-conversation-archive]')).map(control=>[control.dataset.conversationArchive,control.disabled]))`));
  if(exceptions.length)throw new Error('Eccezioni nei prossimi passi: '+JSON.stringify(exceptions));
  ok('prossimi passi e preview ripristinabile','suggerimenti e conferma conservano la bozza, la pubblicazione usa il candidato mostrato e il feedback riprende la stessa chat');
  await page.close();

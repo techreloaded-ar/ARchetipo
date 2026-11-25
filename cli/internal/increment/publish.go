@@ -89,6 +89,15 @@ func (s *Service) Publish(ctx context.Context, id, expectedSHA string, revision 
 	})
 }
 
+// PullRequestClosedUnmerged reports a published increment whose PR was closed
+// on the hosting service without a merge. Nothing will integrate it as it is:
+// the person either reopens the PR, and the next refresh waits for its merge
+// again, or removes the increment. The status stays PROPOSED, so neither choice
+// needs a way back.
+func (r Record) PullRequestClosedUnmerged() bool {
+	return r.Status == Proposed && r.PR != nil && r.PR.State == "CLOSED"
+}
+
 func (s *Service) Refresh(ctx context.Context, id string) (Record, error) {
 	return s.lockedWorkspaceRecord(ctx, id, func() (Record, error) {
 		r, err := s.Read(id)

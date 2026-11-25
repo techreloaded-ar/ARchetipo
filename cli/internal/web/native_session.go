@@ -1003,8 +1003,12 @@ func (s *Server) handleArchiveNativeConversation(w http.ResponseWriter, r *http.
 		return
 	}
 	if r.URL.Query().Get("worktree") == "delete" {
-		if _, deleteErr := s.deleteIncrementEnvironment(r.Context(), ws, plan.Increment.Record.ID, r.URL.Query().Get("head"), true); deleteErr != nil {
-			writeError(w, deleteErr)
+		abandonEnvironment, valid := environmentRemovalChoice(w, r)
+		if !valid {
+			return
+		}
+		if _, deleteErr := s.deleteIncrementEnvironment(r.Context(), ws, plan.Increment.Record.ID, r.URL.Query().Get("head"), true, abandonEnvironment); deleteErr != nil {
+			writeRemovalError(w, deleteErr, true)
 			return
 		}
 		record, err = ws.conversationStore().GetMetadata(r.Context(), id)

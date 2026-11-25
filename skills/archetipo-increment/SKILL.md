@@ -339,6 +339,20 @@ only `increment publish` records the PR, leaves the increment's backlog spec and
 lets the merge close it. It adopts a PR that already exists for the branch
 instead of opening a second one.
 
+The person can close a work without integrating it at any moment, whatever its
+status. A PR closed without a merge (`pull_request.state` `CLOSED` after
+`increment refresh`) leaves the work `PROPOSED` and is theirs to settle: say so,
+then they either reopen the PR or remove the work. Removal is always their
+explicit decision and never a step of yours while the session is working in that
+worktree: in the viewer it is «Elimina incremento»; standalone, from the parent
+workspace, `increment deletion-plan <id>` shows what goes (worktree, branch,
+uncommitted changes and, when the work was never merged, its backlog spec in
+`removes_backlog_spec`) and `increment delete <id> --confirm --head <head_sha>`
+does it, returning `kind: increment_deletion`. `E_PRECONDITION` naming a failed
+environment cleanup preserves the worktree: report its reason, and add
+`--abandon-environment` only when the person chooses to leave those services and
+test data in place.
+
 ## Deterministic contract
 
 All increment operations return `archetipo/v1`, `kind: increment`, record in `data`.

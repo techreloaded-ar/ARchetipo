@@ -34,7 +34,7 @@ async function main(){
   const git=async args=>(await run('git','git',args,{cwd:sandbox})).stdout.trim();
   await git(['init','-b','main']);await git(['config','user.name','Deletion smoke']);await git(['config','user.email','smoke@example.test']);
   await git(['add','hello.txt','service.mjs','setup.mjs','probe.mjs','cleanup.mjs','.archetipo/config.yaml','.archetipo/environment.json']);await git(['commit','-m','test: owned environment']);
-  for(const [index,mode] of ['delete-keep','delete-remove','archive-keep','archive-remove','button'].entries()){
+  for(const [index,mode] of ['delete-keep','delete-remove','archive-keep','archive-remove','button','archive-broken'].entries()){
    const input=path.join(dir,'create-'+index+'.json');await fs.writeFile(input,JSON.stringify({title:mode,request:'Verify cleanup '+mode}));
    const record=JSON.parse((await run('create',cli,['increment','create','--file',input],{cwd:sandbox})).stdout).data;
    await run('prepare',cli,['execution','environment','prepare'],{cwd:record.workdir});
@@ -53,6 +53,7 @@ async function main(){
   const choose=async choice=>{await page.waitFor('!!document.querySelector("[data-removal-dialog][open]")',timeout,'worktree cleanup choice');await page.evaluate(`document.querySelector('[data-removal-dialog][open] [data-removal-choice="${choice}"]').click()`);await page.waitFor('!document.querySelector("[data-removal-dialog]")',timeout,'choice dialog closed');};
   const open=async item=>{await page.waitFor(`!!document.querySelector('[data-conversation-id="${item.id}"]')`,timeout,'conversation in rail');await page.evaluate(`document.querySelector('[data-conversation-id="${item.id}"]').click()`);await page.waitFor(`document.querySelector('.conv-panel')?.dataset.conversationId===${JSON.stringify(item.id)} || !!document.querySelector('[data-increment-id="${item.record.id}"]')`,timeout,'increment conversation');};
   for(const item of items){
+   if(item.mode==='archive-broken')continue;
    if(item.mode.startsWith('delete')){
     await page.waitFor(`!!document.querySelector('[data-conversation-delete="${item.id}"]')`,timeout,'delete chat control');
     await page.evaluate(`document.querySelector('[data-conversation-delete="${item.id}"]').click()`);
@@ -88,6 +89,38 @@ async function main(){
    }
    ok(item.mode+': scelta verificata nel browser, esito confermato su chat, servizio, dati, worktree e branch');
   }
+  // A cleanup that cannot succeed — its service is gone, as with a container
+  // engine that is not running — must not leave an increment that cannot be closed.
+  const broken=items.find(item=>item.mode==='archive-broken');
+  await fetch(broken.service.url+'/shutdown',{headers:{connection:'close'}}).catch(()=>{});
+  // The service runs inside the worktree: wait for its process to be gone, or
+  // on Windows its working directory would keep the checkout from being removed.
+  await until(async()=>{try{await fetch(broken.service.url,{headers:{connection:'close'}});return false;}catch{return true;}},'service of the broken environment stopped');
+  await fs.rm(path.join(broken.record.workdir,'.archetipo/environment/service.json'));
+  const brokenReceipt=path.join(sandbox,'.archetipo/increment-archives',broken.record.id,'deletion.json');
+  const removeBroken=async()=>{
+   await page.waitFor('!!document.querySelector("[data-conversation-close-open]:not([disabled])")',timeout,'archive control of the open conversation');
+   await page.evaluate('document.querySelector("[data-conversation-close-open]").click()');
+   await page.waitFor(`!!document.querySelector('[data-removal-dialog][open] [data-removal-choice="delete"]')`,timeout,'removal choice');
+   await page.evaluate(`document.querySelector('[data-removal-dialog][open] [data-removal-choice="delete"]').click()`);
+   await page.waitFor(`!!document.querySelector('[data-removal-dialog][open] [data-removal-choice="abandon"]')`,timeout,'failed cleanup offers to proceed anyway');
+  };
+  await open(broken);await removeBroken();
+  assert.match(await page.evaluate('document.querySelector("[data-removal-dialog]").innerText'),/cleanup:/);
+  await fs.writeFile(path.join(dir,'cleanup-failed.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await choose('cancel');
+  assert.equal((await fs.stat(path.join(broken.record.workdir,'untracked.txt'))).isFile(),true);
+  assert.equal(await fs.stat(brokenReceipt).then(()=>true,()=>false),false);
+  await page.waitFor(`document.querySelector('[data-conversation-archive="${broken.id}"]')?.disabled===false`,timeout,'rail archive control enabled again after the refused removal');
+  ok('archive-broken: il cleanup fallito dice il motivo, offre di procedere e, annullando, lascia intatto l’incremento');
+  await removeBroken();await choose('abandon');
+  await until(async()=>!(await fs.stat(broken.record.workdir).then(()=>true,()=>false)),'worktree removed without cleanup');
+  await until(async()=>{const value=await (await fetch(viewer.url+'/api/workspace/conversations/'+broken.id)).json();return value.session?.archive==='ARCHIVED';},'archived chat remains readable');
+  const abandoned=JSON.parse(await fs.readFile(brokenReceipt,'utf8'));
+  assert.equal(abandoned.deleted,true);assert.match(abandoned.environment_abandoned.reason,/^cleanup: /);
+  assert.equal(await git(['for-each-ref','--format=%(refname)','refs/heads/'+broken.record.branch]),'');
+  assert.equal((await git(['rev-parse',abandoned.backup_ref])).trim(),abandoned.head_sha);
+  ok('archive-broken: la scelta esplicita rimuove worktree e branch e la ricevuta dice che cosa è rimasto');
   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   const kept=items.find(item=>item.mode==='archive-keep');await open(kept);
   await page.evaluate('document.querySelector("[data-increment-panel=open]").click()');await page.waitFor('!!document.querySelector("[data-increment-delete]")',timeout,'archived increment delete control');

@@ -294,9 +294,13 @@ func (s *Server) handleDeleteWorkspaceConversation(w http.ResponseWriter, r *htt
 		return
 	}
 	if r.URL.Query().Get("worktree") == "delete" {
-		result, deleteErr := s.deleteIncrementEnvironment(ctx, ws, plan.Increment.Record.ID, r.URL.Query().Get("head"), false)
+		abandonEnvironment, valid := environmentRemovalChoice(w, r)
+		if !valid {
+			return
+		}
+		result, deleteErr := s.deleteIncrementEnvironment(ctx, ws, plan.Increment.Record.ID, r.URL.Query().Get("head"), false, abandonEnvironment)
 		if deleteErr != nil {
-			writeError(w, deleteErr)
+			writeRemovalError(w, deleteErr, false)
 			return
 		}
 		writeJSON(w, http.StatusOK, result)

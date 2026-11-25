@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -58,6 +59,15 @@ func (s *Server) conversationRemovalPlan(ctx context.Context, ws *workspaceSessi
 		}
 		if plan.Increment.UnmergedCommits > 0 {
 			plan.Message += fmt.Sprintf(" Ci sono %d commit non integrati in %s.", plan.Increment.UnmergedCommits, plan.Increment.Record.BaseBranch)
+		}
+		if code := plan.Increment.RemovesBacklogSpec; code != "" {
+			plan.Message += fmt.Sprintf(" Verrà rimossa dal backlog anche la spec %s, registrata dalla pubblicazione dell’incremento.", code)
+		}
+		if code := plan.Increment.KeepsBacklogSpec; code != "" {
+			plan.Message += fmt.Sprintf(" La spec %s resta nel backlog: questo connettore non permette di rimuoverla da qui.", code)
+		}
+		if pr := plan.Increment.Record.PR; pr != nil && pr.State == "OPEN" {
+			plan.Message += fmt.Sprintf(" La PR #%d resta aperta su GitHub: chiudila lì se non deve essere integrata.", pr.Number)
 		}
 		label := "Elimina anche l’incremento e il suo ambiente"
 		if archive {
@@ -147,7 +157,53 @@ func (s *Server) stopConversationForRemoval(ctx context.Context, ws *workspaceSe
 	return nil
 }
 
-func (s *Server) deleteIncrementEnvironment(ctx context.Context, ws *workspaceSession, id, head string, archive bool) (increment.DeletionResult, error) {
+// environmentRemovalChoice reads how the request treats a cleanup that fails:
+// nothing, which preserves the worktree, or the explicit choice to remove the
+// increment leaving its services and test data in place.
+func environmentRemovalChoice(w http.ResponseWriter, r *http.Request) (abandon, valid bool) {
+	switch r.URL.Query().Get("environment") {
+	case "":
+		return false, true
+	case "abandon":
+		return true, true
+	}
+	writeError(w, iox.NewInvalidInput("unknown environment removal choice", "omit it or choose abandon", nil))
+	return false, false
+}
+
+// writeRemovalError answers a failed removal. A cleanup that ran and failed is
+// not a dead end: the answer carries its reason and the choice to proceed
+// anyway, in the same shape as the deletion plan, so the page asks the person
+// instead of leaving them with an increment that cannot be closed.
+func writeRemovalError(w http.ResponseWriter, err error, archive bool) {
+	var cleanup *increment.EnvironmentCleanupError
+	if !errors.As(err, &cleanup) {
+		writeError(w, err)
+		return
+	}
+	message := "Non è stato possibile fermare e rimuovere i servizi e i dati di test dell’incremento. Motivo: " + cleanup.Reason + ". L’incremento è intatto: se la causa si può sistemare, ad esempio avviando il motore dei container, fallo e ripeti l’operazione. Se procedi comunque, worktree, branch e file locali vengono rimossi e i servizi e i dati di test restano su questo computer"
+	if len(cleanup.Resources) > 0 {
+		message += " (" + strings.Join(cleanup.Resources, ", ") + ")"
+	}
+	message += ": andranno rimossi a mano."
+	label := "Elimina comunque l’incremento"
+	if archive {
+		label = "Archivia e rimuovi comunque l’incremento"
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error": "Il cleanup dell’ambiente non è riuscito: " + cleanup.Reason,
+		"code":  iox.CodeConflict,
+		"hint":  "sistema la causa e riprova, oppure conferma la rimozione lasciando servizi e dati di test",
+		"removal": conversationDeletionPlan{
+			RequiresChoice: true,
+			Title:          "Il cleanup dell’ambiente non è riuscito",
+			Message:        message,
+			Choices:        []deletionChoice{{ID: "abandon", Label: label}},
+		},
+	})
+}
+
+func (s *Server) deleteIncrementEnvironment(ctx context.Context, ws *workspaceSession, id, head string, archive, abandonEnvironment bool) (increment.DeletionResult, error) {
 	service := s.incrementService(ws)
 	record, err := service.Read(id)
 	if err != nil {
@@ -172,7 +228,7 @@ func (s *Server) deleteIncrementEnvironment(ctx context.Context, ws *workspaceSe
 			}
 		}
 	}
-	return service.Delete(ctx, id, increment.DeletionOptions{HeadSHA: head, Confirm: true, PreserveConversations: archive})
+	return service.Delete(ctx, id, increment.DeletionOptions{HeadSHA: head, Confirm: true, PreserveConversations: archive, AbandonEnvironment: abandonEnvironment})
 }
 
 func (s *Server) handleDeleteIncrement(w http.ResponseWriter, r *http.Request) {
@@ -183,9 +239,13 @@ func (s *Server) handleDeleteIncrement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, iox.NewInvalidInput("explicit confirmation required", "read the deletion plan before removing the increment", nil))
 		return
 	}
-	result, err := s.deleteIncrementEnvironment(r.Context(), s.session(), r.PathValue("id"), r.URL.Query().Get("head"), false)
+	abandonEnvironment, valid := environmentRemovalChoice(w, r)
+	if !valid {
+		return
+	}
+	result, err := s.deleteIncrementEnvironment(r.Context(), s.session(), r.PathValue("id"), r.URL.Query().Get("head"), false, abandonEnvironment)
 	if err != nil {
-		writeError(w, err)
+		writeRemovalError(w, err, false)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

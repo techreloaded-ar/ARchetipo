@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,47 @@ func TestIncrementNamingAReassignedCodeIsNotAWorkOfTheStoryThatCarriesItNow(t *t
 	}
 	if spec, err := conn.ReadSpecDetail(context.Background(), "US-902"); err != nil || spec.Status != domain.StatusReview {
 		t.Fatalf("reading the detail changed the spec: %+v %v", spec, err)
+	}
+}
+
+// A PR closed on GitHub without a merge is said in the server's own words, and
+// the removal of the increment stands beside the refresh as the way out.
+func TestIncrementWhosePRWasClosedWithoutMergeSaysSoAndOffersItsRemoval(t *testing.T) {
+	srv, _, dir := newTransitionServer(t, false)
+	record := increment.Record{
+		ID:              "inc-closed-pr",
+		Title:           "Export customers",
+		Status:          increment.Proposed,
+		DevelopmentMode: increment.Continuous,
+		Workdir:         filepath.Join(dir, ".archetipo", "increments", "worktrees", "inc-closed-pr"),
+		PR:              &increment.PullRequest{URL: "https://github.com/example/product/pull/9", Number: 9, State: "OPEN"},
+	}
+	removalOffered := func(view incrementView) bool {
+		for _, step := range view.NextSteps {
+			if step.Kind == "delete" {
+				return step.Label != ""
+			}
+		}
+		return false
+	}
+	waiting := srv.incrementView(context.Background(), srv.session(), record)
+	if !strings.Contains(waiting.NextStepsNote, "in attesa del merge della PR") || removalOffered(waiting) {
+		t.Fatalf("an open PR is not simply awaited: %+v", waiting)
+	}
+	record.PR.State = "CLOSED"
+	closed := srv.incrementView(context.Background(), srv.session(), record)
+	if closed.StatusLabel != "PR chiusa senza merge" || !strings.Contains(closed.NextStepsNote, "chiusa su GitHub senza merge") || strings.Contains(closed.NextStepsNote, "in attesa del merge") {
+		t.Fatalf("the closed PR is still shown as awaiting its merge: label=%q note=%q", closed.StatusLabel, closed.NextStepsNote)
+	}
+	if !removalOffered(closed) {
+		t.Fatalf("the removal is not offered beside the closed PR: %+v", closed.NextSteps)
+	}
+	refresh := false
+	for _, action := range closed.Actions {
+		refresh = refresh || action.ID == "refresh"
+	}
+	if !refresh {
+		t.Fatalf("a reopened PR could not be read again: %+v", closed.Actions)
 	}
 }
 

@@ -31,6 +31,7 @@ func newIncrementCmd(s streams) *cobra.Command {
 	root := &cobra.Command{Use: "increment", Short: "Develop an isolated product increment"}
 	var confirmed bool
 	var archiveConversations bool
+	var abandonEnvironment bool
 	var expectedHead string
 	deletionPlan := &cobra.Command{Use: "deletion-plan <id>", Short: "Inspect the worktree and unintegrated work before deleting an increment", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfigFor(cmd)
@@ -62,12 +63,13 @@ func newIncrementCmd(s streams) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result, err := increment.New(cfg, conn).Delete(cmd.Context(), args[0], increment.DeletionOptions{HeadSHA: expectedHead, Confirm: confirmed, PreserveConversations: archiveConversations})
+		result, err := increment.New(cfg, conn).Delete(cmd.Context(), args[0], increment.DeletionOptions{HeadSHA: expectedHead, Confirm: confirmed, PreserveConversations: archiveConversations, AbandonEnvironment: abandonEnvironment})
 		if err != nil {
 			return err
 		}
 		return iox.WriteOK(s.out, "increment_deletion", result)
 	}}
+	deletion.Flags().BoolVar(&abandonEnvironment, "abandon-environment", false, "remove the increment even when its environment cleanup fails, leaving the services and test data named in the receipt")
 	deletion.Flags().BoolVar(&archiveConversations, "archive-conversations", false, "retain linked conversations as readable archives after removing their environment")
 	deletion.Flags().BoolVar(&confirmed, "confirm", false, "explicitly remove this increment and its local files, retaining only committed work in Git")
 	deletion.Flags().StringVar(&expectedHead, "head", "", "head_sha returned by increment deletion-plan")
