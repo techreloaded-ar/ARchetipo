@@ -52,7 +52,25 @@ func (s *Server) conversationRemovalPlan(ctx context.Context, ws *workspaceSessi
 		plan.Message = "Questa conversazione è collegata a un worktree. Puoi archiviare la chat e conservare l’ambiente per riprendere il lavoro."
 		plan.Choices[0].Label = "Archivia e conserva l’ambiente"
 	}
-	if plan.Increment != nil {
+	backlogSpecNotes := func() {
+		if code := plan.Increment.RemovesBacklogSpec; code != "" {
+			plan.Message += fmt.Sprintf(" Verrà rimossa dal backlog anche la spec %s, registrata dalla pubblicazione dell’incremento.", code)
+		}
+		if code := plan.Increment.KeepsBacklogSpec; code != "" {
+			plan.Message += fmt.Sprintf(" La spec %s resta nel backlog: questo connettore non permette di rimuoverla da qui.", code)
+		}
+	}
+	if plan.Increment != nil && plan.Increment.Resuming {
+		// The first confirmation already covered what goes, and the checkout
+		// can no longer be kept: the only way forward is to finish.
+		plan.Message = "Una rimozione già confermata di questo incremento si è interrotta dopo aver salvato i commit in Git. Completandola vengono rimossi i file rimasti, il branch e i record locali."
+		backlogSpecNotes()
+		label := "Completa la rimozione dell’incremento"
+		if archive {
+			label = "Archivia e completa la rimozione"
+		}
+		plan.Choices = []deletionChoice{{ID: "delete", Label: label}}
+	} else if plan.Increment != nil {
 		plan.Message += " La pulizia completa ferma agente e preview, esegue il cleanup dei servizi e dei dati di test dell’incremento e rimuove worktree, branch e file locali. Restano recuperabili solo i commit salvati in Git, senza archivi dell’ambiente; eventuali PR e branch remoti restano invariati."
 		if plan.Increment.Dirty {
 			plan.Message += " Le modifiche locali non salvate in un commit verranno eliminate definitivamente."
@@ -60,12 +78,7 @@ func (s *Server) conversationRemovalPlan(ctx context.Context, ws *workspaceSessi
 		if plan.Increment.UnmergedCommits > 0 {
 			plan.Message += fmt.Sprintf(" Ci sono %d commit non integrati in %s.", plan.Increment.UnmergedCommits, plan.Increment.Record.BaseBranch)
 		}
-		if code := plan.Increment.RemovesBacklogSpec; code != "" {
-			plan.Message += fmt.Sprintf(" Verrà rimossa dal backlog anche la spec %s, registrata dalla pubblicazione dell’incremento.", code)
-		}
-		if code := plan.Increment.KeepsBacklogSpec; code != "" {
-			plan.Message += fmt.Sprintf(" La spec %s resta nel backlog: questo connettore non permette di rimuoverla da qui.", code)
-		}
+		backlogSpecNotes()
 		if pr := plan.Increment.Record.PR; pr != nil && pr.State == "OPEN" {
 			plan.Message += fmt.Sprintf(" La PR #%d resta aperta su GitHub: chiudila lì se non deve essere integrata.", pr.Number)
 		}
@@ -116,12 +129,19 @@ func (s *Server) handleIncrementDeletionPlan(w http.ResponseWriter, r *http.Requ
 	}
 	plan := s.conversationRemovalPlan(r.Context(), ws, conversationlog.Record{IncrementID: record.ID, WorkingDir: record.Workdir}, false)
 	if plan.Increment == nil {
-		writeError(w, iox.NewConflict("increment environment cannot be removed safely", "inspect its Git registration before retrying", nil))
+		// Name what is wrong with the checkout instead of a generic refusal.
+		_, planErr := s.incrementService(ws).DeletionPlan(r.Context(), record.ID)
+		if planErr == nil {
+			planErr = iox.NewConflict("increment environment cannot be removed safely", "inspect its Git registration before retrying", nil)
+		}
+		writeError(w, planErr)
 		return
 	}
 	plan.Title = "Eliminare l’incremento?"
 	plan.Message = "Verranno eliminate anche le conversazioni collegate. " + strings.TrimPrefix(plan.Message, "Questa conversazione è collegata a un worktree. Puoi eliminare solo la chat e conservare il lavoro. ")
-	plan.Choices = []deletionChoice{{ID: "delete", Label: "Elimina incremento e ambiente"}}
+	if !plan.Increment.Resuming {
+		plan.Choices = []deletionChoice{{ID: "delete", Label: "Elimina incremento e ambiente"}}
+	}
 	writeJSON(w, http.StatusOK, plan)
 }
 

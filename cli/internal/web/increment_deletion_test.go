@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/execution"
+	"github.com/techreloaded-ar/ARchetipo/cli/internal/increment"
 )
 
 func deletionFixture(t *testing.T) (*Server, conversationView) {
@@ -152,6 +153,80 @@ func TestRemovalWithFailedCleanupOffersToProceedAnyway(t *testing.T) {
 			}
 			if archived.Increment == nil || !strings.Contains(archived.Increment.Note, "non rimossi") || !strings.Contains(archived.Increment.Note, "drop-test-data") {
 				t.Fatalf("the archived conversation hides what was left behind: %s", read.Body.String())
+			}
+		})
+	}
+}
+
+// A removal that Git stopped halfway (a path beyond the platform limit) leaves a
+// directory that is no longer a worktree, with the commits already saved. The
+// viewer must offer to finish it instead of refusing every further attempt.
+func TestRemovalInterruptedByGitIsOfferedAgainAndFinished(t *testing.T) {
+	for _, action := range []string{"archive", "button"} {
+		t.Run(action, func(t *testing.T) {
+			server, view := deletionFixture(t)
+			root := server.session().cfg.ProjectRoot
+			workdir := view.Increment.Workdir
+			service := server.incrementService(server.session())
+			plan, err := service.DeletionPlan(context.Background(), view.Increment.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The state the interrupted removal leaves: receipt and recovery ref
+			// written, Git registration dropped, files still on disk.
+			record, err := service.Read(view.Increment.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := increment.DeletionResult{Record: record, HeadSHA: plan.HeadSHA, BackupRef: "refs/archetipo/deleted/" + record.ID, ConversationIDs: []string{view.Conversation.ID}}
+			archives := filepath.Join(root, ".archetipo", "increment-archives", record.ID)
+			if err = os.MkdirAll(archives, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(receipt)
+			if err = os.WriteFile(filepath.Join(archives, "deletion.json"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(root, ".archetipo", "increments", record.ID+".json"), mustJSON(t, record), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			incrementGit(t, root, "update-ref", receipt.BackupRef, receipt.HeadSHA)
+			if err = os.RemoveAll(incrementGit(t, workdir, "rev-parse", "--path-format=absolute", "--git-dir")); err != nil {
+				t.Fatal(err)
+			}
+
+			endpoint := conversationsRoute + "/" + view.Conversation.ID
+			planPath := "/api/increments/" + record.ID + "/deletion-plan"
+			if action == "archive" {
+				planPath = endpoint + "/deletion-plan?action=archive"
+			}
+			response := doJSON(t, server, http.MethodGet, planPath, nil)
+			var offered conversationDeletionPlan
+			if err = json.Unmarshal(response.Body.Bytes(), &offered); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusOK || offered.Increment == nil || !offered.Increment.Resuming || offered.Increment.HeadSHA != plan.HeadSHA {
+				t.Fatalf("the interrupted removal is refused instead of offered again: %d %s", response.Code, response.Body.String())
+			}
+			if len(offered.Choices) != 1 || offered.Choices[0].ID != "delete" || !strings.Contains(offered.Message, "interrotta") {
+				t.Fatalf("the plan does not offer only to finish the removal: %s", response.Body.String())
+			}
+			method, path := http.MethodPost, endpoint+"/archive?worktree=delete&head="+plan.HeadSHA
+			if action == "button" {
+				method, path = http.MethodDelete, "/api/increments/"+record.ID+"?confirm=true&head="+plan.HeadSHA
+			}
+			if response = doJSON(t, server, method, path, nil); response.Code != http.StatusOK {
+				t.Fatalf("the interrupted removal could not be finished: %d %s", response.Code, response.Body.String())
+			}
+			if _, err = os.Stat(workdir); !os.IsNotExist(err) {
+				t.Fatal("leftover files retained", err)
+			}
+			if refs := incrementGit(t, root, "for-each-ref", "--format=%(refname)", "refs/heads/"+record.Branch); refs != "" {
+				t.Fatal("branch retained", refs)
+			}
+			finished, err := service.DeletionReceipt(record.ID)
+			if err != nil || !finished.Deleted || finished.ConversationsPreserved != (action == "archive") {
+				t.Fatalf("missing deletion evidence: %+v %v", finished, err)
 			}
 		})
 	}

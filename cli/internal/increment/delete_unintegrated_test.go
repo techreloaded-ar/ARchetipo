@@ -124,6 +124,178 @@ func TestDeletionNeverRemovesAnotherStoryThatWasGivenTheSameCode(t *testing.T) {
 	}
 }
 
+// Installed dependencies easily nest deeper than the path length Windows
+// accepts by default: the checkout must still be removed whole.
+func TestDeletionRemovesPathsBeyondThePlatformLimit(t *testing.T) {
+	ctx := context.Background()
+	s := fixture(t)
+	r := create(t, s)
+	exclude := filepath.Join(s.Config.ProjectRoot, ".git", "info")
+	if err := os.MkdirAll(exclude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(exclude, "exclude"), []byte("installed/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(r.Workdir, "installed")
+	for len(deep) < 400 {
+		deep = filepath.Join(deep, strings.Repeat("d", 40))
+	}
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "module.js"), []byte("installed dependency"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.Delete(ctx, r.ID, DeletionOptions{Confirm: true, HeadSHA: plan.HeadSHA})
+	if err != nil || !result.Deleted {
+		t.Fatalf("a deep path stopped the removal: %+v %v", result, err)
+	}
+	if _, err = os.Stat(r.Workdir); !os.IsNotExist(err) {
+		t.Fatal("worktree retained", err)
+	}
+}
+
+// gitStopsHalfway reproduces what Git does when it cannot delete every file of
+// a checkout (a path beyond the platform limit, a file still open): it drops
+// its registration, leaves the directory and fails.
+func gitStopsHalfway(t *testing.T) {
+	t.Helper()
+	original, patience := gitWorktreeRemove, leftoverRemovalPatience
+	// The tests that keep the files busy do not wait for them to be released.
+	leftoverRemovalPatience = 0
+	t.Cleanup(func() { gitWorktreeRemove, leftoverRemovalPatience = original, patience })
+	gitWorktreeRemove = func(ctx context.Context, projectRoot, workdir string) error {
+		admin, err := git(ctx, workdir, "rev-parse", "--path-format=absolute", "--git-dir")
+		if err != nil {
+			return err
+		}
+		if err = os.RemoveAll(admin); err != nil {
+			return err
+		}
+		return errors.New("error: failed to delete '" + workdir + "': Filename too long")
+	}
+}
+
+// One confirmation is enough when Git stops halfway: the files it left are
+// removed by the same deletion.
+func TestDeletionFinishesWhatGitLeftBehind(t *testing.T) {
+	ctx := context.Background()
+	s := fixture(t)
+	r := create(t, s)
+	gitStopsHalfway(t)
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil || plan.Resuming {
+		t.Fatalf("plan of a live checkout: %+v %v", plan, err)
+	}
+	result, err := s.Delete(ctx, r.ID, DeletionOptions{Confirm: true, HeadSHA: plan.HeadSHA})
+	if err != nil || !result.Deleted || !result.WorktreeRemoved || !result.BranchRemoved {
+		t.Fatalf("removal stopped with Git: %+v %v", result, err)
+	}
+	if _, err = os.Stat(r.Workdir); !os.IsNotExist(err) {
+		t.Fatal("leftover files retained", err)
+	}
+	if strings.Contains(runGit(t, s.Config.ProjectRoot, "worktree", "list", "--porcelain"), r.ID) {
+		t.Fatal("Git registration retained")
+	}
+	if runGit(t, s.Config.ProjectRoot, "rev-parse", result.BackupRef) != plan.HeadSHA {
+		t.Fatal("commit recovery ref missing")
+	}
+}
+
+// A removal that stopped after saving the commits leaves a directory that is no
+// longer a worktree. It is not a dead end: the plan says a removal is being
+// resumed and the same confirmation finishes it, from either door.
+func TestInterruptedDeletionIsResumedFromItsLeftovers(t *testing.T) {
+	for _, preserve := range []bool{false, true} {
+		t.Run(map[bool]string{false: "delete", true: "archive"}[preserve], func(t *testing.T) {
+			ctx := context.Background()
+			s := fixture(t)
+			r := create(t, s)
+			gitStopsHalfway(t)
+			busy := errors.New("file in use")
+			removeTree = func(string) error { return busy }
+			t.Cleanup(func() { removeTree = os.RemoveAll })
+			plan, err := s.DeletionPlan(ctx, r.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := DeletionOptions{Confirm: true, HeadSHA: plan.HeadSHA}
+			result, err := s.Delete(ctx, r.ID, options)
+			if !errors.Is(err, busy) || result.Deleted || result.BackupRef == "" {
+				t.Fatalf("a removal that could not finish was not reported as incomplete: %+v %v", result, err)
+			}
+			if _, statErr := os.Stat(filepath.Join(r.Workdir, "hello.txt")); statErr != nil {
+				t.Fatal("the leftovers this test resumes from are missing", statErr)
+			}
+			if _, readErr := s.Read(r.ID); readErr != nil {
+				t.Fatal("the interrupted removal lost the increment record", readErr)
+			}
+
+			resumed, err := s.DeletionPlan(ctx, r.ID)
+			if err != nil || !resumed.Resuming || resumed.HeadSHA != plan.HeadSHA {
+				t.Fatalf("the interrupted removal cannot be planned again: %+v %v", resumed, err)
+			}
+			if _, err = s.Delete(ctx, r.ID, options); !errors.Is(err, busy) {
+				t.Fatalf("a retry with the files still in use: %v", err)
+			}
+			removeTree = os.RemoveAll
+			options.PreserveConversations = preserve
+			result, err = s.Delete(ctx, r.ID, options)
+			if err != nil || !result.Deleted || !result.WorktreeRemoved || !result.BranchRemoved || result.ConversationsPreserved != preserve {
+				t.Fatalf("could not resume: %+v %v", result, err)
+			}
+			if _, err = os.Stat(r.Workdir); !os.IsNotExist(err) {
+				t.Fatal("leftover files retained", err)
+			}
+			if got := runGit(t, s.Config.ProjectRoot, "for-each-ref", "--format=%(refname)", "refs/heads/"+r.Branch); got != "" {
+				t.Fatal("branch retained", got)
+			}
+			if runGit(t, s.Config.ProjectRoot, "rev-parse", result.BackupRef) != plan.HeadSHA {
+				t.Fatal("commit recovery ref missing")
+			}
+			if records, listErr := s.List(); listErr != nil || len(records) != 0 {
+				t.Fatalf("increment still indexed: %+v %v", records, listErr)
+			}
+		})
+	}
+}
+
+// A recovery ref that no longer holds the confirmed commit never lets leftovers
+// be removed: nothing proves that the work was saved.
+func TestLeftoversAreKeptWithoutTheirRecoveryCommit(t *testing.T) {
+	ctx := context.Background()
+	s := fixture(t)
+	r := create(t, s)
+	gitStopsHalfway(t)
+	removeTree = func(string) error { return errors.New("file in use") }
+	t.Cleanup(func() { removeTree = os.RemoveAll })
+	plan, err := s.DeletionPlan(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := DeletionOptions{Confirm: true, HeadSHA: plan.HeadSHA}
+	result, err := s.Delete(ctx, r.ID, options)
+	if err == nil {
+		t.Fatal("the removal was expected to stop")
+	}
+	removeTree = os.RemoveAll
+	runGit(t, s.Config.ProjectRoot, "update-ref", "-d", result.BackupRef)
+	if resumed, planErr := s.DeletionPlan(ctx, r.ID); planErr == nil && resumed.Resuming {
+		t.Fatalf("a removal without its recovery commit is offered again: %+v", resumed)
+	}
+	if _, err = s.Delete(ctx, r.ID, options); err == nil {
+		t.Fatal("continued without a recovery ref")
+	}
+	if _, statErr := os.Stat(filepath.Join(r.Workdir, "hello.txt")); statErr != nil {
+		t.Fatal("leftovers removed without their recovery commit", statErr)
+	}
+}
+
 // failingCleanup leaves in the worktree an environment whose registered
 // cleanup runs and fails, as a service that cannot be reached would.
 func failingCleanup(t *testing.T, workdir string) {

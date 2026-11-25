@@ -34,7 +34,7 @@ async function main(){
   const git=async args=>(await run('git','git',args,{cwd:sandbox})).stdout.trim();
   await git(['init','-b','main']);await git(['config','user.name','Deletion smoke']);await git(['config','user.email','smoke@example.test']);
   await git(['add','hello.txt','service.mjs','setup.mjs','probe.mjs','cleanup.mjs','.archetipo/config.yaml','.archetipo/environment.json']);await git(['commit','-m','test: owned environment']);
-  for(const [index,mode] of ['delete-keep','delete-remove','archive-keep','archive-remove','button','archive-broken'].entries()){
+  for(const [index,mode] of ['delete-keep','delete-remove','archive-keep','archive-remove','button','archive-broken','archive-resume'].entries()){
    const input=path.join(dir,'create-'+index+'.json');await fs.writeFile(input,JSON.stringify({title:mode,request:'Verify cleanup '+mode}));
    const record=JSON.parse((await run('create',cli,['increment','create','--file',input],{cwd:sandbox})).stdout).data;
    await run('prepare',cli,['execution','environment','prepare'],{cwd:record.workdir});
@@ -53,7 +53,7 @@ async function main(){
   const choose=async choice=>{await page.waitFor('!!document.querySelector("[data-removal-dialog][open]")',timeout,'worktree cleanup choice');await page.evaluate(`document.querySelector('[data-removal-dialog][open] [data-removal-choice="${choice}"]').click()`);await page.waitFor('!document.querySelector("[data-removal-dialog]")',timeout,'choice dialog closed');};
   const open=async item=>{await page.waitFor(`!!document.querySelector('[data-conversation-id="${item.id}"]')`,timeout,'conversation in rail');await page.evaluate(`document.querySelector('[data-conversation-id="${item.id}"]').click()`);await page.waitFor(`document.querySelector('.conv-panel')?.dataset.conversationId===${JSON.stringify(item.id)} || !!document.querySelector('[data-increment-id="${item.record.id}"]')`,timeout,'increment conversation');};
   for(const item of items){
-   if(item.mode==='archive-broken')continue;
+   if(item.mode==='archive-broken'||item.mode==='archive-resume')continue;
    if(item.mode.startsWith('delete')){
     await page.waitFor(`!!document.querySelector('[data-conversation-delete="${item.id}"]')`,timeout,'delete chat control');
     await page.evaluate(`document.querySelector('[data-conversation-delete="${item.id}"]').click()`);
@@ -92,10 +92,15 @@ async function main(){
   // A cleanup that cannot succeed — its service is gone, as with a container
   // engine that is not running — must not leave an increment that cannot be closed.
   const broken=items.find(item=>item.mode==='archive-broken');
-  await fetch(broken.service.url+'/shutdown',{headers:{connection:'close'}}).catch(()=>{});
   // The service runs inside the worktree: wait for its process to be gone, or
   // on Windows its working directory would keep the checkout from being removed.
-  await until(async()=>{try{await fetch(broken.service.url,{headers:{connection:'close'}});return false;}catch{return true;}},'service of the broken environment stopped');
+  // A closed listener is not enough: the process outlives it while the
+  // connection that asked for the shutdown is still open.
+  const stopService=async item=>{
+   await fetch(item.service.url+'/shutdown',{headers:{connection:'close'}}).catch(()=>{});
+   await until(async()=>{try{process.kill(item.service.pid,0);return false;}catch{return true;}},'service process of '+item.mode+' exited');
+  };
+  await stopService(broken);
   await fs.rm(path.join(broken.record.workdir,'.archetipo/environment/service.json'));
   const brokenReceipt=path.join(sandbox,'.archetipo/increment-archives',broken.record.id,'deletion.json');
   const removeBroken=async()=>{
@@ -121,6 +126,32 @@ async function main(){
   assert.equal(await git(['for-each-ref','--format=%(refname)','refs/heads/'+broken.record.branch]),'');
   assert.equal((await git(['rev-parse',abandoned.backup_ref])).trim(),abandoned.head_sha);
   ok('archive-broken: la scelta esplicita rimuove worktree e branch e la ricevuta dice che cosa è rimasto');
+  // A confirmed removal that Git stopped halfway — a path beyond the platform
+  // limit — saved the commits, dropped the registration and left the files: the
+  // page offers to finish it instead of refusing every further attempt.
+  const resumed=items.find(item=>item.mode==='archive-resume');
+  await stopService(resumed);
+  const inWorktree=async args=>(await run('git','git',args,{cwd:resumed.record.workdir})).stdout.trim();
+  const resumedHead=await inWorktree(['rev-parse','HEAD']),resumedAdmin=await inWorktree(['rev-parse','--path-format=absolute','--git-dir']);
+  const resumedRef='refs/archetipo/deleted/'+resumed.record.id,resumedArchive=path.join(sandbox,'.archetipo/increment-archives',resumed.record.id);
+  await git(['update-ref',resumedRef,resumedHead]);
+  await fs.mkdir(resumedArchive,{recursive:true});
+  await fs.writeFile(path.join(resumedArchive,'deletion.json'),JSON.stringify({increment:resumed.record,head_sha:resumedHead,backup_ref:resumedRef,conversation_ids:[resumed.id]}));
+  await fs.rm(resumedAdmin,{recursive:true,force:true});
+  assert.equal((await git(['worktree','list','--porcelain'])).includes(resumed.record.id),false);
+  await open(resumed);
+  await page.waitFor('!!document.querySelector("[data-conversation-close-open]:not([disabled])")',timeout,'archive control of the interrupted increment');
+  await page.evaluate('document.querySelector("[data-conversation-close-open]").click()');
+  await page.waitFor(`!!document.querySelector('[data-removal-dialog][open] [data-removal-choice="delete"]')`,timeout,'offer to finish the interrupted removal');
+  assert.equal(await page.evaluate(`!document.querySelector('[data-removal-choice="keep"]')&&/interrotta/.test(document.querySelector('[data-removal-dialog]').innerText)`),true);
+  await fs.writeFile(path.join(dir,'removal-resumed.png'),Buffer.from((await page.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await choose('delete');
+  await until(async()=>!(await fs.stat(resumed.record.workdir).then(()=>true,()=>false)),'leftover files removed');
+  await until(async()=>{const value=await (await fetch(viewer.url+'/api/workspace/conversations/'+resumed.id)).json();return value.session?.archive==='ARCHIVED';},'archived chat remains readable');
+  assert.equal(JSON.parse(await fs.readFile(path.join(resumedArchive,'deletion.json'),'utf8')).deleted,true);
+  assert.equal(await git(['for-each-ref','--format=%(refname)','refs/heads/'+resumed.record.branch]),'');
+  assert.equal(await git(['rev-parse',resumedRef]),resumedHead);
+  ok('archive-resume: una rimozione interrotta da Git viene riproposta e completata, con i commit nel ref di recupero');
   await page.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   const kept=items.find(item=>item.mode==='archive-keep');await open(kept);
   await page.evaluate('document.querySelector("[data-increment-panel=open]").click()');await page.waitFor('!!document.querySelector("[data-increment-delete]")',timeout,'archived increment delete control');

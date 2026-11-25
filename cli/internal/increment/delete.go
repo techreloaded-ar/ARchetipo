@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/connector"
 	"github.com/techreloaded-ar/ARchetipo/cli/internal/conversationlog"
@@ -29,6 +31,9 @@ type DeletionPlan struct {
 	// increment; KeepsBacklogSpec names one the connector cannot delete.
 	RemovesBacklogSpec string `json:"removes_backlog_spec,omitempty"`
 	KeepsBacklogSpec   string `json:"keeps_backlog_spec,omitempty"`
+	// Resuming marks a confirmed removal that saved the commits and then
+	// stopped: confirming this plan finishes it.
+	Resuming bool `json:"resuming,omitempty"`
 }
 
 type DeletionOptions struct {
@@ -135,6 +140,102 @@ func registeredResourceNames(environment *verification.Service) []string {
 	return names
 }
 
+// Replaced by tests to reproduce a removal that stops halfway.
+var (
+	gitWorktreeRemove = func(ctx context.Context, projectRoot, workdir string) error {
+		// Dependencies installed in a checkout easily exceed the path length Git
+		// for Windows accepts by default; the setting is ignored elsewhere.
+		_, err := git(ctx, projectRoot, "-c", "core.longpaths=true", "worktree", "remove", "--force", workdir)
+		return err
+	}
+	removeTree = os.RemoveAll
+	// How long a removal waits for Windows to release a directory that a
+	// process which has just ended was still using.
+	leftoverRemovalPatience = 3 * time.Second
+)
+
+func removeTreePatiently(dir string) error {
+	deadline := time.Now().Add(leftoverRemovalPatience)
+	for {
+		err := removeTree(dir)
+		if err == nil || runtime.GOOS != "windows" || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// ownWorktree reports whether dir is still the root of a Git worktree of its own.
+func ownWorktree(ctx context.Context, dir string) bool {
+	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false
+	}
+	actual, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	canonicalTop, err := filepath.EvalSymlinks(top)
+	return err == nil && actual == canonicalTop
+}
+
+// interruptedDeletion finds a confirmed removal that saved the commits in its
+// recovery ref and then stopped before the end, leaving no live checkout: the
+// directory is gone, or Git dropped its registration and left files behind.
+func (s *Service) interruptedDeletion(ctx context.Context, id string) (DeletionResult, bool) {
+	receipt, err := s.DeletionReceipt(id)
+	if err != nil || receipt.Deleted || receipt.BackupRef == "" || receipt.HeadSHA == "" {
+		return receipt, false
+	}
+	if head, refErr := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", receipt.BackupRef); refErr != nil || head != receipt.HeadSHA {
+		return receipt, false
+	}
+	return receipt, !ownWorktree(ctx, receipt.Record.Workdir)
+}
+
+// removeWorktree removes the checkout with its Git registration. Git drops the
+// registration even when it cannot delete every file (a path beyond the
+// platform limit, a file still open) and leaves a directory that is no longer a
+// worktree: those leftovers are removed here, so one confirmation is enough.
+func (s *Service) removeWorktree(ctx context.Context, id, workdir string) error {
+	err := gitWorktreeRemove(ctx, s.Config.ProjectRoot, workdir)
+	if err == nil || ownWorktree(ctx, workdir) {
+		return err
+	}
+	return s.removeWorktreeLeftovers(ctx, id, workdir)
+}
+
+// removeWorktreeLeftovers deletes what remains of a checkout Git no longer
+// registers. It is reached only after a confirmed removal saved the commits;
+// the path must still be the increment's own directory, never a link elsewhere.
+func (s *Service) removeWorktreeLeftovers(ctx context.Context, id, workdir string) error {
+	canonicalRoot, err := filepath.EvalSymlinks(s.Config.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	parent := filepath.Join(s.dir(), "worktrees")
+	canonicalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return err
+	}
+	if workdir != filepath.Join(parent, id) || canonicalParent != filepath.Join(canonicalRoot, ".archetipo", "increments", "worktrees") {
+		return iox.NewConflict("increment path traverses a symlink", "preserve the worktree and repair its location", nil)
+	}
+	info, err := os.Lstat(workdir)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return iox.NewConflict("increment path traverses a symlink", "preserve the worktree and repair its location", nil)
+		}
+		if err = removeTreePatiently(workdir); err != nil {
+			return iox.NewConflict("some files of the increment could not be removed", "close the programs still using them and retry the same confirmed deletion", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	_, _ = git(ctx, s.Config.ProjectRoot, "worktree", "prune")
+	return nil
+}
+
 // withdrawBacklogSpec settles the backlog spec of an increment that is removed
 // before being integrated: nothing would ever close it, so it goes with the
 // increment. A delivered increment keeps its spec as the trace of what was
@@ -173,6 +274,14 @@ func (s *Service) DeletionPlan(ctx context.Context, id string) (DeletionPlan, er
 		return DeletionPlan{}, err
 	}
 	plan := DeletionPlan{Record: r}
+	if receipt, interrupted := s.interruptedDeletion(ctx, id); interrupted {
+		// The ownership checks below passed when that removal was confirmed and
+		// its commits are in the recovery ref: what is left is finished, never
+		// inspected again as if it were a live checkout.
+		plan.HeadSHA, plan.Resuming = receipt.HeadSHA, true
+		plan.RemovesBacklogSpec, plan.KeepsBacklogSpec, _ = s.withdrawBacklogSpec(ctx, r, false)
+		return plan, nil
+	}
 	top, err := git(ctx, r.Workdir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return plan, err
@@ -259,12 +368,14 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 		receipt := filepath.Join(dir, "deletion.json")
 		if previous, readErr := s.DeletionReceipt(id); readErr == nil {
 			result = previous
-			if result.HeadSHA != expectedHead || result.ConversationsPreserved != options.PreserveConversations {
+			if result.HeadSHA != expectedHead {
 				return Record{}, iox.NewConflict("deletion receipt does not match confirmation", "inspect the existing deletion receipt", nil)
 			}
 			if result.Deleted {
 				return result.Record, nil
 			}
+			// An interrupted removal has not reached the conversations yet, so
+			// it may be finished from either door: deleting them or archiving them.
 			if head, refErr := git(ctx, s.Config.ProjectRoot, "rev-parse", "--verify", result.BackupRef); refErr != nil || head != expectedHead {
 				return Record{}, iox.NewPrecondition("recovery commit unavailable", "restore the Git recovery ref before continuing deletion", refErr)
 			}
@@ -315,6 +426,13 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 			// A saved recovery ref permits resuming after checkout removal.
 			// A live checkout is always inspected again.
 			if _, statErr := os.Lstat(r.Workdir); os.IsNotExist(statErr) && result.BackupRef != "" {
+				result.WorktreeRemoved = true
+			} else if result.BackupRef != "" && !ownWorktree(ctx, r.Workdir) {
+				// The earlier attempt saved the commits and Git dropped the
+				// registration, then stopped on a file: finish what it left.
+				if err = s.removeWorktreeLeftovers(ctx, id, r.Workdir); err != nil {
+					return r, err
+				}
 				result.WorktreeRemoved = true
 			} else {
 				plan, planErr := s.DeletionPlan(ctx, id)
@@ -417,7 +535,7 @@ func (s *Service) Delete(ctx context.Context, id string, options DeletionOptions
 				if err = recordfile.WriteAtomic(s.dir(), parentPath, ".increment-", r); err != nil {
 					return r, err
 				}
-				if _, err = git(ctx, s.Config.ProjectRoot, "worktree", "remove", "--force", r.Workdir); err != nil {
+				if err = s.removeWorktree(ctx, id, r.Workdir); err != nil {
 					return r, err
 				}
 				result.WorktreeRemoved = true

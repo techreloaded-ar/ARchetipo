@@ -348,7 +348,9 @@ worktree: in the viewer it is «Elimina incremento»; standalone, from the paren
 workspace, `increment deletion-plan <id>` shows what goes (worktree, branch,
 uncommitted changes and, when the work was never merged, its backlog spec in
 `removes_backlog_spec`) and `increment delete <id> --confirm --head <head_sha>`
-does it, returning `kind: increment_deletion`. `E_PRECONDITION` naming a failed
+does it, returning `kind: increment_deletion`. A plan with `resuming: true` is a
+removal that stopped after saving the commits: the same command finishes it, and
+an `E_CONFLICT` naming a recovery ref means retry it. `E_PRECONDITION` naming a failed
 environment cleanup preserves the worktree: report its reason, and add
 `--abandon-environment` only when the person chooses to leave those services and
 test data in place.
