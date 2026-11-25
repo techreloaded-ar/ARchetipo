@@ -51,6 +51,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext } from "node:vm";
+import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const helperPath = resolve(
@@ -80,7 +81,7 @@ function loadConversation() {
 	return mod.exports;
 }
 
-const { renderConversation, formatElapsed, inputAnswerValues } = loadConversation();
+const { renderConversation, formatElapsed, inputAnswerValues, isLocalLinkAddress, renderedLinkAddresses } = loadConversation();
 
 // Strip every attribute from the markup, leaving only what a reader sees.
 // A sentence that survives this is visible text; one that does not was only
@@ -2550,5 +2551,85 @@ describe("allegati immagine", () => {
 		assert.equal((composer.match(/data-conversation-attachment-remove="0"/g) || []).length, 1);
 		assert.ok(visibleText(composer).includes("dati.csv"));
 		assert.ok(composer.includes('<input type="file" class="conv-attach-input" multiple hidden>'));
+	});
+});
+
+// The page binds a report to an anchor by comparing two spellings of the same
+// reference: the verbatim one the server authorizes and the one the Markdown
+// parser left on the anchor. The parser here is the real one the page loads,
+// because the whole point is what *it* does to a native Windows path; the
+// paths are written out, so the Windows case is proved on every system.
+describe("riferimenti locali scritti dall'agente", () => {
+	const { marked } = createRequire(import.meta.url)(
+		resolve(dirname(helperPath), "vendor", "marked.min.js"),
+	);
+	const parse = marked.parse.bind(marked);
+	// What a browser reads back from the anchor the parser drew.
+	const anchorAddress = (reference) =>
+		/href="([^"]*)"/
+			.exec(parse(`[Apri report tecnico](${reference})`))[1]
+			.replace(/&quot;/g, '"')
+			.replace(/&#39;/g, "'")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/&amp;/g, "&");
+	const backslash = String.fromCharCode(92);
+	const windowsNative = ["C:", "Users", "ada", "progetto", ".archetipo", "environment", "technical-summary.json"].join(backslash);
+	const windowsForward = windowsNative.split(backslash).join("/");
+
+	it("un percorso Windows nativo non arriva all'ancora com'è stato scritto, e si ritrova lo stesso", () => {
+		const address = anchorAddress(windowsNative);
+		assert.notEqual(address, windowsNative, "il parser riscrive il percorso: è il caso che il confronto alla lettera perdeva");
+		assert.ok(renderedLinkAddresses(windowsNative, parse).includes(address));
+		assert.equal(isLocalLinkAddress(address, false), true);
+	});
+
+	it("un percorso Windows con le barre in avanti è un percorso, non uno schema di una lettera", () => {
+		const address = anchorAddress(windowsForward);
+		assert.deepEqual(Array.from(renderedLinkAddresses(windowsForward, parse)), [address]);
+		assert.equal(isLocalLinkAddress(address, false), true);
+	});
+
+	it("percorsi POSIX, relativi e file: restano locali e si ritrovano, anche con caratteri non ASCII", () => {
+		for (const reference of [
+			"/home/ada/progetto/.archetipo/environment/technical-summary.json",
+			"/home/josé/progetto/docs/test-results/report.json",
+			".archetipo/environment/technical-session.md",
+			`file:///${windowsForward}`,
+			"file:///home/ada/progetto/docs/test-results/report.json",
+		]) {
+			const address = anchorAddress(reference);
+			assert.deepEqual(Array.from(renderedLinkAddresses(reference, parse)), [address], reference);
+			assert.equal(isLocalLinkAddress(address, false), true, reference);
+		}
+	});
+
+	it("il riferimento si ritrova comunque sia stato scritto: nudo o tra parentesi angolari", () => {
+		// Il server toglie le parentesi angolari, e il parser non legge sempre
+		// allo stesso modo le due scritture: una cartella Windows che finisce
+		// con la barra è un collegamento solo scritta nuda.
+		for (const reference of [windowsNative, `${windowsNative}${backslash}`, "/home/josé/progetto/docs/test-results/report.json"]) {
+			const addresses = renderedLinkAddresses(reference, parse);
+			for (const written of [reference, `<${reference}>`]) {
+				const anchor = /href="([^"]*)"/.exec(parse(`[Apri report tecnico](${written})`));
+				if (anchor) assert.ok(addresses.includes(anchor[1]), `${written} → ${anchor[1]}`);
+			}
+		}
+		assert.ok(/href=/.test(parse(`[Apri report tecnico](${windowsNative}${backslash})`)), "il caso della barra finale deve essere davvero un collegamento");
+	});
+
+	it("un indirizzo esterno non è locale, salvo che sia di questa stessa origine", () => {
+		for (const address of ["https://example.com/report.json", "mailto:ada@example.com", "ftp://example.com/c:/x"]) {
+			assert.equal(isLocalLinkAddress(address, false), false, address);
+		}
+		assert.equal(isLocalLinkAddress("http://127.0.0.1:4000/docs/report.json", true), true);
+		assert.equal(isLocalLinkAddress("#sezione", true), false);
+		assert.equal(isLocalLinkAddress("", false), false);
+	});
+
+	it("senza parser, o dove il parser non legge un collegamento, il riferimento vale per sé", () => {
+		assert.deepEqual(Array.from(renderedLinkAddresses(windowsNative)), [windowsNative]);
+		assert.deepEqual(Array.from(renderedLinkAddresses(windowsNative, () => "<p>nessun collegamento</p>")), [windowsNative]);
+		assert.deepEqual(Array.from(renderedLinkAddresses("", parse)), [""]);
 	});
 });

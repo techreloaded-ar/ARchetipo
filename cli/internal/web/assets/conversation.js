@@ -2304,6 +2304,49 @@
 		</section>`;
 	}
 
+	// ---- local references ----
+
+	// A local reference is one the browser must never follow on its own: a
+	// path, a file: address, or an address of this very page's origin. A native
+	// Windows path starts with a drive letter, which a URL parser reads as a
+	// one-letter scheme; no scheme the web uses is one letter long, so `C:\…`
+	// (which the Markdown parser hands over as `C:%5C…`) and `C:/…` are paths
+	// here, exactly as they are for the server that authorizes them.
+	function isLocalLinkAddress(address, sameOrigin) {
+		const text = String(address || "");
+		if (!text || text.startsWith("#")) return false;
+		if (/^[a-z]:(?:[\\/]|%5c)/i.test(text)) return true;
+		return !/^[a-z][a-z0-9+.-]*:/i.test(text) || /^file:/i.test(text) || sameOrigin === true;
+	}
+
+	const HTML_ENTITIES = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+
+	// A reference the agent wrote reaches the page twice: verbatim, in the list
+	// of reports the server authorizes, and as the address the Markdown parser
+	// made of it, on the anchor. The two differ whenever the parser rewrites
+	// the target: it drops a backslash that precedes punctuation and
+	// percent-encodes what a URL cannot carry, which is every native Windows
+	// path (`C:\repo\.archetipo\…`) and every path with a non-ASCII character.
+	// The same parser is asked what it makes of the verbatim reference, so its
+	// rules are never restated here. It is asked in both spellings a link
+	// target can have, bare and in angle brackets, because the server strips
+	// the brackets and the two are not always read alike: every address an
+	// anchor of this reference can carry is in the answer. Where there is no
+	// parser, or it reads no link at all, the reference stands for itself.
+	function renderedLinkAddresses(reference, markedParse) {
+		const verbatim = String(reference || "");
+		const parse = markdownParser({ markedParse });
+		if (!parse || !verbatim) return [verbatim];
+		const addresses = [];
+		for (const target of [verbatim, `<${verbatim}>`]) {
+			const anchor = /<a\s[^>]*?href="([^"]*)"/.exec(String(parse(`[.](${target})`)));
+			if (!anchor) continue;
+			const address = anchor[1].replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => HTML_ENTITIES[entity]);
+			if (!addresses.includes(address)) addresses.push(address);
+		}
+		return addresses.length ? addresses : [verbatim];
+	}
+
 	// ---- exports ----
 
 	// formatElapsed esce insieme al renderer perche' la durata dell'attesa si
@@ -2311,10 +2354,12 @@
 	// per far scorrere un contatore sarebbe un prezzo assurdo: il chiamante
 	// riscrive quel solo numero, e lo scrive con le stesse parole di qui.
 	if (typeof module !== "undefined" && module.exports) {
-		module.exports = { renderConversation, escapeHtml, formatElapsed, inputAnswerValues };
+		module.exports = { renderConversation, escapeHtml, formatElapsed, inputAnswerValues, isLocalLinkAddress, renderedLinkAddresses };
 	} else {
 		// inputAnswerValues travels with the renderer because the page sends
 		// exactly the values the form shows as answered: one rule, read by both.
-		window.Conversation = { renderConversation, formatElapsed, inputAnswerValues };
+		// The two link helpers travel with it because the anchors they read are
+		// the ones this renderer drew, with the parser it was given.
+		window.Conversation = { renderConversation, formatElapsed, inputAnswerValues, isLocalLinkAddress, renderedLinkAddresses };
 	}
 })();

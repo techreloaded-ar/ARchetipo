@@ -8967,10 +8967,9 @@
 		const id = view?.conversation?.id;
 		if (!id) return;
 		const anchors = Array.from(conversationEl.querySelectorAll(".conv-event-markdown a[href]"));
-		const local = anchors.filter(anchor => {
-			const href = anchor.getAttribute("href");
-			return href && !href.startsWith("#") && (!/^[a-z][a-z0-9+.-]*:/i.test(href) || /^file:/i.test(href) || anchor.origin === location.origin);
-		});
+		const local = anchors.filter(anchor =>
+			window.Conversation.isLocalLinkAddress(anchor.getAttribute("href"), anchor.origin === location.origin),
+		);
 		if (!local.length) return;
 		for (const anchor of local) {
 			anchor.dataset.reportHref = anchor.getAttribute("href");
@@ -8983,8 +8982,16 @@
 		}
 		try {
 			const links = await conversationReportsCache.promise;
+			// The server names each report by the reference as the agent wrote
+			// it; the anchor carries what the Markdown parser made of it. They are
+			// compared in the anchor's terms, or a native Windows path, which the
+			// parser rewrites, would never find its report.
+			const reports = links.map(item => ({
+				item,
+				addresses: window.Conversation.renderedLinkAddresses(item.href),
+			}));
 			for (const anchor of local) {
-				const link = links.find(item => item.href === anchor.dataset.reportHref);
+				const link = reports.find(report => report.addresses.includes(anchor.dataset.reportHref))?.item;
 				if (!link) continue;
 				if (!link.available) {
 					anchor.title = "Report non più disponibile";

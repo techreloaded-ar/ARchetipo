@@ -280,7 +280,19 @@ async function exerciseWorkspaceChooser(browser, sandboxDir, cliEnv, runDir) {
       document.getElementById("workspaces-add-submit").click()`);
     await page.waitFor('document.querySelector("#workspace-home-list [data-open]:enabled")', 10000, "il workspace aggiunto compaia nell’elenco");
     await page.evaluate('document.querySelector("#workspace-home-list [data-open]").click()');
-    await page.waitFor('!document.body.classList.contains("no-workspace") && !document.getElementById("workspace-indicator").disabled', 10000, "si apra il workspace");
+    // Opening a workspace rebuilds the document. The static markup of the new
+    // document already has no "no-workspace" class and an enabled indicator, so
+    // those two alone are true before app.js has run, and a press sent then
+    // reaches a button nobody listens to yet. The name is the proof of the
+    // boot: only app.js writes it, after it asked which workspace is open, and
+    // by then every handler is bound. On the document being left the name is
+    // written too, but there the home is still on screen.
+    await page.waitFor(
+      `!document.body.classList.contains("no-workspace") &&
+        !document.getElementById("workspace-indicator").disabled &&
+        document.getElementById("workspace-indicator-name").textContent === ${JSON.stringify(path.basename(sandboxDir))}`,
+      10000, "la pagina ricaricata nomini il workspace aperto",
+    );
     await page.evaluate('document.getElementById("workspace-indicator").click()');
     await page.waitFor(
       'document.querySelector("#workspaces-modal #workspaces-clone-form")?.offsetWidth > 0 && document.querySelector("#workspaces-modal #workspaces-add-form")?.offsetWidth > 0',
